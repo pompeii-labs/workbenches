@@ -53,5 +53,8 @@
         "marked": "^18.0.7",
         "picocolors": "^1.1.1",
         "solid-js": "1.9.12"
+    },
+    "overrides": {
+        "@babel/core": "7.29.7"
     }
 }

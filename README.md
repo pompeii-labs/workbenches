@@ -1,5 +1,8 @@
 # Workbench
 
+[![CI](https://github.com/pompeii-labs/workbenches/actions/workflows/ci.yml/badge.svg)](https://github.com/pompeii-labs/workbenches/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/pompeii-labs/workbenches?include_prereleases)](https://github.com/pompeii-labs/workbenches/releases)
+
 **An open standard for packaging expert AI environments.**
 
 A model is capable. A Workbench makes it prepared.
@@ -258,6 +261,18 @@ notice.
 
 Both `workbench` and `wb` are package binary names. Commits use Conventional
 Commits and are checked by the repository's `commit-msg` hook and CI.
+
+## Project policies
+
+- Use [GitHub Issues](https://github.com/pompeii-labs/workbenches/issues) for
+  reproducible bugs and focused feature proposals.
+- Use [GitHub Discussions](https://github.com/pompeii-labs/workbenches/discussions)
+  for authoring questions and open-ended design discussion.
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change.
+- Report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
+- Project decisions and maintainership are described in
+  [GOVERNANCE.md](GOVERNANCE.md) and [MAINTAINERS.md](MAINTAINERS.md).
+- Participation is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## License
 
