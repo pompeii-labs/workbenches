@@ -48,6 +48,24 @@ describe('Workbench view', () => {
         });
         expect(renderWorkbenchView(view)).toContain('disabled (missing LUX_TOKEN)');
     });
+
+    test('renders a local image build without losing its context', () => {
+        const workbench = fixtureWorkbench();
+        workbench.manifest.runtime = 'docker';
+        workbench.manifest.image = {
+            build: './Dockerfile.workbench',
+            context: '../..',
+        };
+        const output = renderWorkbenchView(
+            describeWorkbench({
+                workbench,
+                origin: { kind: 'local', source: '/repo', selector: 'core' },
+            })
+        );
+        expect(output).toContain(
+            'Image        ./Dockerfile.workbench (build context ../..)'
+        );
+    });
 });
 
 function fixtureWorkbench(): ResolvedWorkbench {

@@ -44,6 +44,7 @@ export async function resolveWorkbench(inputPath: string): Promise<ResolvedWorkb
     const repositoryDirectory = repositoryRoot(packageDirectory);
     const parsed = Bun.YAML.parse(await readFile(manifestPath, 'utf8'));
     const manifest = parseWorkbenchManifest(parsed);
+    validateImagePaths(manifest, packageDirectory, repositoryDirectory);
     const instructionsPath = resolvePackagePath(
         packageDirectory,
         repositoryDirectory,
@@ -75,6 +76,26 @@ export async function resolveWorkbench(inputPath: string): Promise<ResolvedWorkb
         skills,
         manifest,
     };
+}
+
+function validateImagePaths(
+    manifest: WorkbenchManifest,
+    packageDirectory: string,
+    repositoryDirectory: string
+): void {
+    if (!manifest.image || typeof manifest.image === 'string') return;
+    resolvePackagePath(
+        packageDirectory,
+        repositoryDirectory,
+        manifest.image.build,
+        'image.build'
+    );
+    resolvePackagePath(
+        packageDirectory,
+        repositoryDirectory,
+        manifest.image.context ?? '.',
+        'image.context'
+    );
 }
 
 export function parseWorkbenchManifest(value: unknown): WorkbenchManifest {
@@ -138,7 +159,23 @@ function parseManifestV0(body: Record<string, unknown>): WorkbenchManifest {
         mcps: mcpArray(body.mcps),
         env,
         runtime: text(body.runtime, 'runtime'),
-        ...(body.image === undefined ? {} : { image: text(body.image, 'image') }),
+        ...(body.image === undefined ? {} : { image: image(body.image) }),
+    };
+}
+
+function image(value: unknown) {
+    if (typeof value === 'string') return text(value, 'image');
+    const body = record(value, 'image');
+    for (const key of Object.keys(body)) {
+        if (!['build', 'context'].includes(key)) {
+            throw new Error(`Unknown image field: ${key}`);
+        }
+    }
+    return {
+        build: text(body.build, 'image.build'),
+        ...(body.context === undefined
+            ? {}
+            : { context: text(body.context, 'image.context') }),
     };
 }
 

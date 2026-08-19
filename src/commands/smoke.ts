@@ -4,8 +4,9 @@ import { defineCommand } from 'citty';
 
 import { findCatalogEntry, readCatalog } from '../catalog.js';
 import { fetchGitHubWorkbenches, resolvedRemoteWorkbench } from '../github.js';
-import { preflightWorkbench } from '../preflight.js';
+import type { PreflightResult } from '../preflight.js';
 import { resolveReference } from '../references.js';
+import { smokeWorkbenchRuntime } from '../runtime.js';
 import {
     discoverWorkbenches,
     parseWorkbenchReference,
@@ -34,7 +35,10 @@ export const smokeCommand = defineCommand({
             const resolved = await resolveReference(args.source, { home });
             printResult(
                 resolved.workbench.manifest.name,
-                preflightWorkbench(resolved.workbench)
+                await smokeWorkbenchRuntime({
+                    workbench: resolved.workbench,
+                    workspaceDirectory: resolved.workspaceDirectory,
+                })
             );
             return;
         }
@@ -51,7 +55,10 @@ export const smokeCommand = defineCommand({
                 : workbenches;
             if (selected.length === 0) throw new Error('No matching Workbenches found');
             for (const workbench of selected) {
-                printResult(workbench.manifest.name, preflightWorkbench(workbench));
+                printResult(
+                    workbench.manifest.name,
+                    await smokeWorkbenchRuntime({ workbench })
+                );
             }
             return;
         }
@@ -63,13 +70,15 @@ export const smokeCommand = defineCommand({
         for (const workbench of workbenches) {
             printResult(
                 workbench.manifest.name,
-                preflightWorkbench(resolvedRemoteWorkbench(workbench))
+                await smokeWorkbenchRuntime({
+                    workbench: resolvedRemoteWorkbench(workbench),
+                })
             );
         }
     },
 });
 
-function printResult(name: string, result: ReturnType<typeof preflightWorkbench>) {
+function printResult(name: string, result: PreflightResult) {
     const disabled = result.disabledMcps.length
         ? `; optional MCPs disabled: ${result.disabledMcps.join(', ')}`
         : '';

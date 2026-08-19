@@ -46,9 +46,23 @@
             "default": {}
         },
         "runtime": { "type": "string", "minLength": 1 },
-        "image": { "type": "string", "minLength": 1 }
+        "image": {
+            "oneOf": [
+                { "type": "string", "minLength": 1 },
+                { "$ref": "#/$defs/imageBuild" }
+            ]
+        }
     },
     "$defs": {
+        "imageBuild": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["build"],
+            "properties": {
+                "build": { "type": "string", "minLength": 1 },
+                "context": { "type": "string", "minLength": 1 }
+            }
+        },
         "environment": {
             "type": "object",
             "additionalProperties": false,

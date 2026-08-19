@@ -1,10 +1,10 @@
 import { defineCommand } from 'citty';
 
-import { preflightWorkbench } from '../preflight.js';
 import { resolveReference } from '../references.js';
 import { createEventRenderer } from '../render.js';
 import { runWorkbench } from '../run.js';
 import { updateStoredRun } from '../run-store.js';
+import { smokeWorkbenchRuntime } from '../runtime.js';
 import { workbenchHome } from '../storage.js';
 import { launchWorkbenchTui } from '../tui.js';
 import { dispatchStoredRun, executeStoredRun, prepareStoredRun } from '../worker.js';
@@ -105,7 +105,10 @@ export const runCommand = defineCommand({
 
             const home = workbenchHome();
             if (args.detach) {
-                preflightWorkbench(resolved.workbench);
+                await smokeWorkbenchRuntime({
+                    workbench: resolved.workbench,
+                    workspaceDirectory: resolved.workspaceDirectory,
+                });
                 const stored = await prepareStoredRun({
                     home,
                     resolved,

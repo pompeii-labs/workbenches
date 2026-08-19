@@ -9,6 +9,11 @@ export interface WorkbenchMcp {
     headers: Record<string, string>;
 }
 
+export interface WorkbenchImageBuild {
+    build: string;
+    context?: string;
+}
+
 export interface WorkbenchManifest {
     spec: 0;
     version: string;
@@ -22,7 +27,7 @@ export interface WorkbenchManifest {
     mcps: WorkbenchMcp[];
     env: Record<string, WorkbenchEnvRequirement>;
     runtime: string;
-    image?: string;
+    image?: string | WorkbenchImageBuild;
 }
 
 export interface ResolvedWorkbenchSkill {
@@ -44,4 +49,11 @@ export interface RunnerInvocation {
     command: string[];
     cwd: string;
     env: Record<string, string | undefined>;
+}
+
+export interface SpawnedRunner {
+    exited: Promise<number>;
+    stdout?: ReadableStream<Uint8Array>;
+    stderr?: ReadableStream<Uint8Array>;
+    kill?: () => void;
 }
