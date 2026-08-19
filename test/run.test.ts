@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
+import type { WorkbenchEvent } from '../src/execution.js';
 import { runWorkbench } from '../src/run.js';
 
 const temporaryDirectories: string[] = [];
@@ -20,22 +20,32 @@ describe('local run lifecycle', () => {
         const fixture = await createFixture({ tools: ['cargo'] });
         const checked: string[] = [];
         let spawned = false;
+        const events: WorkbenchEvent[] = [];
 
-        await expect(
-            runWorkbench(
-                { workbenchPath: fixture.packageDirectory, task: 'task' },
-                {
-                    findExecutable(name) {
-                        checked.push(name);
-                        return null;
-                    },
-                    spawn() {
-                        spawned = true;
-                        return { exited: Promise.resolve(0) };
-                    },
-                }
-            )
-        ).rejects.toThrow('Runner CLI is unavailable: opencode');
+        const code = await runWorkbench(
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'task',
+                onEvent: (event) => {
+                    events.push(event);
+                },
+            },
+            {
+                findExecutable(name) {
+                    checked.push(name);
+                    return null;
+                },
+                spawn() {
+                    spawned = true;
+                    return { exited: Promise.resolve(0) };
+                },
+            }
+        );
+        expect(code).toBe(1);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: { message: 'Runner CLI is unavailable: opencode' },
+        });
         expect(checked).toEqual(['opencode']);
         expect(spawned).toBeFalse();
     });
@@ -44,22 +54,32 @@ describe('local run lifecycle', () => {
         const fixture = await createFixture({ tools: ['cargo', 'lux'] });
         const checked: string[] = [];
         let spawned = false;
+        const events: WorkbenchEvent[] = [];
 
-        await expect(
-            runWorkbench(
-                { workbenchPath: fixture.packageDirectory, task: 'task' },
-                {
-                    findExecutable(name) {
-                        checked.push(name);
-                        return name === 'lux' ? null : `/bin/${name}`;
-                    },
-                    spawn() {
-                        spawned = true;
-                        return { exited: Promise.resolve(0) };
-                    },
-                }
-            )
-        ).rejects.toThrow('Required CLI tool is unavailable: lux');
+        const code = await runWorkbench(
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'task',
+                onEvent: (event) => {
+                    events.push(event);
+                },
+            },
+            {
+                findExecutable(name) {
+                    checked.push(name);
+                    return name === 'lux' ? null : `/bin/${name}`;
+                },
+                spawn() {
+                    spawned = true;
+                    return { exited: Promise.resolve(0) };
+                },
+            }
+        );
+        expect(code).toBe(1);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: { message: 'Required CLI tool is unavailable: lux' },
+        });
         expect(checked).toEqual(['opencode', 'cargo', 'lux']);
         expect(spawned).toBeFalse();
     });
@@ -128,22 +148,77 @@ describe('local run lifecycle', () => {
     test('cleans staged skills when runner launch throws', async () => {
         const fixture = await createFixture({ skill: true });
         let stagedDirectory = '';
+        const events: WorkbenchEvent[] = [];
 
-        await expect(
-            runWorkbench(
-                { workbenchPath: fixture.packageDirectory, task: 'inspect' },
-                {
-                    findExecutable: () => '/bin/opencode',
-                    spawn(_command, options) {
-                        stagedDirectory = options.env.OPENCODE_CONFIG_DIR ?? '';
-                        throw new Error('spawn failed');
-                    },
-                }
-            )
-        ).rejects.toThrow('spawn failed');
+        const code = await runWorkbench(
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'inspect',
+                onEvent: (event) => {
+                    events.push(event);
+                },
+            },
+            {
+                findExecutable: () => '/bin/opencode',
+                spawn(_command, options) {
+                    stagedDirectory = options.env.OPENCODE_CONFIG_DIR ?? '';
+                    throw new Error('spawn failed');
+                },
+            }
+        );
 
+        expect(code).toBe(1);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: { message: 'spawn failed' },
+        });
         expect(stagedDirectory).not.toBe('');
         await expect(stat(stagedDirectory)).rejects.toThrow();
+    });
+
+    test('terminates the runner and emits cancellation when requested', async () => {
+        const fixture = await createFixture();
+        const controller = new AbortController();
+        const events: WorkbenchEvent[] = [];
+        let killed = false;
+        let finish!: (code: number) => void;
+        const exited = new Promise<number>((resolve) => {
+            finish = resolve;
+        });
+
+        const code = await runWorkbench(
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'wait',
+                signal: controller.signal,
+                onEvent: (event) => {
+                    events.push(event);
+                },
+            },
+            {
+                findExecutable: () => '/bin/opencode',
+                spawn() {
+                    queueMicrotask(() => controller.abort());
+                    return {
+                        exited,
+                        stdout: new Response('').body as ReadableStream<Uint8Array>,
+                        stderr: new Response('').body as ReadableStream<Uint8Array>,
+                        kill() {
+                            killed = true;
+                            finish(143);
+                        },
+                    };
+                },
+            }
+        );
+
+        expect(code).toBe(130);
+        expect(killed).toBeTrue();
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.cancelled',
+            data: { reason: 'requested' },
+        });
+        expect(events.some((event) => event.type === 'run.failed')).toBeFalse();
     });
 });
 

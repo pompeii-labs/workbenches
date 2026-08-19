@@ -1,0 +1,126 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://workbenches.dev/schemas/events/v0/workbench-event.schema.json",
+    "title": "Workbench event protocol v0",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "protocol",
+        "run_id",
+        "sequence",
+        "timestamp",
+        "type",
+        "runner",
+        "data"
+    ],
+    "properties": {
+        "protocol": { "const": 0 },
+        "run_id": {
+            "type": "string",
+            "pattern": "^wb_[a-z0-9]{20,64}$"
+        },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": {
+            "enum": [
+                "run.started",
+                "run.ready",
+                "turn.started",
+                "turn.completed",
+                "output.text",
+                "tool.started",
+                "tool.completed",
+                "file.changed",
+                "input.requested",
+                "usage.updated",
+                "run.completed",
+                "run.failed",
+                "run.cancelled",
+                "runner.event"
+            ]
+        },
+        "runner": { "type": "string", "minLength": 1 },
+        "data": { "type": "object" }
+    },
+    "allOf": [
+        {
+            "if": { "properties": { "type": { "const": "output.text" } } },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["text"],
+                        "properties": { "text": { "type": "string" } }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "type": { "enum": ["tool.started", "tool.completed"] }
+                }
+            },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["id", "name"],
+                        "properties": {
+                            "id": { "type": "string" },
+                            "name": { "type": "string" },
+                            "target": { "type": "string" },
+                            "status": { "enum": ["completed", "failed"] },
+                            "duration_ms": { "type": "number", "minimum": 0 }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "usage.updated" } } },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["kind"],
+                        "properties": {
+                            "kind": { "const": "delta" },
+                            "total_tokens": { "type": "integer", "minimum": 0 },
+                            "input_tokens": { "type": "integer", "minimum": 0 },
+                            "output_tokens": { "type": "integer", "minimum": 0 },
+                            "reasoning_tokens": { "type": "integer", "minimum": 0 },
+                            "cache_read_tokens": { "type": "integer", "minimum": 0 },
+                            "cache_write_tokens": { "type": "integer", "minimum": 0 },
+                            "cost_usd": { "type": "number", "minimum": 0 }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "run.failed" } } },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["message"],
+                        "properties": { "message": { "type": "string" } }
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "runner.event" } } },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["native_type"],
+                        "properties": { "native_type": { "type": "string" } }
+                    }
+                }
+            }
+        }
+    ]
+}

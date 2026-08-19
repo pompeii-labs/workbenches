@@ -72,6 +72,152 @@ describe('CLI integration', () => {
             model: 'openrouter/openai/gpt-5.6-luna',
             instructions: ['.workbenches/core/instructions.md'],
         });
+        expect(result.stdout).toContain('● fixture-core');
+        expect(result.stdout).toContain(
+            'OpenCode · openrouter/openai/gpt-5.6-luna · local'
+        );
+        expect(result.stdout).toContain('fixture response');
+        expect(result.stdout).toContain('✓ Completed');
+    });
+
+    test('auto-colors human output when forced and honors --no-color', async () => {
+        const fixture = await createFixture();
+        const bin = await fakeBin();
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            NO_COLOR: '1',
+        };
+
+        const colored = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--color'],
+            environment
+        );
+        expect(colored.code).toBe(0);
+        expect(colored.stdout).toContain('\u001B[');
+
+        const plain = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--no-color'],
+            environment
+        );
+        expect(plain.code).toBe(0);
+        expect(plain.stdout).not.toContain('\u001B[');
+    });
+
+    test('supports positional tasks, normalized NDJSON, and final-only output', async () => {
+        const fixture = await createFixture();
+        const bin = await fakeBin();
+        const environment = { PATH: `${bin}:${process.env.PATH}` };
+
+        const json = await executeCli(
+            ['run', fixture.packageDirectory, 'inspect', '--json'],
+            environment
+        );
+        expect(json.code).toBe(0);
+        const events = json.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events.map((event) => event.type)).toEqual([
+            'run.started',
+            'run.ready',
+            'turn.started',
+            'output.text',
+            'usage.updated',
+            'turn.completed',
+            'run.completed',
+        ]);
+        expect(events.every((event) => event.protocol === 0)).toBeTrue();
+
+        const final = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--final'],
+            environment
+        );
+        expect(final.code).toBe(0);
+        expect(final.stdout).toBe('fixture response\n');
+    });
+
+    test('stubs taskless interactive mode honestly', async () => {
+        const fixture = await createFixture();
+        const result = await executeCli(['run', fixture.packageDirectory]);
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(
+            'Interactive Workbench mode is not implemented yet'
+        );
+    });
+
+    test('dispatches, prints only a run ID, and attaches to the latest run', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-detached-');
+        const bin = await fakeBin([], { delay: true });
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+
+        const dispatched = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '-d'],
+            environment
+        );
+        expect(dispatched.code).toBe(0);
+        expect(dispatched.stderr).toBe('');
+        expect(dispatched.stdout.trim()).toMatch(/^wb_[a-z0-9]{20,64}$/);
+
+        const attached = await executeCli(['attach', '--json'], environment);
+        expect(attached.code).toBe(0);
+        const events = attached.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events[0]).toMatchObject({
+            run_id: dispatched.stdout.trim(),
+            type: 'run.started',
+        });
+        expect(events.at(-1)).toMatchObject({ type: 'run.completed' });
+
+        const replayed = await executeCli(
+            ['attach', dispatched.stdout.trim(), '--final'],
+            environment
+        );
+        expect(replayed.code).toBe(0);
+        expect(replayed.stdout).toBe('fixture response\n');
+    });
+
+    test('cancels the latest active detached run and records a terminal event', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-kill-');
+        const bin = await fakeBin([], { block: true });
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+
+        const dispatched = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'wait', '-d'],
+            environment
+        );
+        const id = dispatched.stdout.trim();
+        expect(id).toMatch(/^wb_[a-z0-9]{20,64}$/);
+
+        const killed = await executeCli(['kill'], environment);
+        expect(killed.code).toBe(0);
+        expect(killed.stdout).toBe(`cancelled\t${id}\n`);
+
+        const attached = await executeCli(['attach', id, '--json'], environment);
+        expect(attached.code).toBe(130);
+        const events = attached.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events.at(-1)).toMatchObject({
+            run_id: id,
+            type: 'run.cancelled',
+            data: { reason: 'requested' },
+        });
+
+        const repeated = await executeCli(['kill', id], environment);
+        expect(repeated.code).toBe(1);
+        expect(repeated.stderr).toContain(`already cancelled: ${id}`);
     });
 
     test('stages native skills for the child and cleans them after exit', async () => {
@@ -142,8 +288,33 @@ describe('CLI integration', () => {
         expect(added.code).toBe(0);
         expect(added.stdout).toContain('saved\tfixture-saved\tsha256:');
 
-        const saved = await executeCli(['list', '--saved'], environment);
+        const saved = await executeCli(['list'], environment);
         expect(saved.stdout).toContain('fixture-saved\tfixture-core@0.1.0');
+
+        const viewed = await executeCli(
+            ['view', 'fixture-saved', '--json'],
+            environment
+        );
+        expect(viewed.code).toBe(0);
+        expect(JSON.parse(viewed.stdout)).toMatchObject({
+            origin: {
+                kind: 'saved',
+                alias: 'fixture-saved',
+                source: fixture.root,
+                selector: 'core',
+            },
+            spec: 0,
+            name: 'fixture-core',
+            version: '0.1.0',
+            runner: 'opencode',
+            model: 'openrouter/openai/gpt-5.6-luna',
+            runtime: 'local',
+        });
+
+        const humanView = await executeCli(['view', 'fixture-saved'], environment);
+        expect(humanView.code).toBe(0);
+        expect(humanView.stdout).toContain('fixture-core@0.1.0');
+        expect(humanView.stdout).toContain('Origin       saved');
 
         const translated = await executeCli(
             ['run', 'fixture-saved', '--task', 'inspect', '--dry-run'],
@@ -158,7 +329,7 @@ describe('CLI integration', () => {
         const removed = await executeCli(['remove', 'fixture-saved'], environment);
         expect(removed.code).toBe(0);
         expect(removed.stdout).toContain('removed\tfixture-saved');
-        expect((await executeCli(['list', '--saved'], environment)).stdout).toBe('');
+        expect((await executeCli(['list'], environment)).stdout).toBe('');
     });
 
     test('initializes .workbenches/name in the selected repository', async () => {
@@ -196,9 +367,11 @@ async function executeCli(
     environment: Record<string, string | undefined> = {},
     cwd = projectDirectory
 ) {
+    const home =
+        environment.WORKBENCH_HOME ?? (await temporaryDirectory('workbench-cli-home-'));
     const child = Bun.spawn([process.execPath, cliPath, ...arguments_], {
         cwd,
-        env: { ...process.env, ...environment },
+        env: { ...process.env, ...environment, WORKBENCH_HOME: home },
         stdout: 'pipe',
         stderr: 'pipe',
     });
@@ -254,7 +427,10 @@ async function createFixture(options: { tools?: string[]; skill?: boolean } = {}
     return { root, packageDirectory };
 }
 
-async function fakeBin(tools: string[] = []) {
+async function fakeBin(
+    tools: string[] = [],
+    options: { delay?: boolean; block?: boolean } = {}
+) {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-bin-'));
     temporaryDirectories.push(directory);
     const runner = join(directory, 'opencode');
@@ -262,11 +438,17 @@ async function fakeBin(tools: string[] = []) {
         runner,
         [
             '#!/bin/sh',
-            'test -n "$WB_TEST_RECORD" || exit 0',
-            'printf "%s\\n" "$PWD" > "$WB_TEST_RECORD.cwd"',
-            'printf "%s\\n" "$@" > "$WB_TEST_RECORD.args"',
-            'printf "%s\\n" "$OPENCODE_CONFIG_CONTENT" > "$WB_TEST_RECORD.config"',
-            'printf "%s\\n" "$OPENCODE_CONFIG_DIR" > "$WB_TEST_RECORD.config-dir"',
+            ...(options.block ? ['exec sleep 30'] : []),
+            'if test -n "$WB_TEST_RECORD"; then',
+            '  printf "%s\\n" "$PWD" > "$WB_TEST_RECORD.cwd"',
+            '  printf "%s\\n" "$@" > "$WB_TEST_RECORD.args"',
+            '  printf "%s\\n" "$OPENCODE_CONFIG_CONTENT" > "$WB_TEST_RECORD.config"',
+            '  printf "%s\\n" "$OPENCODE_CONFIG_DIR" > "$WB_TEST_RECORD.config-dir"',
+            'fi',
+            ...(options.delay ? ['sleep 0.1'] : []),
+            'printf \'%s\\n\' \'{"type":"step_start","part":{"type":"step-start"}}\'',
+            'printf \'%s\\n\' \'{"type":"text","part":{"type":"text","text":"fixture response"}}\'',
+            'printf \'%s\\n\' \'{"type":"step_finish","part":{"type":"step-finish","reason":"stop","tokens":{"total":9,"input":4,"output":5,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.0001}}\'',
             '',
         ].join('\n')
     );

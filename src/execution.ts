@@ -1,18 +1,21 @@
-export type WorkbenchEventType =
-    | 'run.started'
-    | 'run.ready'
-    | 'turn.started'
-    | 'turn.completed'
-    | 'output.text'
-    | 'tool.started'
-    | 'tool.completed'
-    | 'file.changed'
-    | 'input.requested'
-    | 'usage.updated'
-    | 'run.completed'
-    | 'run.failed'
-    | 'run.cancelled'
-    | 'runner.event';
+export const WORKBENCH_EVENT_TYPES = [
+    'run.started',
+    'run.ready',
+    'turn.started',
+    'turn.completed',
+    'output.text',
+    'tool.started',
+    'tool.completed',
+    'file.changed',
+    'input.requested',
+    'usage.updated',
+    'run.completed',
+    'run.failed',
+    'run.cancelled',
+    'runner.event',
+] as const;
+
+export type WorkbenchEventType = (typeof WORKBENCH_EVENT_TYPES)[number];
 
 export interface WorkbenchEvent<T = unknown> {
     protocol: 0;

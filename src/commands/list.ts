@@ -12,21 +12,21 @@ import {
 import { workbenchHome } from '../storage.js';
 
 export const listCommand = defineCommand({
-    meta: { name: 'list', description: 'List Workbenches from a source.' },
+    meta: { name: 'list', description: 'List saved or published Workbenches.' },
     args: {
         source: {
             type: 'positional',
             description: 'Local path, GitHub URL, or GitHub owner/repo',
-            default: '.',
+            required: false,
         },
         saved: {
             type: 'boolean',
-            description: 'List saved Workbenches instead of a source',
+            description: 'List saved Workbenches (the default without a source)',
             default: false,
         },
     },
     async run({ args }) {
-        if (args.saved) {
+        if (!args.source || args.saved) {
             for (const entry of await readCatalog(workbenchHome())) {
                 console.log(
                     `${entry.alias}\t${entry.name}@${entry.version}\t${entry.source}#${entry.selector}`
