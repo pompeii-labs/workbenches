@@ -1,4 +1,7 @@
-# Sources, saved packages, and target workspaces
+# Source and workspace behavior
+
+This document describes the reference engine. It is not part of the normative
+Workbench package format.
 
 The reference engine recognizes:
 
@@ -39,7 +42,7 @@ run <ref> --dir <workspace>` makes the target explicit. Direct remote runs are
 rejected with an instruction to save the package first; the engine never creates
 a disposable remote work target.
 
-Remote inspection currently follows the GitHub default branch. Other Git hosts,
-exact ref selection, update policy, signature verification, and registry trust
-are roadmap work; remote ingestion must not yet be described as a stable or
-hardened supply-chain boundary.
+Remote inspection follows the GitHub default branch. The reference engine does
+not currently support other Git hosts, exact ref selection, signature
+verification, or registry trust decisions. Remote ingestion is therefore not a
+hardened software-supply-chain boundary.

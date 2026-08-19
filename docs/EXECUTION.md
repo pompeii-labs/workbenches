@@ -1,10 +1,9 @@
-# Execution protocol v0
+# Workbench execution protocol, draft 0
 
-**Status:** working draft
+**Status:** pre-release working draft
 
-A Workbench run has one initial task, an ordered event stream, durable identity,
-and one terminal result. The protocol is designed for zero or more follow-up
-inputs, although the current OpenCode adapter implements one-shot turns only.
+A Workbench run has an ordered event stream, identity, and one terminal result.
+It may contain one or more tasks as turns.
 
 The Workbench engine—not the model or runner—reads `workbench.yml`. It resolves
 the versioned manifest into a canonical representation, provisions the runtime,
@@ -20,7 +19,7 @@ Runtime environment
       ↓ launch
 Runner adapter
       ↕ events, input, close, cancellation
-Host: wb CLI, Pompeii, or another client
+Host
 ```
 
 No runner is asked to interpret the Workbench manifest itself.
@@ -103,16 +102,35 @@ wb run lux-core --task "Explain this repository"
 
 The default renderer consumes canonical events and writes a human-readable live
 log. `--json` writes one complete canonical event per line as NDJSON (newline-
-delimited JSON). This is the stable integration boundary for hosts such as
-Pompeii; it is not the selected runner's native JSON. `--final` buffers
+delimited JSON). This is the portable integration boundary for hosts; it is not
+the selected runner's native JSON. `--final` buffers
 `output.text` events and writes only the final assistant response.
 
 Human output uses a shared Workbench visual language for run identity, runtime
 readiness, optional integrations, tool lifecycle, file changes, assistant text,
-and terminal status. Color is enabled automatically for an interactive stdout,
-can be forced with `--color`, and is disabled by `NO_COLOR` or `--no-color`.
-Paths beneath the target workspace render relative to that workspace. ANSI
-formatting never appears in JSON or final-only modes.
+and terminal status. Assistant text renders the terminal-representable parts of
+CommonMark and GitHub Flavored Markdown: distinct heading levels, emphasis,
+strikethrough, nested and task lists, blockquotes, inline code, fenced code,
+links, horizontal rules, and aligned tables. Completed Markdown blocks render
+while later blocks are still streaming; an unfinished block is flushed at the
+next tool or turn boundary.
+
+The renderer never tries to imitate a browser. It strips terminal control
+characters, turns raw HTML into text, and represents images by alt text without
+fetching them. Browser-only behavior such as collapsible details and portable
+rendering of images or typeset mathematics is unavailable. Syntax from
+non-GFM extensions, including definition lists, footnotes, abbreviations, math,
+and emoji shortcodes, is preserved as readable source text rather than claimed
+as rendered output. The interactive TUI uses the same safety boundary. Active
+turns use a synchronous, marker-free preview so frequent runner deltas do not
+cause syntax-highlighting flicker; completed turns switch once to OpenTUI's
+native rich Markdown layout.
+
+Color is enabled automatically for an interactive stdout, can be forced with
+`--color`, and is disabled by `NO_COLOR` or `--no-color`. Assistant text wraps
+to the terminal width; fenced code preserves its content with hard wrapping for
+overlong lines. Paths beneath the target workspace render relative to that
+workspace. ANSI formatting never appears in JSON or final-only modes.
 
 Stdout is reserved for the selected output contract. Human and final-mode errors
 go to stderr. JSON mode represents failures as `run.failed` on stdout and also
@@ -131,9 +149,8 @@ task is stored only until the worker consumes it, then removed. Direct foregroun
 runs use the same store, so their history can also be attached after completion.
 Attach is read-only. `wb kill [id]` cooperatively cancels a detached run; without
 an ID it selects the latest active detached run. The worker observes a private
-cancellation request, terminates the harness child, emits `run.cancelled`, and
-then marks the durable record cancelled. Steering is not implemented. There is
-not yet a retention or cleanup command.
+cancellation request, terminates the runner child, emits `run.cancelled`, and
+then marks the durable record cancelled.
 
 ## Preflight boundary
 
@@ -149,20 +166,5 @@ Preflight verifies at least:
 - Instructions and skills were staged successfully.
 - Eligible MCP configuration can be translated without exposing secret values.
 
-Presence-only tool checks are the current v0 behavior. Version and health
-contracts remain to be specified.
-
-## Current implementation boundary
-
-The OpenCode process adapter executes a single `opencode run --format json`,
-normalizes its text, tool, file, usage, turn, and terminal lifecycle into v0
-events, and persists those events for attach. Foreground human, NDJSON, final-only,
-and detached execution are implemented and tested.
-
-The runner-neutral `RunHandle` types and their lifecycle invariants are unit
-tested, but they are not yet connected to a live multi-turn adapter. OpenCode's
-ACP command and server/session API are candidates for that adapter. `wb run
-<name>` without a task is reserved for the interactive TUI and currently fails
-with an explicit stub message. Detached cancellation is implemented; multi-turn
-input, steering, permission prompts, and crash recovery remain unverified product
-behavior.
+Draft 0 verifies tool presence only. An engine must not imply that presence also
+proves version compatibility or operational health.

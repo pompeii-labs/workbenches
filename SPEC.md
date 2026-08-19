@@ -1,13 +1,12 @@
-# Workbench format v0
+# Workbench package specification, draft 0
 
-**Status:** working draft
+**Status:** pre-release working draft
 
 A Workbench is a repository-owned execution recipe that packages the expertise
 and environment needed to work on a class of problems.
 
 A Workbench is not an agent. It does not define a DAG, workflow, user
-interface, or product-level run. A host such as Pompeii can add those things
-around it.
+interface, or product-level run. A host can add those things around it.
 
 The host-facing runner boundary is defined separately by
 [`docs/EXECUTION.md`](docs/EXECUTION.md). A run is a managed, potentially
@@ -39,7 +38,7 @@ name: project-core
 description: Work on the project using its maintainers' own practices.
 
 runner: opencode
-model: openrouter/openai/gpt-5.6-luna
+model: openrouter/openai/gpt-5.6-terra
 
 instructions: ./instructions.md
 skills:
@@ -109,7 +108,7 @@ Preflight failure must stop the run before spending model tokens and identify th
 missing or incompatible tool. Executors must not trust an image label or cached
 image metadata as proof that its tools are usable.
 
-The current string form asserts executable presence only:
+Draft 0 defines tools as executable names and asserts presence only:
 
 ```yaml
 tools:
@@ -117,10 +116,8 @@ tools:
   - lux
 ```
 
-A structured tool form for version constraints and deterministic health/version
-commands remains an open v0 design question. Until that contract exists, the
-reference engine must not claim that presence proves version compatibility or
-correct behavior.
+An engine must not claim that executable presence proves version compatibility
+or correct behavior.
 
 `mcps` currently describes remote Streamable HTTP servers. Header values can
 reference root environment declarations with `${NAME}`. A server that references
@@ -128,16 +125,8 @@ an unset optional environment variable is omitted from the run. An unset require
 variable rejects the run. Adapters must preserve the reference instead of placing
 the secret value in generated config or dry-run output.
 
-## Current reference-engine support
+## Scope
 
-The current experiment implements only OpenCode on the local machine. It loads
-`instructions` through OpenCode's native configuration and passes the run task
-as a separate user message. It stages declared skills in an isolated OpenCode
-config directory so they remain native, on-demand skills. It translates eligible
-remote MCPs into OpenCode configuration.
-
-Non-local runtimes, local-process MCPs, and images are intentionally rejected
-until they are actually implemented.
-
-The format does not currently define setup hooks, knowledge files,
-orchestration, a UI, or registry behavior.
+Draft 0 does not define setup hooks, knowledge-file semantics, orchestration,
+user interfaces, or registry behavior. Implementations must reject unsupported
+runners, runtimes, images, or integration transports explicitly.

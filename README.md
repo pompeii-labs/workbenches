@@ -1,131 +1,257 @@
 # Workbench
 
-Workbench is an open format and reference engine for repository-owned execution
-recipes. A Workbench packages the expertise and environment needed to work on a
-class of problems, then names the runner that should execute it.
+**An open standard for packaging expert AI environments.**
 
-This repository is an early experiment. It is not yet a stable specification or
-a general-purpose multi-runner runtime.
+A model is capable. A Workbench makes it prepared.
 
-The v0 execution contract is a versioned, runner-neutral event stream. OpenCode
-one-shot runs can currently stream in the foreground or continue as durable
-detached runs. The same contract will support a uniform interactive terminal UI;
-that UI is deliberately still a stub.
+Workbenches package the expertise, runner, model, tools, skills, integrations,
+runtime, and authorization requirements needed to perform a specific class of
+work. They give maintainers a portable way to publish not only documentation,
+but an executable expert environment for their project.
 
-## Current experiment
+Instead of asking an AI to discover a project's architecture, conventions,
+CLI, development environment, and operating procedures while it is already
+trying to complete a task, a maintainer can publish that knowledge once:
 
-The current local slice supports:
-
-- `runner: opencode`
-- `runtime: local`
-- A selected model
-- A native OpenCode instruction file
-- Portable, on-demand `SKILL.md` skills
-- Optional authenticated remote MCP servers
-- Required local CLI tools and environment variables
-- Local discovery and read-only GitHub API inspection
-- Content-addressed saved package aliases
-- Static validation and token-free smoke preflight
-
-Run a one-shot Workbench with human-readable streaming output:
-
-```sh
-wb run /path/to/repo#name --task "Describe or perform the work"
-wb run saved-name "Describe or perform the work"
+```text
+.workbenches/
+  core/
+    workbench.yml
+    instructions.md
+    skills/
 ```
 
-Select machine-readable NDJSON or final-answer-only output:
+Any compatible host can then resolve the package, verify its requirements, and
+translate it into the selected runner's native interface.
 
-```sh
-wb run saved-name --task "Describe the schema" --json
-wb run saved-name --task "Describe the schema" --final
+Workbench is not another agent framework. The standard does not define a DAG,
+task planner, chat product, or orchestration system. It defines the versioned,
+portable package that prepares an AI to do the work. Products can build their
+own workflows and interfaces around that package.
+
+## What a Workbench contains
+
+A Workbench can declare:
+
+- Maintainer-authored instructions
+- A runner and model selected for the work
+- Portable, on-demand skills
+- Required CLI tools
+- Remote MCP integrations
+- Environment-variable requirements without embedded secret values
+- A local or isolated runtime and, where supported, an image
+
+The manifest is intentionally small:
+
+```yaml
+spec: 0
+version: 0.1.0
+
+name: migrations
+description: Design, review, and safely apply project migrations.
+
+runner: opencode
+model: openrouter/openai/gpt-5.6-terra
+
+instructions: ./instructions.md
+skills:
+  - ./skills/migrations
+
+tools:
+  - cargo
+  - lux
+
+mcps:
+  - name: lux
+    transport: http
+    url: https://api.example.com/mcp
+    headers:
+      Authorization: Bearer ${LUX_TOKEN}
+
+env:
+  LUX_TOKEN:
+    required: false
+
+runtime: local
 ```
 
-Human output uses color when stdout is an interactive terminal. `NO_COLOR` and
-`--no-color` disable it; `--color` forces color when output is being captured.
-Machine-readable and final-only output never contain ANSI formatting.
+The Workbench engine reads this file. The selected runner does not. The engine
+validates and resolves the package, prepares the runtime, verifies its declared
+requirements before model execution, and translates the canonical Workbench
+into the runner's native configuration.
 
-Dispatch a durable background run and attach to it later:
+## Reference CLI
+
+This repository contains `workbench`, also available as `wb`: the TypeScript
+reference engine and command-line client for the standard.
+
+The project is in public pre-alpha development. The draft-0 format, local
+runtime, and OpenCode adapter are implemented. The format is not yet stable,
+and other runners and isolated runtimes are not yet supported by the reference
+engine.
+
+### Install a release
+
+Once the first alpha is published, release binaries will be available for macOS
+and Linux on arm64 and x64. Inspect the installer before running it:
 
 ```sh
-wb run saved-name --task "Perform the migration" --detach
+curl -fsSLO https://raw.githubusercontent.com/pompeii-labs/workbenches/main/install.sh
+less install.sh
+sh install.sh
+rm install.sh
+```
+
+The installer selects the native archive, verifies its published SHA-256
+checksum, installs `workbench` to `~/.local/bin` by default, and creates the `wb`
+alias. It never invokes `sudo` or edits shell startup files. Use `--version` to
+install a specific release and `--bin-dir` to choose another destination.
+
+### Create a Workbench
+
+Run `init` from a repository root to create `.workbenches/<name>`:
+
+```sh
+wb init core
+wb init migrations --runner opencode --model openrouter/openai/gpt-5.6-terra
+```
+
+### Discover and save Workbenches
+
+Local paths, GitHub URLs, and GitHub repository slugs are accepted:
+
+```sh
+wb list .
+wb list /path/to/repository
+wb list https://github.com/owner/repository
+wb list owner/repository
+
+wb validate owner/repository
+wb smoke owner/repository
+wb add owner/repository#core
+```
+
+Remote inspection uses the GitHub API and does not clone or create a temporary
+checkout. `add` is the explicit installation boundary: it saves only the
+selected Workbench package as a content-addressed local snapshot.
+
+Saved packages can be inspected and managed without returning to their source:
+
+```sh
+wb list
+wb view project-core
+wb view project-core --json
+wb remove project-core
+```
+
+### Run a task
+
+Pass a positional task or use `--task` for a one-shot run:
+
+```sh
+wb run project-core "Explain the storage architecture"
+wb run project-core --task "Review this migration"
+```
+
+The default output is a colorized, terminal-safe Markdown stream normalized
+across runners. For integrations, `--json` emits the runner-neutral Workbench
+event protocol as NDJSON. `--final` emits only the final assistant response.
+
+```sh
+wb run project-core --task "Review this migration" --json
+wb run project-core --task "Review this migration" --final
+```
+
+Use `--dry-run` to inspect the translated runner invocation without executing
+it:
+
+```sh
+wb run project-core --task "Review this migration" --dry-run
+```
+
+### Detach, attach, and cancel
+
+```sh
+wb run project-core --task "Perform the migration" --detach
 # wb_...
 
 wb attach wb_...
-wb attach                 # latest dispatched run
+wb attach              # latest dispatched run
 wb attach wb_... --json
-wb kill wb_...            # cancel a detached run
-wb kill                   # latest active detached run
+wb kill wb_...
+wb kill                # latest active detached run
 ```
 
-`--detach` prints only the run ID. Attached clients replay the persisted event
-history and then follow live events until the run terminates. Cancellation is a
-cooperative request to the detached worker, which terminates its harness and
-records `run.cancelled`. `wb run <name>` without a task is reserved for the
-interactive TUI and currently returns an explicit not-implemented error.
+Detached runs persist their normalized events. Attaching replays existing
+events before following new ones. Cancellation cooperatively terminates the
+runner and records a terminal `run.cancelled` event.
 
-Discover, verify, save, and remove packages with:
+### Interactive client
+
+Running `wb`, `workbench`, or `wb run <name>` without a task opens the
+experimental terminal client:
 
 ```sh
-wb list /path/to/repo
-wb list owner/repo
-wb validate /path/to/repo
-wb smoke /path/to/repo
-wb add owner/repo#name
-wb list                    # saved Workbenches
-wb list .                  # Workbenches published by the current repository
-wb view saved-name         # resolved configuration and provenance
-wb view saved-name --json  # same information for tools
-wb remove saved-name
+wb
+wb run project-core
 ```
 
-Remote `list`, `validate`, and `smoke` use the GitHub API in memory and never
-clone or create a temporary checkout. `add` is the explicit operation that saves
-selected package bytes. A remote package must be saved before `run`.
+The OpenCode interactive adapter currently supports multi-turn context,
+streaming, cancellation, tool events, and explicit permission decisions. It is
+not durable: interactive sessions cannot yet be detached, recovered, or steered
+while a turn is active.
 
-Inspect the translated OpenCode launch without executing it:
+## Source and authorization boundaries
 
-```sh
-bun run src/cli.ts run /path/to/repo/.workbenches/name \
-  --task "Describe or perform the work" \
-  --dry-run
-```
+Remote `list`, `validate`, and `smoke` operations are read-only. Public GitHub
+repositories require no credentials. Private repositories can use
+`GITHUB_TOKEN` or `GH_TOKEN`; inaccessible private repositories and missing
+repositories are reported without pretending GitHub distinguishes them.
 
-The Workbench engine reads `workbench.yml`. OpenCode does not. The engine
-resolves the manifest and supplies instructions through OpenCode's native
-configuration while sending the task separately as the user message. Declared
-skills are staged for native OpenCode discovery, and remote MCP environment
-references are translated without exposing their values in generated config.
+Environment values never belong in `workbench.yml`. A manifest declares their
+names and whether they are required; the person or host starting the run
+provides the values. Dry runs, saved package metadata, and normalized events do
+not expose those values.
 
-See [SPEC.md](SPEC.md) for the format sketch,
-[docs/EXECUTION.md](docs/EXECUTION.md) for execution,
-[docs/RUNNER_COMPATIBILITY.md](docs/RUNNER_COMPATIBILITY.md) for researched
-runner integration surfaces,
-[docs/SOURCES.md](docs/SOURCES.md) for source/target behavior,
-[docs/MODEL_SELECTION.md](docs/MODEL_SELECTION.md) for model evaluation, and
-[ROADMAP.md](ROADMAP.md) for the release gap.
+For `runtime: local`, declared tools must exist on the host. Future Docker and
+hosted runtimes must perform the same checks inside the provisioned environment.
+Preflight failure stops execution before model tokens are spent.
 
-OpenCode is the only live adapter. Its native JSON is normalized into Workbench
-events; arbitrary runner payloads are intentionally not copied into portable
-output. Detached cancellation is implemented. Multi-turn input, steering, and
-the uniform TUI are not wired yet.
+## Specification and documentation
+
+- [SPEC.md](SPEC.md) defines the draft-0 Workbench package.
+- [docs/EXECUTION.md](docs/EXECUTION.md) defines the draft-0 execution protocol.
+- [docs/SOURCES.md](docs/SOURCES.md) documents reference-engine source and
+  workspace behavior.
+- [docs/RELEASING.md](docs/RELEASING.md) documents the versioned binary release
+  process.
+- [`schemas/`](schemas) contains the normative JSON Schemas.
+
+The specification and schemas are the interoperability contract. The CLI is a
+reference implementation, not the only permitted host.
 
 ## Development
 
-The CLI is written in strict TypeScript using [Citty](https://unjs.io/packages/citty/)
-for command parsing and help generation, with Bun as the development runtime and
-standalone-binary compiler.
+The reference CLI uses strict TypeScript, Citty, and Bun. From a clean checkout:
 
 ```sh
-bun install
+bun install --frozen-lockfile
 bun run check
 bun run test:coverage
 bun run build
 ```
 
-`bun run check` runs type checking, Biome, and all unit and integration tests.
-Coverage is enforced per source file. The compiled `dist/workbench` binary is
-self-contained and does not require Bun on the target machine.
+`bun run check` runs type checking, Biome, and the unit and integration suite.
+The compiled `dist/workbench` binary is self-contained and does not require Bun
+on the target machine. Distribution builds include the repository license and
+notice.
 
 Both `workbench` and `wb` are package binary names. Commits use Conventional
 Commits and are checked by the repository's `commit-msg` hook and CI.
+
+## License
+
+The source code, schemas, conformance fixtures, specification, and documentation
+in this repository are licensed under the [Apache License 2.0](LICENSE) unless a
+file states otherwise. Workbench packages published by other projects are
+independent works and remain subject to the licenses chosen by their publishers.
