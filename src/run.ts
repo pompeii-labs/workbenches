@@ -1,34 +1,59 @@
-import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { resolveWorkbench } from './manifest.js';
 import { buildOpenCodeInvocation, publicInvocation } from './opencode.js';
+import { preflightWorkbench } from './preflight.js';
 import type { ResolvedWorkbench } from './types.js';
 
 export interface RunOptions {
     workbenchPath: string;
     task: string;
     dryRun?: boolean;
+    workspaceDirectory?: string;
 }
 
-export async function runWorkbench(options: RunOptions): Promise<number> {
-    const workbench = await resolveWorkbench(options.workbenchPath);
+export interface RunDependencies {
+    env?: Record<string, string | undefined>;
+    findExecutable?: (name: string) => string | null;
+    spawn?: (
+        command: string[],
+        options: {
+            cwd: string;
+            env: Record<string, string | undefined>;
+            stdin: 'inherit';
+            stdout: 'inherit';
+            stderr: 'inherit';
+        }
+    ) => { exited: Promise<number> };
+    write?: (value: string) => void;
+}
 
-    for (const tool of workbench.manifest.tools) {
-        if (!Bun.which(tool)) throw new Error(`Required CLI tool is unavailable: ${tool}`);
-    }
+export async function runWorkbench(
+    options: RunOptions,
+    dependencies: RunDependencies = {}
+): Promise<number> {
+    const workbench = await resolveWorkbench(options.workbenchPath);
+    const environment = dependencies.env ?? process.env;
+    const findExecutable = dependencies.findExecutable ?? Bun.which;
+    const spawn = dependencies.spawn ?? defaultSpawn;
+    const write =
+        dependencies.write ?? ((value: string) => process.stdout.write(value));
+
+    preflightWorkbench(workbench, { env: environment, findExecutable });
 
     const staged = await stageOpenCodeSkills(workbench);
     try {
         const invocation = buildOpenCodeInvocation(
             workbench,
             options.task,
-            process.env,
-            staged?.directory
+            environment,
+            staged?.directory,
+            options.workspaceDirectory
         );
         if (options.dryRun) {
-            process.stdout.write(
+            write(
                 `${JSON.stringify(
                     {
                         ...publicInvocation(invocation),
@@ -43,7 +68,7 @@ export async function runWorkbench(options: RunOptions): Promise<number> {
 
         const [command, ...args] = invocation.command;
         if (!command) throw new Error('Runner command is empty');
-        const child = Bun.spawn([command, ...args], {
+        const child = spawn([command, ...args], {
             cwd: invocation.cwd,
             env: invocation.env,
             stdin: 'inherit',
@@ -56,6 +81,19 @@ export async function runWorkbench(options: RunOptions): Promise<number> {
     }
 }
 
+function defaultSpawn(
+    command: string[],
+    options: {
+        cwd: string;
+        env: Record<string, string | undefined>;
+        stdin: 'inherit';
+        stdout: 'inherit';
+        stderr: 'inherit';
+    }
+) {
+    return Bun.spawn(command, options);
+}
+
 export async function stageOpenCodeSkills(
     workbench: ResolvedWorkbench
 ): Promise<{ directory: string; cleanup: () => Promise<void> } | undefined> {
@@ -66,11 +104,7 @@ export async function stageOpenCodeSkills(
     try {
         await Promise.all(
             workbench.skills.map((skill) =>
-                symlink(
-                    skill.directory,
-                    join(skillsDirectory, skill.name),
-                    'dir'
-                )
+                symlink(skill.directory, join(skillsDirectory, skill.name), 'dir')
             )
         );
     } catch (error) {

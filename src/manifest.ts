@@ -1,4 +1,4 @@
-import { stat, readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type {
@@ -9,7 +9,10 @@ import type {
     WorkbenchMcp,
 } from './types.js';
 
-const manifestKeys = new Set([
+export const supportedWorkbenchSpecs = [0] as const;
+
+const manifestKeysV0 = new Set([
+    'spec',
     'version',
     'name',
     'description',
@@ -24,9 +27,7 @@ const manifestKeys = new Set([
     'image',
 ]);
 
-export async function resolveWorkbench(
-    inputPath: string
-): Promise<ResolvedWorkbench> {
+export async function resolveWorkbench(inputPath: string): Promise<ResolvedWorkbench> {
     const requested = resolve(inputPath);
     const input = await stat(requested).catch(() => null);
     if (!input) throw new Error(`Workbench path does not exist: ${requested}`);
@@ -42,7 +43,7 @@ export async function resolveWorkbench(
     const packageDirectory = dirname(manifestPath);
     const repositoryDirectory = repositoryRoot(packageDirectory);
     const parsed = Bun.YAML.parse(await readFile(manifestPath, 'utf8'));
-    const manifest = parseManifest(parsed);
+    const manifest = parseWorkbenchManifest(parsed);
     const instructionsPath = resolvePackagePath(
         packageDirectory,
         repositoryDirectory,
@@ -59,7 +60,8 @@ export async function resolveWorkbench(
         )
     );
     const duplicateSkill = skills.find(
-        (skill, index) => skills.findIndex((entry) => entry.name === skill.name) !== index
+        (skill, index) =>
+            skills.findIndex((entry) => entry.name === skill.name) !== index
     );
     if (duplicateSkill) {
         throw new Error(`Duplicate skill name: ${duplicateSkill.name}`);
@@ -75,13 +77,44 @@ export async function resolveWorkbench(
     };
 }
 
-function parseManifest(value: unknown): WorkbenchManifest {
+export function parseWorkbenchManifest(value: unknown): WorkbenchManifest {
     const body = record(value, 'Workbench manifest');
+    switch (body.spec) {
+        case 0:
+            return parseManifestV0(body);
+        default:
+            throw new Error(
+                `Unsupported Workbench spec: ${String(body.spec)}. Supported specs: ${supportedWorkbenchSpecs.join(', ')}`
+            );
+    }
+}
+
+export function parseSkillMetadata(
+    source: string,
+    expectedDirectoryName: string,
+    label = expectedDirectoryName
+): { name: string; description: string } {
+    const frontmatter = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+    if (!frontmatter?.[1]) {
+        throw new Error(`Skill must begin with YAML frontmatter: ${label}`);
+    }
+    const metadata = record(Bun.YAML.parse(frontmatter[1]), `Skill ${label}`);
+    const name = text(metadata.name, `Skill ${label} name`);
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+        throw new Error(`Invalid skill name: ${name}`);
+    }
+    const description = text(metadata.description, `Skill ${label} description`);
+    if (name !== expectedDirectoryName) {
+        throw new Error(`Skill name must match its directory: ${name}`);
+    }
+    return { name, description };
+}
+
+function parseManifestV0(body: Record<string, unknown>): WorkbenchManifest {
     for (const key of Object.keys(body)) {
-        if (!manifestKeys.has(key)) throw new Error(`Unknown manifest field: ${key}`);
+        if (!manifestKeysV0.has(key)) throw new Error(`Unknown manifest field: ${key}`);
     }
 
-    if (body.version !== 0) throw new Error('version must be 0');
     const envBody = optionalRecord(body.env, 'env');
     const env = Object.fromEntries(
         Object.entries(envBody).map(([name, requirement]) => [
@@ -91,7 +124,8 @@ function parseManifest(value: unknown): WorkbenchManifest {
     );
 
     return {
-        version: 0,
+        spec: 0,
+        version: semanticVersion(body.version),
         name: text(body.name, 'name'),
         ...(body.description === undefined
             ? {}
@@ -104,10 +138,20 @@ function parseManifest(value: unknown): WorkbenchManifest {
         mcps: mcpArray(body.mcps),
         env,
         runtime: text(body.runtime, 'runtime'),
-        ...(body.image === undefined
-            ? {}
-            : { image: text(body.image, 'image') }),
+        ...(body.image === undefined ? {} : { image: text(body.image, 'image') }),
     };
+}
+
+function semanticVersion(value: unknown): string {
+    const version = text(value, 'version');
+    if (
+        !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(
+            version
+        )
+    ) {
+        throw new Error('version must be a semantic version');
+    }
+    return version;
 }
 
 async function resolveSkill(
@@ -128,19 +172,7 @@ async function resolveSkill(
     }
 
     const source = await readFile(manifestPath, 'utf8');
-    const frontmatter = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-    if (!frontmatter?.[1]) {
-        throw new Error(`Skill must begin with YAML frontmatter: ${manifestPath}`);
-    }
-    const metadata = record(Bun.YAML.parse(frontmatter[1]), `Skill ${value}`);
-    const name = text(metadata.name, `Skill ${value} name`);
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
-        throw new Error(`Invalid skill name: ${name}`);
-    }
-    text(metadata.description, `Skill ${value} description`);
-    if (name !== basename(directory)) {
-        throw new Error(`Skill name must match its directory: ${name}`);
-    }
+    const { name } = parseSkillMetadata(source, basename(directory), value);
     return { name, directory, manifestPath };
 }
 
@@ -186,10 +218,7 @@ function mcpArray(value: unknown): WorkbenchMcp[] {
     });
 }
 
-function parseEnvRequirement(
-    value: unknown,
-    name: string
-): WorkbenchEnvRequirement {
+function parseEnvRequirement(value: unknown, name: string): WorkbenchEnvRequirement {
     const requirement = record(value, `env.${name}`);
     for (const key of Object.keys(requirement)) {
         if (key !== 'required') {
@@ -247,10 +276,7 @@ function stringArray(value: unknown, field: string): string[] {
     return value.map((entry) => entry.trim()).filter(Boolean);
 }
 
-function optionalRecord(
-    value: unknown,
-    field: string
-): Record<string, unknown> {
+function optionalRecord(value: unknown, field: string): Record<string, unknown> {
     if (value === undefined) return {};
     return record(value, field);
 }

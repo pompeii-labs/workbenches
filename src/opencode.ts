@@ -6,7 +6,8 @@ export function buildOpenCodeInvocation(
     workbench: ResolvedWorkbench,
     task: string,
     baseEnv: Record<string, string | undefined> = process.env,
-    configDirectory?: string
+    configDirectory?: string,
+    workspaceDirectory = workbench.repositoryDirectory
 ): RunnerInvocation {
     if (workbench.manifest.runner !== 'opencode') {
         throw new Error(`Unsupported runner: ${workbench.manifest.runner}`);
@@ -60,17 +61,19 @@ export function buildOpenCodeInvocation(
         })
     );
 
+    const instructionRelativePath = relative(
+        workspaceDirectory,
+        workbench.instructionsPath
+    );
+    const instructionPath = instructionRelativePath.startsWith('..')
+        ? workbench.instructionsPath
+        : instructionRelativePath;
     const config = {
         $schema: 'https://opencode.ai/config.json',
         autoupdate: false,
         share: 'disabled',
         model: workbench.manifest.model,
-        instructions: [
-            relative(
-                workbench.repositoryDirectory,
-                workbench.instructionsPath
-            ),
-        ],
+        instructions: [instructionPath],
         ...(Object.keys(mcp).length > 0 ? { mcp } : {}),
     };
 
@@ -82,27 +85,25 @@ export function buildOpenCodeInvocation(
             '--model',
             workbench.manifest.model,
             '--dir',
-            workbench.repositoryDirectory,
+            workspaceDirectory,
             '--format',
             'json',
             task.trim(),
         ],
-        cwd: workbench.repositoryDirectory,
+        cwd: workspaceDirectory,
         env: {
             ...baseEnv,
-            PWD: workbench.repositoryDirectory,
+            PWD: workspaceDirectory,
             OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
             OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
-            ...(configDirectory
-                ? { OPENCODE_CONFIG_DIR: configDirectory }
-                : {}),
+            ...(configDirectory ? { OPENCODE_CONFIG_DIR: configDirectory } : {}),
         },
     };
 }
 
 function environmentReferences(value: string): string[] {
-    return [...value.matchAll(/\$\{([A-Z][A-Z0-9_]*)\}/g)].map(
-        (match) => match[1]!
+    return [...value.matchAll(/\$\{([A-Z][A-Z0-9_]*)\}/g)].flatMap((match) =>
+        match[1] ? [match[1]] : []
     );
 }
 

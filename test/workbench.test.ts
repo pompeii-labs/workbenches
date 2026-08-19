@@ -1,22 +1,19 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { resolveWorkbench } from '../src/manifest.js';
-import {
-    buildOpenCodeInvocation,
-    publicInvocation,
-} from '../src/opencode.js';
+import { buildOpenCodeInvocation, publicInvocation } from '../src/opencode.js';
 import { stageOpenCodeSkills } from '../src/run.js';
 
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
     await Promise.all(
-        temporaryDirectories.splice(0).map((directory) =>
-            rm(directory, { recursive: true, force: true })
-        )
+        temporaryDirectories
+            .splice(0)
+            .map((directory) => rm(directory, { recursive: true, force: true }))
     );
 });
 
@@ -77,19 +74,20 @@ describe('Workbench v0', () => {
         const staged = await stageOpenCodeSkills(workbench);
 
         expect(staged).toBeDefined();
+        if (!staged) throw new Error('expected staged skills');
         expect(
-            await stat(join(staged!.directory, 'skills', 'lux-migrations', 'SKILL.md'))
+            await stat(join(staged.directory, 'skills', 'lux-migrations', 'SKILL.md'))
         ).toBeTruthy();
         const invocation = buildOpenCodeInvocation(
             workbench,
             'Plan a migration',
             { PATH: process.env.PATH },
-            staged!.directory
+            staged.directory
         );
-        expect(invocation.env.OPENCODE_CONFIG_DIR).toBe(staged!.directory);
+        expect(invocation.env.OPENCODE_CONFIG_DIR).toBe(staged.directory);
 
-        await staged!.cleanup();
-        await expect(stat(staged!.directory)).rejects.toThrow();
+        await staged.cleanup();
+        await expect(stat(staged.directory)).rejects.toThrow();
     });
 
     test('enables an MCP only when its optional environment is bound', async () => {
@@ -133,11 +131,7 @@ interface FixtureOptions {
 async function createFixture(options: FixtureOptions = {}) {
     const repositoryDirectory = await mkdtemp(join(tmpdir(), 'workbench-'));
     temporaryDirectories.push(repositoryDirectory);
-    const workbenchDirectory = join(
-        repositoryDirectory,
-        '.workbenches',
-        'maintainer'
-    );
+    const workbenchDirectory = join(repositoryDirectory, '.workbenches', 'maintainer');
     await mkdir(workbenchDirectory, { recursive: true });
     const instructionsPath = join(workbenchDirectory, 'instructions.md');
     const manifestPath = join(workbenchDirectory, 'workbench.yml');
@@ -161,7 +155,8 @@ async function createFixture(options: FixtureOptions = {}) {
     await writeFile(
         manifestPath,
         [
-            'version: 0',
+            'spec: 0',
+            'version: 0.1.0',
             'name: fixture',
             `runner: ${options.runner ?? 'opencode'}`,
             'model: openrouter/openai/gpt-5.6-luna',
@@ -177,7 +172,7 @@ async function createFixture(options: FixtureOptions = {}) {
                       '    transport: http',
                       '    url: https://api.luxdb.dev/mcp',
                       '    headers:',
-                      '      Authorization: Bearer ${LUX_TOKEN}',
+                      '      Authorization: Bearer $' + '{LUX_TOKEN}',
                   ]
                 : ['mcps: []']),
             options.env || options.mcp ? 'env:' : 'env: {}',

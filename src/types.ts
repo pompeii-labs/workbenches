@@ -10,7 +10,8 @@ export interface WorkbenchMcp {
 }
 
 export interface WorkbenchManifest {
-    version: 0;
+    spec: 0;
+    version: string;
     name: string;
     description?: string;
     runner: string;

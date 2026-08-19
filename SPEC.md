@@ -9,6 +9,11 @@ A Workbench is not an agent. It does not define a DAG, workflow, user
 interface, or product-level run. A host such as Pompeii can add those things
 around it.
 
+The host-facing runner boundary is defined separately by
+[`docs/EXECUTION.md`](docs/EXECUTION.md). A run is a managed, potentially
+interactive session; the Workbench format still does not own its presentation or
+orchestration.
+
 ## Repository layout
 
 ```text
@@ -27,7 +32,8 @@ Each immediate child directory is one Workbench. Its manifest is named
 ## Initial manifest
 
 ```yaml
-version: 0
+spec: 0
+version: 0.1.0
 
 name: project-core
 description: Work on the project using its maintainers' own practices.
@@ -58,6 +64,19 @@ runtime: local
 
 The Workbench chooses its runner, model, and runtime. A consuming host either
 supports that recipe or reports that it cannot run it.
+
+`spec` is the integer Workbench schema version. A released spec parser is
+immutable: engines select the matching parser, normalize its output into the
+current internal representation, and retain old parsers for backward
+compatibility. Unknown future specs fail without guessing. `version` is the
+Workbench author's semantic release version; source revisions and content
+digests remain the authority for reproducibility.
+
+The published machine-readable schema for this draft is
+[`schemas/v0/workbench.schema.json`](schemas/v0/workbench.schema.json). The
+reference engine dispatches to a dedicated spec-0 parser before producing its
+canonical internal model. Future parsers are added alongside it rather than
+changing spec-0 interpretation.
 
 Environment values never appear in the manifest. The person or host starting a
 run supplies them.
@@ -120,5 +139,5 @@ remote MCPs into OpenCode configuration.
 Non-local runtimes, local-process MCPs, and images are intentionally rejected
 until they are actually implemented.
 
-The format does not currently define setup hooks, knowledge files, runner
-capabilities, orchestration, UI events, or registry behavior.
+The format does not currently define setup hooks, knowledge files,
+orchestration, a UI, or registry behavior.

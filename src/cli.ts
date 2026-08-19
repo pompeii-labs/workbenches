@@ -1,44 +1,45 @@
 #!/usr/bin/env bun
 
-import { runWorkbench } from './run.js';
+import { defineCommand, runMain } from 'citty';
 
-function usage(): never {
-    process.stderr.write(
-        'Usage: workbench run <workbench-path> --task <task> [--dry-run]\n'
-    );
-    process.exit(2);
-}
+import { addCommand } from './commands/add.js';
+import { initCommand } from './commands/init.js';
+import { listCommand } from './commands/list.js';
+import { removeCommand } from './commands/remove.js';
+import { runCommand } from './commands/run.js';
+import { smokeCommand } from './commands/smoke.js';
+import { validateCommand } from './commands/validate.js';
 
-function parseArguments(args: string[]) {
-    if (args[0] !== 'run' || !args[1]) usage();
-    const workbenchPath = args[1];
-    let task: string | undefined;
-    let dryRun = false;
+export const workbenchCommand = defineCommand({
+    meta: {
+        name: 'workbench',
+        version: '0.0.0',
+        description: 'Discover, save, verify, and run open Workbenches.',
+    },
+    subCommands: {
+        init: initCommand,
+        list: listCommand,
+        validate: validateCommand,
+        v: validateCommand,
+        smoke: smokeCommand,
+        add: addCommand,
+        remove: removeCommand,
+        run: runCommand,
+    },
+});
 
-    for (let index = 2; index < args.length; index += 1) {
-        const argument = args[index];
-        if (argument === '--dry-run') {
-            dryRun = true;
-            continue;
+if (import.meta.main) {
+    const defaultConsoleError = console.error;
+    console.error = (value?: unknown, ...optional: unknown[]) => {
+        if (value instanceof Error) {
+            process.stderr.write(`error: ${value.message}\n`);
+            return;
         }
-        if (argument === '--task') {
-            task = args[index + 1];
-            index += 1;
-            continue;
-        }
-        usage();
+        defaultConsoleError(value, ...optional);
+    };
+    try {
+        await runMain(workbenchCommand);
+    } finally {
+        console.error = defaultConsoleError;
     }
-
-    if (!task) usage();
-    return { workbenchPath, task, dryRun };
-}
-
-try {
-    const code = await runWorkbench(parseArguments(process.argv.slice(2)));
-    process.exitCode = code;
-} catch (error) {
-    process.stderr.write(
-        `workbench: ${error instanceof Error ? error.message : String(error)}\n`
-    );
-    process.exitCode = 1;
 }
