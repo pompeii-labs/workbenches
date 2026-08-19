@@ -96,8 +96,14 @@ engine.
 
 ### Install a release
 
-Once the first alpha is published, release binaries will be available for macOS
-and Linux on arm64 and x64. Inspect the installer before running it:
+Install the latest release on macOS or Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/pompeii-labs/workbenches/main/install.sh | sh
+```
+
+Release binaries are available for arm64 and x64. To inspect the installer
+before running it:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/pompeii-labs/workbenches/main/install.sh
