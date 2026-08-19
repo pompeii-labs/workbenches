@@ -68,6 +68,11 @@ events.
 
 ## Public repository hygiene
 
+- Treat tracked files, filenames, branches, commit messages, pull requests, and
+  other repository-host metadata as public product material.
+- Never include private issue identifiers, internal planning phase names,
+  project codenames, private URLs, or internal coordination details in any of
+  those surfaces. Use descriptive product language only.
 - Do not commit private tracker references, internal plans, launch notes,
   competitive research, screenshots, credentials, machine-specific paths, or
   local Workbench labs.
@@ -101,3 +106,6 @@ fixtures alone.
 Commits use Conventional Commits. Do not rewrite history, change repository
 visibility, add a remote, publish a package, or push a release without explicit
 maintainer approval.
+
+A question or request for explanation does not authorize a code or repository
+change. Make changes only when the maintainer asks for them.
