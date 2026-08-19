@@ -4,8 +4,8 @@ import { defineCommand } from 'citty';
 
 import { findCatalogEntry, readCatalog } from '../catalog.js';
 import { fetchGitHubWorkbenches, resolvedRemoteWorkbench } from '../github.js';
-import { preflightWorkbench } from '../preflight.js';
 import { resolveReference } from '../references.js';
+import { smokeWorkbenchRuntime } from '../runtime.js';
 import {
     discoverWorkbenches,
     parseWorkbenchReference,
@@ -32,9 +32,12 @@ export const smokeCommand = defineCommand({
             : undefined;
         if (saved) {
             const resolved = await resolveReference(args.source, { home });
-            printResult(
+            await printResult(
                 resolved.workbench.manifest.name,
-                preflightWorkbench(resolved.workbench)
+                smokeWorkbenchRuntime({
+                    workbench: resolved.workbench,
+                    workspaceDirectory: resolved.workspaceDirectory,
+                })
             );
             return;
         }
@@ -51,7 +54,10 @@ export const smokeCommand = defineCommand({
                 : workbenches;
             if (selected.length === 0) throw new Error('No matching Workbenches found');
             for (const workbench of selected) {
-                printResult(workbench.manifest.name, preflightWorkbench(workbench));
+                await printResult(
+                    workbench.manifest.name,
+                    smokeWorkbenchRuntime({ workbench })
+                );
             }
             return;
         }
@@ -61,15 +67,21 @@ export const smokeCommand = defineCommand({
         );
         if (workbenches.length === 0) throw new Error('No matching Workbenches found');
         for (const workbench of workbenches) {
-            printResult(
+            await printResult(
                 workbench.manifest.name,
-                preflightWorkbench(resolvedRemoteWorkbench(workbench))
+                smokeWorkbenchRuntime({
+                    workbench: resolvedRemoteWorkbench(workbench),
+                })
             );
         }
     },
 });
 
-function printResult(name: string, result: ReturnType<typeof preflightWorkbench>) {
+async function printResult(
+    name: string,
+    pending: ReturnType<typeof smokeWorkbenchRuntime>
+) {
+    const result = await pending;
     const disabled = result.disabledMcps.length
         ? `; optional MCPs disabled: ${result.disabledMcps.join(', ')}`
         : '';

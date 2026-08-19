@@ -24,6 +24,60 @@ Host
 
 No runner is asked to interpret the Workbench manifest itself.
 
+## Runtime provider contract
+
+The engine resolves the manifest before selecting the provider named by
+`runtime`. Every provider implements the same lifecycle:
+
+```ts
+interface RuntimeProvider {
+    name: string;
+    prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime>;
+}
+
+interface RuntimePrepareRequest {
+    workbench: ResolvedWorkbench;
+    workspaceDirectory: string;
+    environment: Record<string, string | undefined>;
+    assets: Array<{
+        path: string;
+        access: "read-only" | "read-write";
+    }>;
+}
+
+interface PreparedRuntime {
+    name: string;
+    workbench: ResolvedWorkbench;
+    workspaceDirectory: string;
+    environment: Record<string, string | undefined>;
+    pathFor(hostPath: string): string;
+    preflight(): Promise<PreflightResult>;
+    launch(invocation: RunnerInvocation): SpawnedRunner;
+    cancel(process: SpawnedRunner): void;
+    cleanup(): Promise<void>;
+}
+```
+
+`prepare` provisions or selects the environment, makes the workspace,
+Workbench package, instructions, skills, and runner assets available, binds the
+environment, and returns their runtime-visible locations. The host workspace is
+read-write; immutable package and generated runner assets are read-only unless
+the request explicitly says otherwise. Local execution uses the host paths
+unchanged. Isolated providers mount or synchronize the declared assets and
+return remapped paths.
+
+Preparation must be safe to repeat with the same inputs, including after an
+interrupted attempt. `cleanup` must be safe to call more than once. A provider
+must reject `launch` until its own preflight has succeeded. Cancellation targets
+the provider-owned process or remote job; cleanup still runs afterward.
+
+Failures are normalized at the `resolve`, `prepare`, `mount`, `bind`,
+`preflight`, `launch`, `cancel`, or `cleanup` boundary and identify the selected
+runtime without exposing bound environment values. Runtime-native logs and
+identifiers are diagnostics, not additions to the portable Workbench event
+protocol. Providers must pass the shared runtime contract suite before being
+registered by the reference engine.
+
 ## Session and turn boundaries
 
 A run may contain multiple turns. `turn.completed` means the runner completed

@@ -104,12 +104,6 @@ function buildOpenCodeEnvironment(
     if (workbench.manifest.runner !== 'opencode') {
         throw new Error(`Unsupported runner: ${workbench.manifest.runner}`);
     }
-    if (workbench.manifest.runtime !== 'local') {
-        throw new Error(`Unsupported runtime: ${workbench.manifest.runtime}`);
-    }
-    if (workbench.manifest.image) {
-        throw new Error('image is not supported with the local runtime');
-    }
     if (workbench.skills.length > 0 && !configDirectory) {
         throw new Error('OpenCode skills require a staged config directory');
     }

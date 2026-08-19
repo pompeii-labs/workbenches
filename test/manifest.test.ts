@@ -74,6 +74,54 @@ describe('spec 0 manifest parser', () => {
         );
     });
 
+    test('parses published image references and local image builds', async () => {
+        const published = await createFixture({
+            manifest: `${validManifest()}image: ghcr.io/example/workbench:0.1.0\n`,
+        });
+        const localBuild = await createFixture({
+            manifest: `${validManifest()}image:\n  build: ./Dockerfile.workbench\n  context: ../..\n`,
+        });
+
+        expect(
+            (await resolveWorkbench(published.packageDirectory)).manifest.image
+        ).toBe('ghcr.io/example/workbench:0.1.0');
+        expect(
+            (await resolveWorkbench(localBuild.packageDirectory)).manifest.image
+        ).toEqual({ build: './Dockerfile.workbench', context: '../..' });
+    });
+
+    test('rejects incomplete and unknown local image build fields', async () => {
+        const incomplete = await createFixture({
+            manifest: `${validManifest()}image:\n  context: .\n`,
+        });
+        const unknown = await createFixture({
+            manifest: `${validManifest()}image:\n  build: ./Dockerfile\n  platform: linux/amd64\n`,
+        });
+
+        await expect(resolveWorkbench(incomplete.packageDirectory)).rejects.toThrow(
+            'image.build must be a non-empty string'
+        );
+        await expect(resolveWorkbench(unknown.packageDirectory)).rejects.toThrow(
+            'Unknown image field: platform'
+        );
+    });
+
+    test('keeps local image build inputs inside the repository', async () => {
+        const absolute = await createFixture({
+            manifest: `${validManifest()}image:\n  build: /tmp/Dockerfile\n`,
+        });
+        const escaped = await createFixture({
+            manifest: `${validManifest()}image:\n  build: ../../../Dockerfile\n`,
+        });
+
+        await expect(resolveWorkbench(absolute.packageDirectory)).rejects.toThrow(
+            'image.build must be a relative path'
+        );
+        await expect(resolveWorkbench(escaped.packageDirectory)).rejects.toThrow(
+            'image.build must remain inside the repository'
+        );
+    });
+
     test('rejects a missing instructions file', async () => {
         const fixture = await createFixture({ writeInstructions: false });
         await expect(resolveWorkbench(fixture.packageDirectory)).rejects.toThrow(
