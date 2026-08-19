@@ -64,7 +64,14 @@ export function describeWorkbench(options: {
         runner: manifest.runner,
         model: manifest.model,
         runtime: manifest.runtime,
-        ...(manifest.image ? { image: manifest.image } : {}),
+        ...(manifest.image
+            ? {
+                  image:
+                      typeof manifest.image === 'string'
+                          ? manifest.image
+                          : `${manifest.image.build} (build context ${manifest.image.context ?? '.'})`,
+              }
+            : {}),
         instructions: manifest.instructions,
         skills: options.workbench.skills.map((skill) => skill.name),
         tools: manifest.tools,

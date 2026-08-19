@@ -86,6 +86,35 @@ those skills through the runner's native on-demand skill mechanism.
 
 `tools` names CLI executables that must be available before a run starts.
 
+## Runtime selection and images
+
+`runtime` is the provider identifier selected by the Workbench. Draft 0 defines
+`local`; the reference engine may register additional providers such as
+`docker` or `e2b`. An unknown provider is an error and must not silently fall
+back to the host.
+
+`image` is optional provider input. A string names a published image:
+
+```yaml
+runtime: docker
+image: ghcr.io/example/project-workbench:0.4.0
+```
+
+A local image build uses an object instead:
+
+```yaml
+runtime: docker
+image:
+  build: ./Dockerfile.workbench
+  context: ../..
+```
+
+`build` is a Workbench-package-relative Dockerfile. `context` is also
+package-relative and defaults to `.`. Both must remain within the containing
+repository. Providers that do not accept images, including `local`, reject the
+field. Providers decide how to cache prepared images, but the observable result
+must be equivalent to preparing the declared input again.
+
 ## Tool preflight
 
 Tools are requirements of the selected runtime, not assumptions about the host
@@ -94,9 +123,11 @@ that launched the Workbench.
 The execution lifecycle is:
 
 1. Resolve and validate the Workbench package.
-2. Provision or select the runtime environment.
-3. Verify every declared tool inside that environment.
-4. Launch the runner and permit model requests only after preflight succeeds.
+2. Select the named runtime provider and prepare its environment.
+3. Mount or synchronize the workspace and Workbench assets, and bind the run
+   environment.
+4. Verify every declared tool inside that environment.
+5. Launch the runner and permit model requests only after preflight succeeds.
 
 For `runtime: local`, the environment is the host process environment. The v0
 reference engine resolves each declared tool from `PATH` and rejects the run if

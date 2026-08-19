@@ -10,9 +10,13 @@ import type {
 import { resolveWorkbench } from './manifest.js';
 import { buildOpenCodeInvocation, publicInvocation } from './opencode.js';
 import { OpenCodeEventAdapter } from './opencode-events.js';
-import { preflightWorkbench } from './preflight.js';
 import { createRunId } from './run-store.js';
-import type { ResolvedWorkbench } from './types.js';
+import {
+    LocalRuntimeProvider,
+    type PreparedRuntime,
+    RuntimeProviderRegistry,
+} from './runtime.js';
+import type { ResolvedWorkbench, SpawnedRunner } from './types.js';
 
 export interface RunOptions {
     workbenchPath: string;
@@ -22,13 +26,6 @@ export interface RunOptions {
     runId?: string;
     signal?: AbortSignal;
     onEvent?: (event: WorkbenchEvent) => Promise<void> | void;
-}
-
-interface SpawnedRunner {
-    exited: Promise<number>;
-    stdout?: ReadableStream<Uint8Array>;
-    stderr?: ReadableStream<Uint8Array>;
-    kill?: () => void;
 }
 
 export interface RunDependencies {
@@ -46,6 +43,7 @@ export interface RunDependencies {
     ) => SpawnedRunner;
     write?: (value: string) => void;
     now?: () => Date;
+    runtimeRegistry?: RuntimeProviderRegistry;
 }
 
 export async function runWorkbench(
@@ -55,20 +53,38 @@ export async function runWorkbench(
     const workbench = await resolveWorkbench(options.workbenchPath);
     const environment = dependencies.env ?? process.env;
     const findExecutable = dependencies.findExecutable ?? Bun.which;
-    const spawn = dependencies.spawn ?? defaultSpawn;
     const write =
         dependencies.write ?? ((value: string) => process.stdout.write(value));
+    const runtimeRegistry =
+        dependencies.runtimeRegistry ??
+        new RuntimeProviderRegistry([
+            new LocalRuntimeProvider({
+                findExecutable,
+                ...(dependencies.spawn ? { spawn: dependencies.spawn } : {}),
+            }),
+        ]);
 
     if (options.dryRun) {
-        preflightWorkbench(workbench, { env: environment, findExecutable });
         const staged = await stageOpenCodeSkills(workbench);
+        let runtime: PreparedRuntime | undefined;
         try {
+            runtime = await runtimeRegistry
+                .resolve(workbench.manifest.runtime)
+                .prepare(
+                    runtimeRequest(
+                        workbench,
+                        options.workspaceDirectory,
+                        environment,
+                        staged?.directory
+                    )
+                );
+            await runtime.preflight();
             const invocation = buildOpenCodeInvocation(
-                workbench,
+                runtime.workbench,
                 options.task,
-                environment,
-                staged?.directory,
-                options.workspaceDirectory
+                runtime.environment,
+                staged ? runtime.pathFor(staged.directory) : undefined,
+                runtime.workspaceDirectory
             );
             write(
                 `${JSON.stringify(
@@ -82,7 +98,7 @@ export async function runWorkbench(
             );
             return 0;
         } finally {
-            await staged?.cleanup();
+            await cleanupRuntimeAndAssets(runtime, staged);
         }
     }
 
@@ -106,25 +122,33 @@ export async function runWorkbench(
     }
 
     try {
-        const preflight = preflightWorkbench(workbench, {
-            env: environment,
-            findExecutable,
-        });
         const staged = await stageOpenCodeSkills(workbench);
+        let runtime: PreparedRuntime | undefined;
         let code = 1;
         let stderr = '';
         let summary = { finalText: '', turnCompleted: false };
         try {
+            runtime = await runtimeRegistry
+                .resolve(workbench.manifest.runtime)
+                .prepare(
+                    runtimeRequest(
+                        workbench,
+                        options.workspaceDirectory,
+                        environment,
+                        staged?.directory
+                    )
+                );
+            const preflight = await runtime.preflight();
             if (options.signal?.aborted) {
                 await emitCancellation(emitter, started);
                 return 130;
             }
             const invocation = buildOpenCodeInvocation(
-                workbench,
+                runtime.workbench,
                 options.task,
-                environment,
-                staged?.directory,
-                options.workspaceDirectory
+                runtime.environment,
+                staged ? runtime.pathFor(staged.directory) : undefined,
+                runtime.workspaceDirectory
             );
             await emitter.emit('run.ready', {
                 runner: preflight.runner.name,
@@ -136,14 +160,11 @@ export async function runWorkbench(
 
             const [command, ...args] = invocation.command;
             if (!command) throw new Error('Runner command is empty');
-            const child = spawn([command, ...args], {
-                cwd: invocation.cwd,
-                env: invocation.env,
-                stdin: 'ignore',
-                stdout: 'pipe',
-                stderr: 'pipe',
+            const child = runtime.launch({
+                ...invocation,
+                command: [command, ...args],
             });
-            const abortRunner = () => child.kill?.();
+            const abortRunner = () => runtime?.cancel(child);
             options.signal?.addEventListener('abort', abortRunner, { once: true });
             if (options.signal?.aborted) abortRunner();
             const adapter = new OpenCodeEventAdapter();
@@ -167,14 +188,14 @@ export async function runWorkbench(
                 [code, stderr] = await Promise.all([child.exited, stderrPromise]);
                 summary = adapter.summary();
             } catch (error) {
-                child.kill?.();
+                runtime.cancel(child);
                 await Promise.allSettled([child.exited, stderrPromise]);
                 throw error;
             } finally {
                 options.signal?.removeEventListener('abort', abortRunner);
             }
         } finally {
-            await staged?.cleanup();
+            await cleanupRuntimeAndAssets(runtime, staged);
         }
         if (options.signal?.aborted) {
             await emitCancellation(emitter, started);
@@ -221,19 +242,6 @@ async function emitCancellation(
     });
 }
 
-function defaultSpawn(
-    command: string[],
-    options: {
-        cwd: string;
-        env: Record<string, string | undefined>;
-        stdin: 'ignore';
-        stdout: 'pipe';
-        stderr: 'pipe';
-    }
-): SpawnedRunner {
-    return Bun.spawn(command, options);
-}
-
 class RunEventEmitter {
     private sequence = 0;
     private readonly runId: string;
@@ -269,6 +277,43 @@ class RunEventEmitter {
             data,
         });
     }
+}
+
+function runtimeRequest(
+    workbench: ResolvedWorkbench,
+    workspaceDirectory: string | undefined,
+    environment: Record<string, string | undefined>,
+    runnerConfigDirectory: string | undefined
+) {
+    const workspace = workspaceDirectory ?? workbench.repositoryDirectory;
+    return {
+        workbench,
+        workspaceDirectory: workspace,
+        environment,
+        assets: [
+            { path: workspace, access: 'read-write' as const },
+            { path: workbench.packageDirectory, access: 'read-only' as const },
+            ...(runnerConfigDirectory
+                ? [
+                      {
+                          path: runnerConfigDirectory,
+                          access: 'read-only' as const,
+                      },
+                  ]
+                : []),
+        ],
+    };
+}
+
+async function cleanupRuntimeAndAssets(
+    runtime: PreparedRuntime | undefined,
+    staged: { cleanup: () => Promise<void> } | undefined
+): Promise<void> {
+    const results = await Promise.allSettled([runtime?.cleanup(), staged?.cleanup()]);
+    const failure = results.find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected'
+    );
+    if (failure) throw failure.reason;
 }
 
 async function consumeLines(

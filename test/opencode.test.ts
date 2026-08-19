@@ -9,16 +9,13 @@ import {
 import type { ResolvedWorkbench, WorkbenchManifest } from '../src/types.js';
 
 describe('OpenCode adapter translation', () => {
-    test('rejects unsupported runners, runtimes, and local images', () => {
+    test('rejects unsupported runners without coupling translation to a runtime', () => {
         expect(() =>
             buildOpenCodeInvocation(workbench({ runner: 'codex' }), 'task')
         ).toThrow('Unsupported runner: codex');
-        expect(() =>
-            buildOpenCodeInvocation(workbench({ runtime: 'docker' }), 'task')
-        ).toThrow('Unsupported runtime: docker');
-        expect(() =>
-            buildOpenCodeInvocation(workbench({ image: 'example/image' }), 'task')
-        ).toThrow('image is not supported with the local runtime');
+        expect(
+            buildOpenCodeInvocation(workbench({ runtime: 'docker' }), 'task').command
+        ).toContain('opencode');
     });
 
     test('rejects empty tasks before launch', () => {
