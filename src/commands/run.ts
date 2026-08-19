@@ -6,6 +6,7 @@ import { createEventRenderer } from '../render.js';
 import { runWorkbench } from '../run.js';
 import { updateStoredRun } from '../run-store.js';
 import { workbenchHome } from '../storage.js';
+import { launchWorkbenchTui } from '../tui.js';
 import { dispatchStoredRun, executeStoredRun, prepareStoredRun } from '../worker.js';
 
 export const runCommand = defineCommand({
@@ -73,9 +74,13 @@ export const runCommand = defineCommand({
             if (args.detach || args.json || args.final || args['dry-run']) {
                 throw new Error('This run mode requires a non-empty task');
             }
-            throw new Error(
-                'Interactive Workbench mode is not implemented yet. Pass a one-shot task as an argument or with --task.'
-            );
+            const resolved = await resolveReference(args.workbench, {
+                ...(args.dir ? { workspaceDirectory: args.dir } : {}),
+            });
+            await launchWorkbenchTui({
+                initial: { alias: args.workbench, resolved },
+            });
+            return;
         }
         if (args.detach && (args.json || args.final || args['dry-run'])) {
             throw new Error(

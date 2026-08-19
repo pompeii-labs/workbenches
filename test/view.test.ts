@@ -69,7 +69,7 @@ function fixtureWorkbench(): ResolvedWorkbench {
             name: 'lux-core',
             description: 'Maintain Lux.',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-luna',
+            model: 'openrouter/openai/gpt-5.6-terra',
             instructions: './instructions.md',
             skills: ['./skills/lux-migrations'],
             tools: ['cargo', 'lux'],

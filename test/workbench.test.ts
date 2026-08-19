@@ -30,7 +30,7 @@ describe('Workbench v0', () => {
 
         expect(visible.cwd).toBe(fixture.repositoryDirectory);
         expect(visible.opencode_config).toMatchObject({
-            model: 'openrouter/openai/gpt-5.6-luna',
+            model: 'openrouter/openai/gpt-5.6-terra',
             instructions: ['.workbenches/maintainer/instructions.md'],
         });
         expect(JSON.stringify(visible.opencode_config)).not.toContain(
@@ -159,7 +159,7 @@ async function createFixture(options: FixtureOptions = {}) {
             'version: 0.1.0',
             'name: fixture',
             `runner: ${options.runner ?? 'opencode'}`,
-            'model: openrouter/openai/gpt-5.6-luna',
+            'model: openrouter/openai/gpt-5.6-terra',
             `instructions: ${options.instructions ?? './instructions.md'}`,
             ...(options.skill
                 ? ['skills:', '  - ./skills/lux-migrations']

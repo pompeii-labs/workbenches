@@ -2,10 +2,14 @@ import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { WorkbenchEvent, WorkbenchEventType } from './execution.js';
+import type {
+    WorkbenchEvent,
+    WorkbenchEventDraft,
+    WorkbenchEventType,
+} from './execution.js';
 import { resolveWorkbench } from './manifest.js';
 import { buildOpenCodeInvocation, publicInvocation } from './opencode.js';
-import { type EventDraft, OpenCodeEventAdapter } from './opencode-events.js';
+import { OpenCodeEventAdapter } from './opencode-events.js';
 import { preflightWorkbench } from './preflight.js';
 import { createRunId } from './run-store.js';
 import type { ResolvedWorkbench } from './types.js';
@@ -249,7 +253,7 @@ class RunEventEmitter {
         this.now = options.now ?? (() => new Date());
     }
 
-    emitDraft(event: EventDraft): Promise<void> {
+    emitDraft(event: WorkbenchEventDraft): Promise<void> {
         return this.emit(event.type, event.data);
     }
 

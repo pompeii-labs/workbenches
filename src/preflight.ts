@@ -20,9 +20,6 @@ export function preflightWorkbench(
     const environment = dependencies.env ?? process.env;
     const findExecutable = dependencies.findExecutable ?? Bun.which;
 
-    if (workbench.manifest.runner !== 'opencode') {
-        throw new Error(`Unsupported runner: ${workbench.manifest.runner}`);
-    }
     if (workbench.manifest.runtime !== 'local') {
         throw new Error(`Unsupported runtime: ${workbench.manifest.runtime}`);
     }

@@ -7,6 +7,7 @@ describe('OpenCode event adapter', () => {
         const adapter = new OpenCodeEventAdapter();
         const text = adapter.consume({
             type: 'text',
+            sessionID: 'ses_123',
             part: {
                 type: 'text',
                 text: 'Hello',
@@ -49,6 +50,8 @@ describe('OpenCode event adapter', () => {
         expect(adapter.summary()).toEqual({
             finalText: 'Hello',
             turnCompleted: true,
+            sessionId: 'ses_123',
+            completionReason: 'stop',
         });
     });
 
@@ -120,5 +123,37 @@ describe('OpenCode event adapter', () => {
         expect(unknown.events).toEqual([
             { type: 'runner.event', data: { native_type: 'future_event' } },
         ]);
+    });
+
+    test('reports safe permission failures once without exposing native errors', () => {
+        const adapter = new OpenCodeEventAdapter();
+        const native = {
+            type: 'tool_use',
+            part: {
+                tool: 'read',
+                callID: 'call_denied',
+                state: {
+                    status: 'error',
+                    input: { filePath: '/outside/file.ts' },
+                    error: 'The user rejected permission. SECRET_NATIVE_DETAIL',
+                },
+            },
+        };
+        const first = adapter.consume(native);
+        const repeated = adapter.consume(native);
+
+        expect(first.events.at(-1)).toEqual({
+            type: 'tool.completed',
+            data: {
+                id: 'call_denied',
+                name: 'read',
+                target: '/outside/file.ts',
+                status: 'failed',
+                error_code: 'permission_denied',
+                message: 'Permission denied',
+            },
+        });
+        expect(repeated.events).toEqual([]);
+        expect(JSON.stringify([first, repeated])).not.toContain('SECRET_NATIVE_DETAIL');
     });
 });

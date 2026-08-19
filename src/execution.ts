@@ -27,6 +27,11 @@ export interface WorkbenchEvent<T = unknown> {
     data: T;
 }
 
+export interface WorkbenchEventDraft {
+    type: WorkbenchEventType;
+    data: Record<string, unknown>;
+}
+
 export interface RunRequest {
     runId: string;
     task: string;

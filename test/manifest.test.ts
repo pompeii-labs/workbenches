@@ -255,7 +255,7 @@ function validManifest() {
         'version: 0.1.0',
         'name: fixture-core',
         'runner: opencode',
-        'model: openrouter/openai/gpt-5.6-luna',
+        'model: openrouter/openai/gpt-5.6-terra',
         'instructions: ./instructions.md',
         'skills: []',
         'tools: []',

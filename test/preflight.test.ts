@@ -28,6 +28,18 @@ describe('Workbench smoke preflight', () => {
         expect(result.disabledMcps).toEqual([]);
     });
 
+    test('checks the manifest runner without coupling generic preflight to an adapter', () => {
+        const fixture = workbench();
+        fixture.manifest.runner = 'codex';
+
+        const result = preflightWorkbench(fixture, {
+            env: { LUX_TOKEN: 'bound' },
+            findExecutable: (name) => `/bin/${name}`,
+        });
+
+        expect(result.runner).toEqual({ name: 'codex', path: '/bin/codex' });
+    });
+
     test('rejects unsupported execution contracts before executable checks', () => {
         const fixture = workbench();
         fixture.manifest.runtime = 'docker';
@@ -76,7 +88,7 @@ function workbench(): ResolvedWorkbench {
             version: '0.1.0',
             name: 'lux-migrations',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-luna',
+            model: 'openrouter/openai/gpt-5.6-terra',
             instructions: './instructions.md',
             skills: [],
             tools: ['lux'],

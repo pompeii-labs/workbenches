@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 
-import { buildOpenCodeInvocation, publicInvocation } from '../src/opencode.js';
+import {
+    buildOpenCodeInvocation,
+    buildOpenCodeServerInvocation,
+    buildOpenCodeSessionInvocation,
+    publicInvocation,
+} from '../src/opencode.js';
 import type { ResolvedWorkbench, WorkbenchManifest } from '../src/types.js';
 
 describe('OpenCode adapter translation', () => {
@@ -83,7 +88,7 @@ describe('OpenCode adapter translation', () => {
 
         expect(visible.cwd).toBe('/repo');
         expect(visible.opencode_config).toMatchObject({
-            model: 'openrouter/openai/gpt-5.6-luna',
+            model: 'openrouter/openai/gpt-5.6-terra',
             instructions: ['.workbenches/core/instructions.md'],
         });
         expect(visible.command.at(-1)).toBe('do work');
@@ -104,6 +109,59 @@ describe('OpenCode adapter translation', () => {
         expect(visible.command).toContain('--format');
         expect(visible.command).toContain('json');
     });
+
+    test('resumes a native OpenCode session without changing Workbench config', () => {
+        const invocation = buildOpenCodeSessionInvocation(
+            workbench({}, true),
+            'Follow up',
+            'ses_123',
+            { PATH: '/bin' },
+            '/tmp/opencode-config',
+            '/workspace'
+        );
+
+        expect(invocation.command).toContain('--session');
+        expect(invocation.command).toContain('ses_123');
+        expect(invocation.command.at(-1)).toBe('Follow up');
+        expect(invocation.cwd).toBe('/workspace');
+        expect(invocation.env.OPENCODE_CONFIG_DIR).toBe('/tmp/opencode-config');
+        expect(
+            JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT ?? '{}')
+        ).toMatchObject({
+            model: 'openrouter/openai/gpt-5.6-terra',
+            instructions: ['/repo/.workbenches/core/instructions.md'],
+        });
+    });
+
+    test('rejects an empty native session identifier', () => {
+        expect(() =>
+            buildOpenCodeSessionInvocation(workbench(), 'Follow up', '   ')
+        ).toThrow('sessionId must not be empty');
+    });
+
+    test('builds a loopback-only authenticated interactive server', () => {
+        const invocation = buildOpenCodeServerInvocation(
+            workbench(),
+            'private-password',
+            { PATH: '/bin' },
+            undefined,
+            '/workspace'
+        );
+        expect(invocation.command).toEqual([
+            'opencode',
+            'serve',
+            '--pure',
+            '--hostname',
+            '127.0.0.1',
+            '--port',
+            '0',
+        ]);
+        expect(invocation.cwd).toBe('/workspace');
+        expect(invocation.env.OPENCODE_SERVER_PASSWORD).toBe('private-password');
+        expect(JSON.stringify(publicInvocation(invocation))).not.toContain(
+            'private-password'
+        );
+    });
 });
 
 function workbench(
@@ -115,7 +173,7 @@ function workbench(
         version: '0.1.0',
         name: 'fixture-core',
         runner: 'opencode',
-        model: 'openrouter/openai/gpt-5.6-luna',
+        model: 'openrouter/openai/gpt-5.6-terra',
         instructions: './instructions.md',
         skills: withSkill ? ['./skills/migrations'] : [],
         tools: [],

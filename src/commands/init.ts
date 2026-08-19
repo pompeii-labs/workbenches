@@ -15,6 +15,16 @@ export const initCommand = defineCommand({
             type: 'string',
             description: 'Repository directory (defaults to the current directory)',
         },
+        runner: {
+            type: 'string',
+            description: 'Runner recorded in the generated manifest',
+            default: 'opencode',
+        },
+        model: {
+            type: 'string',
+            description: 'Model recorded in the generated manifest',
+            default: 'openrouter/openai/gpt-5.6-terra',
+        },
     },
     async run({ args }) {
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(args.name)) {
@@ -28,7 +38,14 @@ export const initCommand = defineCommand({
         await mkdir(directory, { recursive: true });
         await writeFile(
             resolve(directory, 'instructions.md'),
-            `# ${args.name}\n\nDescribe the expertise and operating rules for this Workbench.\n`
+            [
+                `# ${args.name}`,
+                '',
+                "Use this repository's source, documentation, and tests as the authority.",
+                'Inspect the relevant implementation before acting, follow documented',
+                'project conventions, and report uncertainty instead of inventing behavior.',
+                '',
+            ].join('\n')
         );
         await writeFile(
             resolve(directory, 'workbench.yml'),
@@ -36,10 +53,9 @@ export const initCommand = defineCommand({
                 'spec: 0',
                 'version: 0.1.0',
                 `name: ${args.name}`,
-                `description: Work with ${args.name}.`,
-                'runner: opencode',
-                '# Provisional cheap baseline; evaluate the model for this Workbench.',
-                'model: openrouter/openai/gpt-5.6-luna',
+                `description: Repository-maintained expertise for ${args.name} tasks.`,
+                `runner: ${JSON.stringify(args.runner)}`,
+                `model: ${JSON.stringify(args.model)}`,
                 'instructions: ./instructions.md',
                 'skills: []',
                 'tools: []',

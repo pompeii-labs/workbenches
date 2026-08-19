@@ -1,24 +1,24 @@
-import type { WorkbenchEventType } from './execution.js';
-
-export interface EventDraft {
-    type: WorkbenchEventType;
-    data: Record<string, unknown>;
-}
+import type { WorkbenchEventDraft } from './execution.js';
 
 export interface OpenCodeAdapterResult {
-    events: EventDraft[];
+    events: WorkbenchEventDraft[];
     finalText?: string;
     turnCompleted: boolean;
 }
 
 export class OpenCodeEventAdapter {
     private readonly startedTools = new Set<string>();
+    private readonly completedTools = new Set<string>();
     private turnCompleted = false;
     private finalText = '';
+    private sessionId: string | undefined;
+    private completionReason: string | undefined;
 
     consume(value: unknown): OpenCodeAdapterResult {
         const event = record(value);
         if (!event) return this.native('malformed');
+        const sessionId = string(event.sessionID);
+        if (!this.sessionId && sessionId) this.sessionId = sessionId;
         const type = string(event.type);
         if (!type) return this.native('unknown');
 
@@ -41,6 +41,10 @@ export class OpenCodeEventAdapter {
         return {
             finalText: this.finalText,
             turnCompleted: this.turnCompleted,
+            ...(this.sessionId ? { sessionId: this.sessionId } : {}),
+            ...(this.completionReason
+                ? { completionReason: this.completionReason }
+                : {}),
         };
     }
 
@@ -64,17 +68,23 @@ export class OpenCodeEventAdapter {
             name,
             ...(target ? { target } : {}),
         };
-        const events: EventDraft[] = [];
+        const events: WorkbenchEventDraft[] = [];
         if (!this.startedTools.has(id)) {
             this.startedTools.add(id);
             events.push({ type: 'tool.started', data: common });
         }
-        if (status === 'completed' || status === 'error' || status === 'failed') {
+        if (
+            (status === 'completed' || status === 'error' || status === 'failed') &&
+            !this.completedTools.has(id)
+        ) {
+            this.completedTools.add(id);
+            const failure = status === 'completed' ? undefined : safeToolFailure(state);
             events.push({
                 type: 'tool.completed',
                 data: {
                     ...common,
                     status: status === 'completed' ? 'completed' : 'failed',
+                    ...(failure ?? {}),
                     ...duration(state),
                 },
             });
@@ -86,7 +96,7 @@ export class OpenCodeEventAdapter {
 
     private stepFinish(event: Record<string, unknown>): OpenCodeAdapterResult {
         const part = record(event.part);
-        const events: EventDraft[] = [];
+        const events: WorkbenchEventDraft[] = [];
         const tokens = record(part?.tokens);
         if (tokens) {
             const cache = record(tokens.cache);
@@ -107,6 +117,7 @@ export class OpenCodeEventAdapter {
         const reason = string(part?.reason);
         if (reason && reason !== 'tool-calls') {
             this.turnCompleted = true;
+            this.completionReason = reason;
             events.push({ type: 'turn.completed', data: { reason } });
         }
         return this.result(events);
@@ -118,13 +129,27 @@ export class OpenCodeEventAdapter {
         ]);
     }
 
-    private result(events: EventDraft[], finalText?: string): OpenCodeAdapterResult {
+    private result(
+        events: WorkbenchEventDraft[],
+        finalText?: string
+    ): OpenCodeAdapterResult {
         return {
             events,
             ...(finalText ? { finalText } : {}),
             turnCompleted: this.turnCompleted,
         };
     }
+}
+
+function safeToolFailure(state: Record<string, unknown> | undefined) {
+    const error = string(state?.error)?.toLowerCase() ?? '';
+    if (error.includes('permission') || error.includes('rejected')) {
+        return {
+            error_code: 'permission_denied',
+            message: 'Permission denied',
+        };
+    }
+    return { error_code: 'runner_error', message: 'Tool failed in runner' };
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

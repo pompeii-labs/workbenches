@@ -9,6 +9,98 @@ export function buildOpenCodeInvocation(
     configDirectory?: string,
     workspaceDirectory = workbench.repositoryDirectory
 ): RunnerInvocation {
+    if (!task.trim()) throw new Error('task must not be empty');
+    const environment = buildOpenCodeEnvironment(
+        workbench,
+        baseEnv,
+        configDirectory,
+        workspaceDirectory
+    );
+
+    return {
+        command: [
+            'opencode',
+            'run',
+            '--pure',
+            '--model',
+            workbench.manifest.model,
+            '--dir',
+            workspaceDirectory,
+            '--format',
+            'json',
+            task.trim(),
+        ],
+        cwd: workspaceDirectory,
+        env: environment,
+    };
+}
+
+export function buildOpenCodeSessionInvocation(
+    workbench: ResolvedWorkbench,
+    task: string,
+    sessionId: string | undefined,
+    baseEnv: Record<string, string | undefined> = process.env,
+    configDirectory?: string,
+    workspaceDirectory = workbench.repositoryDirectory
+): RunnerInvocation {
+    const invocation = buildOpenCodeInvocation(
+        workbench,
+        task,
+        baseEnv,
+        configDirectory,
+        workspaceDirectory
+    );
+    if (sessionId === undefined) return invocation;
+    const normalized = sessionId.trim();
+    if (!normalized) throw new Error('sessionId must not be empty');
+    return {
+        ...invocation,
+        command: [
+            ...invocation.command.slice(0, -1),
+            '--session',
+            normalized,
+            invocation.command.at(-1) as string,
+        ],
+    };
+}
+
+export function buildOpenCodeServerInvocation(
+    workbench: ResolvedWorkbench,
+    password: string,
+    baseEnv: Record<string, string | undefined> = process.env,
+    configDirectory?: string,
+    workspaceDirectory = workbench.repositoryDirectory
+): RunnerInvocation {
+    if (!password) throw new Error('OpenCode server password must not be empty');
+    return {
+        command: [
+            'opencode',
+            'serve',
+            '--pure',
+            '--hostname',
+            '127.0.0.1',
+            '--port',
+            '0',
+        ],
+        cwd: workspaceDirectory,
+        env: {
+            ...buildOpenCodeEnvironment(
+                workbench,
+                baseEnv,
+                configDirectory,
+                workspaceDirectory
+            ),
+            OPENCODE_SERVER_PASSWORD: password,
+        },
+    };
+}
+
+function buildOpenCodeEnvironment(
+    workbench: ResolvedWorkbench,
+    baseEnv: Record<string, string | undefined>,
+    configDirectory: string | undefined,
+    workspaceDirectory: string
+): Record<string, string | undefined> {
     if (workbench.manifest.runner !== 'opencode') {
         throw new Error(`Unsupported runner: ${workbench.manifest.runner}`);
     }
@@ -21,7 +113,6 @@ export function buildOpenCodeInvocation(
     if (workbench.skills.length > 0 && !configDirectory) {
         throw new Error('OpenCode skills require a staged config directory');
     }
-    if (!task.trim()) throw new Error('task must not be empty');
 
     for (const [name, requirement] of Object.entries(workbench.manifest.env)) {
         if (requirement.required && !baseEnv[name]) {
@@ -60,7 +151,6 @@ export function buildOpenCodeInvocation(
             ];
         })
     );
-
     const instructionRelativePath = relative(
         workspaceDirectory,
         workbench.instructionsPath
@@ -78,26 +168,11 @@ export function buildOpenCodeInvocation(
     };
 
     return {
-        command: [
-            'opencode',
-            'run',
-            '--pure',
-            '--model',
-            workbench.manifest.model,
-            '--dir',
-            workspaceDirectory,
-            '--format',
-            'json',
-            task.trim(),
-        ],
-        cwd: workspaceDirectory,
-        env: {
-            ...baseEnv,
-            PWD: workspaceDirectory,
-            OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
-            OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
-            ...(configDirectory ? { OPENCODE_CONFIG_DIR: configDirectory } : {}),
-        },
+        ...baseEnv,
+        PWD: workspaceDirectory,
+        OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+        OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
+        ...(configDirectory ? { OPENCODE_CONFIG_DIR: configDirectory } : {}),
     };
 }
 

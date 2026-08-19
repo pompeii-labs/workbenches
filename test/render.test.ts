@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { stripVTControlCharacters } from 'node:util';
 
 import type { WorkbenchEvent, WorkbenchEventType } from '../src/execution.js';
 import { createEventRenderer } from '../src/render.js';
@@ -62,7 +63,7 @@ describe('Workbench event renderers', () => {
         for (const next of [
             event(1, 'run.started', {
                 workbench: 'lux-core',
-                model: 'openrouter/openai/gpt-5.6-luna',
+                model: 'openrouter/openai/gpt-5.6-terra',
                 runtime: 'local',
                 workspace: '/repo',
             }),
@@ -97,7 +98,7 @@ describe('Workbench event renderers', () => {
         renderer.finish();
 
         expect(stdout).toContain('● lux-core');
-        expect(stdout).toContain('OpenCode · openrouter/openai/gpt-5.6-luna · local');
+        expect(stdout).toContain('OpenCode · openrouter/openai/gpt-5.6-terra · local');
         expect(stdout).toContain('✓ Ready · cargo, lux');
         expect(stdout).toContain('→ Read · Cargo.toml');
         expect(stdout).not.toContain('/repo/Cargo.toml');
@@ -122,7 +123,11 @@ describe('Workbench event renderers', () => {
         for (const next of [
             event(1, 'run.started', {}),
             event(2, 'run.ready', { disabled_mcps: ['lux'] }),
-            event(3, 'tool.completed', { name: 'shell_command', status: 'failed' }),
+            event(3, 'tool.completed', {
+                name: 'shell_command',
+                status: 'failed',
+                message: 'Permission denied',
+            }),
             event(4, 'file.changed', { path: 'schema.sql', operation: 'edit' }),
             event(5, 'input.requested', { message: 'Approve migration?' }),
             event(6, 'run.failed', { message: 'permission denied' }),
@@ -135,6 +140,7 @@ describe('Workbench event renderers', () => {
         expect(stdout).toContain('● Workbench');
         expect(stdout).toContain('○ MCP unavailable · lux (optional)');
         expect(stdout).toContain('✗ Shell command');
+        expect(stdout).toContain('Permission denied');
         expect(stdout).toContain('~ edit schema.sql');
         expect(stdout).toContain('? Input required · Approve migration?');
         expect(stderr).toContain('✗ Failed · permission denied');
@@ -173,6 +179,201 @@ describe('Workbench event renderers', () => {
         machine.finish();
         expect(json).not.toContain('\u001B[');
         expect(JSON.parse(json)).toMatchObject({ type: 'run.completed' });
+    });
+
+    test('renders streamed Markdown blocks without exposing source markers', () => {
+        let output = '';
+        const renderer = createEventRenderer({
+            mode: 'human',
+            color: false,
+            columns: 80,
+            stdout: (value) => {
+                output += value;
+            },
+        });
+
+        renderer.render(event(1, 'output.text', { text: '# Release' }));
+        expect(output).toBe('\n');
+        renderer.render(event(2, 'output.text', { text: ' notes\n\nThis is **bo' }));
+        expect(output).toContain('Release notes');
+        expect(output).not.toContain('This is');
+        renderer.render(
+            event(3, 'output.text', {
+                text: 'ld**, *focused*, and `safe` with [docs](https://example.com).\n\n- First\n- Second\n\n> Quote\n\n```ts\nconst ok = true\n```\n',
+            })
+        );
+        renderer.render(event(4, 'turn.completed', {}));
+        renderer.finish();
+
+        expect(output).toMatchInlineSnapshot(`
+          "
+          ▌ Release notes
+
+          This is bold, focused, and safe with docs (https://example.com).
+
+          • First
+          • Second
+
+          │ Quote
+
+          ┌─ ts
+          │ const ok = true
+          └─
+          "
+        `);
+        expect(output).not.toContain('**');
+        expect(output).not.toContain('```');
+    });
+
+    test('waits for a closing fence before streaming code with blank lines', () => {
+        let output = '';
+        const renderer = createEventRenderer({
+            mode: 'human',
+            color: false,
+            stdout: (value) => {
+                output += value;
+            },
+        });
+
+        renderer.render(
+            event(1, 'output.text', { text: '```ts\nconst first = true\n\n' })
+        );
+        expect(output).toBe('\n');
+        renderer.render(
+            event(2, 'output.text', { text: 'const second = true\n```\n' })
+        );
+        expect(output).toContain('const first = true');
+        expect(output).toContain('const second = true');
+        renderer.finish();
+    });
+
+    test('renders GFM hierarchy, tasks, tables, and code without duplicated syntax', () => {
+        let output = '';
+        const renderer = createEventRenderer({
+            mode: 'human',
+            color: false,
+            columns: 52,
+            stdout: (value) => {
+                output += value;
+            },
+        });
+
+        renderer.render(
+            event(1, 'output.text', {
+                text: [
+                    '# Primary',
+                    '',
+                    '## Secondary',
+                    '',
+                    '### Tertiary',
+                    '',
+                    '- [x] Complete',
+                    '- [ ] Pending',
+                    '',
+                    '| Feature | State |',
+                    '|:--|--:|',
+                    '| A deliberately long table value that wraps | ready |',
+                    '',
+                    '```ts',
+                    'const value = true;',
+                    '```',
+                ].join('\n'),
+            })
+        );
+        renderer.finish();
+
+        expect(output).toContain('▌ Primary');
+        expect(output).toContain('◆ Secondary');
+        expect(output).toContain('› Tertiary');
+        expect(output).toContain('✓ Complete');
+        expect(output).toContain('○ Pending');
+        expect(output).not.toContain('[x]');
+        expect(output).not.toContain('[ ]');
+        expect(output).toContain('Feature');
+        expect(output).toContain('─┼─');
+        expect(output).toContain('┌─ ts');
+        expect(output).toContain('│ const value = true;');
+        expect(output).not.toContain('```');
+        for (const line of output.split('\n')) {
+            expect(Bun.stringWidth(line)).toBeLessThanOrEqual(52);
+        }
+    });
+
+    test('sanitizes terminal controls, unsafe links, images, and malformed input', () => {
+        let output = '';
+        const renderer = createEventRenderer({
+            mode: 'human',
+            color: false,
+            stdout: (value) => {
+                output += value;
+            },
+        });
+
+        renderer.render(
+            event(1, 'output.text', {
+                text: '\u001B[31mRED\u001B[0m\u0007\u202E [unsafe](javascript:alert(1)) ![tracking](https://example.com/pixel) **unfinished',
+            })
+        );
+        renderer.finish();
+
+        expect(output).toContain('RED unsafe [image: tracking] **unfinished');
+        expect(output).not.toContain('\u001B');
+        expect(output).not.toContain('\u0007');
+        expect(output).not.toContain('\u202E');
+        expect(output).not.toContain('javascript:');
+        expect(output).not.toContain('/pixel');
+    });
+
+    test('wraps styled human output to the configured terminal width', () => {
+        let output = '';
+        const renderer = createEventRenderer({
+            mode: 'human',
+            color: true,
+            columns: 24,
+            stdout: (value) => {
+                output += value;
+            },
+        });
+
+        renderer.render(
+            event(1, 'output.text', {
+                text: '**Workbench output** remains readable across narrow terminal windows and unicode 🙂 text.',
+            })
+        );
+        renderer.finish();
+
+        expect(output).toContain('\u001B[');
+        for (const line of stripVTControlCharacters(output).split('\n')) {
+            expect(Bun.stringWidth(line)).toBeLessThanOrEqual(24);
+        }
+    });
+
+    test('does not apply human Markdown formatting to JSON or final modes', () => {
+        let json = '';
+        const machine = createEventRenderer({
+            mode: 'json',
+            color: true,
+            stdout: (value) => {
+                json += value;
+            },
+        });
+        machine.render(event(1, 'output.text', { text: '**bold**' }));
+        machine.finish();
+        expect(JSON.parse(json).data.text).toBe('**bold**');
+        expect(json).not.toContain('\u001B[');
+
+        let final = '';
+        const finalOnly = createEventRenderer({
+            mode: 'final',
+            color: true,
+            stdout: (value) => {
+                final += value;
+            },
+        });
+        finalOnly.render(event(1, 'output.text', { text: '**bold**' }));
+        finalOnly.finish();
+        expect(final).toBe('**bold**\n');
+        expect(final).not.toContain('\u001B[');
     });
 
     test('reports a failure in final-only mode without inventing an answer', () => {

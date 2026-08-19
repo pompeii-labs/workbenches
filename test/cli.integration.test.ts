@@ -69,12 +69,12 @@ describe('CLI integration', () => {
         );
         const config = JSON.parse(await readFile(`${record}.config`, 'utf8'));
         expect(config).toMatchObject({
-            model: 'openrouter/openai/gpt-5.6-luna',
+            model: 'openrouter/openai/gpt-5.6-terra',
             instructions: ['.workbenches/core/instructions.md'],
         });
         expect(result.stdout).toContain('● fixture-core');
         expect(result.stdout).toContain(
-            'OpenCode · openrouter/openai/gpt-5.6-luna · local'
+            'OpenCode · openrouter/openai/gpt-5.6-terra · local'
         );
         expect(result.stdout).toContain('fixture response');
         expect(result.stdout).toContain('✓ Completed');
@@ -101,6 +101,32 @@ describe('CLI integration', () => {
         );
         expect(plain.code).toBe(0);
         expect(plain.stdout).not.toContain('\u001B[');
+    });
+
+    test('renders runner Markdown in human mode without changing final output', async () => {
+        const fixture = await createFixture();
+        const response =
+            '# Result\n\nThe **important** value is `safe`.\n\n- First\n- Second';
+        const bin = await fakeBin([], { response });
+        const environment = { PATH: `${bin}:${process.env.PATH}` };
+
+        const human = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--no-color'],
+            environment
+        );
+        expect(human.code).toBe(0);
+        expect(human.stdout).toContain(
+            'Result\n\nThe important value is safe.\n\n• First\n• Second'
+        );
+        expect(human.stdout).not.toContain('**');
+        expect(human.stdout).not.toContain('# Result');
+
+        const final = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--final'],
+            environment
+        );
+        expect(final.code).toBe(0);
+        expect(final.stdout).toBe(`${response}\n`);
     });
 
     test('supports positional tasks, normalized NDJSON, and final-only output', async () => {
@@ -136,13 +162,19 @@ describe('CLI integration', () => {
         expect(final.stdout).toBe('fixture response\n');
     });
 
-    test('stubs taskless interactive mode honestly', async () => {
+    test('reserves taskless and bare invocations for an interactive TUI', async () => {
         const fixture = await createFixture();
         const result = await executeCli(['run', fixture.packageDirectory]);
 
         expect(result.code).toBe(1);
         expect(result.stderr).toContain(
-            'Interactive Workbench mode is not implemented yet'
+            'The Workbench TUI requires an interactive terminal'
+        );
+
+        const bare = await executeCli([]);
+        expect(bare.code).toBe(1);
+        expect(bare.stderr).toContain(
+            'The Workbench TUI requires an interactive terminal'
         );
     });
 
@@ -307,7 +339,7 @@ describe('CLI integration', () => {
             name: 'fixture-core',
             version: '0.1.0',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-luna',
+            model: 'openrouter/openai/gpt-5.6-terra',
             runtime: 'local',
         });
 
@@ -336,9 +368,40 @@ describe('CLI integration', () => {
         const repository = await temporaryDirectory('workbench-init-');
         const result = await executeCli(['init', 'core'], {}, repository);
         expect(result.code).toBe(0);
-        expect(
-            await readFile(join(repository, '.workbenches/core/workbench.yml'), 'utf8')
-        ).toContain('name: core');
+        const manifest = await readFile(
+            join(repository, '.workbenches/core/workbench.yml'),
+            'utf8'
+        );
+        const instructions = await readFile(
+            join(repository, '.workbenches/core/instructions.md'),
+            'utf8'
+        );
+        expect(manifest).toContain('name: core');
+        expect(manifest).toContain('runner: "opencode"');
+        expect(manifest).toContain('model: "openrouter/openai/gpt-5.6-terra"');
+        expect(manifest).toContain(
+            'description: Repository-maintained expertise for core tasks.'
+        );
+        expect(instructions).toContain(
+            "Use this repository's source, documentation, and tests"
+        );
+
+        const validated = await executeCli(['validate', repository], {}, repository);
+        expect(validated.code).toBe(0);
+        expect(validated.stdout).toContain('valid\tcore');
+
+        const customized = await executeCli(
+            ['init', 'review', '--runner', 'pi', '--model', 'example/custom-model'],
+            {},
+            repository
+        );
+        expect(customized.code).toBe(0);
+        const customManifest = await readFile(
+            join(repository, '.workbenches/review/workbench.yml'),
+            'utf8'
+        );
+        expect(customManifest).toContain('runner: "pi"');
+        expect(customManifest).toContain('model: "example/custom-model"');
 
         const duplicate = await executeCli(['init', 'core'], {}, repository);
         expect(duplicate.code).toBe(1);
@@ -410,7 +473,7 @@ async function createFixture(options: { tools?: string[]; skill?: boolean } = {}
             'version: 0.1.0',
             'name: fixture-core',
             'runner: opencode',
-            'model: openrouter/openai/gpt-5.6-luna',
+            'model: openrouter/openai/gpt-5.6-terra',
             'instructions: ./instructions.md',
             ...(options.skill
                 ? ['skills:', '  - ./skills/fixture-skill']
@@ -429,11 +492,15 @@ async function createFixture(options: { tools?: string[]; skill?: boolean } = {}
 
 async function fakeBin(
     tools: string[] = [],
-    options: { delay?: boolean; block?: boolean } = {}
+    options: { delay?: boolean; block?: boolean; response?: string } = {}
 ) {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-bin-'));
     temporaryDirectories.push(directory);
     const runner = join(directory, 'opencode');
+    const responseEvent = JSON.stringify({
+        type: 'text',
+        part: { type: 'text', text: options.response ?? 'fixture response' },
+    });
     await writeFile(
         runner,
         [
@@ -447,7 +514,7 @@ async function fakeBin(
             'fi',
             ...(options.delay ? ['sleep 0.1'] : []),
             'printf \'%s\\n\' \'{"type":"step_start","part":{"type":"step-start"}}\'',
-            'printf \'%s\\n\' \'{"type":"text","part":{"type":"text","text":"fixture response"}}\'',
+            `printf '%s\\n' '${responseEvent}'`,
             'printf \'%s\\n\' \'{"type":"step_finish","part":{"type":"step-finish","reason":"stop","tokens":{"total":9,"input":4,"output":5,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.0001}}\'',
             '',
         ].join('\n')

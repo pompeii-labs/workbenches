@@ -129,7 +129,7 @@ function fixtureRun(
             workbench: 'fixture-core',
             workbench_version: '0.1.0',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-luna',
+            model: 'openrouter/openai/gpt-5.6-terra',
             workspace: '/workspace',
             mode,
         },

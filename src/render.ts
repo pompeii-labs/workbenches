@@ -3,6 +3,7 @@ import { isAbsolute, relative } from 'node:path';
 import pc from 'picocolors';
 
 import type { WorkbenchEvent } from './execution.js';
+import { TerminalMarkdownStream } from './terminal-markdown.js';
 
 type Colors = ReturnType<typeof pc.createColors>;
 
@@ -18,16 +19,16 @@ export function createEventRenderer(options: {
     stdout?: (value: string) => void;
     stderr?: (value: string) => void;
     color?: boolean;
+    columns?: number;
 }): EventRenderer {
     const stdout = options.stdout ?? ((value) => process.stdout.write(value));
     const stderr = options.stderr ?? ((value) => process.stderr.write(value));
     if (options.mode === 'json') return jsonRenderer(stdout);
     if (options.mode === 'final') return finalRenderer(stdout, stderr);
-    return humanRenderer(
-        stdout,
-        stderr,
-        pc.createColors(options.color ?? defaultColorEnabled())
-    );
+    return humanRenderer(stdout, stderr, {
+        colors: pc.createColors(options.color ?? defaultColorEnabled()),
+        columns: options.columns ?? process.stdout.columns ?? 80,
+    });
 }
 
 function jsonRenderer(write: (value: string) => void): EventRenderer {
@@ -60,14 +61,18 @@ function finalRenderer(
 function humanRenderer(
     stdout: (value: string) => void,
     stderr: (value: string) => void,
-    colors: Colors
+    options: { colors: Colors; columns: number }
 ): EventRenderer {
+    const { colors } = options;
     let inAnswer = false;
     let workspace = '';
     const usage: Record<string, number> = {};
+    const markdown = new TerminalMarkdownStream(stdout, colors, options.columns);
     const endAnswer = () => {
         if (!inAnswer) return;
+        markdown.flush();
         stdout('\n');
+        markdown.reset();
         inAnswer = false;
     };
     return {
@@ -100,7 +105,7 @@ function humanRenderer(
                     stdout('\n');
                     inAnswer = true;
                 }
-                stdout(text(event.data, 'text'));
+                markdown.push(text(event.data, 'text'));
                 return;
             }
             if (event.type === 'tool.started') {
@@ -118,6 +123,10 @@ function humanRenderer(
                 stdout(
                     `  ${marker} ${styledToolLabel(event.data, workspace, colors)}${duration ? colors.dim(` · ${duration}`) : ''}\n`
                 );
+                const detail = text(event.data, 'message');
+                if (failed && detail) {
+                    stdout(`    ${colors.red(detail)}\n`);
+                }
                 return;
             }
             if (event.type === 'file.changed') {
@@ -132,6 +141,10 @@ function humanRenderer(
                     if (typeof value === 'number')
                         usage[key] = (usage[key] ?? 0) + value;
                 }
+                return;
+            }
+            if (event.type === 'turn.completed') {
+                endAnswer();
                 return;
             }
             if (event.type === 'input.requested') {

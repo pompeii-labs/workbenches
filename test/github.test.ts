@@ -287,7 +287,7 @@ function manifestSource(instructions: string) {
         'name: lux-migrations',
         'description: Safely manage Lux migrations.',
         'runner: opencode',
-        'model: openrouter/openai/gpt-5.6-luna',
+        'model: openrouter/openai/gpt-5.6-terra',
         `instructions: ${instructions}`,
         'skills:',
         '  - ./skills/lux-migrations',

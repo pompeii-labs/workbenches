@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { defineCommand, runMain } from 'citty';
+import packageMetadata from '../package.json' with { type: 'json' };
 
 import { addCommand } from './commands/add.js';
 import { attachCommand } from './commands/attach.js';
@@ -12,13 +13,19 @@ import { runCommand } from './commands/run.js';
 import { smokeCommand } from './commands/smoke.js';
 import { validateCommand } from './commands/validate.js';
 import { viewCommand } from './commands/view.js';
+import { launchWorkbenchTui } from './tui.js';
 import { executeDetachedStoredRun } from './worker.js';
+
+const bareInvocation = import.meta.main && process.argv.length === 2;
 
 export const workbenchCommand = defineCommand({
     meta: {
         name: 'workbench',
-        version: '0.0.0',
+        version: packageMetadata.version,
         description: 'Discover, save, verify, and run open Workbenches.',
+    },
+    async run() {
+        if (bareInvocation) await launchWorkbenchTui();
     },
     subCommands: {
         init: initCommand,

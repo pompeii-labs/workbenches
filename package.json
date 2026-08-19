@@ -2,6 +2,23 @@
     "name": "@pompeii-labs/workbench",
     "version": "0.0.0",
     "private": true,
+    "description": "Open standard and reference engine for portable expert AI environments.",
+    "license": "Apache-2.0",
+    "author": "Pompeii Labs, Inc. <hello@pompeiilabs.com>",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/pompeii-labs/workbenches.git"
+    },
+    "bugs": {
+        "url": "https://github.com/pompeii-labs/workbenches/issues"
+    },
+    "keywords": [
+        "ai",
+        "agents",
+        "cli",
+        "open-standard",
+        "workbench"
+    ],
     "packageManager": "bun@1.3.11",
     "type": "module",
     "bin": {
@@ -9,15 +26,17 @@
         "wb": "./src/cli.ts"
     },
     "scripts": {
-        "build": "bun build --compile --minify --outfile dist/workbench src/cli.ts",
+        "build": "bun scripts/build.ts",
         "check": "bun run typecheck && bun run lint && bun test",
         "commitlint": "commitlint",
         "format": "biome check --write .",
         "lint": "biome check .",
         "prepare": "husky",
-        "run": "bun src/cli.ts",
-        "test": "bun test",
-        "test:coverage": "bun test --coverage",
+        "release:package": "bun scripts/package-release.ts",
+        "release:verify": "bun scripts/verify-release.ts",
+        "run": "bun --preload @opentui/solid/preload src/cli.ts",
+        "test": "bun test --preload @opentui/solid/preload",
+        "test:coverage": "bun test --preload @opentui/solid/preload --coverage",
         "typecheck": "tsc --noEmit"
     },
     "devDependencies": {
@@ -29,7 +48,10 @@
         "typescript": "^5.9.3"
     },
     "dependencies": {
+        "@opentui/solid": "^0.5.4",
         "citty": "^0.2.2",
-        "picocolors": "^1.1.1"
+        "marked": "^18.0.7",
+        "picocolors": "^1.1.1",
+        "solid-js": "1.9.12"
     }
 }
