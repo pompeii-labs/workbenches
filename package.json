@@ -1,0 +1,17 @@
+{
+    "name": "@pompeii-labs/workbench",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "bin": {
+        "workbench": "./src/cli.ts"
+    },
+    "scripts": {
+        "run": "bun src/cli.ts",
+        "test": "bun test"
+    },
+    "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.9.3"
+    }
+}
