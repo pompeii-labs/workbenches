@@ -4,14 +4,18 @@
 
 A model is capable. A Workbench makes it prepared.
 
+General-purpose agents pay a knowledge ramp-up cost every time they enter an
+unfamiliar project. They spend time and model tokens rediscovering architecture,
+conventions, tooling, and operating procedures that maintainers already know. A
+Workbench packages that expertise once, so every compatible run begins
+prepared.
+
 Workbenches package the expertise, runner, model, tools, skills, integrations,
 runtime, and authorization requirements needed to perform a specific class of
 work. They give maintainers a portable way to publish not only documentation,
 but an executable expert environment for their project.
 
-Instead of asking an AI to discover a project's architecture, conventions,
-CLI, development environment, and operating procedures while it is already
-trying to complete a task, a maintainer can publish that knowledge once:
+A maintainer publishes the package alongside the project:
 
 ```text
 .workbenches/

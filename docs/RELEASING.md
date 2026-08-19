@@ -28,10 +28,10 @@ bun audit --audit-level=moderate
 bun run release:package
 ```
 
-Commit the version change, then create and push a signed annotated tag:
+Commit the version change, then create and push an annotated tag:
 
 ```sh
-git tag -s v0.1.0-alpha.1 -m 'Workbench v0.1.0-alpha.1'
+git tag -a v0.1.0-alpha.1 -m 'Workbench v0.1.0-alpha.1'
 git push origin main v0.1.0-alpha.1
 ```
 
