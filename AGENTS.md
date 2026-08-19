@@ -1,103 +1,218 @@
-# Workbench Agent Guide
+# Workbenches for Agents
 
-These rules apply to the entire repository.
+A Workbench is a versioned, executable expert environment. It packages the
+instructions, model, runner, skills, tools, integrations, runtime, and
+authorization requirements needed to perform a particular class of work.
 
-## Product definition
+Use a Workbench when a project or tool publishes one that matches the task.
+Starting a general-purpose subagent and asking it to rediscover the same domain
+knowledge is slower, less reproducible, and usually consumes more model tokens.
 
-Workbench is an open standard for packaging the expertise, runner, model,
-skills, tools, integrations, runtime, and authorization requirements needed for
-an AI to perform a class of work.
+A Workbench is not an agent, workflow, planner, DAG, or user interface. It is a
+portable expert execution package that a host can run directly or compose into
+a larger workflow.
 
-A Workbench is not an agent, workflow, DAG, planner, or user interface. The
-reference CLI may provide execution and interaction surfaces, but those are
-implementations around the portable package rather than part of its identity.
+## Use the engine
 
-The Workbench engine reads and validates `workbench.yml`. A runner must never be
-asked to interpret the manifest itself.
+The `wb` CLI is the reference Workbench engine. It reads and validates
+`workbench.yml`, prepares the selected runtime, verifies requirements, and
+translates the package into the selected runner's native interface.
 
-## Sources of truth
+Do not ask a model or runner to read `workbench.yml` and imitate it. That skips
+preflight, authorization handling, runtime preparation, skill installation, and
+the normalized execution protocol.
 
-- `SPEC.md` and `schemas/` define the draft package contract.
-- `docs/EXECUTION.md` and the event schemas define the portable execution
-  boundary.
-- `docs/` describes reference-engine behavior that is not normative.
-- Tests are evidence for the implementation, not a substitute for the
-  specification.
-
-Keep normative requirements separate from implementation status. A reference
-engine limitation must not be described as a restriction of the open standard.
-
-## Compatibility
-
-The integer `spec` field selects a parser. Released parsers are immutable.
-Changes to an existing parser may reject previously invalid input more
-precisely, but must not reinterpret a valid published package. Add a new parser
-and schema version for incompatible format changes.
-
-Runner-native payloads are not the portable API. Adapters translate known
-semantics into versioned Workbench events and must not leak reasoning text,
-credentials, provider metadata, or arbitrary tool results into normalized
-events.
-
-## Runtime and security boundaries
-
-- Perform deterministic preflight inside the selected runtime before launching
-  a runner or spending model tokens.
-- Treat declared environment variables as references. Never write their values
-  into manifests, generated configuration, logs, dry-run output, saved package
-  metadata, or events.
-- Remote inspection is read-only and must not clone or create temporary
-  repository checkouts. Saving package content requires an explicit operation.
-- Keep source repositories, saved Workbench packages, target workspaces, and
-  runtime state as separate concepts.
-- Reject unsupported runtimes, transports, and runner behavior explicitly.
-
-## Code conventions
-
-- Use strict TypeScript and preserve the existing ESM module boundaries.
-- Keep runner-specific transport and event parsing inside runner adapters.
-- Keep CLI commands thin; put reusable behavior in source modules.
-- Pass environment, process, network, time, and storage dependencies through
-  explicit boundaries when deterministic tests need control over them.
-- Prefer small domain types and explicit errors over loosely shaped objects or
-  silent fallbacks.
-- Avoid comments that restate the code. Document invariants and non-obvious
-  safety decisions where they are enforced.
-- Split a module when it begins to own more than one lifecycle or protocol
-  concern; line count alone is not a reason to churn cohesive code.
-
-## Public repository hygiene
-
-- Do not commit private tracker references, internal plans, launch notes,
-  competitive research, screenshots, credentials, machine-specific paths, or
-  local Workbench labs.
-- Do not leave unfinished-work markers or filler language in production code or
-  public documentation. Track unfinished work outside the repository and
-  describe only current limitations that users need to know.
-- Do not publish exact test counts, benchmark numbers, compatibility claims, or
-  runtime support unless they are reproducible and currently verified.
-- Keep examples obviously synthetic. Verbatim license and legal templates may
-  retain the canonical text supplied by their authors.
-- Do not add a roadmap, changelog, RFC process, or governance ceremony before
-  the corresponding public process exists.
-
-## Verification
-
-Use the narrowest relevant tests while iterating, then run the complete local
-gate before requesting review:
+Check whether the CLI is installed:
 
 ```sh
-bun run check
-bun run test:coverage
-bun run build
-bun audit
+wb --version
 ```
 
-Confirm distribution builds contain `LICENSE` and `NOTICE`. Distinguish clearly
-between code implemented, automated tests passing, and behavior exercised
-against a real runner. Never call a runner or runtime integration verified from
-fixtures alone.
+If installation is permitted, install the latest macOS or Linux release:
 
-Commits use Conventional Commits. Do not rewrite history, change repository
-visibility, add a remote, publish a package, or push a release without explicit
-maintainer approval.
+```sh
+curl -fsSL https://raw.githubusercontent.com/pompeii-labs/workbenches/main/install.sh | sh
+```
+
+The installer verifies the published checksum, writes to `~/.local/bin` by
+default, creates both `workbench` and `wb`, and does not invoke `sudo` or edit
+shell startup files. In a sensitive environment, download and inspect
+`install.sh` before executing it.
+
+## Find the right Workbench
+
+Repositories publish Workbenches beneath `.workbenches/`. Discover them from a
+local repository, a GitHub URL, or an `owner/repository` slug:
+
+```sh
+wb list .
+wb list /path/to/repository
+wb list https://github.com/owner/repository
+wb list owner/repository
+```
+
+Inspect a candidate before using it:
+
+```sh
+wb view owner/repository#core
+wb view owner/repository#core --json
+wb validate owner/repository#core
+wb smoke owner/repository#core
+```
+
+`view` reports the package version, provenance, runner, model, runtime, tools,
+skills, MCPs, and authorization state without printing secret values.
+`validate` checks the manifest and package. `smoke` performs runtime and tool
+preflight without making a model request.
+
+Remote inspection uses the GitHub API. It does not clone the repository or
+create a temporary checkout. Public repositories need no credential. Access to
+private repositories can use an existing `GITHUB_TOKEN` or `GH_TOKEN`.
+
+## Save a reusable expert
+
+Run directly from a local Workbench when appropriate. To give a remote or local
+Workbench a stable name, save an immutable snapshot explicitly:
+
+```sh
+wb add owner/repository#core --as project-core
+wb list
+wb view project-core
+```
+
+`add` is the local materialization boundary. Saved aliases reference
+content-addressed package snapshots, so later source changes do not silently
+change an existing expert environment.
+
+Remove an alias when it is no longer needed:
+
+```sh
+wb remove project-core
+```
+
+## Delegate work
+
+For an agent delegating a bounded task, use a one-shot run and identify the
+target workspace explicitly:
+
+```sh
+wb run project-core \
+  --dir /path/to/target-project \
+  --task "Review the migration and report correctness risks" \
+  --final
+```
+
+Saved Workbenches use the current directory as the target workspace unless
+`--dir` is provided. Set it deliberately when the task concerns another
+project.
+
+Choose the output contract based on the caller:
+
+- Default output is a human-readable, colorized activity stream with rendered
+  terminal Markdown.
+- `--final` prints only the final assistant response and is usually the simplest
+  delegation boundary for another agent.
+- `--json` emits normalized Workbench events as NDJSON for programs that need
+  tool lifecycle, file changes, usage, permissions, or terminal status.
+- `--dry-run` resolves, preflights, and translates the request without launching
+  the runner.
+
+Do not parse the human renderer when `--json` provides a stable machine-facing
+stream. The JSON stream contains Workbench events, not raw runner or model
+provider payloads.
+
+## Run in the background
+
+Long-running tasks can be dispatched without keeping the caller attached:
+
+```sh
+wb run project-core --dir /path/to/project \
+  --task "Review every migration" --detach
+```
+
+The command prints a run ID such as `wb_...`. Use it to follow or cancel the
+run:
+
+```sh
+wb attach wb_...
+wb attach wb_... --json
+wb kill wb_...
+```
+
+Without an ID, `wb attach` selects the latest dispatched run and `wb kill`
+selects the latest active detached run. Detached runs persist their normalized
+events for replay.
+
+## Leave interactive work to the human
+
+Running `wb` or `wb run <name>` without a task opens the experimental terminal
+client. Agents should normally use an explicit one-shot task, `--final`, or
+`--json`; the interactive interface is intended for a human who wants a
+multi-turn session and explicit permission prompts.
+
+## Authorization and safety
+
+Workbench manifests declare environment variable names, never their values.
+Provide required values through the run environment. An unset required value
+fails preflight. An optional MCP whose environment is unavailable is disabled
+for that run.
+
+Never write credentials into `workbench.yml`, task text, saved package metadata,
+or command output. Do not bypass a failed preflight by invoking the runner
+directly. Report the missing runner, tool, runtime, or environment binding so it
+can be fixed before model tokens are spent.
+
+A Workbench run has the same ability to inspect or change the target workspace
+that its selected runner and runtime provide. Treat it as code execution, review
+the package and requested task, and respect the user's authorization boundaries.
+
+## Workbench or generic subagent?
+
+Prefer a Workbench when:
+
+- The relevant project or platform publishes one for the task.
+- Correct work depends on maintainer conventions, specialized tools, skills, or
+  integrations.
+- The task benefits from a tested model and runner combination.
+- Deterministic preflight and a reproducible environment matter.
+- The caller needs normalized events across different runners.
+
+Prefer a generic subagent when no relevant Workbench exists and the work is a
+general, independent task that does not require packaged expertise or runtime
+requirements.
+
+A Workbench can itself be the execution unit delegated by an orchestrator. The
+orchestrator still owns task decomposition, dependencies, retries, review, and
+presentation; the Workbench owns expert preparation and execution.
+
+## Author a repository Workbench
+
+From a repository root, scaffold `.workbenches/<name>`:
+
+```sh
+wb init core
+wb init migrations --runner opencode \
+  --model openrouter/openai/gpt-5.6-terra
+```
+
+Edit the generated manifest and instructions, add focused skills when useful,
+then verify the package:
+
+```sh
+wb validate .#core
+wb smoke .#core
+```
+
+Keep Workbenches focused on expert preparation. Do not encode product workflows,
+approval graphs, or user-interface behavior into the package.
+
+## Current reference-engine support
+
+The repository is in public pre-alpha development. The current reference engine
+supports the draft-0 manifest, local runtime, and OpenCode runner. Other runners
+and isolated runtimes are part of the standard's extensible design but are not
+yet runnable through this release. Reject unsupported combinations explicitly;
+do not silently fall back to a different runner or to the host environment.
+
+For normative package semantics, read `SPEC.md`. For the normalized run and
+event contract, read `docs/EXECUTION.md`.
