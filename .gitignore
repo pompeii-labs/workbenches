@@ -1,7 +1,7 @@
 node_modules/
 dist/
 coverage/
-.workbenches/
+.workbenches/lab-*
 .env
 .env.*
 !.env.example

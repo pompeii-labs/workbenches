@@ -129,6 +129,17 @@ wb init core
 wb init migrations --runner opencode --model openrouter/openai/gpt-5.6-terra
 ```
 
+This repository also publishes a `creator` Workbench containing the current
+schema and maintainer-authored package guidance. Save it once, then use it to
+design, author, review, or repair Workbenches in another repository:
+
+```sh
+wb add pompeii-labs/workbenches#creator --as workbench-creator
+wb run workbench-creator \
+  --dir /path/to/repository \
+  --task "Inspect this repository and create a focused migrations Workbench"
+```
+
 ### Discover and save Workbenches
 
 Local paths, GitHub URLs, and GitHub repository slugs are accepted:
