@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./assets/brand/workbench-mark-woodcut.png" alt="Workbench" width="220">
+</p>
+
 # Workbench
 
 [![CI](https://github.com/pompeii-labs/workbenches/actions/workflows/ci.yml/badge.svg)](https://github.com/pompeii-labs/workbenches/actions/workflows/ci.yml)
