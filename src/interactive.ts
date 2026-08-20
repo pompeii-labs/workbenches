@@ -13,6 +13,7 @@ import {
     type RunnerSession,
     RunnerSessionRegistry,
 } from './runner-session.js';
+import type { WorkbenchWorkspaceBinding } from './types.js';
 
 export interface InteractiveWorkbenchSession {
     readonly runId: string;
@@ -36,6 +37,7 @@ export async function startInteractiveWorkbench(options: {
         request: RunnerPermissionRequest
     ) => Promise<RunnerPermissionDecision> | RunnerPermissionDecision;
     dependencies?: InteractiveDependencies;
+    workspaces?: WorkbenchWorkspaceBinding[];
 }): Promise<InteractiveWorkbenchSession> {
     const { workbench } = options.resolved;
     const dependencies = options.dependencies ?? {};
@@ -63,6 +65,7 @@ export async function startInteractiveWorkbench(options: {
             runtime: workbench.manifest.runtime,
             workspace: options.resolved.workspaceDirectory,
             interactive: true,
+            workspaces: options.workspaces ?? [],
         });
         session = await adapter.start({
             workbench,
@@ -94,6 +97,7 @@ export async function startInteractiveWorkbench(options: {
             tools: preflight.tools.map((tool) => tool.name),
             enabled_mcps: preflight.enabledMcps,
             disabled_mcps: preflight.disabledMcps,
+            workspaces: options.workspaces ?? [],
         });
         return new HostedInteractiveSession(session, emitter);
     } catch (error) {

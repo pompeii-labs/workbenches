@@ -58,6 +58,91 @@ describe('Docker runtime provider', () => {
         ).rejects.toThrow('Docker runtime requires an image or local image build');
     });
 
+    test('requires authorization and preserves host paths for a host engine binding', async () => {
+        const fixture = await createFixture({
+            image: 'ghcr.io/example/lux:0.1.0',
+            dockerEngine: true,
+        });
+        let resolvedSocket = false;
+        const provider = new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock([]),
+            hostSocket: async () => {
+                resolvedSocket = true;
+                return { path: fixture.workbench.manifestPath, gid: 20 };
+            },
+        });
+
+        await expect(provider.prepare(request(fixture))).rejects.toThrow(
+            'Host Docker engine access requires explicit --allow-host-docker authorization'
+        );
+        expect(resolvedSocket).toBeFalse();
+
+        let spawnedCommand: string[] = [];
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock([]),
+            hostSocket: async () => ({
+                path: fixture.workbench.manifestPath,
+                gid: 20,
+            }),
+            spawn(command) {
+                spawnedCommand = command;
+                return { exited: Promise.resolve(0), kill() {} };
+            },
+        }).prepare({
+            ...request(fixture),
+            authorizations: { hostDocker: true },
+        });
+        try {
+            expect(runtime.workspaceDirectory).toBe(fixture.root);
+            expect(runtime.environment).toMatchObject({
+                DOCKER_HOST: 'unix:///var/run/docker.sock',
+                WORKBENCH_DOCKER_ENGINE: 'host',
+            });
+            await runtime.preflight();
+            runtime.launch({
+                command: ['opencode', 'run', 'inspect'],
+                cwd: runtime.workspaceDirectory,
+                env: runtime.environment,
+            });
+            expect(spawnedCommand).toContain(`${fixture.root}:${fixture.root}`);
+            expect(spawnedCommand).toContain(
+                `${fixture.workbench.manifestPath}:/var/run/docker.sock`
+            );
+            expect(spawnedCommand).toContain('--group-add');
+            expect(spawnedCommand).toContain('20');
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('rejects a non-Unix Docker context without falling back', async () => {
+        const fixture = await createFixture({
+            image: 'ghcr.io/example/lux:0.1.0',
+            dockerEngine: true,
+        });
+        const mockedDocker = dockerMock([]);
+        const provider = new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command(command) {
+                if (command[1] === 'context') {
+                    return Promise.resolve(result(0, 'tcp://docker.example:2376\n'));
+                }
+                return mockedDocker(command);
+            },
+        });
+
+        await expect(
+            provider.prepare({
+                ...request(fixture),
+                authorizations: { hostDocker: true },
+            })
+        ).rejects.toThrow(
+            'Host Docker engine binding requires a Unix socket context; received tcp://docker.example:2376'
+        );
+    });
+
     test('pulls a published tag and runs from its immutable repository digest', async () => {
         const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
         const commands: string[][] = [];
@@ -199,6 +284,9 @@ describe('Docker runtime provider', () => {
             expect(spawnedCommand).toContain(
                 `${fixture.packageDirectory}:/workbench:ro`
             );
+            expect(spawnedCommand).toContain(
+                `${fixture.packageDirectory}:/workspace/.workbenches/core:ro`
+            );
             const preflightCommands = commands.filter(
                 (command) => command[1] === 'run'
             );
@@ -209,6 +297,9 @@ describe('Docker runtime provider', () => {
                 expect(command).toContain('501:20');
                 expect(command).toContain(`${fixture.root}:/workspace`);
                 expect(command).toContain(`${fixture.packageDirectory}:/workbench:ro`);
+                expect(command).toContain(
+                    `${fixture.packageDirectory}:/workspace/.workbenches/core:ro`
+                );
             }
             expect(
                 dockerEnvironments.every(
@@ -223,6 +314,62 @@ describe('Docker runtime provider', () => {
             await process.exited;
             await expect(stat(environmentFile)).rejects.toThrow();
             runtime.cancel(process);
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('mounts named workspaces at deterministic paths with declared access', async () => {
+        const fixture = await createFixture({
+            image: 'ghcr.io/example/lux:0.1.0',
+        });
+        const api = await mkdtemp(join(tmpdir(), 'workbench-api-test-'));
+        const schemas = await mkdtemp(join(tmpdir(), 'workbench-schemas-test-'));
+        temporaryDirectories.push(api, schemas);
+        let spawnedCommand: string[] = [];
+        let containerEnvironment = '';
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock([]),
+            spawn(command) {
+                spawnedCommand = command;
+                const environmentFile = command[command.indexOf('--env-file') + 1];
+                if (environmentFile) {
+                    containerEnvironment = readFileSync(environmentFile, 'utf8');
+                }
+                return { exited: Promise.resolve(0), kill() {} };
+            },
+        }).prepare({
+            ...request(fixture),
+            assets: [
+                ...request(fixture).assets,
+                { path: api, access: 'read-write', workspace: 'api' },
+                { path: schemas, access: 'read-only', workspace: 'schemas' },
+            ],
+        });
+        try {
+            expect(runtime.workspaces).toEqual([
+                { name: 'api', path: '/workspaces/api', access: 'read-write' },
+                {
+                    name: 'schemas',
+                    path: '/workspaces/schemas',
+                    access: 'read-only',
+                },
+            ]);
+            await runtime.preflight();
+            runtime.launch({
+                command: ['opencode', 'run', 'inspect'],
+                cwd: runtime.workspaceDirectory,
+                env: runtime.environment,
+            });
+            expect(spawnedCommand).toContain(`${api}:/workspaces/api`);
+            expect(spawnedCommand).toContain(`${schemas}:/workspaces/schemas:ro`);
+            expect(containerEnvironment).toContain(
+                'WORKBENCH_WORKSPACE_API=/workspaces/api\n'
+            );
+            expect(containerEnvironment).toContain(
+                'WORKBENCH_WORKSPACE_SCHEMAS=/workspaces/schemas\n'
+            );
         } finally {
             await runtime.cleanup();
         }
@@ -470,6 +617,7 @@ async function createFixture(options: {
     localBuild?: boolean;
     tools?: string[];
     env?: Record<string, { required: boolean }>;
+    dockerEngine?: boolean;
 }): Promise<{
     root: string;
     packageDirectory: string;
@@ -510,6 +658,9 @@ async function createFixture(options: {
             env: options.env ?? {},
             runtime: 'docker',
             ...(image ? { image } : {}),
+            ...(options.dockerEngine
+                ? { docker: { engine: { mode: 'host' as const } } }
+                : {}),
         },
     };
     await writeFile(manifestPath, Bun.YAML.stringify(workbench.manifest));

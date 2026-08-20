@@ -1,6 +1,15 @@
 import { type DockerRuntimeDependencies, DockerRuntimeProvider } from './docker.js';
 import { type PreflightResult, preflightWorkbench } from './preflight.js';
-import type { ResolvedWorkbench, RunnerInvocation, SpawnedRunner } from './types.js';
+import type {
+    ResolvedWorkbench,
+    RunnerInvocation,
+    SpawnedRunner,
+    WorkbenchWorkspaceBinding,
+} from './types.js';
+import {
+    validateWorkbenchWorkspaceBindings,
+    workspaceEnvironment,
+} from './workspaces.js';
 
 export type RuntimePhase =
     | 'resolve'
@@ -15,6 +24,7 @@ export type RuntimePhase =
 export interface RuntimeAsset {
     path: string;
     access: 'read-only' | 'read-write';
+    workspace?: string;
 }
 
 export interface RuntimePrepareRequest {
@@ -22,6 +32,8 @@ export interface RuntimePrepareRequest {
     workspaceDirectory: string;
     environment: Record<string, string | undefined>;
     assets: RuntimeAsset[];
+    authorizations?: { hostDocker: boolean };
+    purpose?: 'build' | 'run';
 }
 
 export interface PreparedRuntime {
@@ -29,6 +41,7 @@ export interface PreparedRuntime {
     readonly workbench: ResolvedWorkbench;
     readonly workspaceDirectory: string;
     readonly environment: Record<string, string | undefined>;
+    readonly workspaces: WorkbenchWorkspaceBinding[];
     readonly preparation?: RuntimePreparation;
     pathFor(hostPath: string): string;
     preflight(): Promise<PreflightResult>;
@@ -105,11 +118,20 @@ export async function smokeWorkbenchRuntime(options: {
     workbench: ResolvedWorkbench;
     workspaceDirectory?: string;
     environment?: Record<string, string | undefined>;
+    workspaces?: WorkbenchWorkspaceBinding[];
+    allowHostDocker?: boolean;
     registry?: RuntimeProviderRegistry;
 }): Promise<PreflightResult> {
     const environment = options.environment ?? process.env;
     const workspaceDirectory =
         options.workspaceDirectory ?? options.workbench.repositoryDirectory;
+    const workspaces = options.workspaces ?? [];
+    await validateWorkbenchWorkspaceBindings(options.workbench, workspaces);
+    if (options.allowHostDocker && !options.workbench.manifest.docker?.engine) {
+        throw new Error(
+            'Host Docker authorization was supplied to a Workbench that does not declare docker.engine'
+        );
+    }
     const registry = options.registry ?? createRuntimeProviderRegistry();
     const runtime = await registry.resolve(options.workbench.manifest.runtime).prepare({
         workbench: options.workbench,
@@ -121,7 +143,13 @@ export async function smokeWorkbenchRuntime(options: {
                 path: options.workbench.packageDirectory,
                 access: 'read-only',
             },
+            ...workspaces.map((workspace) => ({
+                path: workspace.path,
+                access: workspace.access,
+                workspace: workspace.name,
+            })),
         ],
+        authorizations: { hostDocker: options.allowHostDocker ?? false },
     });
     try {
         return await runtime.preflight();
@@ -169,6 +197,7 @@ class LocalPreparedRuntime implements PreparedRuntime {
     readonly workbench: ResolvedWorkbench;
     readonly workspaceDirectory: string;
     readonly environment: Record<string, string | undefined>;
+    readonly workspaces: WorkbenchWorkspaceBinding[];
     readonly preparation = { kind: 'host' as const };
     private readonly findExecutable: (name: string) => string | null;
     private readonly spawn: NonNullable<LocalRuntimeDependencies['spawn']>;
@@ -182,7 +211,21 @@ class LocalPreparedRuntime implements PreparedRuntime {
     ) {
         this.workbench = request.workbench;
         this.workspaceDirectory = request.workspaceDirectory;
-        this.environment = request.environment;
+        this.workspaces = request.assets.flatMap((asset) =>
+            asset.workspace
+                ? [
+                      {
+                          name: asset.workspace,
+                          path: asset.path,
+                          access: asset.access,
+                      },
+                  ]
+                : []
+        );
+        this.environment = {
+            ...request.environment,
+            ...workspaceEnvironment(this.workspaces),
+        };
         this.findExecutable = findExecutable;
         this.spawn = spawn;
     }
@@ -205,7 +248,7 @@ class LocalPreparedRuntime implements PreparedRuntime {
                 findExecutable: this.findExecutable,
             });
             this.ready = true;
-            return result;
+            return { ...result, workspaces: this.workspaces };
         } catch (error) {
             throw normalizeRuntimeError(this.name, 'preflight', error);
         }
@@ -297,6 +340,10 @@ class NormalizedPreparedRuntime implements PreparedRuntime {
 
     get environment(): Record<string, string | undefined> {
         return this.runtime.environment;
+    }
+
+    get workspaces(): WorkbenchWorkspaceBinding[] {
+        return this.runtime.workspaces;
     }
 
     get preparation(): RuntimePreparation {

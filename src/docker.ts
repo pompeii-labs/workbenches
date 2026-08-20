@@ -23,7 +23,13 @@ import {
     type RuntimePrepareRequest,
     type RuntimeProvider,
 } from './runtime.js';
-import type { ResolvedWorkbench, RunnerInvocation, SpawnedRunner } from './types.js';
+import type {
+    ResolvedWorkbench,
+    RunnerInvocation,
+    SpawnedRunner,
+    WorkbenchWorkspaceBinding,
+} from './types.js';
+import { workspaceEnvironment } from './workspaces.js';
 
 export interface DockerPreparation {
     kind: 'image';
@@ -59,6 +65,10 @@ export interface DockerRuntimeDependencies {
     ) => Promise<DockerCommandResult>;
     spawn?: (command: string[], options: DockerSpawnOptions) => SpawnedRunner;
     user?: () => { uid: number; gid: number } | undefined;
+    hostSocket?: (
+        docker: string,
+        command: NonNullable<DockerRuntimeDependencies['command']>
+    ) => Promise<{ path: string; gid?: number }>;
 }
 
 interface DockerImageInspect {
@@ -70,6 +80,7 @@ interface AssetMapping {
     hostPath: string;
     runtimePath: string;
     access: 'read-only' | 'read-write';
+    translate?: boolean;
 }
 
 export class DockerRuntimeProvider implements RuntimeProvider {
@@ -78,12 +89,14 @@ export class DockerRuntimeProvider implements RuntimeProvider {
     private readonly command: NonNullable<DockerRuntimeDependencies['command']>;
     private readonly spawn: NonNullable<DockerRuntimeDependencies['spawn']>;
     private readonly user: NonNullable<DockerRuntimeDependencies['user']>;
+    private readonly hostSocket: NonNullable<DockerRuntimeDependencies['hostSocket']>;
 
     constructor(dependencies: DockerRuntimeDependencies = {}) {
         this.findExecutable = dependencies.findExecutable ?? Bun.which;
         this.command = dependencies.command ?? defaultCommand;
         this.spawn = dependencies.spawn ?? defaultSpawn;
         this.user = dependencies.user ?? hostUser;
+        this.hostSocket = dependencies.hostSocket ?? resolveHostDockerSocket;
     }
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
@@ -102,6 +115,16 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                 'Docker runtime requires an image or local image build'
             );
         }
+        const needsHostDocker =
+            request.purpose !== 'build' &&
+            request.workbench.manifest.docker?.engine !== undefined;
+        if (needsHostDocker && !request.authorizations?.hostDocker) {
+            throw new RuntimeError(
+                this.name,
+                'bind',
+                'Host Docker engine access requires explicit --allow-host-docker authorization'
+            );
+        }
 
         const command = withoutWorkbenchEnvironment(
             this.command,
@@ -115,6 +138,10 @@ export class DockerRuntimeProvider implements RuntimeProvider {
             'Docker daemon is unavailable'
         );
 
+        const hostDocker = needsHostDocker
+            ? await this.hostSocket(docker, command)
+            : undefined;
+
         const prepared =
             typeof request.workbench.manifest.image === 'string'
                 ? await preparePublishedImage(
@@ -124,7 +151,7 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                   )
                 : await prepareLocalImage(docker, request, command);
         try {
-            const mappings = createAssetMappings(request);
+            const mappings = createAssetMappings(request, hostDocker?.path);
             await verifyAssets(mappings);
             const stateDirectory = await mkdtemp(
                 join(tmpdir(), 'workbench-docker-runtime-')
@@ -135,6 +162,7 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                 command,
                 spawn: this.spawn,
                 user: this.user(),
+                ...(hostDocker ? { hostDocker } : {}),
                 mappings,
                 preparation: prepared.preparation,
                 stateDirectory,
@@ -157,11 +185,13 @@ class DockerPreparedRuntime implements PreparedRuntime {
     readonly workbench: ResolvedWorkbench;
     readonly workspaceDirectory: string;
     readonly environment: Record<string, string | undefined>;
+    readonly workspaces: WorkbenchWorkspaceBinding[];
     readonly preparation: DockerPreparation;
     private readonly docker: string;
     private readonly command: NonNullable<DockerRuntimeDependencies['command']>;
     private readonly spawn: NonNullable<DockerRuntimeDependencies['spawn']>;
     private readonly user: { uid: number; gid: number } | undefined;
+    private readonly hostDocker: { path: string; gid?: number } | undefined;
     private readonly mappings: AssetMapping[];
     private readonly stateDirectory: string;
     private readonly cleanupPreparation: () => Promise<void>;
@@ -177,6 +207,7 @@ class DockerPreparedRuntime implements PreparedRuntime {
         command: NonNullable<DockerRuntimeDependencies['command']>;
         spawn: NonNullable<DockerRuntimeDependencies['spawn']>;
         user: { uid: number; gid: number } | undefined;
+        hostDocker?: { path: string; gid?: number };
         mappings: AssetMapping[];
         preparation: DockerPreparation;
         stateDirectory: string;
@@ -186,12 +217,33 @@ class DockerPreparedRuntime implements PreparedRuntime {
         this.command = options.command;
         this.spawn = options.spawn;
         this.user = options.user;
+        this.hostDocker = options.hostDocker;
         this.mappings = options.mappings;
         this.stateDirectory = options.stateDirectory;
         this.preparation = options.preparation;
         this.cleanupPreparation = options.cleanupPreparation;
         this.workspaceDirectory = this.pathFor(options.request.workspaceDirectory);
-        this.environment = containerEnvironment(options.request);
+        this.workspaces = options.request.assets.flatMap((asset) =>
+            asset.workspace
+                ? [
+                      {
+                          name: asset.workspace,
+                          path: this.pathFor(asset.path),
+                          access: asset.access,
+                      },
+                  ]
+                : []
+        );
+        this.environment = {
+            ...containerEnvironment(options.request),
+            ...workspaceEnvironment(this.workspaces),
+            ...(this.hostDocker
+                ? {
+                      DOCKER_HOST: 'unix:///var/run/docker.sock',
+                      WORKBENCH_DOCKER_ENGINE: 'host',
+                  }
+                : {}),
+        };
         this.workbench = remapWorkbench(options.request.workbench, (path) =>
             this.pathFor(path)
         );
@@ -200,7 +252,10 @@ class DockerPreparedRuntime implements PreparedRuntime {
     pathFor(hostPath: string): string {
         const requested = resolve(hostPath);
         const match = this.mappings
-            .filter((mapping) => contains(mapping.hostPath, requested))
+            .filter(
+                (mapping) =>
+                    mapping.translate !== false && contains(mapping.hostPath, requested)
+            )
             .toSorted((left, right) => right.hostPath.length - left.hostPath.length)[0];
         if (!match) {
             throw new Error(`Path is not staged in Docker runtime: ${hostPath}`);
@@ -231,6 +286,26 @@ class DockerPreparedRuntime implements PreparedRuntime {
             }
             tools.push({ name, path });
         }
+        if (this.hostDocker) {
+            const dockerPath = await this.findInside('docker');
+            if (!dockerPath) {
+                throw new Error(
+                    `Docker CLI is unavailable in Docker image ${this.preparation.immutableReference} for the declared host engine binding`
+                );
+            }
+            const daemon = await this.runEphemeral(
+                ['docker', 'version', '--format', '{{.Server.Version}}'],
+                { network: 'none', readOnly: true }
+            );
+            if (daemon.code !== 0) {
+                throw new Error(
+                    firstDiagnostic(
+                        daemon,
+                        'Host Docker engine is unavailable inside the Workbench runtime'
+                    )
+                );
+            }
+        }
         const requiredAssets = [
             this.workbench.instructionsPath,
             ...this.workbench.skills.map((skill) => skill.manifestPath),
@@ -248,6 +323,8 @@ class DockerPreparedRuntime implements PreparedRuntime {
         return {
             runner: { name: this.workbench.manifest.runner, path: runnerPath },
             tools,
+            workspaces: this.workspaces,
+            ...(this.hostDocker ? { dockerEngine: 'host' as const } : {}),
             ...configuration,
         };
     }
@@ -273,6 +350,7 @@ class DockerPreparedRuntime implements PreparedRuntime {
             'bridge',
             '--read-only',
             ...userArguments(this.user),
+            ...groupArguments(this.hostDocker),
             ...temporaryFilesystemArguments(this.user),
             ...mountArguments(this.mappings),
             '--env-file',
@@ -389,6 +467,7 @@ class DockerPreparedRuntime implements PreparedRuntime {
                     options.network,
                     ...(options.readOnly ? ['--read-only'] : []),
                     ...userArguments(this.user),
+                    ...groupArguments(this.hostDocker),
                     ...temporaryFilesystemArguments(this.user),
                     ...mountArguments(this.mappings),
                     '--env-file',
@@ -630,19 +709,57 @@ export async function stageDockerBuildContext(workbench: ResolvedWorkbench): Pro
     }
 }
 
-function createAssetMappings(request: RuntimePrepareRequest): AssetMapping[] {
+function createAssetMappings(
+    request: RuntimePrepareRequest,
+    hostDockerSocket?: string
+): AssetMapping[] {
     const workspace = resolve(request.workspaceDirectory);
     const packageDirectory = resolve(request.workbench.packageDirectory);
     const unique = new Map<string, AssetMapping>();
     for (const asset of request.assets) {
         const hostPath = resolve(asset.path);
         let runtimePath: string;
-        if (hostPath === workspace) runtimePath = '/workspace';
+        if (asset.workspace)
+            runtimePath = hostDockerSocket
+                ? hostPath
+                : `/workspaces/${asset.workspace}`;
+        else if (hostPath === workspace)
+            runtimePath = hostDockerSocket ? hostPath : '/workspace';
         else if (hostPath === packageDirectory) runtimePath = '/workbench';
         else runtimePath = `/runtime-assets/${unique.size}`;
+        const existing = unique.get(hostPath);
+        if (existing && existing.runtimePath !== runtimePath) {
+            throw new Error(
+                `Runtime assets must resolve to distinct mount points: ${hostPath}`
+            );
+        }
         unique.set(hostPath, { hostPath, runtimePath, access: asset.access });
     }
-    return [...unique.values()];
+    if (hostDockerSocket) {
+        unique.set(resolve(hostDockerSocket), {
+            hostPath: resolve(hostDockerSocket),
+            runtimePath: '/var/run/docker.sock',
+            access: 'read-write',
+        });
+    }
+    const mappings = [...unique.values()];
+    const primary = mappings.find((mapping) => mapping.hostPath === workspace);
+    if (
+        primary &&
+        packageDirectory !== workspace &&
+        contains(workspace, packageDirectory)
+    ) {
+        mappings.push({
+            hostPath: packageDirectory,
+            runtimePath: join(
+                primary.runtimePath,
+                relative(workspace, packageDirectory)
+            ),
+            access: 'read-only',
+            translate: false,
+        });
+    }
+    return mappings;
 }
 
 async function verifyAssets(mappings: AssetMapping[]): Promise<void> {
@@ -667,7 +784,7 @@ function remapWorkbench(
         ...workbench,
         manifestPath: pathFor(workbench.manifestPath),
         packageDirectory: pathFor(workbench.packageDirectory),
-        repositoryDirectory: '/workspace',
+        repositoryDirectory: pathFor(workbench.repositoryDirectory),
         instructionsPath: pathFor(workbench.instructionsPath),
         skills: workbench.skills.map((skill) => ({
             ...skill,
@@ -700,6 +817,43 @@ function mountArguments(mappings: AssetMapping[]): string[] {
 
 function userArguments(user: { uid: number; gid: number } | undefined): string[] {
     return user ? ['--user', `${user.uid}:${user.gid}`] : [];
+}
+
+function groupArguments(
+    hostDocker: { path: string; gid?: number } | undefined
+): string[] {
+    if (!hostDocker) return [];
+    const groups = new Set([0, hostDocker.gid].filter((gid) => gid !== undefined));
+    return [...groups].flatMap((gid) => ['--group-add', String(gid)]);
+}
+
+async function resolveHostDockerSocket(
+    docker: string,
+    command: NonNullable<DockerRuntimeDependencies['command']>
+): Promise<{ path: string; gid?: number }> {
+    const inspected = await command([
+        docker,
+        'context',
+        'inspect',
+        '--format',
+        '{{(index .Endpoints "docker").Host}}',
+    ]);
+    if (inspected.code !== 0) {
+        throw new Error(firstDiagnostic(inspected, 'Failed to inspect Docker context'));
+    }
+    const endpoint = inspected.stdout.trim();
+    if (!endpoint.startsWith('unix://')) {
+        throw new Error(
+            `Host Docker engine binding requires a Unix socket context; received ${endpoint || 'an empty endpoint'}`
+        );
+    }
+    const requested = endpoint.slice('unix://'.length);
+    const path = await realpath(requested).catch(() => requested);
+    const details = await stat(path).catch(() => null);
+    if (!details?.isSocket()) {
+        throw new Error(`Docker context socket is unavailable: ${requested}`);
+    }
+    return { path, gid: details.gid };
 }
 
 function serializeDockerEnvironment(environment: Record<string, string>): string {

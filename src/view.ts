@@ -35,9 +35,15 @@ export interface WorkbenchView {
     model: string;
     runtime: string;
     image?: string;
+    docker_engine?: { mode: 'host'; authorization: 'explicit' };
     instructions: string;
     skills: string[];
     tools: string[];
+    workspaces: Array<{
+        name: string;
+        required: boolean;
+        access: 'read-only' | 'read-write';
+    }>;
     environment: Array<{ name: string; required: boolean; bound: boolean }>;
     mcps: Array<{
         name: string;
@@ -72,9 +78,20 @@ export function describeWorkbench(options: {
                           : `${manifest.image.build} (build context ${manifest.image.context ?? '.'})`,
               }
             : {}),
+        ...(manifest.docker?.engine
+            ? {
+                  docker_engine: {
+                      mode: manifest.docker.engine.mode,
+                      authorization: 'explicit' as const,
+                  },
+              }
+            : {}),
         instructions: manifest.instructions,
         skills: options.workbench.skills.map((skill) => skill.name),
         tools: manifest.tools,
+        workspaces: Object.entries(manifest.workspaces ?? {}).map(
+            ([name, requirement]) => ({ name, ...requirement })
+        ),
         environment: Object.entries(manifest.env).map(([name, requirement]) => ({
             name,
             required: requirement.required,
@@ -116,9 +133,23 @@ export function renderWorkbenchView(view: WorkbenchView): string {
     field(lines, 'Model', view.model);
     field(lines, 'Runtime', view.runtime);
     field(lines, 'Image', view.image ?? 'none');
+    field(
+        lines,
+        'Docker engine',
+        view.docker_engine
+            ? `${view.docker_engine.mode} · explicit authorization required`
+            : 'none'
+    );
     field(lines, 'Instructions', view.instructions);
     field(lines, 'Skills', view.skills.join(', ') || 'none');
     field(lines, 'Tools', view.tools.join(', ') || 'none');
+    lines.push('', 'Workspaces');
+    if (view.workspaces.length === 0) lines.push('  none');
+    for (const workspace of view.workspaces) {
+        lines.push(
+            `  ${workspace.name} · ${workspace.required ? 'required' : 'optional'} · ${workspace.access}`
+        );
+    }
     lines.push('', 'Environment');
     if (view.environment.length === 0) lines.push('  none');
     for (const variable of view.environment) {

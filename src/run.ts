@@ -16,13 +16,20 @@ import {
     type PreparedRuntime,
     type RuntimeProviderRegistry,
 } from './runtime.js';
-import type { ResolvedWorkbench, SpawnedRunner } from './types.js';
+import type {
+    ResolvedWorkbench,
+    SpawnedRunner,
+    WorkbenchWorkspaceBinding,
+} from './types.js';
+import { validateWorkbenchWorkspaceBindings } from './workspaces.js';
 
 export interface RunOptions {
     workbenchPath: string;
     task: string;
     dryRun?: boolean;
     workspaceDirectory?: string;
+    workspaces?: WorkbenchWorkspaceBinding[];
+    allowHostDocker?: boolean;
     runId?: string;
     signal?: AbortSignal;
     onEvent?: (event: WorkbenchEvent) => Promise<void> | void;
@@ -51,6 +58,9 @@ export async function runWorkbench(
     dependencies: RunDependencies = {}
 ): Promise<number> {
     const workbench = await resolveWorkbench(options.workbenchPath);
+    const workspaces = options.workspaces ?? [];
+    await validateWorkbenchWorkspaceBindings(workbench, workspaces);
+    validateHostDockerAuthorization(workbench, options.allowHostDocker ?? false);
     const environment = dependencies.env ?? process.env;
     const findExecutable = dependencies.findExecutable ?? Bun.which;
     const write =
@@ -73,7 +83,9 @@ export async function runWorkbench(
                         workbench,
                         options.workspaceDirectory,
                         environment,
-                        staged?.directory
+                        staged?.directory,
+                        workspaces,
+                        options.allowHostDocker
                     )
                 );
             await runtime.preflight();
@@ -89,6 +101,10 @@ export async function runWorkbench(
                     {
                         ...publicInvocation(invocation),
                         skills: workbench.skills.map((skill) => skill.name),
+                        workspaces: runtime.workspaces,
+                        ...(workbench.manifest.docker?.engine
+                            ? { docker_engine: workbench.manifest.docker.engine.mode }
+                            : {}),
                     },
                     null,
                     2
@@ -113,6 +129,13 @@ export async function runWorkbench(
         model: workbench.manifest.model,
         runtime: workbench.manifest.runtime,
         workspace: options.workspaceDirectory ?? workbench.repositoryDirectory,
+        workspaces,
+        ...(workbench.manifest.docker?.engine
+            ? {
+                  docker_engine: workbench.manifest.docker.engine.mode,
+                  host_docker_authorized: options.allowHostDocker ?? false,
+              }
+            : {}),
     });
     if (options.signal?.aborted) {
         await emitCancellation(emitter, started);
@@ -137,7 +160,9 @@ export async function runWorkbench(
                         workbench,
                         options.workspaceDirectory,
                         environment,
-                        staged?.directory
+                        staged?.directory,
+                        workspaces,
+                        options.allowHostDocker
                     )
                 );
             const preflight = await runtime.preflight();
@@ -157,6 +182,10 @@ export async function runWorkbench(
                 tools: preflight.tools.map((tool) => tool.name),
                 enabled_mcps: preflight.enabledMcps,
                 disabled_mcps: preflight.disabledMcps,
+                workspaces: runtime.workspaces,
+                ...(preflight.dockerEngine
+                    ? { docker_engine: preflight.dockerEngine }
+                    : {}),
             });
             await emitter.emit('turn.started', { index: 1 });
 
@@ -235,6 +264,18 @@ export async function runWorkbench(
     }
 }
 
+function validateHostDockerAuthorization(
+    workbench: ResolvedWorkbench,
+    authorized: boolean
+): void {
+    const declared = workbench.manifest.docker?.engine !== undefined;
+    if (authorized && !declared) {
+        throw new Error(
+            'Host Docker authorization was supplied to a Workbench that does not declare docker.engine'
+        );
+    }
+}
+
 async function emitCancellation(
     emitter: RunEventEmitter,
     started: number
@@ -286,7 +327,9 @@ function runtimeRequest(
     workbench: ResolvedWorkbench,
     workspaceDirectory: string | undefined,
     environment: Record<string, string | undefined>,
-    runnerConfigDirectory: string | undefined
+    runnerConfigDirectory: string | undefined,
+    workspaces: WorkbenchWorkspaceBinding[] = [],
+    allowHostDocker = false
 ) {
     const workspace = workspaceDirectory ?? workbench.repositoryDirectory;
     return {
@@ -296,6 +339,11 @@ function runtimeRequest(
         assets: [
             { path: workspace, access: 'read-write' as const },
             { path: workbench.packageDirectory, access: 'read-only' as const },
+            ...workspaces.map((binding) => ({
+                path: binding.path,
+                access: binding.access,
+                workspace: binding.name,
+            })),
             ...(runnerConfigDirectory
                 ? [
                       {
@@ -305,6 +353,7 @@ function runtimeRequest(
                   ]
                 : []),
         ],
+        authorizations: { hostDocker: allowHostDocker },
     };
 }
 

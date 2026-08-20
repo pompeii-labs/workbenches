@@ -268,6 +268,7 @@ describe('local run lifecycle', () => {
                         workbench: request.workbench,
                         workspaceDirectory: request.workspaceDirectory,
                         environment: request.environment,
+                        workspaces: [],
                         pathFor: (path) => path,
                         preflight: async () => ({
                             runner: { name: 'opencode', path: '/bin/opencode' },
@@ -275,6 +276,7 @@ describe('local run lifecycle', () => {
                             enabledMcps: [],
                             disabledMcps: [],
                             optionalEnvironment: [],
+                            workspaces: [],
                         }),
                         launch: () => ({
                             exited: Promise.resolve(0),

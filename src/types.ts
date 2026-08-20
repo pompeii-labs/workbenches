@@ -2,6 +2,17 @@ export interface WorkbenchEnvRequirement {
     required: boolean;
 }
 
+export interface WorkbenchWorkspaceRequirement {
+    required: boolean;
+    access: 'read-only' | 'read-write';
+}
+
+export interface WorkbenchWorkspaceBinding {
+    name: string;
+    path: string;
+    access: 'read-only' | 'read-write';
+}
+
 export interface WorkbenchMcp {
     name: string;
     transport: 'http';
@@ -12,6 +23,10 @@ export interface WorkbenchMcp {
 export interface WorkbenchImageBuild {
     build: string;
     context?: string;
+}
+
+export interface WorkbenchDockerConfiguration {
+    engine?: { mode: 'host' };
 }
 
 export interface WorkbenchManifest {
@@ -26,8 +41,10 @@ export interface WorkbenchManifest {
     tools: string[];
     mcps: WorkbenchMcp[];
     env: Record<string, WorkbenchEnvRequirement>;
+    workspaces?: Record<string, WorkbenchWorkspaceRequirement>;
     runtime: string;
     image?: string | WorkbenchImageBuild;
+    docker?: WorkbenchDockerConfiguration;
 }
 
 export interface ResolvedWorkbenchSkill {

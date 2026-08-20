@@ -50,6 +50,7 @@ A Workbench can declare:
 - Required CLI tools
 - Remote MCP integrations
 - Environment-variable requirements without embedded secret values
+- Explicit named workspace requirements for multi-repository work
 - A local or isolated runtime and, where supported, an image
 
 The manifest is intentionally small:
@@ -82,6 +83,11 @@ mcps:
 env:
   LUX_TOKEN:
     required: false
+
+workspaces:
+  api:
+    required: true
+    access: read-write
 
 runtime: local
 ```
@@ -209,6 +215,21 @@ saved run metadata or normalized events. Prefer `--env-file` or inherited
 environment for secrets because command-line values may be retained in shell
 history.
 
+Bind additional repositories or directories only when the manifest declares
+them:
+
+```sh
+wb run project-core --dir ./app --workspace api=../api \
+  --workspace schemas=../schemas --task "Review the cross-repository change"
+```
+
+Required bindings fail before runner launch. Inside a local run, the resolved
+paths are exposed as `WORKBENCH_WORKSPACE_API` and
+`WORKBENCH_WORKSPACE_SCHEMAS`. Docker uses the same names with deterministic
+container paths such as `/workspaces/api`; read-only declarations are enforced
+by Docker mounts. Local access declarations are preflight checks, not an
+operating-system sandbox.
+
 Use `--dry-run` to inspect the translated runner invocation without executing
 it:
 
@@ -243,6 +264,8 @@ Published tags are pulled and execution uses the resolved repository digest.
 Local builds use a content-addressed cache and a staged build context that
 excludes common credential stores and secret-bearing files. The target
 workspace is mounted read-write and the Workbench package is read-only.
+Named workspaces are mounted beneath `/workspaces/<name>` with their declared
+read-only or read-write access.
 Generated runner state is isolated in a writable, ephemeral mount because some
 runners update their own configuration at launch. The container root filesystem
 is read-only and `/tmp` is a writable temporary filesystem. The engine does not
@@ -255,6 +278,32 @@ mounts through its virtual machine, so filesystem performance and permission
 details can differ from native Linux. Images must tolerate a read-only root and
 write caches beneath the provided temporary `HOME`; interactive Docker sessions
 are not supported in draft 0.
+
+If the Workbench itself must use the host Docker engine, it must declare that
+high-risk requirement:
+
+```yaml
+runtime: docker
+image: ghcr.io/example/project-workbench:0.4.0
+docker:
+  engine:
+    mode: host
+```
+
+The declaration is not authorization. Every smoke or run requires an explicit
+grant:
+
+```sh
+wb smoke project-core --allow-host-docker
+wb run project-core --allow-host-docker --task "Start the local stack"
+```
+
+Host Docker access is effectively administrative access to the Docker host and
+can escape the Workbench container's isolation. The image must contain the
+Docker CLI; preflight verifies both the CLI and daemon before model execution.
+Host-engine runs preserve host workspace paths inside the Workbench container
+so nested Docker and Compose bind mounts resolve correctly. Other Docker engine
+modes and non-Unix contexts are rejected rather than silently substituted.
 
 ### Detach, attach, and cancel
 

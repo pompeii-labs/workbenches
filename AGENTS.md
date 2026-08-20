@@ -106,6 +106,12 @@ Saved Workbenches use the current directory as the target workspace unless
 `--dir` is provided. Set it deliberately when the task concerns another
 project.
 
+If `wb view` reports named workspace requirements, bind them explicitly with a
+repeatable `--workspace NAME=PATH` argument. Never guess sibling repository
+paths. The engine exposes each resolved location to the runner as
+`WORKBENCH_WORKSPACE_<NAME>` and rejects missing required bindings before model
+execution.
+
 Choose the output contract based on the caller:
 
 - Default output is a human-readable, colorized activity stream with rendered
@@ -167,6 +173,12 @@ can be fixed before model tokens are spent.
 A Workbench run has the same ability to inspect or change the target workspace
 that its selected runner and runtime provide. Treat it as code execution, review
 the package and requested task, and respect the user's authorization boundaries.
+
+A `docker.engine.mode: host` declaration is a request for effective
+administrative access to the host Docker daemon. Never infer authorization from
+the Docker CLI being installed or a socket being present. A human or trusted
+host must opt in for that invocation with `--allow-host-docker` after reviewing
+the Workbench and task.
 
 ## Workbench or generic subagent?
 

@@ -1,9 +1,11 @@
 import type { ResolvedReference } from './references.js';
+import type { WorkbenchWorkspaceBinding } from './types.js';
 
 export async function launchWorkbenchTui(
     options: {
         initial?: { alias: string; resolved: ResolvedReference };
         environment?: Record<string, string | undefined>;
+        workspaces?: WorkbenchWorkspaceBinding[];
     } = {}
 ): Promise<void> {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {

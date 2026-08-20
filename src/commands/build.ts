@@ -41,6 +41,7 @@ export const buildCommand = defineCommand({
                 workbench,
                 workspaceDirectory: resolved.workspaceDirectory,
                 environment: process.env,
+                purpose: 'build',
                 assets: [
                     {
                         path: resolved.workspaceDirectory,

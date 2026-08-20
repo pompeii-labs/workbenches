@@ -1,4 +1,4 @@
-import type { ResolvedWorkbench } from './types.js';
+import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from './types.js';
 
 export interface PreflightResult {
     runner: { name: string; path: string };
@@ -6,6 +6,8 @@ export interface PreflightResult {
     enabledMcps: string[];
     disabledMcps: string[];
     optionalEnvironment: string[];
+    workspaces: WorkbenchWorkspaceBinding[];
+    dockerEngine?: 'host';
 }
 
 export interface PreflightDependencies {
@@ -49,6 +51,7 @@ export function preflightWorkbench(
     return {
         runner: { name: workbench.manifest.runner, path: runnerPath },
         tools,
+        workspaces: [],
         ...configuration,
     };
 }

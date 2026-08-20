@@ -13,6 +13,7 @@ import {
 import { join } from 'node:path';
 
 import type { WorkbenchEvent } from './execution.js';
+import type { WorkbenchWorkspaceBinding } from './types.js';
 
 export type StoredRunStatus =
     | 'dispatched'
@@ -31,6 +32,8 @@ export interface StoredRun {
     model: string;
     workspace: string;
     mode?: 'foreground' | 'detached';
+    workspaces?: WorkbenchWorkspaceBinding[];
+    allow_host_docker?: boolean;
     dispatched_at: string;
     started_at?: string;
     finished_at?: string;
@@ -43,6 +46,8 @@ export interface StoredRunRequest {
     workbench_path: string;
     workspace: string;
     task: string;
+    workspaces?: WorkbenchWorkspaceBinding[];
+    allow_host_docker?: boolean;
 }
 
 const terminalStatuses = new Set<StoredRunStatus>(['completed', 'failed', 'cancelled']);

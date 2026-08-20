@@ -90,6 +90,29 @@ describe('spec 0 manifest parser', () => {
         ).toEqual({ build: './Dockerfile.workbench', context: '../..' });
     });
 
+    test('parses only an explicit host engine binding on the Docker runtime', async () => {
+        const valid = await createFixture({
+            manifest: `${validManifest().replace('runtime: local', 'runtime: docker')}image: alpine:3.22\ndocker:\n  engine:\n    mode: host\n`,
+        });
+        expect(
+            (await resolveWorkbench(valid.packageDirectory)).manifest.docker
+        ).toEqual({ engine: { mode: 'host' } });
+
+        const local = await createFixture({
+            manifest: `${validManifest()}docker:\n  engine:\n    mode: host\n`,
+        });
+        await expect(resolveWorkbench(local.packageDirectory)).rejects.toThrow(
+            'docker.engine requires runtime: docker'
+        );
+
+        const unsupported = await createFixture({
+            manifest: `${validManifest().replace('runtime: local', 'runtime: docker')}docker:\n  engine:\n    mode: isolated\n`,
+        });
+        await expect(resolveWorkbench(unsupported.packageDirectory)).rejects.toThrow(
+            'docker.engine.mode must be host'
+        );
+    });
+
     test('rejects incomplete and unknown local image build fields', async () => {
         const incomplete = await createFixture({
             manifest: `${validManifest()}image:\n  context: .\n`,
@@ -184,6 +207,45 @@ describe('spec 0 manifest parser', () => {
         });
         await expect(resolveWorkbench(fixture.packageDirectory)).rejects.toThrow(
             'Unknown env.TOKEN field: secret'
+        );
+    });
+
+    test('parses named workspace requirements with safe defaults', async () => {
+        const fixture = await createFixture({
+            manifest: `${validManifest()}workspaces:\n  api:\n    access: read-write\n  schemas:\n    required: false\n`,
+        });
+        const resolved = await resolveWorkbench(fixture.packageDirectory);
+        expect(resolved.manifest.workspaces).toEqual({
+            api: { required: true, access: 'read-write' },
+            schemas: { required: false, access: 'read-only' },
+        });
+    });
+
+    test('rejects invalid workspace names, access, and fields', async () => {
+        const invalidName = await createFixture({
+            manifest: `${validManifest()}workspaces:\n  Bad_Name: {}\n`,
+        });
+        const reserved = await createFixture({
+            manifest: `${validManifest()}workspaces:\n  primary: {}\n`,
+        });
+        const invalidAccess = await createFixture({
+            manifest: `${validManifest()}workspaces:\n  api:\n    access: host\n`,
+        });
+        const unknown = await createFixture({
+            manifest: `${validManifest()}workspaces:\n  api:\n    path: ../api\n`,
+        });
+
+        await expect(resolveWorkbench(invalidName.packageDirectory)).rejects.toThrow(
+            'Invalid workspace name: Bad_Name'
+        );
+        await expect(resolveWorkbench(reserved.packageDirectory)).rejects.toThrow(
+            'Invalid workspace name: primary'
+        );
+        await expect(resolveWorkbench(invalidAccess.packageDirectory)).rejects.toThrow(
+            'workspaces.api.access must be read-only or read-write'
+        );
+        await expect(resolveWorkbench(unknown.packageDirectory)).rejects.toThrow(
+            'Unknown workspaces.api field: path'
         );
     });
 

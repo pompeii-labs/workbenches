@@ -139,6 +139,79 @@ describe('CLI integration', () => {
         expect(await readTextTree(join(home, 'runs'))).not.toContain(explicitSecret);
     });
 
+    test('binds declared sibling workspaces across smoke, run, and detached execution', async () => {
+        const fixture = await createFixture({
+            workspaces: {
+                api: { required: true, access: 'read-write' },
+                schemas: { required: false, access: 'read-only' },
+            },
+        });
+        const api = await temporaryDirectory('workbench-api-workspace-');
+        const schemas = await temporaryDirectory('workbench-schema-workspace-');
+        const bin = await fakeBin([], { delay: true });
+        const home = await temporaryDirectory('workbench-workspace-home-');
+        const record = join(fixture.root, 'workspace-runner');
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WB_TEST_RECORD: record,
+            WORKBENCH_HOME: home,
+        };
+        const bindings = [
+            '--workspace',
+            `api=${api}`,
+            `--workspace=schemas=${schemas}`,
+        ];
+
+        const smoked = await executeCli(
+            ['smoke', fixture.packageDirectory, ...bindings],
+            environment
+        );
+        expect(smoked.code).toBe(0);
+
+        const foreground = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', ...bindings],
+            environment
+        );
+        expect(foreground.code).toBe(0);
+        expect(await readFile(`${record}.workspace-api`, 'utf8')).toBe(
+            `${await realpath(api)}\n`
+        );
+        expect(await readFile(`${record}.workspace-schemas`, 'utf8')).toBe(
+            `${await realpath(schemas)}\n`
+        );
+
+        const dispatched = await executeCli(
+            [
+                'run',
+                fixture.packageDirectory,
+                '--task',
+                'inspect',
+                '--detach',
+                ...bindings,
+            ],
+            environment
+        );
+        expect(dispatched.code).toBe(0);
+        expect(
+            (
+                await executeCli(
+                    ['attach', dispatched.stdout.trim(), '--final'],
+                    environment
+                )
+            ).code
+        ).toBe(0);
+        expect(await readFile(`${record}.workspace-api`, 'utf8')).toBe(
+            `${await realpath(api)}\n`
+        );
+
+        const missing = await executeCli(
+            ['smoke', fixture.packageDirectory],
+            environment
+        );
+        expect(missing.code).toBe(1);
+        expect(missing.stderr).toContain('Missing required workspace binding: api');
+    });
+
     test('uses environment files during smoke and rejects undeclared explicit names', async () => {
         const fixture = await createFixture({
             env: { PROJECT_TOKEN: { required: true } },
@@ -514,6 +587,81 @@ describe('CLI integration', () => {
         expect(commands).not.toContain(secret);
     });
 
+    test('requires an explicit grant before binding the host Docker engine', async () => {
+        const fixture = await createFixture({
+            runtime: 'docker',
+            image: 'ghcr.io/example/lux:0.1.0',
+            dockerEngine: true,
+        });
+        const docker = await fakeDocker();
+        const socketDirectory = await temporaryDirectory('workbench-docker-socket-');
+        const socketPath = join(socketDirectory, 'docker.sock');
+        const home = await temporaryDirectory('workbench-docker-engine-home-');
+        const server = Bun.listen({
+            unix: socketPath,
+            socket: { data() {} },
+        });
+        const environment = {
+            PATH: `${docker.bin}:${process.env.PATH}`,
+            WB_DOCKER_RECORD: docker.record,
+            WB_DOCKER_SOCKET: socketPath,
+            WORKBENCH_HOME: home,
+        };
+        try {
+            const built = await executeCli(
+                ['build', fixture.packageDirectory, '--json'],
+                environment
+            );
+            expect(built.code).toBe(0);
+
+            const denied = await executeCli(
+                ['run', fixture.packageDirectory, '--task', 'inspect'],
+                environment
+            );
+            expect(denied.code).toBe(1);
+            expect(denied.stderr).toContain(
+                'Host Docker engine access requires explicit --allow-host-docker authorization'
+            );
+
+            const allowed = await executeCli(
+                [
+                    'run',
+                    fixture.packageDirectory,
+                    '--task',
+                    'inspect',
+                    '--allow-host-docker',
+                    '--json',
+                ],
+                environment
+            );
+            expect(allowed.code).toBe(0);
+            const commands = await readFile(docker.record, 'utf8');
+            expect(commands).toContain(`${socketPath}:/var/run/docker.sock`);
+            expect(commands).toContain(`${fixture.root}:${fixture.root}`);
+            expect(commands).toContain(`--workdir ${fixture.root}`);
+
+            const detached = await executeCli(
+                [
+                    'run',
+                    fixture.packageDirectory,
+                    '--task',
+                    'inspect',
+                    '--allow-host-docker',
+                    '--detach',
+                ],
+                environment
+            );
+            expect(detached.code).toBe(0);
+            const attached = await executeCli(
+                ['attach', detached.stdout.trim(), '--final'],
+                environment
+            );
+            expect(attached.code).toBe(0);
+        } finally {
+            server.stop(true);
+        }
+    });
+
     test('dispatches and attaches to a detached Docker run', async () => {
         const fixture = await createFixture({
             runtime: 'docker',
@@ -729,6 +877,11 @@ async function createFixture(
         image?: string;
         localImage?: boolean;
         env?: Record<string, { required: boolean }>;
+        workspaces?: Record<
+            string,
+            { required: boolean; access: 'read-only' | 'read-write' }
+        >;
+        dockerEngine?: boolean;
     } = {}
 ) {
     const root = await mkdtemp(join(tmpdir(), 'workbench-cli-'));
@@ -775,12 +928,25 @@ async function createFixture(
                       ]),
                   ]
                 : ['env: {}']),
+            ...(options.workspaces && Object.keys(options.workspaces).length > 0
+                ? [
+                      'workspaces:',
+                      ...Object.entries(options.workspaces).flatMap(
+                          ([name, requirement]) => [
+                              `  ${name}:`,
+                              `    required: ${requirement.required}`,
+                              `    access: ${requirement.access}`,
+                          ]
+                      ),
+                  ]
+                : []),
             `runtime: ${options.runtime ?? 'local'}`,
             ...(options.localImage
                 ? ['image:', '  build: ./Dockerfile.workbench', '  context: .']
                 : options.image
                   ? [`image: ${options.image}`]
                   : []),
+            ...(options.dockerEngine ? ['docker:', '  engine:', '    mode: host'] : []),
             '',
         ].join('\n')
     );
@@ -811,6 +977,7 @@ async function fakeDocker() {
             '        ;;',
             '    esac',
             '    ;;',
+            '  "context inspect") printf "%s\\n" "unix://$WB_DOCKER_SOCKET" ;;',
             '  "buildx build") : > "$WB_DOCKER_STATE" ;;',
             '  "container rm") exit 0 ;;',
             '  "run --rm")',
@@ -835,6 +1002,7 @@ async function fakeDocker() {
             '      printf \'%s\\n\' \'{"type":"step_finish","part":{"type":"step-finish","reason":"stop","tokens":{"total":9,"input":4,"output":5,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.0001}}\'',
             '      exit 0',
             '    fi',
+            '    if test "$entrypoint" = "docker"; then exit 0; fi',
             '    exit 1',
             '    ;;',
             '  *) exit 1 ;;',
@@ -870,6 +1038,8 @@ async function fakeBin(
             '  printf "%s\\n" "$PROJECT_TOKEN" > "$WB_TEST_RECORD.project-token"',
             '  printf "%s\\n" "$OPTIONAL_TOKEN" > "$WB_TEST_RECORD.optional-token"',
             '  printf "%s\\n" "$UNDECLARED_TOKEN" > "$WB_TEST_RECORD.undeclared-token"',
+            '  printf "%s\\n" "$WORKBENCH_WORKSPACE_API" > "$WB_TEST_RECORD.workspace-api"',
+            '  printf "%s\\n" "$WORKBENCH_WORKSPACE_SCHEMAS" > "$WB_TEST_RECORD.workspace-schemas"',
             'fi',
             ...(options.delay ? ['sleep 0.1'] : []),
             'printf \'%s\\n\' \'{"type":"step_start","part":{"type":"step-start"}}\'',
