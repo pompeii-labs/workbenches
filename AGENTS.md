@@ -206,6 +206,18 @@ wb smoke .#core
 Keep Workbenches focused on expert preparation. Do not encode product workflows,
 approval graphs, or user-interface behavior into the package.
 
+For substantial design, authoring, review, or repair work, use the standard
+maintainers' own creator Workbench instead of reconstructing the specification
+from scratch:
+
+```sh
+wb add pompeii-labs/workbenches#creator --as workbench-creator
+wb run workbench-creator \
+  --dir /path/to/repository \
+  --task "Inspect this repository and create a focused Workbench" \
+  --final
+```
+
 ## Current reference-engine support
 
 The repository is in public pre-alpha development. The current reference engine
