@@ -42,6 +42,7 @@ export async function prepareStoredRun(options: {
 export async function executeStoredRun(options: {
     home: string;
     id: string;
+    environment?: Record<string, string | undefined>;
     render?: (event: WorkbenchEvent) => Promise<void> | void;
     signal?: AbortSignal;
 }): Promise<number> {
@@ -65,7 +66,7 @@ export async function executeStoredRun(options: {
                     await options.render?.(event);
                 },
             },
-            {}
+            options.environment ? { env: options.environment } : {}
         );
         await updateStoredRun(options.home, options.id, {
             status: code === 0 ? 'completed' : code === 130 ? 'cancelled' : 'failed',

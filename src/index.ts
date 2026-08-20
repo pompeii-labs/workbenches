@@ -1,4 +1,5 @@
 export * from './catalog.js';
+export * from './docker.js';
 export * from './execution.js';
 export * from './github.js';
 export * from './interactive.js';

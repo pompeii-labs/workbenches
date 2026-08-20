@@ -1,3 +1,4 @@
+import { type DockerRuntimeDependencies, DockerRuntimeProvider } from './docker.js';
 import { type PreflightResult, preflightWorkbench } from './preflight.js';
 import type { ResolvedWorkbench, RunnerInvocation, SpawnedRunner } from './types.js';
 
@@ -28,11 +29,21 @@ export interface PreparedRuntime {
     readonly workbench: ResolvedWorkbench;
     readonly workspaceDirectory: string;
     readonly environment: Record<string, string | undefined>;
+    readonly preparation?: RuntimePreparation;
     pathFor(hostPath: string): string;
     preflight(): Promise<PreflightResult>;
     launch(invocation: RunnerInvocation): SpawnedRunner;
     cancel(process: SpawnedRunner): void;
     cleanup(): Promise<void>;
+}
+
+export interface RuntimePreparation {
+    kind: 'host' | 'image';
+    reference?: string;
+    immutableReference?: string;
+    action?: 'pulled' | 'built' | 'cache-hit';
+    cacheKey?: string;
+    excludedPaths?: string[];
 }
 
 export interface RuntimeProvider {
@@ -77,10 +88,17 @@ export interface LocalRuntimeDependencies {
     ) => SpawnedRunner;
 }
 
+export interface RuntimeProviderDependencies extends LocalRuntimeDependencies {
+    docker?: DockerRuntimeDependencies;
+}
+
 export function createRuntimeProviderRegistry(
-    dependencies: LocalRuntimeDependencies = {}
+    dependencies: RuntimeProviderDependencies = {}
 ): RuntimeProviderRegistry {
-    return new RuntimeProviderRegistry([new LocalRuntimeProvider(dependencies)]);
+    return new RuntimeProviderRegistry([
+        new LocalRuntimeProvider(dependencies),
+        new DockerRuntimeProvider(dependencies.docker),
+    ]);
 }
 
 export async function smokeWorkbenchRuntime(options: {
@@ -151,6 +169,7 @@ class LocalPreparedRuntime implements PreparedRuntime {
     readonly workbench: ResolvedWorkbench;
     readonly workspaceDirectory: string;
     readonly environment: Record<string, string | undefined>;
+    readonly preparation = { kind: 'host' as const };
     private readonly findExecutable: (name: string) => string | null;
     private readonly spawn: NonNullable<LocalRuntimeDependencies['spawn']>;
     private ready = false;
@@ -278,6 +297,10 @@ class NormalizedPreparedRuntime implements PreparedRuntime {
 
     get environment(): Record<string, string | undefined> {
         return this.runtime.environment;
+    }
+
+    get preparation(): RuntimePreparation {
+        return this.runtime.preparation ?? { kind: 'host' };
     }
 
     pathFor(hostPath: string): string {

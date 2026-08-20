@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,9 +12,9 @@ import { buildOpenCodeInvocation, publicInvocation } from './opencode.js';
 import { OpenCodeEventAdapter } from './opencode-events.js';
 import { createRunId } from './run-store.js';
 import {
-    LocalRuntimeProvider,
+    createRuntimeProviderRegistry,
     type PreparedRuntime,
-    RuntimeProviderRegistry,
+    type RuntimeProviderRegistry,
 } from './runtime.js';
 import type { ResolvedWorkbench, SpawnedRunner } from './types.js';
 
@@ -57,12 +57,10 @@ export async function runWorkbench(
         dependencies.write ?? ((value: string) => process.stdout.write(value));
     const runtimeRegistry =
         dependencies.runtimeRegistry ??
-        new RuntimeProviderRegistry([
-            new LocalRuntimeProvider({
-                findExecutable,
-                ...(dependencies.spawn ? { spawn: dependencies.spawn } : {}),
-            }),
-        ]);
+        createRuntimeProviderRegistry({
+            findExecutable,
+            ...(dependencies.spawn ? { spawn: dependencies.spawn } : {}),
+        });
 
     if (options.dryRun) {
         const staged = await stageOpenCodeSkills(workbench);
@@ -126,7 +124,11 @@ export async function runWorkbench(
         let runtime: PreparedRuntime | undefined;
         let code = 1;
         let stderr = '';
-        let summary = { finalText: '', turnCompleted: false };
+        let summary: {
+            finalText: string;
+            turnCompleted: boolean;
+            failureMessage?: string;
+        } = { finalText: '', turnCompleted: false };
         try {
             runtime = await runtimeRegistry
                 .resolve(workbench.manifest.runtime)
@@ -202,7 +204,8 @@ export async function runWorkbench(
             return 130;
         }
         if (code !== 0) {
-            const detail = firstLine(redact(stderr, workbench, environment));
+            const nativeDetail = summary.failureMessage ?? firstLine(stderr);
+            const detail = firstLine(redact(nativeDetail, workbench, environment));
             await emitter.emit('run.failed', {
                 message: `OpenCode exited with code ${code}${detail ? `: ${detail}` : ''}`,
                 exit_code: code,
@@ -297,7 +300,7 @@ function runtimeRequest(
                 ? [
                       {
                           path: runnerConfigDirectory,
-                          access: 'read-only' as const,
+                          access: 'read-write' as const,
                       },
                   ]
                 : []),
@@ -379,12 +382,33 @@ function redact(
 
 function firstLine(value: string): string {
     return (
-        value
+        stripTerminalControl(value)
             .split(/\r?\n/)
             .map((line) => line.trim())
             .find(Boolean)
             ?.slice(0, 500) ?? ''
     );
+}
+
+function stripTerminalControl(value: string): string {
+    let result = '';
+    for (let index = 0; index < value.length; index += 1) {
+        if (value.charCodeAt(index) !== 27) {
+            result += value[index];
+            continue;
+        }
+        if (value[index + 1] !== '[') {
+            index += 1;
+            continue;
+        }
+        index += 2;
+        while (index < value.length) {
+            const code = value.charCodeAt(index);
+            if (code >= 0x40 && code <= 0x7e) break;
+            index += 1;
+        }
+    }
+    return result;
 }
 
 export async function stageOpenCodeSkills(
@@ -397,7 +421,10 @@ export async function stageOpenCodeSkills(
     try {
         await Promise.all(
             workbench.skills.map((skill) =>
-                symlink(skill.directory, join(skillsDirectory, skill.name), 'dir')
+                cp(skill.directory, join(skillsDirectory, skill.name), {
+                    recursive: true,
+                    preserveTimestamps: true,
+                })
             )
         );
     } catch (error) {

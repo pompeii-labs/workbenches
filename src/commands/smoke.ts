@@ -3,6 +3,7 @@ import { basename } from 'node:path';
 import { defineCommand } from 'citty';
 
 import { findCatalogEntry, readCatalog } from '../catalog.js';
+import { bindWorkbenchEnvironment, loadEnvironmentOverrides } from '../environment.js';
 import { fetchGitHubWorkbenches, resolvedRemoteWorkbench } from '../github.js';
 import { resolveReference } from '../references.js';
 import { smokeWorkbenchRuntime } from '../runtime.js';
@@ -24,8 +25,22 @@ export const smokeCommand = defineCommand({
             description: 'Workbench reference or source',
             default: '.',
         },
+        'env-file': {
+            type: 'string',
+            valueHint: 'path',
+            description: 'Load declared environment bindings from a dotenv file',
+        },
+        env: {
+            type: 'string',
+            valueHint: 'NAME=value',
+            description: 'Set a declared environment binding (repeatable)',
+        },
     },
-    async run({ args }) {
+    async run({ args, rawArgs }) {
+        const overrides = await loadEnvironmentOverrides({
+            ...(args['env-file'] ? { envFile: args['env-file'] } : {}),
+            rawArgs,
+        });
         const home = workbenchHome();
         const saved = !args.source.includes('/')
             ? findCatalogEntry(await readCatalog(home), args.source)
@@ -37,6 +52,10 @@ export const smokeCommand = defineCommand({
                 smokeWorkbenchRuntime({
                     workbench: resolved.workbench,
                     workspaceDirectory: resolved.workspaceDirectory,
+                    environment: bindWorkbenchEnvironment(
+                        resolved.workbench,
+                        overrides
+                    ),
                 })
             );
             return;
@@ -56,7 +75,10 @@ export const smokeCommand = defineCommand({
             for (const workbench of selected) {
                 await printResult(
                     workbench.manifest.name,
-                    smokeWorkbenchRuntime({ workbench })
+                    smokeWorkbenchRuntime({
+                        workbench,
+                        environment: bindWorkbenchEnvironment(workbench, overrides),
+                    })
                 );
             }
             return;
@@ -67,10 +89,12 @@ export const smokeCommand = defineCommand({
         );
         if (workbenches.length === 0) throw new Error('No matching Workbenches found');
         for (const workbench of workbenches) {
+            const resolved = resolvedRemoteWorkbench(workbench);
             await printResult(
                 workbench.manifest.name,
                 smokeWorkbenchRuntime({
-                    workbench: resolvedRemoteWorkbench(workbench),
+                    workbench: resolved,
+                    environment: bindWorkbenchEnvironment(resolved, overrides),
                 })
             );
         }

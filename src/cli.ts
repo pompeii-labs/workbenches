@@ -5,6 +5,7 @@ import packageMetadata from '../package.json' with { type: 'json' };
 
 import { addCommand } from './commands/add.js';
 import { attachCommand } from './commands/attach.js';
+import { buildCommand } from './commands/build.js';
 import { initCommand } from './commands/init.js';
 import { killCommand } from './commands/kill.js';
 import { listCommand } from './commands/list.js';
@@ -34,6 +35,7 @@ export const workbenchCommand = defineCommand({
         validate: validateCommand,
         v: validateCommand,
         smoke: smokeCommand,
+        build: buildCommand,
         add: addCommand,
         remove: removeCommand,
         run: runCommand,

@@ -13,6 +13,12 @@ export interface PreflightDependencies {
     findExecutable?: (name: string) => string | null;
 }
 
+export interface WorkbenchConfigurationPreflight {
+    enabledMcps: string[];
+    disabledMcps: string[];
+    optionalEnvironment: string[];
+}
+
 export function preflightWorkbench(
     workbench: ResolvedWorkbench,
     dependencies: PreflightDependencies = {}
@@ -38,6 +44,19 @@ export function preflightWorkbench(
         return { name, path };
     });
 
+    const configuration = preflightWorkbenchConfiguration(workbench, environment);
+
+    return {
+        runner: { name: workbench.manifest.runner, path: runnerPath },
+        tools,
+        ...configuration,
+    };
+}
+
+export function preflightWorkbenchConfiguration(
+    workbench: ResolvedWorkbench,
+    environment: Record<string, string | undefined>
+): WorkbenchConfigurationPreflight {
     const optionalEnvironment: string[] = [];
     for (const [name, requirement] of Object.entries(workbench.manifest.env)) {
         if (environment[name]) continue;
@@ -66,13 +85,7 @@ export function preflightWorkbench(
         destination.push(server.name);
     }
 
-    return {
-        runner: { name: workbench.manifest.runner, path: runnerPath },
-        tools,
-        enabledMcps,
-        disabledMcps,
-        optionalEnvironment,
-    };
+    return { enabledMcps, disabledMcps, optionalEnvironment };
 }
 
 export function environmentReferences(value: string): string[] {

@@ -153,9 +153,11 @@ multi-turn session and explicit permission prompts.
 ## Authorization and safety
 
 Workbench manifests declare environment variable names, never their values.
-Provide required values through the run environment. An unset required value
-fails preflight. An optional MCP whose environment is unavailable is disabled
-for that run.
+Provide required values through inherited environment, `--env-file`, or
+repeatable `--env NAME=value` flags. An unset required value fails preflight.
+An optional MCP whose environment is unavailable is disabled for that run.
+Prefer `--env-file` or inherited environment for secrets because command-line
+values may be retained in shell history.
 
 Never write credentials into `workbench.yml`, task text, saved package metadata,
 or command output. Do not bypass a failed preflight by invoking the runner
@@ -221,10 +223,13 @@ wb run workbench-creator \
 ## Current reference-engine support
 
 The repository is in public pre-alpha development. The current reference engine
-supports the draft-0 manifest, local runtime, and OpenCode runner. Other runners
-and isolated runtimes are part of the standard's extensible design but are not
-yet runnable through this release. Reject unsupported combinations explicitly;
-do not silently fall back to a different runner or to the host environment.
+supports the draft-0 manifest and OpenCode runner. Local execution supports
+one-shot, detached, and experimental interactive sessions. Docker execution
+supports image preparation, in-container smoke checks, one-shot runs, and
+detached runs; its interactive TUI path is not yet supported. Other runners and
+hosted runtimes are part of the standard's extensible design but are not yet
+runnable through this release. Reject unsupported combinations explicitly; do
+not silently fall back to a different runner or to the host environment.
 
 For normative package semantics, read `SPEC.md`. For the normalized run and
 event contract, read `docs/EXECUTION.md`.

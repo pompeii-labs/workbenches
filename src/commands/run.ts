@@ -1,5 +1,6 @@
 import { defineCommand } from 'citty';
 
+import { bindWorkbenchEnvironment, loadEnvironmentOverrides } from '../environment.js';
 import { resolveReference } from '../references.js';
 import { createEventRenderer } from '../render.js';
 import { runWorkbench } from '../run.js';
@@ -61,14 +62,28 @@ export const runCommand = defineCommand({
             description:
                 'Workspace directory (saved aliases default to the current directory)',
         },
+        'env-file': {
+            type: 'string',
+            valueHint: 'path',
+            description: 'Load declared environment bindings from a dotenv file',
+        },
+        env: {
+            type: 'string',
+            valueHint: 'NAME=value',
+            description: 'Set a declared environment binding (repeatable)',
+        },
     },
-    async run({ args }) {
+    async run({ args, rawArgs }) {
         if (args.prompt !== undefined && args.task !== undefined) {
             throw new Error('Pass a task either positionally or with --task, not both');
         }
         if (args.json && args.final) {
             throw new Error('--json and --final cannot be used together');
         }
+        const overrides = await loadEnvironmentOverrides({
+            ...(args['env-file'] ? { envFile: args['env-file'] } : {}),
+            rawArgs,
+        });
         const task = (args.task ?? args.prompt ?? '').trim();
         if (!task) {
             if (args.detach || args.json || args.final || args['dry-run']) {
@@ -79,6 +94,7 @@ export const runCommand = defineCommand({
             });
             await launchWorkbenchTui({
                 initial: { alias: args.workbench, resolved },
+                environment: bindWorkbenchEnvironment(resolved.workbench, overrides),
             });
             return;
         }
@@ -92,13 +108,17 @@ export const runCommand = defineCommand({
             ...(args.dir ? { workspaceDirectory: args.dir } : {}),
         });
         try {
+            const environment = bindWorkbenchEnvironment(resolved.workbench, overrides);
             if (args['dry-run']) {
-                const code = await runWorkbench({
-                    workbenchPath: resolved.workbench.packageDirectory,
-                    workspaceDirectory: resolved.workspaceDirectory,
-                    task,
-                    dryRun: true,
-                });
+                const code = await runWorkbench(
+                    {
+                        workbenchPath: resolved.workbench.packageDirectory,
+                        workspaceDirectory: resolved.workspaceDirectory,
+                        task,
+                        dryRun: true,
+                    },
+                    { env: environment }
+                );
                 if (code !== 0) process.exitCode = code;
                 return;
             }
@@ -108,6 +128,7 @@ export const runCommand = defineCommand({
                 await smokeWorkbenchRuntime({
                     workbench: resolved.workbench,
                     workspaceDirectory: resolved.workspaceDirectory,
+                    environment,
                 });
                 const stored = await prepareStoredRun({
                     home,
@@ -120,6 +141,7 @@ export const runCommand = defineCommand({
                         home,
                         id: stored.id,
                         cwd: resolved.workspaceDirectory,
+                        environment,
                     });
                 } catch (error) {
                     await updateStoredRun(home, stored.id, {
@@ -148,6 +170,7 @@ export const runCommand = defineCommand({
                 code = await executeStoredRun({
                     home,
                     id: stored.id,
+                    environment,
                     render: (event) => renderer.render(event),
                 });
             } finally {
