@@ -1,4 +1,4 @@
-import type { ResolvedWorkbench } from './types.js';
+import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from './types.js';
 
 export interface PreflightResult {
     runner: { name: string; path: string };
@@ -6,11 +6,19 @@ export interface PreflightResult {
     enabledMcps: string[];
     disabledMcps: string[];
     optionalEnvironment: string[];
+    workspaces: WorkbenchWorkspaceBinding[];
+    dockerEngine?: 'host';
 }
 
 export interface PreflightDependencies {
     env?: Record<string, string | undefined>;
     findExecutable?: (name: string) => string | null;
+}
+
+export interface WorkbenchConfigurationPreflight {
+    enabledMcps: string[];
+    disabledMcps: string[];
+    optionalEnvironment: string[];
 }
 
 export function preflightWorkbench(
@@ -38,6 +46,20 @@ export function preflightWorkbench(
         return { name, path };
     });
 
+    const configuration = preflightWorkbenchConfiguration(workbench, environment);
+
+    return {
+        runner: { name: workbench.manifest.runner, path: runnerPath },
+        tools,
+        workspaces: [],
+        ...configuration,
+    };
+}
+
+export function preflightWorkbenchConfiguration(
+    workbench: ResolvedWorkbench,
+    environment: Record<string, string | undefined>
+): WorkbenchConfigurationPreflight {
     const optionalEnvironment: string[] = [];
     for (const [name, requirement] of Object.entries(workbench.manifest.env)) {
         if (environment[name]) continue;
@@ -66,13 +88,7 @@ export function preflightWorkbench(
         destination.push(server.name);
     }
 
-    return {
-        runner: { name: workbench.manifest.runner, path: runnerPath },
-        tools,
-        enabledMcps,
-        disabledMcps,
-        optionalEnvironment,
-    };
+    return { enabledMcps, disabledMcps, optionalEnvironment };
 }
 
 export function environmentReferences(value: string): string[] {

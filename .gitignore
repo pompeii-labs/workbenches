@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .workbenches/*-draft/
+docs/.scratch/
 .env
 .env.*
 !.env.example

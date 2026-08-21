@@ -4,10 +4,15 @@ import { readCatalog } from '../catalog.js';
 import { startInteractiveWorkbench } from '../interactive.js';
 import { type ResolvedReference, resolveReference } from '../references.js';
 import { workbenchHome } from '../storage.js';
+import type { WorkbenchWorkspaceBinding } from '../types.js';
 import { WorkbenchApp } from './app.js';
 
 export async function renderWorkbenchTui(
-    options: { initial?: { alias: string; resolved: ResolvedReference } } = {}
+    options: {
+        initial?: { alias: string; resolved: ResolvedReference };
+        environment?: Record<string, string | undefined>;
+        workspaces?: WorkbenchWorkspaceBinding[];
+    } = {}
 ): Promise<void> {
     const home = workbenchHome();
     const entries = await readCatalog(home);
@@ -20,6 +25,12 @@ export async function renderWorkbenchTui(
                 start={(sessionOptions) =>
                     startInteractiveWorkbench({
                         ...sessionOptions,
+                        ...(options.environment
+                            ? { dependencies: { env: options.environment } }
+                            : {}),
+                        ...(options.workspaces
+                            ? { workspaces: options.workspaces }
+                            : {}),
                     })
                 }
             />

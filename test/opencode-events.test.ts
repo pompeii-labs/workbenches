@@ -156,4 +156,33 @@ describe('OpenCode event adapter', () => {
         expect(repeated.events).toEqual([]);
         expect(JSON.stringify([first, repeated])).not.toContain('SECRET_NATIVE_DETAIL');
     });
+
+    test('retains a safe provider failure without retaining response metadata', () => {
+        const adapter = new OpenCodeEventAdapter();
+        const result = adapter.consume({
+            type: 'error',
+            error: {
+                name: 'APIError',
+                data: {
+                    message: 'Missing Authentication header',
+                    statusCode: 401,
+                    responseBody: 'SECRET_RESPONSE_BODY',
+                    responseHeaders: { authorization: 'SECRET_HEADER' },
+                },
+            },
+        });
+
+        expect(result.events).toEqual([
+            {
+                type: 'runner.event',
+                data: { native_type: 'error', status: 'error' },
+            },
+        ]);
+        expect(adapter.summary()).toEqual({
+            finalText: '',
+            turnCompleted: false,
+            failureMessage: 'HTTP 401: Missing Authentication header',
+        });
+        expect(JSON.stringify(adapter.summary())).not.toContain('SECRET');
+    });
 });

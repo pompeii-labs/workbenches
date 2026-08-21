@@ -58,6 +58,14 @@ env:
   PROJECT_TOKEN:
     required: false
 
+workspaces:
+  api:
+    required: true
+    access: read-write
+  schemas:
+    required: false
+    access: read-only
+
 runtime: local
 ```
 
@@ -85,6 +93,42 @@ package-relative directory containing a portable `SKILL.md`; adapters expose
 those skills through the runner's native on-demand skill mechanism.
 
 `tools` names CLI executables that must be available before a run starts.
+
+## Workspace bindings
+
+Every run has one primary workspace. The person or host starting the run selects
+it; the reference CLI uses the current directory by default and accepts `--dir`
+to select another directory. The primary workspace is available to the runner as
+its working directory and is read-write.
+
+A Workbench can also declare named workspaces when its expertise legitimately
+spans additional repositories or directories. Declarations contain logical
+names and access requirements, never machine-specific paths:
+
+```yaml
+workspaces:
+  api:
+    required: true
+    access: read-write
+  schemas:
+    required: false
+    access: read-only
+```
+
+Names are lowercase and hyphenated; `primary` is reserved. `required` defaults
+to `true` and `access` defaults to `read-only`. A host binds a directory to a
+declared name for an individual run. The reference CLI accepts repeatable
+`--workspace NAME=PATH` arguments and rejects missing required bindings,
+undeclared names, unavailable directories, and duplicate resolved paths before
+launch.
+
+Runtimes expose named workspace locations through
+`WORKBENCH_WORKSPACE_<NAME>`, replacing hyphens with underscores. The local
+runtime uses resolved host paths. The Docker runtime mounts them at
+`/workspaces/<name>` and enforces the declared mount access. The local runtime
+checks host readability or writability but cannot prevent a host process from
+writing elsewhere; engines must not represent local access declarations as an
+isolation boundary.
 
 ## Runtime selection and images
 
@@ -115,6 +159,35 @@ repository. Providers that do not accept images, including `local`, reject the
 field. Providers decide how to cache prepared images, but the observable result
 must be equivalent to preparing the declared input again.
 
+### Host Docker engine binding
+
+A Docker Workbench that must build or run sibling containers can request the
+host's Docker engine:
+
+```yaml
+runtime: docker
+image: ghcr.io/example/project-workbench:0.4.0
+docker:
+  engine:
+    mode: host
+```
+
+This is a high-risk provider-specific requirement. It does not grant access by
+itself: the person or host starting each run must explicitly authorize it. The
+reference CLI requires `--allow-host-docker`. Without that grant, preparation
+fails before the image or runner is launched. A host-engine binding gives code
+inside the Workbench effective administrative control over the Docker host and
+must be presented as such.
+
+The image must contain the Docker CLI. The provider binds the active local Unix
+socket, verifies the CLI and daemon from inside the prepared runtime, and does
+not silently use a TCP endpoint or another engine mode. To keep nested bind
+mounts correct, the reference Docker provider uses path-preserving primary and
+named workspace mounts for host-engine runs. Their runtime-visible paths and
+`WORKBENCH_WORKSPACE_<NAME>` values are therefore the resolved host paths, not
+`/workspace` and `/workspaces/<name>`. Ordinary Docker Workbenches retain the
+deterministic paths described above.
+
 ## Tool preflight
 
 Tools are requirements of the selected runtime, not assumptions about the host
@@ -124,8 +197,8 @@ The execution lifecycle is:
 
 1. Resolve and validate the Workbench package.
 2. Select the named runtime provider and prepare its environment.
-3. Mount or synchronize the workspace and Workbench assets, and bind the run
-   environment.
+3. Mount or synchronize the primary workspace, named workspaces, and Workbench
+   assets, then bind the run environment.
 4. Verify every declared tool inside that environment.
 5. Launch the runner and permit model requests only after preflight succeeds.
 

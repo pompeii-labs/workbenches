@@ -3,6 +3,7 @@ import {
     chmod,
     mkdir,
     mkdtemp,
+    readdir,
     readFile,
     realpath,
     rm,
@@ -78,6 +79,209 @@ describe('CLI integration', () => {
         );
         expect(result.stdout).toContain('fixture response');
         expect(result.stdout).toContain('✓ Completed');
+    });
+
+    test('binds declared environment from a file with repeatable explicit overrides', async () => {
+        const fixture = await createFixture({
+            env: {
+                PROJECT_TOKEN: { required: true },
+                OPTIONAL_TOKEN: { required: false },
+            },
+        });
+        const bin = await fakeBin();
+        const home = await temporaryDirectory('workbench-environment-home-');
+        const record = join(fixture.root, 'runner');
+        const environmentFile = join(fixture.root, '.env.workbench');
+        const fileSecret = 'file-secret-not-for-output';
+        const explicitSecret = 'explicit-secret-not-for-output';
+        await writeFile(
+            environmentFile,
+            [
+                `PROJECT_TOKEN=${fileSecret}`,
+                'OPTIONAL_TOKEN=file-value',
+                'UNDECLARED_TOKEN=ignored',
+                '',
+            ].join('\n')
+        );
+
+        const result = await executeCli(
+            [
+                'run',
+                fixture.packageDirectory,
+                '--task',
+                'inspect',
+                '--env-file',
+                environmentFile,
+                '--env',
+                'OPTIONAL_TOKEN=first',
+                '--env=OPTIONAL_TOKEN=explicit=value',
+                '--env',
+                `PROJECT_TOKEN=${explicitSecret}`,
+            ],
+            {
+                PATH: `${bin}:${process.env.PATH}`,
+                WB_TEST_RECORD: record,
+                WORKBENCH_HOME: home,
+                PROJECT_TOKEN: 'inherited-secret',
+            }
+        );
+
+        expect(result.code).toBe(0);
+        expect(await readFile(`${record}.project-token`, 'utf8')).toBe(
+            `${explicitSecret}\n`
+        );
+        expect(await readFile(`${record}.optional-token`, 'utf8')).toBe(
+            'explicit=value\n'
+        );
+        expect(await readFile(`${record}.undeclared-token`, 'utf8')).toBe('\n');
+        expect(`${result.stdout}\n${result.stderr}`).not.toContain(fileSecret);
+        expect(`${result.stdout}\n${result.stderr}`).not.toContain(explicitSecret);
+        expect(await readTextTree(join(home, 'runs'))).not.toContain(explicitSecret);
+    });
+
+    test('binds declared sibling workspaces across smoke, run, and detached execution', async () => {
+        const fixture = await createFixture({
+            workspaces: {
+                api: { required: true, access: 'read-write' },
+                schemas: { required: false, access: 'read-only' },
+            },
+        });
+        const api = await temporaryDirectory('workbench-api-workspace-');
+        const schemas = await temporaryDirectory('workbench-schema-workspace-');
+        const bin = await fakeBin([], { delay: true });
+        const home = await temporaryDirectory('workbench-workspace-home-');
+        const record = join(fixture.root, 'workspace-runner');
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WB_TEST_RECORD: record,
+            WORKBENCH_HOME: home,
+        };
+        const bindings = [
+            '--workspace',
+            `api=${api}`,
+            `--workspace=schemas=${schemas}`,
+        ];
+
+        const smoked = await executeCli(
+            ['smoke', fixture.packageDirectory, ...bindings],
+            environment
+        );
+        expect(smoked.code).toBe(0);
+
+        const foreground = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', ...bindings],
+            environment
+        );
+        expect(foreground.code).toBe(0);
+        expect(await readFile(`${record}.workspace-api`, 'utf8')).toBe(
+            `${await realpath(api)}\n`
+        );
+        expect(await readFile(`${record}.workspace-schemas`, 'utf8')).toBe(
+            `${await realpath(schemas)}\n`
+        );
+
+        const dispatched = await executeCli(
+            [
+                'run',
+                fixture.packageDirectory,
+                '--task',
+                'inspect',
+                '--detach',
+                ...bindings,
+            ],
+            environment
+        );
+        expect(dispatched.code).toBe(0);
+        expect(
+            (
+                await executeCli(
+                    ['attach', dispatched.stdout.trim(), '--final'],
+                    environment
+                )
+            ).code
+        ).toBe(0);
+        expect(await readFile(`${record}.workspace-api`, 'utf8')).toBe(
+            `${await realpath(api)}\n`
+        );
+
+        const missing = await executeCli(
+            ['smoke', fixture.packageDirectory],
+            environment
+        );
+        expect(missing.code).toBe(1);
+        expect(missing.stderr).toContain('Missing required workspace binding: api');
+    });
+
+    test('uses environment files during smoke and rejects undeclared explicit names', async () => {
+        const fixture = await createFixture({
+            env: { PROJECT_TOKEN: { required: true } },
+        });
+        const bin = await fakeBin();
+        const environmentFile = join(fixture.root, '.env.workbench');
+        await writeFile(environmentFile, 'PROJECT_TOKEN=available\n');
+
+        const smoked = await executeCli(
+            ['smoke', fixture.packageDirectory, '--env-file', environmentFile],
+            { PATH: `${bin}:${process.env.PATH}` }
+        );
+        expect(smoked.code).toBe(0);
+        expect(smoked.stdout).toContain('ready\tfixture-core');
+
+        const rejected = await executeCli(
+            [
+                'run',
+                fixture.packageDirectory,
+                '--task',
+                'inspect',
+                '--env',
+                'TYPO_TOKEN=do-not-echo-this',
+            ],
+            { PATH: `${bin}:${process.env.PATH}` }
+        );
+        expect(rejected.code).toBe(1);
+        expect(rejected.stderr).toContain(
+            'Environment override is not declared by fixture-core: TYPO_TOKEN'
+        );
+        expect(rejected.stderr).not.toContain('do-not-echo-this');
+    });
+
+    test('passes environment overrides to a detached worker without persisting values', async () => {
+        const fixture = await createFixture({
+            env: { PROJECT_TOKEN: { required: true } },
+        });
+        const bin = await fakeBin([], { delay: true });
+        const home = await temporaryDirectory('workbench-environment-detached-');
+        const record = join(fixture.root, 'detached-runner');
+        const environmentFile = join(fixture.root, '.env.workbench');
+        const secret = 'detached-secret-not-for-storage';
+        await writeFile(environmentFile, `PROJECT_TOKEN=${secret}\n`);
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WB_TEST_RECORD: record,
+            WORKBENCH_HOME: home,
+        };
+
+        const dispatched = await executeCli(
+            [
+                'run',
+                fixture.packageDirectory,
+                '--task',
+                'inspect',
+                '--detach',
+                '--env-file',
+                environmentFile,
+            ],
+            environment
+        );
+        expect(dispatched.code).toBe(0);
+
+        const attached = await executeCli(
+            ['attach', dispatched.stdout.trim(), '--json'],
+            environment
+        );
+        expect(attached.code).toBe(0);
+        expect(await readFile(`${record}.project-token`, 'utf8')).toBe(`${secret}\n`);
+        expect(await readTextTree(join(home, 'runs'))).not.toContain(secret);
     });
 
     test('auto-colors human output when forced and honors --no-color', async () => {
@@ -290,6 +494,208 @@ describe('CLI integration', () => {
         await expect(stat(record)).rejects.toThrow();
     });
 
+    test('builds and reuses a Workbench-local Docker image', async () => {
+        const fixture = await createFixture({ runtime: 'docker', localImage: true });
+        const docker = await fakeDocker();
+        const environment = {
+            PATH: `${docker.bin}:${process.env.PATH}`,
+            WB_DOCKER_RECORD: docker.record,
+            WB_DOCKER_STATE: docker.state,
+        };
+
+        const built = await executeCli(
+            ['build', fixture.packageDirectory, '--json'],
+            environment
+        );
+        expect(built.code).toBe(0);
+        expect(JSON.parse(built.stdout)).toMatchObject({
+            kind: 'image',
+            action: 'built',
+        });
+
+        const cached = await executeCli(
+            ['build', fixture.packageDirectory, '--json'],
+            environment
+        );
+        expect(cached.code).toBe(0);
+        expect(JSON.parse(cached.stdout)).toMatchObject({
+            kind: 'image',
+            action: 'cache-hit',
+        });
+
+        const commands = await readFile(docker.record, 'utf8');
+        expect(commands.match(/buildx build/g)).toHaveLength(1);
+    });
+
+    test('smokes required tools inside Docker before launching the runner', async () => {
+        const fixture = await createFixture({
+            runtime: 'docker',
+            image: 'ghcr.io/example/lux:0.1.0',
+            tools: ['cargo', 'lux'],
+        });
+        const docker = await fakeDocker();
+        const result = await executeCli(['smoke', fixture.packageDirectory], {
+            PATH: `${docker.bin}:${process.env.PATH}`,
+            WB_DOCKER_RECORD: docker.record,
+            WB_DOCKER_MISSING: 'lux',
+        });
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(
+            'Required CLI tool is unavailable in Docker image'
+        );
+        expect(result.stderr).toContain(': lux');
+        const commands = await readFile(docker.record, 'utf8');
+        expect(commands).toContain('workbench-preflight cargo');
+        expect(commands).toContain('workbench-preflight lux');
+        expect(commands).not.toContain('--entrypoint opencode');
+    });
+
+    test('runs OpenCode in Docker with normalized output and named authorization', async () => {
+        const fixture = await createFixture({
+            runtime: 'docker',
+            image: 'ghcr.io/example/lux:0.1.0',
+            tools: ['lux'],
+            env: { OPENROUTER_API_KEY: { required: true } },
+        });
+        const docker = await fakeDocker();
+        const secret = 'do-not-place-this-value-in-docker-arguments';
+        const result = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--json'],
+            {
+                PATH: `${docker.bin}:${process.env.PATH}`,
+                WB_DOCKER_RECORD: docker.record,
+                OPENROUTER_API_KEY: secret,
+            }
+        );
+
+        expect(result.code).toBe(0);
+        const events = result.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events.at(1)).toMatchObject({
+            type: 'run.ready',
+            data: { runner: 'opencode', tools: ['lux'] },
+        });
+        expect(events.at(-1)).toMatchObject({ type: 'run.completed' });
+
+        const commands = await readFile(docker.record, 'utf8');
+        expect(commands).toContain('--workdir /workspace');
+        expect(commands).toContain('--entrypoint opencode');
+        expect(commands).toContain('--env-file');
+        expect(commands).not.toContain(secret);
+    });
+
+    test('requires an explicit grant before binding the host Docker engine', async () => {
+        const fixture = await createFixture({
+            runtime: 'docker',
+            image: 'ghcr.io/example/lux:0.1.0',
+            dockerEngine: true,
+        });
+        const docker = await fakeDocker();
+        const socketDirectory = await temporaryDirectory('workbench-docker-socket-');
+        const socketPath = join(socketDirectory, 'docker.sock');
+        const home = await temporaryDirectory('workbench-docker-engine-home-');
+        const server = Bun.listen({
+            unix: socketPath,
+            socket: { data() {} },
+        });
+        const environment = {
+            PATH: `${docker.bin}:${process.env.PATH}`,
+            WB_DOCKER_RECORD: docker.record,
+            WB_DOCKER_SOCKET: socketPath,
+            WORKBENCH_HOME: home,
+        };
+        try {
+            const built = await executeCli(
+                ['build', fixture.packageDirectory, '--json'],
+                environment
+            );
+            expect(built.code).toBe(0);
+
+            const denied = await executeCli(
+                ['run', fixture.packageDirectory, '--task', 'inspect'],
+                environment
+            );
+            expect(denied.code).toBe(1);
+            expect(denied.stderr).toContain(
+                'Host Docker engine access requires explicit --allow-host-docker authorization'
+            );
+
+            const allowed = await executeCli(
+                [
+                    'run',
+                    fixture.packageDirectory,
+                    '--task',
+                    'inspect',
+                    '--allow-host-docker',
+                    '--json',
+                ],
+                environment
+            );
+            expect(allowed.code).toBe(0);
+            const commands = await readFile(docker.record, 'utf8');
+            expect(commands).toContain(`${socketPath}:/var/run/docker.sock`);
+            expect(commands).toContain(`${fixture.root}:${fixture.root}`);
+            expect(commands).toContain(`--workdir ${fixture.root}`);
+
+            const detached = await executeCli(
+                [
+                    'run',
+                    fixture.packageDirectory,
+                    '--task',
+                    'inspect',
+                    '--allow-host-docker',
+                    '--detach',
+                ],
+                environment
+            );
+            expect(detached.code).toBe(0);
+            const attached = await executeCli(
+                ['attach', detached.stdout.trim(), '--final'],
+                environment
+            );
+            expect(attached.code).toBe(0);
+        } finally {
+            server.stop(true);
+        }
+    });
+
+    test('dispatches and attaches to a detached Docker run', async () => {
+        const fixture = await createFixture({
+            runtime: 'docker',
+            image: 'ghcr.io/example/lux:0.1.0',
+            tools: ['lux'],
+        });
+        const docker = await fakeDocker();
+        const home = await temporaryDirectory('workbench-docker-detached-');
+        const environment = {
+            PATH: `${docker.bin}:${process.env.PATH}`,
+            WB_DOCKER_RECORD: docker.record,
+            WORKBENCH_HOME: home,
+        };
+
+        const dispatched = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--detach'],
+            environment
+        );
+        expect(dispatched.code).toBe(0);
+        const id = dispatched.stdout.trim();
+        expect(id).toMatch(/^wb_[a-z0-9]{20,64}$/);
+
+        const attached = await executeCli(['attach', id, '--json'], environment);
+        expect(attached.code).toBe(0);
+        const events = attached.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events.at(-1)).toMatchObject({
+            run_id: id,
+            type: 'run.completed',
+        });
+    });
+
     test('lists, validates, smokes, saves, runs, and removes a Workbench', async () => {
         const fixture = await createFixture({ tools: ['fixture-tool'] });
         const home = await temporaryDirectory('workbench-home-');
@@ -452,12 +858,43 @@ async function temporaryDirectory(prefix: string) {
     return directory;
 }
 
-async function createFixture(options: { tools?: string[]; skill?: boolean } = {}) {
+async function readTextTree(directory: string): Promise<string> {
+    const entries = await readdir(directory, { withFileTypes: true });
+    const contents = await Promise.all(
+        entries.map((entry) => {
+            const path = join(directory, entry.name);
+            return entry.isDirectory() ? readTextTree(path) : readFile(path, 'utf8');
+        })
+    );
+    return contents.join('\n');
+}
+
+async function createFixture(
+    options: {
+        tools?: string[];
+        skill?: boolean;
+        runtime?: 'local' | 'docker';
+        image?: string;
+        localImage?: boolean;
+        env?: Record<string, { required: boolean }>;
+        workspaces?: Record<
+            string,
+            { required: boolean; access: 'read-only' | 'read-write' }
+        >;
+        dockerEngine?: boolean;
+    } = {}
+) {
     const root = await mkdtemp(join(tmpdir(), 'workbench-cli-'));
     temporaryDirectories.push(root);
     const packageDirectory = join(root, '.workbenches', 'core');
     await mkdir(packageDirectory, { recursive: true });
     await writeFile(join(packageDirectory, 'instructions.md'), '# Instructions\n');
+    if (options.localImage) {
+        await writeFile(
+            join(packageDirectory, 'Dockerfile.workbench'),
+            'FROM alpine:3.22\n'
+        );
+    }
     if (options.skill) {
         const skillDirectory = join(packageDirectory, 'skills', 'fixture-skill');
         await mkdir(skillDirectory, { recursive: true });
@@ -482,12 +919,99 @@ async function createFixture(options: { tools?: string[]; skill?: boolean } = {}
                 ? ['tools:', ...options.tools.map((tool) => `  - ${tool}`)]
                 : ['tools: []']),
             'mcps: []',
-            'env: {}',
-            'runtime: local',
+            ...(options.env && Object.keys(options.env).length > 0
+                ? [
+                      'env:',
+                      ...Object.entries(options.env).flatMap(([name, requirement]) => [
+                          `  ${name}:`,
+                          `    required: ${requirement.required}`,
+                      ]),
+                  ]
+                : ['env: {}']),
+            ...(options.workspaces && Object.keys(options.workspaces).length > 0
+                ? [
+                      'workspaces:',
+                      ...Object.entries(options.workspaces).flatMap(
+                          ([name, requirement]) => [
+                              `  ${name}:`,
+                              `    required: ${requirement.required}`,
+                              `    access: ${requirement.access}`,
+                          ]
+                      ),
+                  ]
+                : []),
+            `runtime: ${options.runtime ?? 'local'}`,
+            ...(options.localImage
+                ? ['image:', '  build: ./Dockerfile.workbench', '  context: .']
+                : options.image
+                  ? [`image: ${options.image}`]
+                  : []),
+            ...(options.dockerEngine ? ['docker:', '  engine:', '    mode: host'] : []),
             '',
         ].join('\n')
     );
     return { root, packageDirectory };
+}
+
+async function fakeDocker() {
+    const bin = await temporaryDirectory('workbench-docker-bin-');
+    const recordDirectory = await temporaryDirectory('workbench-docker-record-');
+    const record = join(recordDirectory, 'commands');
+    const state = join(recordDirectory, 'built');
+    await writeFile(
+        join(bin, 'docker'),
+        [
+            '#!/bin/sh',
+            'printf "%s\\n" "$*" >> "$WB_DOCKER_RECORD"',
+            'case "$1 $2" in',
+            '  "version --format") printf "%s\\n" "28.1.1" ;;',
+            '  "image pull") printf "%s\\n" "sha256:local" ;;',
+            '  "image inspect")',
+            '    case "$3" in',
+            '      workbench-local/*)',
+            '        test -f "$WB_DOCKER_STATE" || exit 1',
+            '        printf "%s\\n" \'{"Id":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoDigests":[]}\'',
+            '        ;;',
+            '      *)',
+            '        printf "%s\\n" \'{"Id":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoDigests":["ghcr.io/example/lux@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}\'',
+            '        ;;',
+            '    esac',
+            '    ;;',
+            '  "context inspect") printf "%s\\n" "unix://$WB_DOCKER_SOCKET" ;;',
+            '  "buildx build") : > "$WB_DOCKER_STATE" ;;',
+            '  "container rm") exit 0 ;;',
+            '  "run --rm")',
+            '    last=""',
+            '    entrypoint=""',
+            '    previous=""',
+            '    for argument in "$@"; do',
+            '      test "$previous" = "--entrypoint" && entrypoint="$argument"',
+            '      previous="$argument"',
+            '      last="$argument"',
+            '    done',
+            '    if test "$entrypoint" = "/bin/sh"; then',
+            '      test "$last" = "$WB_DOCKER_MISSING" && exit 127',
+            '      case "$*" in',
+            '        *"command -v"*) printf "/usr/local/bin/%s\\n" "$last" ;;',
+            '      esac',
+            '      exit 0',
+            '    fi',
+            '    if test "$entrypoint" = "opencode"; then',
+            '      printf \'%s\\n\' \'{"type":"step_start","part":{"type":"step-start"}}\'',
+            '      printf \'%s\\n\' \'{"type":"text","part":{"type":"text","text":"fixture response"}}\'',
+            '      printf \'%s\\n\' \'{"type":"step_finish","part":{"type":"step-finish","reason":"stop","tokens":{"total":9,"input":4,"output":5,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.0001}}\'',
+            '      exit 0',
+            '    fi',
+            '    if test "$entrypoint" = "docker"; then exit 0; fi',
+            '    exit 1',
+            '    ;;',
+            '  *) exit 1 ;;',
+            'esac',
+            '',
+        ].join('\n')
+    );
+    await chmod(join(bin, 'docker'), 0o755);
+    return { bin, record, state };
 }
 
 async function fakeBin(
@@ -511,6 +1035,11 @@ async function fakeBin(
             '  printf "%s\\n" "$@" > "$WB_TEST_RECORD.args"',
             '  printf "%s\\n" "$OPENCODE_CONFIG_CONTENT" > "$WB_TEST_RECORD.config"',
             '  printf "%s\\n" "$OPENCODE_CONFIG_DIR" > "$WB_TEST_RECORD.config-dir"',
+            '  printf "%s\\n" "$PROJECT_TOKEN" > "$WB_TEST_RECORD.project-token"',
+            '  printf "%s\\n" "$OPTIONAL_TOKEN" > "$WB_TEST_RECORD.optional-token"',
+            '  printf "%s\\n" "$UNDECLARED_TOKEN" > "$WB_TEST_RECORD.undeclared-token"',
+            '  printf "%s\\n" "$WORKBENCH_WORKSPACE_API" > "$WB_TEST_RECORD.workspace-api"',
+            '  printf "%s\\n" "$WORKBENCH_WORKSPACE_SCHEMAS" > "$WB_TEST_RECORD.workspace-schemas"',
             'fi',
             ...(options.delay ? ['sleep 0.1'] : []),
             'printf \'%s\\n\' \'{"type":"step_start","part":{"type":"step-start"}}\'',

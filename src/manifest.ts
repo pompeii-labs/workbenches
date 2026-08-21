@@ -4,9 +4,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import type {
     ResolvedWorkbench,
     ResolvedWorkbenchSkill,
+    WorkbenchDockerConfiguration,
     WorkbenchEnvRequirement,
     WorkbenchManifest,
     WorkbenchMcp,
+    WorkbenchWorkspaceRequirement,
 } from './types.js';
 
 export const supportedWorkbenchSpecs = [0] as const;
@@ -23,8 +25,10 @@ const manifestKeysV0 = new Set([
     'tools',
     'mcps',
     'env',
+    'workspaces',
     'runtime',
     'image',
+    'docker',
 ]);
 
 export async function resolveWorkbench(inputPath: string): Promise<ResolvedWorkbench> {
@@ -143,6 +147,18 @@ function parseManifestV0(body: Record<string, unknown>): WorkbenchManifest {
             parseEnvRequirement(requirement, name),
         ])
     );
+    const workspaceBody = optionalRecord(body.workspaces, 'workspaces');
+    const workspaces = Object.fromEntries(
+        Object.entries(workspaceBody).map(([name, requirement]) => [
+            workspaceName(name),
+            parseWorkspaceRequirement(requirement, name),
+        ])
+    );
+    const runtime = text(body.runtime, 'runtime');
+    const docker = parseDockerConfiguration(body.docker);
+    if (docker?.engine && runtime !== 'docker') {
+        throw new Error('docker.engine requires runtime: docker');
+    }
 
     return {
         spec: 0,
@@ -158,9 +174,30 @@ function parseManifestV0(body: Record<string, unknown>): WorkbenchManifest {
         tools: stringArray(body.tools, 'tools'),
         mcps: mcpArray(body.mcps),
         env,
-        runtime: text(body.runtime, 'runtime'),
+        ...(body.workspaces === undefined ? {} : { workspaces }),
+        runtime,
         ...(body.image === undefined ? {} : { image: image(body.image) }),
+        ...(docker ? { docker } : {}),
     };
+}
+
+function parseDockerConfiguration(
+    value: unknown
+): WorkbenchDockerConfiguration | undefined {
+    if (value === undefined) return undefined;
+    const body = record(value, 'docker');
+    for (const key of Object.keys(body)) {
+        if (key !== 'engine') throw new Error(`Unknown docker field: ${key}`);
+    }
+    if (body.engine === undefined) return {};
+    const engine = record(body.engine, 'docker.engine');
+    for (const key of Object.keys(engine)) {
+        if (key !== 'mode') throw new Error(`Unknown docker.engine field: ${key}`);
+    }
+    if (engine.mode !== 'host') {
+        throw new Error('docker.engine.mode must be host');
+    }
+    return { engine: { mode: 'host' } };
 }
 
 function image(value: unknown) {
@@ -271,6 +308,32 @@ function parseEnvRequirement(value: unknown, name: string): WorkbenchEnvRequirem
     return { required: requirement.required ?? true };
 }
 
+function parseWorkspaceRequirement(
+    value: unknown,
+    name: string
+): WorkbenchWorkspaceRequirement {
+    const requirement = record(value, `workspaces.${name}`);
+    for (const key of Object.keys(requirement)) {
+        if (!['required', 'access'].includes(key)) {
+            throw new Error(`Unknown workspaces.${name} field: ${key}`);
+        }
+    }
+    if (
+        requirement.required !== undefined &&
+        typeof requirement.required !== 'boolean'
+    ) {
+        throw new Error(`workspaces.${name}.required must be a boolean`);
+    }
+    const access = requirement.access ?? 'read-only';
+    if (!['read-only', 'read-write'].includes(String(access))) {
+        throw new Error(`workspaces.${name}.access must be read-only or read-write`);
+    }
+    return {
+        required: requirement.required ?? true,
+        access: access as WorkbenchWorkspaceRequirement['access'],
+    };
+}
+
 function repositoryRoot(packageDirectory: string): string {
     let current = packageDirectory;
     while (true) {
@@ -328,6 +391,13 @@ function record(value: unknown, field: string): Record<string, unknown> {
 function environmentName(value: string): string {
     if (!/^[A-Z][A-Z0-9_]*$/.test(value)) {
         throw new Error(`Invalid environment variable name: ${value}`);
+    }
+    return value;
+}
+
+function workspaceName(value: string): string {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) || value === 'primary') {
+        throw new Error(`Invalid workspace name: ${value}`);
     }
     return value;
 }

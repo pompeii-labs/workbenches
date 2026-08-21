@@ -13,6 +13,7 @@ export class OpenCodeEventAdapter {
     private finalText = '';
     private sessionId: string | undefined;
     private completionReason: string | undefined;
+    private failureMessage: string | undefined;
 
     consume(value: unknown): OpenCodeAdapterResult {
         const event = record(value);
@@ -27,6 +28,7 @@ export class OpenCodeEventAdapter {
         if (type === 'tool_use') return this.tool(event);
         if (type === 'step_finish') return this.stepFinish(event);
         if (type === 'error') {
+            this.failureMessage ??= safeRunnerError(event);
             return this.result([
                 {
                     type: 'runner.event',
@@ -45,6 +47,7 @@ export class OpenCodeEventAdapter {
             ...(this.completionReason
                 ? { completionReason: this.completionReason }
                 : {}),
+            ...(this.failureMessage ? { failureMessage: this.failureMessage } : {}),
         };
     }
 
@@ -150,6 +153,16 @@ function safeToolFailure(state: Record<string, unknown> | undefined) {
         };
     }
     return { error_code: 'runner_error', message: 'Tool failed in runner' };
+}
+
+function safeRunnerError(event: Record<string, unknown>): string | undefined {
+    const error = record(event.error);
+    const data = record(error?.data);
+    const message = string(data?.message) ?? string(error?.message);
+    if (!message) return undefined;
+    const status = number(data?.statusCode);
+    const normalized = message.replace(/\s+/g, ' ').trim().slice(0, 500);
+    return status === undefined ? normalized : `HTTP ${status}: ${normalized}`;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

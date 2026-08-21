@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkbenchEvent } from '../src/execution.js';
 import { runWorkbench } from '../src/run.js';
+import { type RuntimeAsset, RuntimeProviderRegistry } from '../src/runtime.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -145,6 +146,84 @@ describe('local run lifecycle', () => {
         });
     });
 
+    test('reports the safe error carried by a failed OpenCode event', async () => {
+        const fixture = await createFixture();
+        const events: WorkbenchEvent[] = [];
+        const stdout = `${JSON.stringify({
+            type: 'error',
+            error: {
+                data: {
+                    message: 'Missing Authentication header',
+                    statusCode: 401,
+                    responseBody: 'SECRET_RESPONSE_BODY',
+                },
+            },
+        })}\n`;
+
+        const code = await runWorkbench(
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'inspect',
+                onEvent(event) {
+                    events.push(event);
+                },
+            },
+            {
+                findExecutable: () => '/bin/opencode',
+                spawn() {
+                    return {
+                        exited: Promise.resolve(1),
+                        stdout: new Response(stdout).body as ReadableStream<Uint8Array>,
+                        stderr: new Response('').body as ReadableStream<Uint8Array>,
+                    };
+                },
+            }
+        );
+
+        expect(code).toBe(1);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: {
+                message:
+                    'OpenCode exited with code 1: HTTP 401: Missing Authentication header',
+            },
+        });
+        expect(JSON.stringify(events)).not.toContain('SECRET_RESPONSE_BODY');
+    });
+
+    test('removes terminal control sequences from runner diagnostics', async () => {
+        const fixture = await createFixture();
+        const events: WorkbenchEvent[] = [];
+
+        const code = await runWorkbench(
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'inspect',
+                onEvent(event) {
+                    events.push(event);
+                },
+            },
+            {
+                findExecutable: () => '/bin/opencode',
+                spawn() {
+                    return {
+                        exited: Promise.resolve(1),
+                        stdout: new Response('').body as ReadableStream<Uint8Array>,
+                        stderr: new Response(
+                            '\u001b[91m\u001b[1mError: \u001b[0mUnexpected error\n'
+                        ).body as ReadableStream<Uint8Array>,
+                    };
+                },
+            }
+        );
+
+        expect(code).toBe(1);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: { message: 'OpenCode exited with code 1: Error: Unexpected error' },
+        });
+    });
+
     test('cleans staged skills when runner launch throws', async () => {
         const fixture = await createFixture({ skill: true });
         let stagedDirectory = '';
@@ -174,6 +253,54 @@ describe('local run lifecycle', () => {
         });
         expect(stagedDirectory).not.toBe('');
         await expect(stat(stagedDirectory)).rejects.toThrow();
+    });
+
+    test('stages generated runner configuration as writable runtime state', async () => {
+        const fixture = await createFixture({ skill: true });
+        let assets: RuntimeAsset[] = [];
+        const runtimeRegistry = new RuntimeProviderRegistry([
+            {
+                name: 'local',
+                async prepare(request) {
+                    assets = request.assets;
+                    return {
+                        name: 'local',
+                        workbench: request.workbench,
+                        workspaceDirectory: request.workspaceDirectory,
+                        environment: request.environment,
+                        workspaces: [],
+                        pathFor: (path) => path,
+                        preflight: async () => ({
+                            runner: { name: 'opencode', path: '/bin/opencode' },
+                            tools: [],
+                            enabledMcps: [],
+                            disabledMcps: [],
+                            optionalEnvironment: [],
+                            workspaces: [],
+                        }),
+                        launch: () => ({
+                            exited: Promise.resolve(0),
+                            stdout: new Response('').body as ReadableStream<Uint8Array>,
+                            stderr: new Response('').body as ReadableStream<Uint8Array>,
+                        }),
+                        cancel() {},
+                        async cleanup() {},
+                    };
+                },
+            },
+        ]);
+
+        const code = await runWorkbench(
+            { workbenchPath: fixture.packageDirectory, task: 'inspect' },
+            { runtimeRegistry }
+        );
+
+        expect(code).toBe(0);
+        const generated = assets.find(
+            (asset) =>
+                asset.path !== fixture.root && asset.path !== fixture.packageDirectory
+        );
+        expect(generated).toMatchObject({ access: 'read-write' });
     });
 
     test('terminates the runner and emits cancellation when requested', async () => {

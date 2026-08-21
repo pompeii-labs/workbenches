@@ -13,12 +13,15 @@ import {
     updateStoredRun,
     watchStoredRunCancellation,
 } from './run-store.js';
+import type { WorkbenchWorkspaceBinding } from './types.js';
 
 export async function prepareStoredRun(options: {
     home: string;
     resolved: ResolvedReference;
     task: string;
     mode: 'foreground' | 'detached';
+    workspaces?: WorkbenchWorkspaceBinding[];
+    allowHostDocker?: boolean;
 }): Promise<StoredRun> {
     const workbench = options.resolved.workbench;
     return createStoredRun({
@@ -30,11 +33,15 @@ export async function prepareStoredRun(options: {
             model: workbench.manifest.model,
             workspace: options.resolved.workspaceDirectory,
             mode: options.mode,
+            workspaces: options.workspaces ?? [],
+            allow_host_docker: options.allowHostDocker ?? false,
         },
         request: {
             workbench_path: workbench.packageDirectory,
             workspace: options.resolved.workspaceDirectory,
             task: options.task,
+            workspaces: options.workspaces ?? [],
+            allow_host_docker: options.allowHostDocker ?? false,
         },
     });
 }
@@ -42,6 +49,7 @@ export async function prepareStoredRun(options: {
 export async function executeStoredRun(options: {
     home: string;
     id: string;
+    environment?: Record<string, string | undefined>;
     render?: (event: WorkbenchEvent) => Promise<void> | void;
     signal?: AbortSignal;
 }): Promise<number> {
@@ -58,6 +66,8 @@ export async function executeStoredRun(options: {
                 workbenchPath: request.workbench_path,
                 workspaceDirectory: request.workspace,
                 task: request.task,
+                workspaces: request.workspaces ?? [],
+                allowHostDocker: request.allow_host_docker ?? false,
                 runId: options.id,
                 ...(options.signal ? { signal: options.signal } : {}),
                 onEvent: async (event) => {
@@ -65,7 +75,7 @@ export async function executeStoredRun(options: {
                     await options.render?.(event);
                 },
             },
-            {}
+            options.environment ? { env: options.environment } : {}
         );
         await updateStoredRun(options.home, options.id, {
             status: code === 0 ? 'completed' : code === 130 ? 'cancelled' : 'failed',

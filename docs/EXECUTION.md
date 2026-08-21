@@ -42,6 +42,7 @@ interface RuntimePrepareRequest {
     assets: Array<{
         path: string;
         access: "read-only" | "read-write";
+        workspace?: string;
     }>;
 }
 
@@ -50,6 +51,11 @@ interface PreparedRuntime {
     workbench: ResolvedWorkbench;
     workspaceDirectory: string;
     environment: Record<string, string | undefined>;
+    workspaces: Array<{
+        name: string;
+        path: string;
+        access: "read-only" | "read-write";
+    }>;
     pathFor(hostPath: string): string;
     preflight(): Promise<PreflightResult>;
     launch(invocation: RunnerInvocation): SpawnedRunner;
@@ -59,12 +65,13 @@ interface PreparedRuntime {
 ```
 
 `prepare` provisions or selects the environment, makes the workspace,
-Workbench package, instructions, skills, and runner assets available, binds the
-environment, and returns their runtime-visible locations. The host workspace is
-read-write; immutable package and generated runner assets are read-only unless
-the request explicitly says otherwise. Local execution uses the host paths
-unchanged. Isolated providers mount or synchronize the declared assets and
-return remapped paths.
+Workbench package, instructions, skills, named workspaces, and runner assets
+available, binds the environment, and returns their runtime-visible locations.
+The primary workspace is read-write; immutable package assets are read-only,
+and each named workspace has its manifest-declared access. Generated runner
+state can be a separate writable ephemeral asset. Local execution uses host
+paths unchanged. Isolated providers mount or synchronize only the declared
+assets and return remapped paths.
 
 Preparation must be safe to repeat with the same inputs, including after an
 interrupted attempt. `cleanup` must be safe to call more than once. A provider
@@ -77,6 +84,63 @@ runtime without exposing bound environment values. Runtime-native logs and
 identifiers are diagnostics, not additions to the portable Workbench event
 protocol. Providers must pass the shared runtime contract suite before being
 registered by the reference engine.
+
+### Reference Docker provider
+
+The reference Docker provider accepts either a published image reference or a
+local build declared by `image`. Published tags are pulled and resolved to an
+immutable repository digest before preflight or launch. An already-present
+digest is reused. Local builds stage the declared context, exclude common
+credential stores and secret-bearing files, hash the resulting files and
+Dockerfile, and cache the image under that content identity. `wb run` prepares
+automatically; `wb build` exposes preparation without preflight or runner
+launch.
+
+The provider mounts only runtime assets supplied by the engine. The primary
+workspace is read-write, named workspaces are mounted at
+`/workspaces/<name>` with their declared access, and the Workbench package is
+read-only. Generated runner state is a separate writable, ephemeral asset because a runner may need
+to update its own configuration during startup; it is discarded during runtime
+cleanup. Containers run as the host user where the platform provides a numeric
+user and group, with a read-only root filesystem and writable `/tmp` temporary
+filesystem. Draft 0 does not impose implicit CPU, memory, or
+temporary-filesystem capacity limits.
+
+Preflight containers have networking disabled. A launched runner uses Docker's
+bridge network because model providers and remote MCPs require outbound access.
+The container receives only the Workbench's declared environment plus
+engine-generated runner configuration. Values are written to a mode-`0600`
+ephemeral Docker environment file and removed after the container exits; values
+do not appear in Docker command arguments, and the host Docker client retains
+its own environment.
+
+The reference binaries currently target macOS and Linux. Numeric host-user
+mapping is applied only where the host runtime exposes it. Docker Desktop uses
+virtualized bind mounts, so permission behavior and filesystem performance may
+differ from native Linux. A Workbench image must support an arbitrary numeric
+user, a read-only root filesystem, and writable state beneath the temporary
+`HOME`. Draft 0 supports one-shot and detached Docker execution, not interactive
+Docker sessions.
+
+A manifest can request `docker.engine.mode: host`. The request is inert until
+the caller supplies an explicit per-run authorization; the reference CLI uses
+`--allow-host-docker`. The provider resolves the active Docker context only when
+it is a local Unix socket, binds it at `/var/run/docker.sock`, passes its group
+when needed, and sets `DOCKER_HOST` inside the container. It then verifies both
+the in-image Docker CLI and an engine request during preflight. Socket paths and
+credentials are not package inputs.
+
+Access to a host Docker socket is equivalent to administrative access to that
+Docker host and can escape the Workbench container's filesystem isolation. The
+grant must never be inferred from `tools: [docker]`, inherited environment, or
+socket presence. TCP contexts, isolated engines, and other modes are
+unsupported in draft 0 and must fail explicitly.
+
+Nested containers resolve bind-mount sources on the host daemon, not inside the
+Workbench container. For that reason, a host-engine run maps its primary and
+named workspaces to their resolved host paths and runs the adapter from the
+path-preserved primary workspace. This is the documented exception to ordinary
+Docker paths such as `/workspace` and `/workspaces/<name>`.
 
 ## Session and turn boundaries
 
@@ -153,6 +217,22 @@ One-shot execution is selected by a positional task or `--task`:
 wb run lux-core "Explain this repository"
 wb run lux-core --task "Explain this repository"
 ```
+
+Manifest-declared environment bindings can come from the invoking process, a
+dotenv file passed with `--env-file`, or repeatable `--env NAME=value`
+arguments. Precedence is explicit override, then dotenv file, then inherited
+environment. File entries outside the manifest are ignored, while undeclared
+explicit overrides fail before runtime preparation. Bound values are
+invocation-only state: they are never added to stored run requests, metadata,
+or normalized events. Detached workers receive them through their private
+process environment rather than the durable run store.
+
+Named workspace bindings come from repeatable `--workspace NAME=PATH`
+arguments. Paths are resolved and checked on the host before preparation. The
+binding is durable run metadata for detached execution; the engine exposes only
+the runtime-visible path as `WORKBENCH_WORKSPACE_<NAME>`. In the local runtime,
+access is a checked requirement rather than an enforceable isolation boundary.
+Container providers must enforce read-only bindings at the mount boundary.
 
 The default renderer consumes canonical events and writes a human-readable live
 log. `--json` writes one complete canonical event per line as NDJSON (newline-

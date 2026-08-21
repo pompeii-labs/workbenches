@@ -16,6 +16,7 @@ describe('Workbench smoke preflight', () => {
             enabledMcps: [],
             disabledMcps: ['lux'],
             optionalEnvironment: ['LUX_TOKEN'],
+            workspaces: [],
         });
     });
 

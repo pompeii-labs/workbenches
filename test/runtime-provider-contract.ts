@@ -8,20 +8,23 @@ import {
 
 export function runtimeProviderContract(options: {
     createProvider: () => RuntimeProvider;
-    request: RuntimePrepareRequest;
+    request:
+        | RuntimePrepareRequest
+        | (() => RuntimePrepareRequest | Promise<RuntimePrepareRequest>);
 }) {
     test('prepares repeatedly without changing its runtime-visible layout', async () => {
+        const request = await resolveRequest(options.request);
         const candidate = options.createProvider();
         const provider = new RuntimeProviderRegistry([candidate]).resolve(
             candidate.name
         );
-        const first = await provider.prepare(options.request);
-        const second = await provider.prepare(options.request);
+        const first = await provider.prepare(request);
+        const second = await provider.prepare(request);
         try {
             expect(first.name).toBe(provider.name);
             expect(second.name).toBe(provider.name);
             expect(first.workspaceDirectory).toBe(second.workspaceDirectory);
-            for (const asset of options.request.assets) {
+            for (const asset of request.assets) {
                 expect(first.pathFor(asset.path)).toBe(second.pathFor(asset.path));
             }
         } finally {
@@ -33,10 +36,11 @@ export function runtimeProviderContract(options: {
     });
 
     test('requires successful preflight before launch', async () => {
+        const request = await resolveRequest(options.request);
         const candidate = options.createProvider();
         const runtime = await new RuntimeProviderRegistry([candidate])
             .resolve(candidate.name)
-            .prepare(options.request);
+            .prepare(request);
         try {
             expect(() =>
                 runtime.launch({
@@ -59,10 +63,11 @@ export function runtimeProviderContract(options: {
     });
 
     test('cancels a launched process and makes cleanup idempotent', async () => {
+        const request = await resolveRequest(options.request);
         const candidate = options.createProvider();
         const runtime = await new RuntimeProviderRegistry([candidate])
             .resolve(candidate.name)
-            .prepare(options.request);
+            .prepare(request);
         await runtime.preflight();
         const process = runtime.launch({
             command: ['runner'],
@@ -76,4 +81,12 @@ export function runtimeProviderContract(options: {
             'Runtime has already been cleaned up'
         );
     });
+}
+
+function resolveRequest(
+    request:
+        | RuntimePrepareRequest
+        | (() => RuntimePrepareRequest | Promise<RuntimePrepareRequest>)
+): RuntimePrepareRequest | Promise<RuntimePrepareRequest> {
+    return typeof request === 'function' ? request() : request;
 }

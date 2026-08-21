@@ -25,12 +25,14 @@ describe('Workbench view', () => {
             version: '0.1.0',
             skills: ['lux-migrations'],
             tools: ['cargo', 'lux'],
+            workspaces: [{ name: 'api', required: true, access: 'read-write' }],
             environment: [{ name: 'LUX_TOKEN', required: false, bound: true }],
             mcps: [{ name: 'lux', status: 'enabled', missing_env: [] }],
         });
         const output = renderWorkbenchView(view);
         expect(output).toContain('LUX_TOKEN · optional · bound');
         expect(output).toContain('lux · http · https://api.luxdb.dev/mcp · enabled');
+        expect(output).toContain('api · required · read-write');
         expect(output).not.toContain('do-not-print-this');
         expect(JSON.stringify(view)).not.toContain('do-not-print-this');
     });
@@ -64,6 +66,25 @@ describe('Workbench view', () => {
         );
         expect(output).toContain(
             'Image        ./Dockerfile.workbench (build context ../..)'
+        );
+    });
+
+    test('makes host Docker engine risk visible', () => {
+        const workbench = fixtureWorkbench();
+        workbench.manifest.runtime = 'docker';
+        workbench.manifest.image = 'alpine:3.22';
+        workbench.manifest.docker = { engine: { mode: 'host' } };
+        const view = describeWorkbench({
+            workbench,
+            origin: { kind: 'local', source: '/repo', selector: 'core' },
+        });
+
+        expect(view.docker_engine).toEqual({
+            mode: 'host',
+            authorization: 'explicit',
+        });
+        expect(renderWorkbenchView(view)).toContain(
+            'host · explicit authorization required'
         );
     });
 });
@@ -100,6 +121,9 @@ function fixtureWorkbench(): ResolvedWorkbench {
                 },
             ],
             env: { LUX_TOKEN: { required: false } },
+            workspaces: {
+                api: { required: true, access: 'read-write' },
+            },
             runtime: 'local',
         },
     };

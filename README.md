@@ -50,6 +50,7 @@ A Workbench can declare:
 - Required CLI tools
 - Remote MCP integrations
 - Environment-variable requirements without embedded secret values
+- Explicit named workspace requirements for multi-repository work
 - A local or isolated runtime and, where supported, an image
 
 The manifest is intentionally small:
@@ -83,6 +84,11 @@ env:
   LUX_TOKEN:
     required: false
 
+workspaces:
+  api:
+    required: true
+    access: read-write
+
 runtime: local
 ```
 
@@ -96,10 +102,10 @@ into the runner's native configuration.
 This repository contains `workbench`, also available as `wb`: the TypeScript
 reference engine and command-line client for the standard.
 
-The project is in public pre-alpha development. The draft-0 format, local
-runtime, and OpenCode adapter are implemented. The format is not yet stable,
-and other runners and isolated runtimes are not yet supported by the reference
-engine.
+The project is in public pre-alpha development. The draft-0 format, OpenCode
+adapter, local runtime, and Docker runtime for one-shot and detached execution
+are implemented. The format is not yet stable. Other runners and hosted
+runtimes are not yet supported by the reference engine.
 
 ### Install a release
 
@@ -190,12 +196,114 @@ wb run project-core --task "Review this migration" --json
 wb run project-core --task "Review this migration" --final
 ```
 
+Bind manifest-declared environment values from a dotenv file or with repeatable
+per-run overrides:
+
+```sh
+wb smoke project-core --env-file .env.workbench
+wb run project-core --task "Review this migration" --env-file .env.workbench
+wb run project-core --task "Review this migration" \
+  --env API_URL=https://api.example.com \
+  --env API_TOKEN=secret
+```
+
+Explicit `--env` values take precedence over `--env-file`, which takes
+precedence over inherited process environment. Dotenv entries not declared by
+the Workbench are ignored; an undeclared explicit override is rejected as a
+likely typo. Values are used only for that invocation and are not written to
+saved run metadata or normalized events. Prefer `--env-file` or inherited
+environment for secrets because command-line values may be retained in shell
+history.
+
+Bind additional repositories or directories only when the manifest declares
+them:
+
+```sh
+wb run project-core --dir ./app --workspace api=../api \
+  --workspace schemas=../schemas --task "Review the cross-repository change"
+```
+
+Required bindings fail before runner launch. Inside a local run, the resolved
+paths are exposed as `WORKBENCH_WORKSPACE_API` and
+`WORKBENCH_WORKSPACE_SCHEMAS`. Docker uses the same names with deterministic
+container paths such as `/workspaces/api`; read-only declarations are enforced
+by Docker mounts. Local access declarations are preflight checks, not an
+operating-system sandbox.
+
 Use `--dry-run` to inspect the translated runner invocation without executing
 it:
 
 ```sh
 wb run project-core --task "Review this migration" --dry-run
 ```
+
+### Run in Docker
+
+A Docker Workbench can name a published OCI image or a Workbench-local
+Dockerfile:
+
+```yaml
+runtime: docker
+image:
+  build: ./Dockerfile.workbench
+  context: .
+```
+
+`run` automatically pulls or builds the declared image. Use `build` to prepare
+it explicitly, then `smoke` to verify the runner, declared tools,
+authorizations, instructions, and skills inside the container without making a
+model request:
+
+```sh
+wb build project-core
+wb smoke project-core
+wb run project-core --task "Review this migration"
+```
+
+Published tags are pulled and execution uses the resolved repository digest.
+Local builds use a content-addressed cache and a staged build context that
+excludes common credential stores and secret-bearing files. The target
+workspace is mounted read-write and the Workbench package is read-only.
+Named workspaces are mounted beneath `/workspaces/<name>` with their declared
+read-only or read-write access.
+Generated runner state is isolated in a writable, ephemeral mount because some
+runners update their own configuration at launch. The container root filesystem
+is read-only and `/tmp` is a writable temporary filesystem. The engine does not
+impose a CPU, memory, or temporary-filesystem size limit in draft 0.
+
+The reference binaries currently support macOS and Linux. On platforms that
+expose a numeric host user and group, containers run under that identity so
+workspace writes retain host ownership. Docker Desktop still mediates bind
+mounts through its virtual machine, so filesystem performance and permission
+details can differ from native Linux. Images must tolerate a read-only root and
+write caches beneath the provided temporary `HOME`; interactive Docker sessions
+are not supported in draft 0.
+
+If the Workbench itself must use the host Docker engine, it must declare that
+high-risk requirement:
+
+```yaml
+runtime: docker
+image: ghcr.io/example/project-workbench:0.4.0
+docker:
+  engine:
+    mode: host
+```
+
+The declaration is not authorization. Every smoke or run requires an explicit
+grant:
+
+```sh
+wb smoke project-core --allow-host-docker
+wb run project-core --allow-host-docker --task "Start the local stack"
+```
+
+Host Docker access is effectively administrative access to the Docker host and
+can escape the Workbench container's isolation. The image must contain the
+Docker CLI; preflight verifies both the CLI and daemon before model execution.
+Host-engine runs preserve host workspace paths inside the Workbench container
+so nested Docker and Compose bind mounts resolve correctly. Other Docker engine
+modes and non-Unix contexts are rejected rather than silently substituted.
 
 ### Detach, attach, and cancel
 
@@ -225,9 +333,10 @@ wb run project-core
 ```
 
 The OpenCode interactive adapter currently supports multi-turn context,
-streaming, cancellation, tool events, and explicit permission decisions. It is
-not durable: interactive sessions cannot yet be detached, recovered, or steered
-while a turn is active.
+streaming, cancellation, tool events, and explicit permission decisions for the
+local runtime. It is not durable, and Docker Workbenches currently require a
+one-shot task: interactive sessions cannot yet be detached, recovered, or
+steered while a turn is active.
 
 ## Source and authorization boundaries
 
@@ -238,12 +347,16 @@ repositories are reported without pretending GitHub distinguishes them.
 
 Environment values never belong in `workbench.yml`. A manifest declares their
 names and whether they are required; the person or host starting the run
-provides the values. Dry runs, saved package metadata, and normalized events do
-not expose those values.
+provides the values through inherited environment, `--env-file`, or `--env`.
+Dry runs, saved package metadata, and normalized events do not expose those
+values.
 
-For `runtime: local`, declared tools must exist on the host. Future Docker and
-hosted runtimes must perform the same checks inside the provisioned environment.
-Preflight failure stops execution before model tokens are spent.
+For `runtime: local`, declared tools must exist on the host. For `runtime:
+docker`, declared tools and the runner must exist inside the resolved image;
+host installations do not satisfy the requirement. Only manifest-declared
+environment values are bound into the container, and their values do not appear
+in Docker command arguments. Preflight failure stops execution before model
+tokens are spent.
 
 ## Specification and documentation
 
@@ -266,8 +379,13 @@ The reference CLI uses strict TypeScript, Citty, and Bun. From a clean checkout:
 bun install --frozen-lockfile
 bun run check
 bun run test:coverage
+bun run test:docker
 bun run build
 ```
+
+`test:docker` requires a running Docker daemon and network access to pull its
+pinned fixture image. It exercises the real container boundary; the default
+test suite uses deterministic provider doubles and does not require Docker.
 
 `bun run check` runs type checking, Biome, and the unit and integration suite.
 The compiled `dist/workbench` binary is self-contained and does not require Bun
