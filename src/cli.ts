@@ -6,14 +6,21 @@ import packageMetadata from '../package.json' with { type: 'json' };
 import { addCommand } from './commands/add.js';
 import { attachCommand } from './commands/attach.js';
 import { buildCommand } from './commands/build.js';
+import { imageCommand } from './commands/image.js';
 import { initCommand } from './commands/init.js';
 import { killCommand } from './commands/kill.js';
 import { listCommand } from './commands/list.js';
+import { loginCommand } from './commands/login.js';
+import { logoutCommand } from './commands/logout.js';
+import { publishCommand } from './commands/publish.js';
 import { removeCommand } from './commands/remove.js';
 import { runCommand } from './commands/run.js';
 import { smokeCommand } from './commands/smoke.js';
+import { telemetryCommand } from './commands/telemetry.js';
 import { validateCommand } from './commands/validate.js';
 import { viewCommand } from './commands/view.js';
+import { whoamiCommand } from './commands/whoami.js';
+import { setRegistryApiUrl } from './registry.js';
 import { launchWorkbenchTui } from './tui.js';
 import { executeDetachedStoredRun } from './worker.js';
 
@@ -30,11 +37,17 @@ export const workbenchCommand = defineCommand({
     },
     subCommands: {
         init: initCommand,
+        image: imageCommand,
         list: listCommand,
         view: viewCommand,
         validate: validateCommand,
         v: validateCommand,
         smoke: smokeCommand,
+        telemetry: telemetryCommand,
+        login: loginCommand,
+        logout: logoutCommand,
+        whoami: whoamiCommand,
+        publish: publishCommand,
         build: buildCommand,
         add: addCommand,
         remove: removeCommand,
@@ -60,8 +73,38 @@ if (import.meta.main) {
         defaultConsoleError(value, ...optional);
     };
     try {
-        await runMain(workbenchCommand);
+        const invocation = extractApiUrl(process.argv.slice(2));
+        setRegistryApiUrl(invocation.apiUrl);
+        await runMain(workbenchCommand, { rawArgs: invocation.args });
     } finally {
         console.error = defaultConsoleError;
     }
+}
+
+export function extractApiUrl(args: string[]): {
+    args: string[];
+    apiUrl?: string;
+} {
+    const remaining: string[] = [];
+    let apiUrl: string | undefined;
+    for (let index = 0; index < args.length; index += 1) {
+        const argument = args[index];
+        if (argument === '--api-url') {
+            const value = args[index + 1];
+            if (!value || value.startsWith('-')) {
+                throw new Error('--api-url requires a value');
+            }
+            apiUrl = value;
+            index += 1;
+            continue;
+        }
+        if (argument?.startsWith('--api-url=')) {
+            const value = argument.slice('--api-url='.length);
+            if (!value) throw new Error('--api-url requires a value');
+            apiUrl = value;
+            continue;
+        }
+        if (argument) remaining.push(argument);
+    }
+    return apiUrl ? { args: remaining, apiUrl } : { args: remaining };
 }

@@ -122,9 +122,19 @@ describe('local run lifecycle', () => {
         let command: string[] = [];
         let cwd = '';
         let config = '';
+        let launches = 0;
+        let launchCompleted = false;
 
         const code = await runWorkbench(
-            { workbenchPath: fixture.packageDirectory, task: 'inspect' },
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'inspect',
+                async onLaunch() {
+                    launches += 1;
+                    await Promise.resolve();
+                    launchCompleted = true;
+                },
+            },
             {
                 env: { PATH: '/fixture/bin' },
                 findExecutable: () => '/fixture/bin/opencode',
@@ -144,6 +154,8 @@ describe('local run lifecycle', () => {
         expect(JSON.parse(config)).toMatchObject({
             instructions: ['.workbenches/core/instructions.md'],
         });
+        expect(launches).toBe(1);
+        expect(launchCompleted).toBeTrue();
     });
 
     test('reports the safe error carried by a failed OpenCode event', async () => {

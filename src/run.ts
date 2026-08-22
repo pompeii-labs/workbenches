@@ -33,6 +33,7 @@ export interface RunOptions {
     runId?: string;
     signal?: AbortSignal;
     onEvent?: (event: WorkbenchEvent) => Promise<void> | void;
+    onLaunch?: () => Promise<void> | void;
 }
 
 export interface RunDependencies {
@@ -195,6 +196,9 @@ export async function runWorkbench(
                 ...invocation,
                 command: [command, ...args],
             });
+            const launchCompletion = Promise.resolve()
+                .then(() => options.onLaunch?.())
+                .catch(() => {});
             const abortRunner = () => runtime?.cancel(child);
             options.signal?.addEventListener('abort', abortRunner, { once: true });
             if (options.signal?.aborted) abortRunner();
@@ -224,6 +228,7 @@ export async function runWorkbench(
                 throw error;
             } finally {
                 options.signal?.removeEventListener('abort', abortRunner);
+                await launchCompletion;
             }
         } finally {
             await cleanupRuntimeAndAssets(runtime, staged);

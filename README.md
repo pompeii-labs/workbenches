@@ -112,14 +112,14 @@ runtimes are not yet supported by the reference engine.
 Install the latest release on macOS or Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pompeii-labs/workbenches/main/install.sh | sh
+curl -fsSL https://workbenches.dev/install.sh | sh
 ```
 
 Release binaries are available for arm64 and x64. To inspect the installer
 before running it:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/pompeii-labs/workbenches/main/install.sh
+curl -fsSLO https://workbenches.dev/install.sh
 less install.sh
 sh install.sh
 rm install.sh

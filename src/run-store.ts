@@ -11,7 +11,7 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { join } from 'node:path';
-
+import type { CatalogRegistryReference } from './catalog.js';
 import type { WorkbenchEvent } from './execution.js';
 import type { WorkbenchWorkspaceBinding } from './types.js';
 
@@ -34,6 +34,8 @@ export interface StoredRun {
     mode?: 'foreground' | 'detached';
     workspaces?: WorkbenchWorkspaceBinding[];
     allow_host_docker?: boolean;
+    registry?: CatalogRegistryReference;
+    registry_event_id?: string;
     dispatched_at: string;
     started_at?: string;
     finished_at?: string;

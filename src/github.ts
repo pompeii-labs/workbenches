@@ -48,6 +48,7 @@ interface GitHubInspection {
 export interface GitHubDependencies {
     fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
     env?: Record<string, string | undefined>;
+    revision?: string;
 }
 
 export function parseGitHubRepository(source: string): GitHubRepository {
@@ -186,19 +187,23 @@ async function inspectGitHubRepository(
     dependencies: GitHubDependencies
 ): Promise<GitHubInspection> {
     const repository = parseGitHubRepository(source);
-    const metadata = await requestJson<{ default_branch?: string }>(
-        repository,
-        `/repos/${repository.owner}/${repository.repo}`,
-        dependencies
-    );
-    if (!metadata.default_branch) {
-        throw new Error(
-            `GitHub repository has no default branch: ${repository.owner}/${repository.repo}`
+    let reference = dependencies.revision;
+    if (!reference) {
+        const metadata = await requestJson<{ default_branch?: string }>(
+            repository,
+            `/repos/${repository.owner}/${repository.repo}`,
+            dependencies
         );
+        if (!metadata.default_branch) {
+            throw new Error(
+                `GitHub repository has no default branch: ${repository.owner}/${repository.repo}`
+            );
+        }
+        reference = metadata.default_branch;
     }
     const commit = await requestJson<{ sha?: string }>(
         repository,
-        `/repos/${repository.owner}/${repository.repo}/commits/${encodeURIComponent(metadata.default_branch)}`,
+        `/repos/${repository.owner}/${repository.repo}/commits/${encodeURIComponent(reference)}`,
         dependencies
     );
     if (!commit.sha) throw malformedResponse(repository);
@@ -275,7 +280,7 @@ function selectSummary(
     return available[0] as RemoteWorkbenchSummary;
 }
 
-function validateRemotePackage(
+export function validateRemotePackage(
     workbench: RemoteWorkbenchSummary,
     files: RemotePackageFile[]
 ) {

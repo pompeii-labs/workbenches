@@ -14,6 +14,8 @@ a larger workflow.
 
 ## Use the engine
 
+Do not use em dashes in product copy, documentation, or user-facing output.
+
 The `wb` CLI is the reference Workbench engine. It reads and validates
 `workbench.yml`, prepares the selected runtime, verifies requirements, and
 translates the package into the selected runner's native interface.
@@ -31,7 +33,7 @@ wb --version
 If installation is permitted, install the latest macOS or Linux release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pompeii-labs/workbenches/main/install.sh | sh
+curl -fsSL https://workbenches.dev/install.sh | sh
 ```
 
 The installer verifies the published checksum, writes to `~/.local/bin` by
