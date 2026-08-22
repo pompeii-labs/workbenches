@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+    addRemoteToCatalog,
     addToCatalog,
     findCatalogEntry,
     readCatalog,
@@ -172,6 +173,49 @@ describe('sources and saved catalog', () => {
         await expect(
             addToCatalog({ home, alias: 'with-link', source: fixture.root, workbench })
         ).rejects.toThrow('may not contain symlinks');
+    });
+
+    test('rejects registry packages whose downloaded contents do not match', async () => {
+        const home = await temporaryDirectory('workbench-registry-digest-');
+        await expect(
+            addRemoteToCatalog({
+                home,
+                alias: 'registry-core',
+                expectedDigest: `sha256:${'0'.repeat(64)}`,
+                registry: {
+                    url: 'https://workbenches.dev',
+                    publisher: 'pompeii-labs',
+                    workbench: 'core',
+                    version_id: '018f1e48-7fb2-7a12-a4dd-0123456789ab',
+                },
+                workbench: {
+                    source: 'https://github.com/pompeii-labs/workbenches',
+                    revision: 'a'.repeat(40),
+                    selector: 'core',
+                    manifest: {
+                        spec: 0,
+                        version: '0.1.0',
+                        name: 'core',
+                        runner: 'opencode',
+                        model: 'openrouter/openai/gpt-5.6-terra',
+                        instructions: './instructions.md',
+                        skills: [],
+                        tools: [],
+                        mcps: [],
+                        env: {},
+                        runtime: 'local',
+                    },
+                    files: [
+                        {
+                            path: 'workbench.yml',
+                            bytes: new TextEncoder().encode('spec: 0\n'),
+                            executable: false,
+                        },
+                    ],
+                },
+            })
+        ).rejects.toThrow('Registry package digest mismatch');
+        expect(await readCatalog(home)).toEqual([]);
     });
 
     test('rejects malformed catalogs and non-portable package references', async () => {

@@ -1,6 +1,6 @@
 {
     "name": "@pompeii-labs/workbench",
-    "version": "0.1.0-alpha.1",
+    "version": "0.1.0-alpha.2",
     "private": true,
     "description": "Open standard and reference engine for portable expert AI environments.",
     "license": "Apache-2.0",

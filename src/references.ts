@@ -1,6 +1,10 @@
 import { resolve } from 'node:path';
 
-import { findCatalogEntry, readCatalog } from './catalog.js';
+import {
+    type CatalogRegistryReference,
+    findCatalogEntry,
+    readCatalog,
+} from './catalog.js';
 import {
     parseWorkbenchReference,
     remoteSource,
@@ -14,6 +18,7 @@ export interface ResolvedReference {
     workbench: ResolvedWorkbench;
     workspaceDirectory: string;
     cleanup: () => Promise<void>;
+    registry?: CatalogRegistryReference;
 }
 
 export async function resolveReference(
@@ -34,6 +39,7 @@ export async function resolveReference(
                 workbench: await resolveWorkbench(saved.packagePath),
                 workspaceDirectory: resolve(options.workspaceDirectory ?? cwd),
                 cleanup: async () => {},
+                ...(saved.registry ? { registry: saved.registry } : {}),
             };
         }
     }

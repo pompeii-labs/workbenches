@@ -5,7 +5,7 @@
 A Workbench run has an ordered event stream, identity, and one terminal result.
 It may contain one or more tasks as turns.
 
-The Workbench engine—not the model or runner—reads `workbench.yml`. It resolves
+The Workbench engine, not the model or runner, reads `workbench.yml`. It resolves
 the versioned manifest into a canonical representation, provisions the runtime,
 performs preflight inside that runtime, and translates canonical inputs through
 the selected runner adapter.

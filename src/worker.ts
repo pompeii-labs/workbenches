@@ -1,5 +1,6 @@
 import { basename, join } from 'node:path';
 
+import type { CatalogRegistryReference } from './catalog.js';
 import type { WorkbenchEvent } from './execution.js';
 import type { ResolvedReference } from './references.js';
 import { runWorkbench } from './run.js';
@@ -13,6 +14,7 @@ import {
     updateStoredRun,
     watchStoredRunCancellation,
 } from './run-store.js';
+import { reportRegistryEvent, runTelemetryEnabled } from './telemetry.js';
 import type { WorkbenchWorkspaceBinding } from './types.js';
 
 export async function prepareStoredRun(options: {
@@ -35,6 +37,12 @@ export async function prepareStoredRun(options: {
             mode: options.mode,
             workspaces: options.workspaces ?? [],
             allow_host_docker: options.allowHostDocker ?? false,
+            ...(options.resolved.registry
+                ? {
+                      registry: options.resolved.registry,
+                      registry_event_id: crypto.randomUUID(),
+                  }
+                : {}),
         },
         request: {
             workbench_path: workbench.packageDirectory,
@@ -55,6 +63,8 @@ export async function executeStoredRun(options: {
 }): Promise<number> {
     const metadata = await readStoredRun(options.home, options.id);
     const request = await takeStoredRunRequest(options.home, options.id);
+    const registry = metadata.registry;
+    const registryEventId = metadata.registry_event_id;
     await updateStoredRun(options.home, options.id, {
         status: 'running',
         started_at: new Date().toISOString(),
@@ -74,6 +84,17 @@ export async function executeStoredRun(options: {
                     await appendRunEvent(options.home, options.id, event);
                     await options.render?.(event);
                 },
+                ...(registry && registryEventId
+                    ? {
+                          onLaunch: () => {
+                              return reportRunLaunch(
+                                  options.home,
+                                  registry,
+                                  registryEventId
+                              );
+                          },
+                      }
+                    : {}),
             },
             options.environment ? { env: options.environment } : {}
         );
@@ -98,6 +119,19 @@ export async function executeStoredRun(options: {
         }).catch(() => {});
         return 1;
     }
+}
+
+async function reportRunLaunch(
+    home: string,
+    registry: CatalogRegistryReference,
+    idempotencyKey: string
+): Promise<void> {
+    if (!(await runTelemetryEnabled(home))) return;
+    await reportRegistryEvent({
+        registry,
+        kind: 'run',
+        idempotencyKey,
+    });
 }
 
 export async function executeDetachedStoredRun(options: {

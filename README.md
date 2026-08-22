@@ -112,14 +112,14 @@ runtimes are not yet supported by the reference engine.
 Install the latest release on macOS or Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pompeii-labs/workbenches/main/install.sh | sh
+curl -fsSL https://workbenches.dev/install.sh | sh
 ```
 
 Release binaries are available for arm64 and x64. To inspect the installer
 before running it:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/pompeii-labs/workbenches/main/install.sh
+curl -fsSLO https://workbenches.dev/install.sh
 less install.sh
 sh install.sh
 rm install.sh
@@ -259,6 +259,42 @@ wb build project-core
 wb smoke project-core
 wb run project-core --task "Review this migration"
 ```
+
+Publish a locally built image to the Workbench OCI registry after signing in:
+
+```sh
+wb login
+docker build -t project-core-local .
+wb image push project-core-local \
+  --publisher example \
+  --as project-core \
+  --tag 0.4.0
+```
+
+`image push` logs the selected OCI client in, tags the local image as
+`images.workbenches.dev/example/project-core:0.4.0`, and pushes it. The source
+image can have any valid local name. Use `--client` to select an OCI-compatible
+client other than Docker.
+
+Standard OCI commands work after an explicit registry login too:
+
+```sh
+wb image login
+docker tag project-core-local \
+  images.workbenches.dev/example/project-core:0.4.0
+docker push images.workbenches.dev/example/project-core:0.4.0
+```
+
+The Workbench can then declare the published image:
+
+```yaml
+runtime: docker
+image: images.workbenches.dev/example/project-core:0.4.0
+```
+
+Publishing requires a Workbench registry account with access to the selected
+publisher. Use a versioned tag for a published Workbench and avoid changing the
+image behind that tag.
 
 Published tags are pulled and execution uses the resolved repository digest.
 Local builds use a content-addressed cache and a staged build context that

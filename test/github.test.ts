@@ -95,6 +95,21 @@ describe('GitHub Workbench provider', () => {
         ).toEqual(['lux']);
     });
 
+    test('pins registry-backed package inspection to the published commit', async () => {
+        const api = githubApiFixture();
+        const workbench = await fetchGitHubWorkbench('lux-db/lux', 'migrations', {
+            fetch: api.fetch,
+            env: {},
+            revision: 'published-commit',
+        });
+
+        expect(workbench.revision).toBe('commit-sha');
+        expect(api.requests.map((request) => request.url).slice(0, 2)).toEqual([
+            'https://api.github.com/repos/lux-db/lux/commits/published-commit',
+            'https://api.github.com/repos/lux-db/lux/git/trees/commit-sha?recursive=1',
+        ]);
+    });
+
     test('writes remote package bytes only when explicitly added', async () => {
         const api = githubApiFixture();
         const workbench = await fetchGitHubWorkbench('lux-db/lux', 'migrations', {
@@ -264,7 +279,9 @@ function githubApiFixture(options: FixtureOptions = {}) {
             if (url.endsWith('/repos/lux-db/lux')) {
                 return response(options.metadata ?? { default_branch: 'main' });
             }
-            if (url.endsWith('/commits/main')) return response({ sha: 'commit-sha' });
+            if (/\/commits\/(?:main|published-commit)$/.test(url)) {
+                return response({ sha: 'commit-sha' });
+            }
             if (url.includes('/git/trees/commit-sha')) {
                 return response({ tree, truncated: options.truncated ?? false });
             }

@@ -14,7 +14,7 @@ import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import type { RemoteWorkbenchPackage } from './github.js';
 import type { ResolvedWorkbench, WorkbenchManifest } from './types.js';
 
-interface SnapshotFile {
+export interface SnapshotFile {
     path: string;
     bytes: Uint8Array;
     executable: boolean;
@@ -30,6 +30,14 @@ export interface CatalogEntry {
     packagePath: string;
     addedAt: string;
     revision?: string;
+    registry?: CatalogRegistryReference;
+}
+
+export interface CatalogRegistryReference {
+    url: string;
+    publisher: string;
+    workbench: string;
+    version_id: string;
 }
 
 interface CatalogFile {
@@ -55,8 +63,6 @@ export async function addToCatalog(options: {
     revision?: string;
     workbench: ResolvedWorkbench;
 }): Promise<CatalogEntry> {
-    ensurePortablePackage(options.workbench);
-    await rejectSymlinks(options.workbench.packageDirectory);
     return savePackage({
         home: options.home,
         alias: options.alias,
@@ -64,14 +70,24 @@ export async function addToCatalog(options: {
         ...(options.revision ? { revision: options.revision } : {}),
         selector: basename(options.workbench.packageDirectory),
         manifest: options.workbench.manifest,
-        files: await localPackageFiles(options.workbench.packageDirectory),
+        files: await workbenchPackageFiles(options.workbench),
     });
+}
+
+export async function workbenchPackageFiles(
+    workbench: ResolvedWorkbench
+): Promise<SnapshotFile[]> {
+    ensurePortablePackage(workbench);
+    await rejectSymlinks(workbench.packageDirectory);
+    return localPackageFiles(workbench.packageDirectory);
 }
 
 export async function addRemoteToCatalog(options: {
     home: string;
     alias: string;
     workbench: RemoteWorkbenchPackage;
+    expectedDigest?: string;
+    registry?: CatalogRegistryReference;
 }): Promise<CatalogEntry> {
     return savePackage({
         home: options.home,
@@ -81,6 +97,8 @@ export async function addRemoteToCatalog(options: {
         selector: options.workbench.selector,
         manifest: options.workbench.manifest,
         files: options.workbench.files,
+        ...(options.expectedDigest ? { expectedDigest: options.expectedDigest } : {}),
+        ...(options.registry ? { registry: options.registry } : {}),
     });
 }
 
@@ -92,6 +110,8 @@ async function savePackage(options: {
     selector: string;
     manifest: WorkbenchManifest;
     files: SnapshotFile[];
+    expectedDigest?: string;
+    registry?: CatalogRegistryReference;
 }): Promise<CatalogEntry> {
     validateAlias(options.alias);
     const entries = await readCatalog(options.home);
@@ -99,6 +119,11 @@ async function savePackage(options: {
         throw new Error(`Saved Workbench already exists: ${options.alias}`);
     }
     const digest = packageDigest(options.files);
+    if (options.expectedDigest && digest !== options.expectedDigest) {
+        throw new Error(
+            `Registry package digest mismatch: expected ${options.expectedDigest}, received ${digest}`
+        );
+    }
     const snapshotRoot = join(options.home, 'packages', digest.slice('sha256:'.length));
     const packagePath = join(snapshotRoot, '.workbenches', options.selector);
     if (!(await stat(packagePath).catch(() => null))) {
@@ -125,6 +150,7 @@ async function savePackage(options: {
         packagePath,
         addedAt: new Date().toISOString(),
         ...(options.revision ? { revision: options.revision } : {}),
+        ...(options.registry ? { registry: options.registry } : {}),
     };
     await writeCatalog(options.home, [...entries, entry]);
     return entry;
@@ -164,7 +190,7 @@ async function writeCatalog(home: string, entries: CatalogEntry[]) {
     await rename(temporary, path);
 }
 
-function packageDigest(files: SnapshotFile[]): string {
+export function packageDigest(files: SnapshotFile[]): string {
     const hash = createHash('sha256');
     for (const file of files.toSorted((left, right) =>
         left.path.localeCompare(right.path)

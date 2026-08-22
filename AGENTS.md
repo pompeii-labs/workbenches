@@ -14,6 +14,8 @@ a larger workflow.
 
 ## Use the engine
 
+Do not use em dashes in product copy, documentation, or user-facing output.
+
 The `wb` CLI is the reference Workbench engine. It reads and validates
 `workbench.yml`, prepares the selected runtime, verifies requirements, and
 translates the package into the selected runner's native interface.
@@ -31,7 +33,7 @@ wb --version
 If installation is permitted, install the latest macOS or Linux release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pompeii-labs/workbenches/main/install.sh | sh
+curl -fsSL https://workbenches.dev/install.sh | sh
 ```
 
 The installer verifies the published checksum, writes to `~/.local/bin` by
@@ -219,6 +221,30 @@ wb smoke .#core
 
 Keep Workbenches focused on expert preparation. Do not encode product workflows,
 approval graphs, or user-interface behavior into the package.
+
+For a Docker Workbench, either keep a portable Dockerfile inside the package or
+publish a prebuilt image. Build the image under any local name and let the CLI
+authenticate, tag, and push it:
+
+```sh
+wb login
+docker build -t project-core-local .
+wb image push project-core-local \
+  --publisher example \
+  --as project-core \
+  --tag 0.4.0
+```
+
+The corresponding manifest declaration is:
+
+```yaml
+runtime: docker
+image: images.workbenches.dev/example/project-core:0.4.0
+```
+
+Use `wb image login` when standard `docker tag` and `docker push` commands are
+more appropriate. Prefer a versioned tag and do not silently replace the image
+behind a published Workbench version.
 
 For substantial design, authoring, review, or repair work, use the standard
 maintainers' own creator Workbench instead of reconstructing the specification
