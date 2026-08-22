@@ -103,6 +103,38 @@ Place detailed schemas or documentation in one-level-deep `references/` files
 and link to them directly from `SKILL.md`. Do not create auxiliary READMEs,
 changelogs, or duplicated quick-reference files inside a skill.
 
+### Docker images
+
+Use a package-local Dockerfile when consumers should build the environment from
+source. Use a published OCI image when the environment should be prepared once
+and reused consistently. In either case, ensure the image contains the declared
+runner and tools and supports the runtime constraints described by the standard.
+
+To publish a locally built image to the Workbench registry:
+
+```sh
+wb login
+docker build -t <local-image> <context>
+wb image push <local-image> \
+  --publisher <publisher> \
+  --as <image-name> \
+  --tag <version>
+```
+
+The command authenticates the OCI client, adds the canonical registry tag, and
+pushes the image. The resulting manifest reference is:
+
+```yaml
+runtime: docker
+image: images.workbenches.dev/<publisher>/<image-name>:<version>
+```
+
+Use `wb image login` followed by normal OCI `tag` and `push` commands when more
+control is required. Use a versioned tag rather than `latest` for a published
+Workbench, and do not overwrite an image tag already referenced by a released
+package. Run `wb build`, `wb smoke`, and a representative task against the
+published reference before describing it as verified.
+
 ## Verify truthfully
 
 Run the narrow checks first:

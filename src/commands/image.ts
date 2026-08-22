@@ -1,9 +1,14 @@
 import { defineCommand } from 'citty';
 
-import { type Account, registryProfile, requireAccount } from '../account.js';
+import {
+    type Account,
+    type RegistryProfile,
+    registryProfile,
+    requireAccount,
+} from '../account.js';
 import { registryImageHost } from '../registry.js';
 
-const loginCommand = defineCommand({
+export const loginCommand = defineCommand({
     meta: {
         name: 'login',
         description: 'Connect an OCI client to the Workbench image registry.',
@@ -17,12 +22,12 @@ const loginCommand = defineCommand({
     },
     async run({ args }) {
         const account = await requireAccount();
-        await loginClient(args.client, account);
-        console.log(`connected\t${registryImageHost()}\t${args.client}`);
+        const host = await loginImageClient(args.client, account);
+        console.log(`connected\t${host}\t${args.client}`);
     },
 });
 
-const pushCommand = defineCommand({
+export const pushCommand = defineCommand({
     meta: {
         name: 'push',
         description: 'Tag and push a local image to a publisher repository.',
@@ -56,30 +61,17 @@ const pushCommand = defineCommand({
     async run({ args }) {
         const account = await requireAccount();
         const profile = await registryProfile(account);
-        const publisher = args.publisher
-            ? profile.publishers.find((candidate) => candidate.slug === args.publisher)
-            : profile.publishers.length === 1
-              ? profile.publishers[0]
-              : undefined;
-        if (!publisher) {
-            if (args.publisher) {
-                throw new Error(
-                    `Publisher is unavailable to this account: ${args.publisher}`
-                );
-            }
-            if (profile.publishers.length === 0) {
-                throw new Error('Create or join a publisher before pushing');
-            }
-            throw new Error(
-                `Choose a publisher with --publisher: ${profile.publishers
-                    .map((candidate) => candidate.slug)
-                    .join(', ')}`
-            );
-        }
-        const target = imageReference(publisher.slug, args.as, args.tag);
-        await loginClient(args.client, account);
-        await runClient(args.client, ['tag', args.image, target]);
-        await runClient(args.client, ['push', target]);
+        const target = await pushImage(
+            {
+                image: args.image,
+                ...(args.publisher ? { publisher: args.publisher } : {}),
+                name: args.as,
+                tag: args.tag,
+                client: args.client,
+            },
+            account,
+            profile
+        );
         console.log(`pushed\t${target}`);
     },
 });
@@ -108,8 +100,62 @@ export function imageReference(publisher: string, name: string, tag: string): st
     return `${registryImageHost()}/${publisher}/${name}:${tag}`;
 }
 
-async function loginClient(client: string, account: Account): Promise<void> {
-    await runClient(
+export async function loginImageClient(
+    client: string,
+    account: Account,
+    run: ClientRunner = runClient
+): Promise<string> {
+    await loginClient(client, account, run);
+    return registryImageHost();
+}
+
+export async function pushImage(
+    options: {
+        image: string;
+        publisher?: string;
+        name: string;
+        tag: string;
+        client: string;
+    },
+    account: Account,
+    profile: RegistryProfile,
+    run: ClientRunner = runClient
+): Promise<string> {
+    const publisher = options.publisher
+        ? profile.publishers.find((candidate) => candidate.slug === options.publisher)
+        : profile.publishers.length === 1
+          ? profile.publishers[0]
+          : undefined;
+    if (!publisher) {
+        if (options.publisher) {
+            throw new Error(
+                `Publisher is unavailable to this account: ${options.publisher}`
+            );
+        }
+        if (profile.publishers.length === 0) {
+            throw new Error('Create or join a publisher before pushing');
+        }
+        throw new Error(
+            `Choose a publisher with --publisher: ${profile.publishers
+                .map((candidate) => candidate.slug)
+                .join(', ')}`
+        );
+    }
+    const target = imageReference(publisher.slug, options.name, options.tag);
+    await loginClient(options.client, account, run);
+    await run(options.client, ['tag', options.image, target]);
+    await run(options.client, ['push', target]);
+    return target;
+}
+
+type ClientRunner = (client: string, args: string[], input?: string) => Promise<void>;
+
+async function loginClient(
+    client: string,
+    account: Account,
+    run: ClientRunner
+): Promise<void> {
+    await run(
         client,
         ['login', registryImageHost(), '--username', 'workbench', '--password-stdin'],
         account.token

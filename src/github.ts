@@ -2,6 +2,7 @@ import { posix } from 'node:path';
 
 import { parseSkillMetadata, parseWorkbenchManifest } from './manifest.js';
 import type { WorkbenchManifest } from './types.js';
+import { WORKBENCH_USER_AGENT } from './user-agent.js';
 
 const githubApi = 'https://api.github.com';
 const maximumPackageFiles = 256;
@@ -364,7 +365,7 @@ async function requestJson<T>(
             headers: {
                 Accept: 'application/vnd.github+json',
                 'X-GitHub-Api-Version': '2022-11-28',
-                'User-Agent': 'pompeii-labs-workbench',
+                'User-Agent': WORKBENCH_USER_AGENT,
                 ...(token ? { Authorization: `Bearer ${token}` } : {}),
             },
             signal: AbortSignal.timeout(15_000),

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import packageMetadata from '../package.json' with { type: 'json' };
 import type { CatalogRegistryReference } from './catalog.js';
+import { WORKBENCH_USER_AGENT } from './user-agent.js';
 
 interface Preferences {
     version: 1;
@@ -28,7 +29,7 @@ export async function reportRegistryEvent(options: {
                 headers: {
                     Accept: 'application/json',
                     'Content-Type': 'application/json',
-                    'User-Agent': 'pompeii-labs-workbench',
+                    'User-Agent': WORKBENCH_USER_AGENT,
                 },
                 body: JSON.stringify({
                     idempotency_key: options.idempotencyKey ?? crypto.randomUUID(),

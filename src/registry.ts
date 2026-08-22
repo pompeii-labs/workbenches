@@ -1,5 +1,6 @@
 import { type RemoteWorkbenchPackage, validateRemotePackage } from './github.js';
 import { parseWorkbenchManifest } from './manifest.js';
+import { WORKBENCH_USER_AGENT } from './user-agent.js';
 
 const defaultRegistryUrl = 'https://api.workbenches.dev';
 
@@ -61,7 +62,7 @@ export async function resolveRegistryPackage(
             headers: {
                 Accept: 'application/json',
                 'Content-Type': 'application/json',
-                'User-Agent': 'pompeii-labs-workbench',
+                'User-Agent': WORKBENCH_USER_AGENT,
             },
             body: JSON.stringify(reference),
             signal: AbortSignal.timeout(10_000),
@@ -111,7 +112,7 @@ export async function fetchRegistryWorkbench(
         response = await (dependencies.fetch ?? fetch)(registry.artifactUrl, {
             headers: {
                 Accept: 'application/json',
-                'User-Agent': 'pompeii-labs-workbench',
+                'User-Agent': WORKBENCH_USER_AGENT,
             },
             signal: AbortSignal.timeout(20_000),
         });

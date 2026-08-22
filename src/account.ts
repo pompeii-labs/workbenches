@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { registryApiUrl } from './registry.js';
 import { workbenchHome } from './storage.js';
+import { WORKBENCH_USER_AGENT } from './user-agent.js';
 
 export interface Account {
     url: string;
@@ -87,7 +88,7 @@ export async function registryRequest<T>(
             method: options.method ?? 'GET',
             headers: {
                 Accept: 'application/json',
-                'User-Agent': 'pompeii-labs-workbench',
+                'User-Agent': WORKBENCH_USER_AGENT,
                 ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
                 ...(options.body === undefined
                     ? {}
