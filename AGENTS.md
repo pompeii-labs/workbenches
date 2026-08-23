@@ -30,7 +30,7 @@ Check whether the CLI is installed:
 wb --version
 ```
 
-If installation is permitted, install the latest macOS or Linux release:
+If installation is permitted, install the current macOS or Linux prerelease:
 
 ```sh
 curl -fsSL https://workbenches.dev/install.sh | sh

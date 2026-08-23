@@ -107,9 +107,9 @@ adapter, local runtime, and Docker runtime for one-shot and detached execution
 are implemented. The format is not yet stable. Other runners and hosted
 runtimes are not yet supported by the reference engine.
 
-### Install a release
+### Install the current prerelease
 
-Install the latest release on macOS or Linux:
+Install the current prerelease on macOS or Linux:
 
 ```sh
 curl -fsSL https://workbenches.dev/install.sh | sh
@@ -125,7 +125,7 @@ sh install.sh
 rm install.sh
 ```
 
-The installer selects the native archive, verifies its published SHA-256
+The installer selects the prerelease matching this repository, verifies its published SHA-256
 checksum, installs `workbench` to `~/.local/bin` by default, and creates the `wb`
 alias. It never invokes `sudo` or edits shell startup files. Use `--version` to
 install a specific release and `--bin-dir` to choose another destination.

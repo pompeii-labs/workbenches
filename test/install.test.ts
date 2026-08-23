@@ -10,7 +10,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-
+import packageMetadata from '../package.json' with { type: 'json' };
 import { resolveReleaseTarget } from '../scripts/release-support.js';
 
 const projectDirectory = resolve(import.meta.dir, '..');
@@ -70,6 +70,25 @@ describe('release installer', () => {
         expect(result.code).not.toBe(0);
         expect(await readFile(log, 'utf8')).toContain(
             `https://github.com/pompeii-labs/workbenches/releases/download/v1.2.3/${resolveReleaseTarget().name}.tar.gz`
+        );
+    });
+
+    test('defaults to the prerelease matching the package version', async () => {
+        const stubs = await temporaryDirectory('workbench-install-default-');
+        const log = join(stubs, 'urls.log');
+        await executableFile(
+            join(stubs, 'curl'),
+            '#!/bin/sh\nfor argument do url="$argument"; done\nprintf "%s\\n" "$url" >> "$WORKBENCH_TEST_URL_LOG"\nexit 22\n'
+        );
+
+        const result = await runInstaller('', '', [], {
+            PATH: `${stubs}:${process.env.PATH ?? ''}`,
+            WORKBENCH_TEST_URL_LOG: log,
+        });
+
+        expect(result.code).not.toBe(0);
+        expect(await readFile(log, 'utf8')).toContain(
+            `https://github.com/pompeii-labs/workbenches/releases/download/v${packageMetadata.version}/${resolveReleaseTarget().name}.tar.gz`
         );
     });
 
