@@ -9,6 +9,7 @@ import {
     RunnerSessionRegistry,
     type RunnerSessionStartOptions,
 } from '../src/runner-session.js';
+import { supportedRunnerDeclaration } from './runner-adapter-contract.js';
 
 describe('runner-neutral interactive host', () => {
     test('normalizes runner permission requests and returns the host decision', async () => {
@@ -154,6 +155,7 @@ describe('runner-neutral interactive host', () => {
 
 class FakeAdapter implements RunnerSessionAdapter {
     readonly runner = 'opencode';
+    readonly declaration = supportedRunnerDeclaration('opencode');
     readonly prompts: string[] = [];
     cancellations = 0;
     closes = 0;

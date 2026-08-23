@@ -24,6 +24,34 @@ Host
 
 No runner is asked to interpret the Workbench manifest itself.
 
+## Runner adapter contract
+
+Each registered runner adapter declares the native command it drives, the exact
+native versions and interfaces it has been verified against, and an exhaustive
+capability map. The initial capability catalog covers streamed assistant text,
+tool events, file changes, usage, permissions, multiple turns, cancellation,
+failures, and unknown native events.
+
+Every capability has one of three outcomes:
+
+- `supported` passes the portable behavior defined by the shared conformance
+  suite.
+- `degraded` is usable with a documented semantic limitation.
+- `unsupported` is rejected or omitted deliberately, with a documented reason.
+
+An adapter cannot be registered without a verified native version, a named
+native interface, and an outcome for every capability. A declaration is
+evidence about the listed native versions and interfaces only. It is not a
+claim that untested future runner releases conform.
+
+The shared runner conformance suite exercises streamed text, tool and file
+lifecycle, usage, explicit permission decisions, multi-turn continuity,
+cancellation, failures, and unknown native events through the normalized
+session boundary. It also injects reasoning, credentials, shell commands, tool
+output, and arbitrary future payloads and asserts that none cross that boundary.
+Unknown native events become a minimal `runner.event` marker containing only
+their native type.
+
 ## Runtime provider contract
 
 The engine resolves the manifest before selecting the provider named by
