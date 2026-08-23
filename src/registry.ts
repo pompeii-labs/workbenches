@@ -41,6 +41,13 @@ export function registryImageHost(): string {
     return api.hostname === 'api.workbenches.dev' ? 'images.workbenches.dev' : api.host;
 }
 
+export function registryImageOrigin(): string {
+    const api = new URL(registryApiUrl());
+    return api.hostname === 'api.workbenches.dev'
+        ? 'https://images.workbenches.dev'
+        : api.origin;
+}
+
 export function parseRegistryReference(value: string): RegistryReference | undefined {
     const match = value.match(
         /^([a-z0-9]+(?:-[a-z0-9]+)*)\/([a-z0-9]+(?:-[a-z0-9]+)*)$/
