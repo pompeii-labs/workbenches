@@ -4,6 +4,23 @@ import type { WorkbenchEventDraft } from '../src/execution.js';
 import { OpenCodeSessionAdapter } from '../src/opencode-session.js';
 import type { RunnerPermissionRequest } from '../src/runner-session.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import {
+    RUNNER_CONFORMANCE_UNSAFE_VALUES,
+    type RunnerConformanceScenario,
+    runnerAdapterContract,
+} from './runner-adapter-contract.js';
+
+runnerAdapterContract({
+    name: 'OpenCode',
+    createHarness: () => {
+        const server = new FakeOpenCodeServer();
+        return {
+            adapter: server.adapter(),
+            workbench: workbench(),
+            arrange: (scenario) => server.arrange(scenario),
+        };
+    },
+});
 
 describe('OpenCode interactive server adapter', () => {
     test('keeps context in one native server session across streamed turns', async () => {
@@ -273,6 +290,111 @@ class FakeOpenCodeServer {
         });
     }
 
+    arrange(scenario: RunnerConformanceScenario) {
+        if (scenario === 'streaming_text') {
+            this.onPrompt = () => {
+                this.emit('session.status', { status: { type: 'busy' } });
+                this.beginAssistant();
+                this.emit('message.part.updated', {
+                    part: {
+                        id: 'reasoning_contract',
+                        messageID: this.currentAssistantMessageId(),
+                        type: 'reasoning',
+                        text: RUNNER_CONFORMANCE_UNSAFE_VALUES[0],
+                        metadata: {
+                            credential: RUNNER_CONFORMANCE_UNSAFE_VALUES[1],
+                        },
+                    },
+                });
+                this.emit('message.part.updated', {
+                    part: {
+                        id: 'text_contract',
+                        messageID: this.currentAssistantMessageId(),
+                        type: 'text',
+                        text: '',
+                    },
+                });
+                for (const delta of ['Hello', ' world']) {
+                    this.emit('message.part.delta', {
+                        messageID: this.currentAssistantMessageId(),
+                        partID: 'text_contract',
+                        field: 'text',
+                        delta,
+                    });
+                }
+                this.finishContractTurn();
+            };
+            return;
+        }
+        if (scenario === 'tool_events') {
+            this.onPrompt = () => {
+                this.emit('session.status', { status: { type: 'busy' } });
+                this.beginAssistant();
+                this.emit('message.part.updated', {
+                    part: contractToolPart('running'),
+                });
+                this.emit('message.part.updated', {
+                    part: contractToolPart('completed'),
+                });
+                this.emit('message.part.updated', {
+                    part: {
+                        id: 'finish_contract',
+                        messageID: this.currentAssistantMessageId(),
+                        type: 'step-finish',
+                        reason: 'stop',
+                        tokens: {
+                            total: 12,
+                            input: 5,
+                            output: 7,
+                            reasoning: 2,
+                        },
+                        cost: 0.001,
+                    },
+                });
+                this.emit('session.status', { status: { type: 'idle' } });
+            };
+            return;
+        }
+        if (scenario === 'permissions') {
+            this.onPrompt = () => {
+                this.emit('session.status', { status: { type: 'busy' } });
+                this.emit('permission.asked', {
+                    id: 'permission_contract',
+                    permission: 'external_directory',
+                    patterns: ['/outside/*'],
+                    always: ['/outside/*'],
+                });
+            };
+            this.onPermissionReply = () => this.completeTurn('approved');
+            return;
+        }
+        if (scenario === 'multi_turn') {
+            this.onPrompt = (body) => this.completeTurn(String(firstPartText(body)));
+            return;
+        }
+        if (scenario === 'cancellation') {
+            this.onPrompt = () =>
+                this.emit('session.status', { status: { type: 'busy' } });
+            return;
+        }
+        if (scenario === 'failures') {
+            this.onPrompt = () => {
+                this.emit('session.status', { status: { type: 'busy' } });
+                this.emit('session.error', {
+                    error: RUNNER_CONFORMANCE_UNSAFE_VALUES[1],
+                });
+            };
+            return;
+        }
+        this.onPrompt = () => {
+            this.emit('session.status', { status: { type: 'busy' } });
+            this.emit('future.event', {
+                secret: RUNNER_CONFORMANCE_UNSAFE_VALUES[1],
+            });
+            this.completeTurn('done');
+        };
+    }
+
     emit(type: string, properties: Record<string, unknown>) {
         this.eventController?.enqueue(
             new TextEncoder().encode(
@@ -306,6 +428,18 @@ class FakeOpenCodeServer {
         this.emit('message.part.updated', {
             part: {
                 id: `finish_${this.promptBodies.length}`,
+                messageID: this.currentAssistantMessageId(),
+                type: 'step-finish',
+                reason: 'stop',
+            },
+        });
+        this.emit('session.status', { status: { type: 'idle' } });
+    }
+
+    private finishContractTurn() {
+        this.emit('message.part.updated', {
+            part: {
+                id: 'finish_contract',
                 messageID: this.currentAssistantMessageId(),
                 type: 'step-finish',
                 reason: 'stop',
@@ -414,6 +548,24 @@ function toolPart(status: 'running' | 'completed') {
         state: {
             status,
             input: { filePath: '/outside/file.ts' },
+        },
+    };
+}
+
+function contractToolPart(status: 'running' | 'completed') {
+    return {
+        type: 'tool',
+        messageID: 'message_1',
+        tool: 'write',
+        callID: 'call_contract',
+        state: {
+            status,
+            input: {
+                filePath: '/workspace/output.txt',
+                command: RUNNER_CONFORMANCE_UNSAFE_VALUES[2],
+            },
+            output: RUNNER_CONFORMANCE_UNSAFE_VALUES[3],
+            time: { start: 100, end: 125 },
         },
     };
 }

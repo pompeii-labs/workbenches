@@ -1,6 +1,39 @@
 import type { WorkbenchEventDraft } from './execution.js';
 import type { ResolvedWorkbench } from './types.js';
 
+export const RUNNER_CAPABILITIES = [
+    'streaming_text',
+    'tool_events',
+    'file_events',
+    'usage',
+    'permissions',
+    'multi_turn',
+    'cancellation',
+    'failures',
+    'unknown_events',
+] as const;
+
+export type RunnerCapability = (typeof RUNNER_CAPABILITIES)[number];
+export type RunnerCapabilityStatus = 'supported' | 'degraded' | 'unsupported';
+
+export interface RunnerCapabilitySupport {
+    status: RunnerCapabilityStatus;
+    detail?: string;
+}
+
+export interface VerifiedRunnerSurface {
+    version: string;
+    surfaces: string[];
+}
+
+export interface RunnerAdapterDeclaration {
+    native: {
+        command: string;
+        verified: VerifiedRunnerSurface[];
+    };
+    capabilities: Record<RunnerCapability, RunnerCapabilitySupport>;
+}
+
 export interface RunnerTurnResult {
     reason?: string;
 }
@@ -38,6 +71,7 @@ export interface RunnerSessionStartOptions {
 
 export interface RunnerSessionAdapter {
     readonly runner: string;
+    readonly declaration: RunnerAdapterDeclaration;
     start(options: RunnerSessionStartOptions): Promise<RunnerSession>;
 }
 
@@ -51,6 +85,7 @@ export class RunnerSessionRegistry {
             if (this.adapters.has(runner)) {
                 throw new Error(`Duplicate interactive runner adapter: ${runner}`);
             }
+            validateDeclaration(runner, adapter.declaration);
             this.adapters.set(runner, adapter);
         }
     }
@@ -63,5 +98,52 @@ export class RunnerSessionRegistry {
             );
         }
         return adapter;
+    }
+}
+
+function validateDeclaration(
+    runner: string,
+    declaration: RunnerAdapterDeclaration
+): void {
+    if (!declaration) {
+        throw new Error(`Runner adapter declaration is required: ${runner}`);
+    }
+    if (!declaration.native.command.trim()) {
+        throw new Error(`Runner adapter native command must not be empty: ${runner}`);
+    }
+    if (declaration.native.verified.length === 0) {
+        throw new Error(
+            `Runner adapter must declare a verified native version: ${runner}`
+        );
+    }
+    for (const verified of declaration.native.verified) {
+        if (!verified.version.trim() || verified.surfaces.length === 0) {
+            throw new Error(
+                `Runner adapter verified versions require native surfaces: ${runner}`
+            );
+        }
+        if (verified.surfaces.some((surface) => !surface.trim())) {
+            throw new Error(
+                `Runner adapter native surfaces must not be empty: ${runner}`
+            );
+        }
+    }
+    for (const capability of RUNNER_CAPABILITIES) {
+        const support = declaration.capabilities[capability];
+        if (!support) {
+            throw new Error(
+                `Runner adapter capability is not declared: ${runner}.${capability}`
+            );
+        }
+        if (!['supported', 'degraded', 'unsupported'].includes(support.status)) {
+            throw new Error(
+                `Runner adapter capability status is invalid: ${runner}.${capability}`
+            );
+        }
+        if (support.status !== 'supported' && !support.detail?.trim()) {
+            throw new Error(
+                `Runner adapter ${support.status} capability requires detail: ${runner}.${capability}`
+            );
+        }
     }
 }

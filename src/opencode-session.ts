@@ -2,12 +2,31 @@ import { buildOpenCodeServerInvocation } from './opencode.js';
 import { OpenCodeEventAdapter } from './opencode-events.js';
 import { stageOpenCodeSkills } from './run.js';
 import type {
+    RunnerAdapterDeclaration,
     RunnerPermissionDecision,
     RunnerSession,
     RunnerSessionAdapter,
     RunnerSessionStartOptions,
     RunnerTurnResult,
 } from './runner-session.js';
+
+export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
+    native: {
+        command: 'opencode',
+        verified: [{ version: '1.18.18', surfaces: ['server'] }],
+    },
+    capabilities: {
+        streaming_text: { status: 'supported' },
+        tool_events: { status: 'supported' },
+        file_events: { status: 'supported' },
+        usage: { status: 'supported' },
+        permissions: { status: 'supported' },
+        multi_turn: { status: 'supported' },
+        cancellation: { status: 'supported' },
+        failures: { status: 'supported' },
+        unknown_events: { status: 'supported' },
+    },
+};
 
 interface SpawnedRunner {
     exited: Promise<number>;
@@ -36,6 +55,7 @@ export interface OpenCodeSessionDependencies {
 
 export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
     readonly runner = 'opencode';
+    readonly declaration = OPENCODE_SESSION_DECLARATION;
     private readonly dependencies: Required<OpenCodeSessionDependencies>;
 
     constructor(dependencies: OpenCodeSessionDependencies = {}) {
@@ -297,7 +317,13 @@ class OpenCodeServerSession implements RunnerSession {
             });
             return;
         }
-        if (type !== 'message.part.updated') return;
+        if (type !== 'message.part.updated') {
+            await this.options.host.emit({
+                type: 'runner.event',
+                data: { native_type: type },
+            });
+            return;
+        }
         const part = record(properties.part);
         const partType = string(part?.type);
         if (!part || !partType) return;
