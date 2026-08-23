@@ -80,6 +80,44 @@ describe('sources and saved catalog', () => {
         );
     });
 
+    test('ignores incomplete draft packages during repository discovery', async () => {
+        const fixture = await createRepository(['core']);
+        await mkdir(join(fixture.root, '.workbenches', 'experiment-draft'), {
+            recursive: true,
+        });
+
+        const discovered = await discoverWorkbenches(fixture.root);
+
+        expect(discovered.map((workbench) => workbench.manifest.name)).toEqual([
+            'core',
+        ]);
+        expect((await selectWorkbench(fixture.root, 'core')).manifest.name).toBe(
+            'core'
+        );
+        await expect(selectWorkbench(fixture.root, 'experiment-draft')).rejects.toThrow(
+            'Workbench not found: experiment-draft'
+        );
+    });
+
+    test('rejects incomplete non-draft packages during repository discovery', async () => {
+        const fixture = await createRepository(['core']);
+        const incomplete = join(fixture.root, '.workbenches', 'incomplete');
+        await mkdir(incomplete, { recursive: true });
+
+        await expect(discoverWorkbenches(fixture.root)).rejects.toThrow(
+            `Workbench manifest does not exist: ${join(incomplete, 'workbench.yml')}`
+        );
+    });
+
+    test('rejects invalid draft manifests instead of ignoring them', async () => {
+        const fixture = await createRepository(['core']);
+        const invalidDraft = join(fixture.root, '.workbenches', 'invalid-draft');
+        await mkdir(invalidDraft, { recursive: true });
+        await writeFile(join(invalidDraft, 'workbench.yml'), 'spec: invalid\n');
+
+        await expect(discoverWorkbenches(fixture.root)).rejects.toThrow();
+    });
+
     test('distinguishes missing local paths from GitHub slugs without materializing', async () => {
         expect(await resolveLocalSource('lux-db/lux')).toBeUndefined();
         expect(

@@ -60,9 +60,22 @@ export async function discoverWorkbenches(
     const root = join(sourceDirectory, '.workbenches');
     const entries = await readdir(root, { withFileTypes: true }).catch(() => null);
     if (!entries) return [];
-    const directories = entries
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
+    const directories = (
+        await Promise.all(
+            entries
+                .filter((entry) => entry.isDirectory())
+                .map(async (entry) => {
+                    if (
+                        entry.name.endsWith('-draft') &&
+                        !(await isManifestDirectory(join(root, entry.name)))
+                    ) {
+                        return undefined;
+                    }
+                    return entry.name;
+                })
+        )
+    )
+        .filter((name): name is string => name !== undefined)
         .sort();
     return Promise.all(directories.map((name) => resolveWorkbench(join(root, name))));
 }
