@@ -239,7 +239,8 @@ describe('Workbench image commands', () => {
                 fixture.environment
             );
             expect(second.code).toBe(0);
-            expect(second.stderr).toContain('0 blobs to upload · 2 already stored');
+            expect(second.stderr).toContain('0 blobs to upload');
+            expect(second.stderr).toContain('2 already stored');
             expect(fixture.patchSizes).toHaveLength(patchCount);
             expect(fixture.manifests).toHaveLength(2);
         } finally {
