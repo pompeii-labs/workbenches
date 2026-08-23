@@ -3,7 +3,7 @@
 set -eu
 
 repository="${WORKBENCH_REPOSITORY:-pompeii-labs/workbenches}"
-version="${WORKBENCH_VERSION:-latest}"
+version="${WORKBENCH_VERSION:-0.1.0-alpha.2}"
 bin_dir="${WORKBENCH_INSTALL_DIR:-${XDG_BIN_HOME:-${HOME:-}/.local/bin}}"
 download_root="${WORKBENCH_DOWNLOAD_ROOT:-}"
 allow_insecure="${WORKBENCH_ALLOW_INSECURE:-0}"
@@ -16,7 +16,7 @@ usage() {
         '                  [--repository OWNER/REPOSITORY]' \
         '' \
         'Environment:' \
-        '  WORKBENCH_VERSION         Release version or latest' \
+        '  WORKBENCH_VERSION         Release version or latest (default: 0.1.0-alpha.2)' \
         '  WORKBENCH_INSTALL_DIR     Installation directory' \
         '  WORKBENCH_REPOSITORY      GitHub owner/repository' \
         '  WORKBENCH_DOWNLOAD_ROOT   HTTPS release mirror root'
