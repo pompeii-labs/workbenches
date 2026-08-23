@@ -1,4 +1,8 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { defineCommand } from 'citty';
+import pc from 'picocolors';
 
 import {
     type Account,
@@ -6,7 +10,8 @@ import {
     registryProfile,
     requireAccount,
 } from '../account.js';
-import { registryImageHost } from '../registry.js';
+import { type OciPublishProgress, publishOciArchive } from '../oci-publisher.js';
+import { registryImageHost, registryImageOrigin } from '../registry.js';
 
 export const loginCommand = defineCommand({
     meta: {
@@ -30,7 +35,7 @@ export const loginCommand = defineCommand({
 export const pushCommand = defineCommand({
     meta: {
         name: 'push',
-        description: 'Tag and push a local image to a publisher repository.',
+        description: 'Publish a local image to a publisher repository.',
     },
     args: {
         image: {
@@ -61,6 +66,7 @@ export const pushCommand = defineCommand({
     async run({ args }) {
         const account = await requireAccount();
         const profile = await registryProfile(account);
+        const progress = imageProgress();
         const target = await pushImage(
             {
                 image: args.image,
@@ -70,7 +76,8 @@ export const pushCommand = defineCommand({
                 client: args.client,
             },
             account,
-            profile
+            profile,
+            { progress }
         );
         console.log(`pushed\t${target}`);
     },
@@ -119,7 +126,11 @@ export async function pushImage(
     },
     account: Account,
     profile: RegistryProfile,
-    run: ClientRunner = runClient
+    dependencies: {
+        run?: ClientRunner;
+        fetch?: typeof fetch;
+        progress?: (event: OciPublishProgress | { type: 'exporting' }) => void;
+    } = {}
 ): Promise<string> {
     const publisher = options.publisher
         ? profile.publishers.find((candidate) => candidate.slug === options.publisher)
@@ -142,10 +153,78 @@ export async function pushImage(
         );
     }
     const target = imageReference(publisher.slug, options.name, options.tag);
-    await loginClient(options.client, account, run);
-    await run(options.client, ['tag', options.image, target]);
-    await run(options.client, ['push', target]);
-    return target;
+    const directory = await mkdtemp(join(tmpdir(), 'workbench-image-push-'));
+    const archive = join(directory, 'image.tar');
+    try {
+        dependencies.progress?.({ type: 'exporting' });
+        await (dependencies.run ?? runClient)(options.client, [
+            'image',
+            'save',
+            '--output',
+            archive,
+            options.image,
+        ]);
+        await publishOciArchive({
+            archive,
+            registryOrigin: registryImageOrigin(),
+            registryHost: registryImageHost(),
+            publisher: publisher.slug,
+            image: options.name,
+            tag: options.tag,
+            accountToken: account.token,
+            ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),
+            ...(dependencies.progress ? { progress: dependencies.progress } : {}),
+        });
+        return target;
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+}
+
+function imageProgress(): (event: OciPublishProgress | { type: 'exporting' }) => void {
+    let activeBlob = 0;
+    let reported = -1;
+    return (event) => {
+        if (event.type === 'exporting') {
+            process.stderr.write(`${pc.cyan('→')} Exporting local image\n`);
+            return;
+        }
+        if (event.type === 'inspecting') {
+            process.stderr.write(`${pc.cyan('→')} Inspecting OCI image\n`);
+            return;
+        }
+        if (event.type === 'planned') {
+            const reused = event.blobs - event.missing;
+            process.stderr.write(
+                `${pc.cyan('→')} ${event.missing} blob${event.missing === 1 ? '' : 's'} to upload${reused ? pc.dim(` · ${reused} already stored`) : ''}\n`
+            );
+            return;
+        }
+        if (event.type === 'manifest') {
+            process.stderr.write(`${pc.cyan('→')} Publishing image manifest\n`);
+            return;
+        }
+        const percent =
+            event.size === 0
+                ? 100
+                : Math.floor((event.uploaded / event.size) * 10) * 10;
+        if (event.blob === activeBlob && percent === reported && percent < 100) return;
+        activeBlob = event.blob;
+        reported = percent;
+        const kind = event.mediaType.includes('config') ? 'config' : 'layer';
+        process.stderr.write(
+            `  ${pc.cyan('•')} ${kind} ${event.blob}/${event.blobs} · ${Math.min(percent, 100)}% · ${formatBytes(event.uploaded)} / ${formatBytes(event.size)}\n`
+        );
+    };
+}
+
+function formatBytes(value: number): string {
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+    if (value < 1024 * 1024 * 1024) {
+        return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+    }
+    return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }
 
 type ClientRunner = (client: string, args: string[], input?: string) => Promise<void>;

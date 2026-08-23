@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { createHash } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { pack } from 'tar-stream';
 
 import {
     imageReference,
@@ -74,7 +78,10 @@ describe('Workbench image commands', () => {
             expect(output).toHaveBeenCalledWith(
                 `pushed\t127.0.0.1:${fixture.server.port}/pompeii-labs/creator:0.2.0`
             );
-            expect(await clientInvocations(fixture.log)).toHaveLength(4);
+            expect(await clientInvocations(fixture.log)).toHaveLength(2);
+            expect(fixture.patchSizes.some((size) => size === 16 * 1024 * 1024)).toBe(
+                true
+            );
         } finally {
             output.mockRestore();
             if (previousHome === undefined) delete process.env.WORKBENCH_HOME;
@@ -164,7 +171,7 @@ describe('Workbench image commands', () => {
         }
     });
 
-    test('logs in, tags, and pushes an image to the selected publisher', async () => {
+    test('exports and publishes an image to the selected publisher', async () => {
         const fixture = await imageFixture();
         try {
             const result = await executeCli(
@@ -189,27 +196,81 @@ describe('Workbench image commands', () => {
             const target = `127.0.0.1:${fixture.server.port}/pompeii-labs/creator:0.2.0`;
             expect(result.code).toBe(0);
             expect(result.stdout).toContain(`pushed\t${target}`);
+            expect(result.stderr).toContain('Exporting local image');
+            expect(result.stderr).toContain('Inspecting OCI image');
+            expect(result.stderr).toContain('2 blobs to upload');
+            expect(result.stderr).toContain('layer 2/2');
+            expect(result.stderr).toContain('Publishing image manifest');
             expect(`${result.stdout}\n${result.stderr}`).not.toContain(fixture.token);
             expect(await clientInvocations(fixture.log)).toEqual([
                 {
                     args: [
-                        'login',
-                        `127.0.0.1:${fixture.server.port}`,
-                        '--username',
-                        'workbench',
-                        '--password-stdin',
+                        'image',
+                        'save',
+                        '--output',
+                        expect.stringContaining('workbench-image-push-'),
+                        'local-image:latest',
                     ],
-                    input: `${fixture.token}\n`,
-                },
-                {
-                    args: ['tag', 'local-image:latest', target],
-                    input: '',
-                },
-                {
-                    args: ['push', target],
                     input: '',
                 },
             ]);
+            expect(Math.max(...fixture.patchSizes)).toBeLessThanOrEqual(
+                16 * 1024 * 1024
+            );
+            expect(fixture.manifests).toHaveLength(1);
+
+            const patchCount = fixture.patchSizes.length;
+            const second = await executeCli(
+                [
+                    '--api-url',
+                    fixture.apiUrl,
+                    'image',
+                    'push',
+                    'local-image:latest',
+                    '--publisher',
+                    'pompeii-labs',
+                    '--as',
+                    'creator',
+                    '--tag',
+                    '0.2.1',
+                    '--client',
+                    fixture.client,
+                ],
+                fixture.environment
+            );
+            expect(second.code).toBe(0);
+            expect(second.stderr).toContain('0 blobs to upload · 2 already stored');
+            expect(fixture.patchSizes).toHaveLength(patchCount);
+            expect(fixture.manifests).toHaveLength(2);
+        } finally {
+            fixture.server.stop(true);
+        }
+    });
+
+    test('resumes after the registry stores a chunk but loses its response', async () => {
+        const fixture = await imageFixture({ losePatchResponseOnce: true });
+        try {
+            const result = await executeCli(
+                [
+                    '--api-url',
+                    fixture.apiUrl,
+                    'image',
+                    'push',
+                    'local-image:latest',
+                    '--publisher',
+                    'pompeii-labs',
+                    '--as',
+                    'creator',
+                    '--tag',
+                    '0.2.0',
+                    '--client',
+                    fixture.client,
+                ],
+                fixture.environment
+            );
+
+            expect(result.code).toBe(0);
+            expect(fixture.manifests).toHaveLength(1);
         } finally {
             fixture.server.stop(true);
         }
@@ -239,38 +300,119 @@ describe('Workbench image commands', () => {
     });
 });
 
-async function imageFixture() {
+async function imageFixture(options: { losePatchResponseOnce?: boolean } = {}) {
     const root = await temporaryDirectory('workbench-image-');
     const home = join(root, 'home');
     const client = join(root, 'oci-client');
     const log = join(root, 'client.jsonl');
     const token = 'registry-token-for-testing';
+    const ociToken = 'oci-token-for-testing';
+    const archive = join(root, 'fixture.tar');
+    await writeOciArchive(archive);
+    const uploads = new Map<string, Uint8Array[]>();
+    const blobs = new Set<string>();
+    const patchSizes: number[] = [];
+    const manifests: Uint8Array[] = [];
+    let patchResponseLost = false;
     const server = Bun.serve({
         hostname: '127.0.0.1',
         port: 0,
-        fetch(request) {
-            if (new URL(request.url).pathname !== '/v1/profile') {
-                return Response.json(
-                    { error: { message: 'Not found' } },
-                    { status: 404 }
-                );
+        async fetch(request) {
+            const url = new URL(request.url);
+            if (url.pathname === '/v1/profile') {
+                if (request.headers.get('authorization') !== `Bearer ${token}`) {
+                    return Response.json(
+                        { error: { message: 'Unauthorized' } },
+                        { status: 401 }
+                    );
+                }
+                return Response.json({
+                    user: { id: 'user-1', email: 'maintainer@example.com' },
+                    publishers: [
+                        {
+                            id: 'publisher-1',
+                            slug: 'pompeii-labs',
+                            name: 'Pompeii Labs',
+                        },
+                    ],
+                });
             }
-            if (request.headers.get('authorization') !== `Bearer ${token}`) {
-                return Response.json(
-                    { error: { message: 'Unauthorized' } },
-                    { status: 401 }
-                );
+            if (url.pathname === '/v2/auth') {
+                if (request.headers.get('authorization') !== `Bearer ${token}`) {
+                    return Response.json({ errors: [] }, { status: 401 });
+                }
+                return Response.json({ token: ociToken });
             }
-            return Response.json({
-                user: { id: 'user-1', email: 'maintainer@example.com' },
-                publishers: [
-                    {
-                        id: 'publisher-1',
-                        slug: 'pompeii-labs',
-                        name: 'Pompeii Labs',
+            if (request.headers.get('authorization') !== `Bearer ${ociToken}`) {
+                return Response.json({ errors: [] }, { status: 401 });
+            }
+            const blobMatch = /\/blobs\/(sha256:[0-9a-f]{64})$/.exec(url.pathname);
+            if (request.method === 'HEAD' && blobMatch?.[1]) {
+                return new Response(null, {
+                    status: blobs.has(blobMatch[1]) ? 200 : 404,
+                });
+            }
+            if (request.method === 'POST' && url.pathname.endsWith('/blobs/uploads/')) {
+                const id = crypto.randomUUID();
+                uploads.set(id, []);
+                return new Response(null, {
+                    status: 202,
+                    headers: {
+                        Location: `/v2/pompeii-labs/creator/blobs/uploads/${id}`,
                     },
-                ],
-            });
+                });
+            }
+            const uploadMatch = /\/blobs\/uploads\/([^/]+)$/.exec(url.pathname);
+            if (uploadMatch?.[1] && request.method === 'PATCH') {
+                const parts = uploads.get(uploadMatch[1]);
+                if (!parts) return Response.json({ errors: [] }, { status: 404 });
+                const bytes = new Uint8Array(await request.arrayBuffer());
+                patchSizes.push(bytes.byteLength);
+                parts.push(bytes);
+                const size = parts.reduce((total, part) => total + part.byteLength, 0);
+                if (options.losePatchResponseOnce && !patchResponseLost) {
+                    patchResponseLost = true;
+                    return Response.json({ errors: [] }, { status: 503 });
+                }
+                return new Response(null, {
+                    status: 202,
+                    headers: {
+                        Location: url.pathname,
+                        Range: `0-${size - 1}`,
+                    },
+                });
+            }
+            if (uploadMatch?.[1] && request.method === 'GET') {
+                const parts = uploads.get(uploadMatch[1]);
+                if (!parts) return Response.json({ errors: [] }, { status: 404 });
+                const size = parts.reduce((total, part) => total + part.byteLength, 0);
+                return new Response(null, {
+                    status: 204,
+                    headers: { Location: url.pathname, Range: `0-${size - 1}` },
+                });
+            }
+            if (uploadMatch?.[1] && request.method === 'PUT') {
+                const digest = url.searchParams.get('digest');
+                if (!digest) return Response.json({ errors: [] }, { status: 400 });
+                blobs.add(digest);
+                uploads.delete(uploadMatch[1]);
+                return new Response(null, {
+                    status: 201,
+                    headers: {
+                        Location: `/v2/pompeii-labs/creator/blobs/${digest}`,
+                        'Docker-Content-Digest': digest,
+                    },
+                });
+            }
+            if (uploadMatch?.[1] && request.method === 'DELETE') {
+                uploads.delete(uploadMatch[1]);
+                return new Response(null, { status: 204 });
+            }
+            if (request.method === 'PUT' && url.pathname.includes('/manifests/')) {
+                manifests.push(new Uint8Array(await request.arrayBuffer()));
+                return new Response(null, { status: 201 });
+            }
+            return Response.json({ error: { message: 'Not found' } }, { status: 404 });
         },
     });
     const apiUrl = `http://127.0.0.1:${server.port}`;
@@ -294,9 +436,13 @@ async function imageFixture() {
     await writeFile(
         client,
         `#!/usr/bin/env bun
-import { appendFile } from 'node:fs/promises';
+import { appendFile, copyFile } from 'node:fs/promises';
 const input = await Bun.stdin.text();
-await appendFile(${JSON.stringify(log)}, JSON.stringify({ args: process.argv.slice(2), input }) + '\\n');
+const args = process.argv.slice(2);
+await appendFile(${JSON.stringify(log)}, JSON.stringify({ args, input }) + '\\n');
+if (args[0] === 'image' && args[1] === 'save' && args[2] === '--output' && args[3]) {
+    await copyFile(${JSON.stringify(archive)}, args[3]);
+}
 process.exit(Number(process.env.WB_IMAGE_CLIENT_EXIT ?? 0));
 `
     );
@@ -310,9 +456,77 @@ process.exit(Number(process.env.WB_IMAGE_CLIENT_EXIT ?? 0));
         },
         home,
         log,
+        manifests,
+        patchSizes,
         server,
         token,
     };
+}
+
+async function writeOciArchive(path: string): Promise<void> {
+    const config = new TextEncoder().encode(
+        JSON.stringify({
+            architecture: 'arm64',
+            os: 'linux',
+            rootfs: { type: 'layers', diff_ids: [] },
+        })
+    );
+    const layer = new Uint8Array(17 * 1024 * 1024 + 19);
+    for (let index = 0; index < layer.byteLength; index += 1) {
+        layer[index] = index % 251;
+    }
+    const configDescriptor = descriptor(
+        'application/vnd.oci.image.config.v1+json',
+        config
+    );
+    const layerDescriptor = descriptor('application/vnd.oci.image.layer.v1.tar', layer);
+    const manifest = new TextEncoder().encode(
+        JSON.stringify({
+            schemaVersion: 2,
+            mediaType: 'application/vnd.oci.image.manifest.v1+json',
+            config: configDescriptor,
+            layers: [layerDescriptor],
+        })
+    );
+    const manifestDescriptor = descriptor(
+        'application/vnd.oci.image.manifest.v1+json',
+        manifest
+    );
+    const index = new TextEncoder().encode(
+        JSON.stringify({
+            schemaVersion: 2,
+            mediaType: 'application/vnd.oci.image.index.v1+json',
+            manifests: [manifestDescriptor],
+        })
+    );
+    const archive = pack();
+    archive.entry(
+        { name: digestPath(configDescriptor.digest), size: config.byteLength },
+        Buffer.from(config)
+    );
+    archive.entry(
+        { name: digestPath(manifestDescriptor.digest), size: manifest.byteLength },
+        Buffer.from(manifest)
+    );
+    archive.entry(
+        { name: digestPath(layerDescriptor.digest), size: layer.byteLength },
+        Buffer.from(layer)
+    );
+    archive.entry({ name: 'index.json', size: index.byteLength }, Buffer.from(index));
+    archive.finalize();
+    await pipeline(archive, createWriteStream(path));
+}
+
+function descriptor(mediaType: string, bytes: Uint8Array) {
+    return {
+        mediaType,
+        digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+        size: bytes.byteLength,
+    };
+}
+
+function digestPath(digest: string): string {
+    return `blobs/sha256/${digest.slice('sha256:'.length)}`;
 }
 
 function testAccount(url: string, token: string) {

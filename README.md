@@ -271,12 +271,14 @@ wb image push project-core-local \
   --tag 0.4.0
 ```
 
-`image push` logs the selected OCI client in, tags the local image as
-`images.workbenches.dev/example/project-core:0.4.0`, and pushes it. The source
-image can have any valid local name. Use `--client` to select an OCI-compatible
-client other than Docker.
+`image push` exports the local image, skips blobs already present in the
+registry, uploads missing blobs in bounded chunks, and publishes the original
+OCI manifest under `images.workbenches.dev/example/project-core:0.4.0`. The
+source image can have any valid local name. Progress is written to stderr and
+the resulting image reference is written to stdout. Use `--client` to select an
+OCI-compatible client that supports the Docker `image save` interface.
 
-Standard OCI commands work after an explicit registry login too:
+Standard OCI clients can authenticate explicitly too:
 
 ```sh
 wb image login
@@ -284,6 +286,11 @@ docker tag project-core-local \
   images.workbenches.dev/example/project-core:0.4.0
 docker push images.workbenches.dev/example/project-core:0.4.0
 ```
+
+Direct client pushes are subject to the registry edge's per-request body
+limit. Use `wb image push` for images with large layers because it controls the
+upload chunk size. Standard Docker pulls work for images published through
+either path.
 
 The Workbench can then declare the published image:
 

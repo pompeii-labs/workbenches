@@ -44,6 +44,7 @@
         "@biomejs/biome": "^2.5.8",
         "@commitlint/cli": "^21.2.2",
         "@commitlint/config-conventional": "^21.2.2",
+        "@types/tar-stream": "^3.1.4",
         "@types/bun": "latest",
         "husky": "^9.1.7",
         "typescript": "^5.9.3"
@@ -53,7 +54,8 @@
         "citty": "^0.2.2",
         "marked": "^18.0.7",
         "picocolors": "^1.1.1",
-        "solid-js": "1.9.12"
+        "solid-js": "1.9.12",
+        "tar-stream": "^3.2.0"
     },
     "overrides": {
         "@babel/core": "7.29.7"

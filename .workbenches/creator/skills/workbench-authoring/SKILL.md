@@ -121,19 +121,22 @@ wb image push <local-image> \
   --tag <version>
 ```
 
-The command authenticates the OCI client, adds the canonical registry tag, and
-pushes the image. The resulting manifest reference is:
+The command exports the local image, reuses blobs already stored by the
+registry, uploads missing blobs in bounded chunks, and publishes the original
+OCI manifest. The resulting manifest reference is:
 
 ```yaml
 runtime: docker
 image: images.workbenches.dev/<publisher>/<image-name>:<version>
 ```
 
-Use `wb image login` followed by normal OCI `tag` and `push` commands when more
-control is required. Use a versioned tag rather than `latest` for a published
-Workbench, and do not overwrite an image tag already referenced by a released
-package. Run `wb build`, `wb smoke`, and a representative task against the
-published reference before describing it as verified.
+Use `wb image login` when a standard OCI client needs explicit registry
+credentials. Direct client pushes are subject to the registry edge's
+per-request body limit, so use `wb image push` for images with large layers.
+Use a versioned tag rather than `latest` for a published Workbench, and do not
+overwrite an image tag already referenced by a released package. Run `wb
+build`, `wb smoke`, and a representative task against the published reference
+before describing it as verified.
 
 ## Verify truthfully
 

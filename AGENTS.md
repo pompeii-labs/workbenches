@@ -224,7 +224,8 @@ approval graphs, or user-interface behavior into the package.
 
 For a Docker Workbench, either keep a portable Dockerfile inside the package or
 publish a prebuilt image. Build the image under any local name and let the CLI
-authenticate, tag, and push it:
+export it, reuse existing registry blobs, and upload missing blobs in bounded
+chunks:
 
 ```sh
 wb login
@@ -242,9 +243,11 @@ runtime: docker
 image: images.workbenches.dev/example/project-core:0.4.0
 ```
 
-Use `wb image login` when standard `docker tag` and `docker push` commands are
-more appropriate. Prefer a versioned tag and do not silently replace the image
-behind a published Workbench version.
+Use `wb image login` when a standard OCI client needs explicit registry
+credentials. Direct client pushes are subject to the registry edge's
+per-request body limit, so use `wb image push` for images with large layers.
+Prefer a versioned tag and do not silently replace the image behind a published
+Workbench version.
 
 For substantial design, authoring, review, or repair work, use the standard
 maintainers' own creator Workbench instead of reconstructing the specification
