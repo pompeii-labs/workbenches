@@ -178,6 +178,21 @@ wb view project-core --json
 wb remove project-core
 ```
 
+CLI releases and saved Workbench snapshots have separate lifecycles:
+
+```sh
+wb update --check
+wb update
+wb upgrade project-core
+wb upgrade
+```
+
+`update` checks or replaces the installed Workbench CLI. `upgrade` refreshes one
+saved Workbench from its recorded source, or every saved Workbench when no alias
+is provided. An upgrade downloads and verifies the candidate package before it
+atomically repoints the saved alias. Existing snapshots remain unchanged if the
+upgrade fails.
+
 ### Run a task
 
 Pass a positional task or use `--task` for a one-shot run:

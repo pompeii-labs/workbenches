@@ -92,6 +92,21 @@ Remove an alias when it is no longer needed:
 wb remove project-core
 ```
 
+Refresh saved snapshots deliberately. `upgrade` changes the selected local
+snapshot; source changes never apply implicitly:
+
+```sh
+wb upgrade project-core
+wb upgrade
+```
+
+Keep the engine itself current through its separate release lifecycle:
+
+```sh
+wb update --check
+wb update
+```
+
 ## Delegate work
 
 For an agent delegating a bounded task, use a one-shot run and identify the
