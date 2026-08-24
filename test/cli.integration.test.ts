@@ -33,6 +33,8 @@ describe('CLI integration', () => {
             'Discover, save, verify, and run open Workbenches'
         );
         expect(result.stdout).toContain('run');
+        expect(result.stdout).toContain('update');
+        expect(result.stdout).toContain('upgrade');
     });
 
     test('preflights declared tools before spawning the runner', async () => {
@@ -729,6 +731,27 @@ describe('CLI integration', () => {
         const saved = await executeCli(['list'], environment);
         expect(saved.stdout).toContain('fixture-saved\tfixture-core@0.1.0');
 
+        const current = await executeCli(['upgrade'], environment);
+        expect(current.code).toBe(0);
+        expect(current.stdout).toContain('current\tfixture-saved\t0.1.0');
+
+        await writeFile(
+            join(fixture.packageDirectory, 'workbench.yml'),
+            (
+                await readFile(join(fixture.packageDirectory, 'workbench.yml'), 'utf8')
+            ).replace('version: 0.1.0', 'version: 0.2.0')
+        );
+        await writeFile(
+            join(fixture.packageDirectory, 'instructions.md'),
+            '# upgraded fixture\n'
+        );
+        const upgraded = await executeCli(['upgrade', 'fixture-saved'], environment);
+        expect(upgraded.code).toBe(0);
+        expect(upgraded.stdout).toContain('upgraded\tfixture-saved\t0.1.0\t0.2.0');
+        expect((await executeCli(['list'], environment)).stdout).toContain(
+            'fixture-saved\tfixture-core@0.2.0'
+        );
+
         const viewed = await executeCli(
             ['view', 'fixture-saved', '--json'],
             environment
@@ -743,7 +766,7 @@ describe('CLI integration', () => {
             },
             spec: 0,
             name: 'fixture-core',
-            version: '0.1.0',
+            version: '0.2.0',
             runner: 'opencode',
             model: 'openrouter/openai/gpt-5.6-terra',
             runtime: 'local',
@@ -751,7 +774,7 @@ describe('CLI integration', () => {
 
         const humanView = await executeCli(['view', 'fixture-saved'], environment);
         expect(humanView.code).toBe(0);
-        expect(humanView.stdout).toContain('fixture-core@0.1.0');
+        expect(humanView.stdout).toContain('fixture-core@0.2.0');
         expect(humanView.stdout).toContain('Origin       saved');
 
         const translated = await executeCli(

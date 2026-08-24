@@ -40,6 +40,22 @@ export interface CatalogRegistryReference {
     version_id: string;
 }
 
+export interface CatalogUpgrade {
+    source: string;
+    selector: string;
+    manifest: WorkbenchManifest;
+    files: SnapshotFile[];
+    revision?: string;
+    expectedDigest?: string;
+    registry?: CatalogRegistryReference;
+}
+
+export interface CatalogUpgradeResult {
+    previous: CatalogEntry;
+    entry: CatalogEntry;
+    changed: boolean;
+}
+
 interface CatalogFile {
     version: 1;
     entries: CatalogEntry[];
@@ -118,6 +134,59 @@ async function savePackage(options: {
     if (entries.some((entry) => entry.alias === options.alias)) {
         throw new Error(`Saved Workbench already exists: ${options.alias}`);
     }
+    const entry = await materializeCatalogEntry(options);
+    await writeCatalog(options.home, [...entries, entry]);
+    return entry;
+}
+
+export async function upgradeCatalogEntry(
+    home: string,
+    alias: string,
+    upgrade: CatalogUpgrade
+): Promise<CatalogUpgradeResult> {
+    validateAlias(alias);
+    const entries = await readCatalog(home);
+    const previous = entries.find((entry) => entry.alias === alias);
+    if (!previous) throw new Error(`Saved Workbench does not exist: ${alias}`);
+
+    const entry = await materializeCatalogEntry({
+        home,
+        alias,
+        source: upgrade.source,
+        selector: upgrade.selector,
+        manifest: upgrade.manifest,
+        files: upgrade.files,
+        addedAt: previous.addedAt,
+        ...(upgrade.revision ? { revision: upgrade.revision } : {}),
+        ...(upgrade.expectedDigest ? { expectedDigest: upgrade.expectedDigest } : {}),
+        ...(upgrade.registry ? { registry: upgrade.registry } : {}),
+    });
+    if (entry.digest === previous.digest) {
+        return { previous, entry: previous, changed: false };
+    }
+
+    const updated = entries.map((candidate) =>
+        candidate.alias === alias ? entry : candidate
+    );
+    await writeCatalog(home, updated);
+    if (!updated.some((candidate) => candidate.digest === previous.digest)) {
+        await removeSnapshot(home, previous.digest);
+    }
+    return { previous, entry, changed: true };
+}
+
+async function materializeCatalogEntry(options: {
+    home: string;
+    alias: string;
+    source: string;
+    selector: string;
+    manifest: WorkbenchManifest;
+    files: SnapshotFile[];
+    addedAt?: string;
+    revision?: string;
+    expectedDigest?: string;
+    registry?: CatalogRegistryReference;
+}): Promise<CatalogEntry> {
     const digest = packageDigest(options.files);
     if (options.expectedDigest && digest !== options.expectedDigest) {
         throw new Error(
@@ -126,20 +195,7 @@ async function savePackage(options: {
     }
     const snapshotRoot = join(options.home, 'packages', digest.slice('sha256:'.length));
     const packagePath = join(snapshotRoot, '.workbenches', options.selector);
-    if (!(await stat(packagePath).catch(() => null))) {
-        await mkdir(packagePath, { recursive: true });
-        for (const file of options.files) {
-            const destination = join(packagePath, file.path);
-            const fromPackage = relative(packagePath, destination);
-            if (fromPackage.startsWith('..') || isAbsolute(fromPackage)) {
-                throw new Error(`Invalid Workbench package file path: ${file.path}`);
-            }
-            await mkdir(dirname(destination), { recursive: true });
-            await writeFile(destination, file.bytes, {
-                mode: file.executable ? 0o755 : 0o644,
-            });
-        }
-    }
+    await materializeSnapshot(packagePath, options.files);
     const entry: CatalogEntry = {
         alias: options.alias,
         name: options.manifest.name,
@@ -148,12 +204,43 @@ async function savePackage(options: {
         selector: options.selector,
         digest,
         packagePath,
-        addedAt: new Date().toISOString(),
+        addedAt: options.addedAt ?? new Date().toISOString(),
         ...(options.revision ? { revision: options.revision } : {}),
         ...(options.registry ? { registry: options.registry } : {}),
     };
-    await writeCatalog(options.home, [...entries, entry]);
     return entry;
+}
+
+async function materializeSnapshot(
+    packagePath: string,
+    files: SnapshotFile[]
+): Promise<void> {
+    if (await stat(packagePath).catch(() => null)) return;
+    await mkdir(dirname(packagePath), { recursive: true });
+    const staging = join(
+        dirname(packagePath),
+        `.${basename(packagePath)}.${crypto.randomUUID()}`
+    );
+    try {
+        await mkdir(staging);
+        for (const file of files) {
+            const destination = join(staging, file.path);
+            const fromPackage = relative(staging, destination);
+            if (fromPackage.startsWith('..') || isAbsolute(fromPackage)) {
+                throw new Error(`Invalid Workbench package file path: ${file.path}`);
+            }
+            await mkdir(dirname(destination), { recursive: true });
+            await writeFile(destination, file.bytes, {
+                mode: file.executable ? 0o755 : 0o644,
+            });
+        }
+        await rename(staging, packagePath).catch(async (error) => {
+            if (await stat(packagePath).catch(() => null)) return;
+            throw error;
+        });
+    } finally {
+        await rm(staging, { recursive: true, force: true });
+    }
 }
 
 export async function removeFromCatalog(
@@ -166,12 +253,16 @@ export async function removeFromCatalog(
     const remaining = entries.filter((candidate) => candidate.alias !== alias);
     await writeCatalog(home, remaining);
     if (!remaining.some((candidate) => candidate.digest === entry.digest)) {
-        await rm(join(home, 'packages', entry.digest.slice('sha256:'.length)), {
-            recursive: true,
-            force: true,
-        });
+        await removeSnapshot(home, entry.digest);
     }
     return entry;
+}
+
+async function removeSnapshot(home: string, digest: string): Promise<void> {
+    await rm(join(home, 'packages', digest.slice('sha256:'.length)), {
+        recursive: true,
+        force: true,
+    });
 }
 
 export function findCatalogEntry(entries: CatalogEntry[], alias: string) {

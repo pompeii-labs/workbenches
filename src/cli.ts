@@ -17,6 +17,8 @@ import { removeCommand } from './commands/remove.js';
 import { runCommand } from './commands/run.js';
 import { smokeCommand } from './commands/smoke.js';
 import { telemetryCommand } from './commands/telemetry.js';
+import { updateCommand } from './commands/update.js';
+import { upgradeCommand } from './commands/upgrade.js';
 import { validateCommand } from './commands/validate.js';
 import { viewCommand } from './commands/view.js';
 import { whoamiCommand } from './commands/whoami.js';
@@ -44,6 +46,8 @@ export const workbenchCommand = defineCommand({
         v: validateCommand,
         smoke: smokeCommand,
         telemetry: telemetryCommand,
+        update: updateCommand,
+        upgrade: upgradeCommand,
         login: loginCommand,
         logout: logoutCommand,
         whoami: whoamiCommand,
