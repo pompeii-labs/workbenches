@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { ManagedRun, type WorkbenchEvent } from '../src/execution.js';
+import { ManagedRun, type WorkbenchEvent } from '../src/runs/index.js';
 
 async function collect(events: AsyncIterable<WorkbenchEvent>) {
     const collected: WorkbenchEvent[] = [];

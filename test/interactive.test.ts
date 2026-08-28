@@ -1,14 +1,16 @@
 import { describe, expect, test } from 'bun:test';
-
-import type { WorkbenchEvent } from '../src/execution.js';
-import { startInteractiveWorkbench } from '../src/interactive.js';
-import type { ResolvedReference } from '../src/references.js';
+import { RunnerRegistry } from '../src/runners/registry.js';
+import { type PreparedRunner, Runner } from '../src/runners/runner.js';
 import {
+    normalizeRunnerInput,
+    type RunnerInput,
     type RunnerSession,
     type RunnerSessionAdapter,
-    RunnerSessionRegistry,
     type RunnerSessionStartOptions,
-} from '../src/runner-session.js';
+} from '../src/runners/session.js';
+import { InteractiveRun, type WorkbenchEvent } from '../src/runs/index.js';
+import type { ResolvedWorkbench } from '../src/types.js';
+import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 import { supportedRunnerDeclaration } from './runner-adapter-contract.js';
 
 describe('runner-neutral interactive host', () => {
@@ -16,7 +18,7 @@ describe('runner-neutral interactive host', () => {
         const events: WorkbenchEvent[] = [];
         const decisions: string[] = [];
         const adapter = new FakeAdapter({ requestPermission: true });
-        const session = await startInteractiveWorkbench({
+        const session = await InteractiveRun.start({
             resolved: reference(),
             onEvent: (event) => void events.push(event),
             onPermission: async (request) => {
@@ -44,7 +46,7 @@ describe('runner-neutral interactive host', () => {
 
     test('rejects a permission safely when no interactive handler exists', async () => {
         const adapter = new FakeAdapter({ requestPermission: true });
-        const session = await startInteractiveWorkbench({
+        const session = await InteractiveRun.start({
             resolved: reference(),
             onEvent: () => {},
             dependencies: dependencies(adapter),
@@ -58,7 +60,7 @@ describe('runner-neutral interactive host', () => {
     test('owns Workbench lifecycle while an adapter owns native transport', async () => {
         const events: WorkbenchEvent[] = [];
         const adapter = new FakeAdapter();
-        const session = await startInteractiveWorkbench({
+        const session = await InteractiveRun.start({
             resolved: reference(),
             onEvent: (event) => {
                 events.push(event);
@@ -86,7 +88,7 @@ describe('runner-neutral interactive host', () => {
     test('normalizes turn cancellation without terminating the session', async () => {
         const events: WorkbenchEvent[] = [];
         const adapter = new FakeAdapter({ waitForCancellation: true });
-        const session = await startInteractiveWorkbench({
+        const session = await InteractiveRun.start({
             resolved: reference(),
             onEvent: (event) => {
                 events.push(event);
@@ -114,7 +116,7 @@ describe('runner-neutral interactive host', () => {
         const adapter = new FakeAdapter({
             failure: new Error('native transport failed'),
         });
-        const session = await startInteractiveWorkbench({
+        const session = await InteractiveRun.start({
             resolved: reference(),
             onEvent: (event) => {
                 events.push(event);
@@ -136,7 +138,7 @@ describe('runner-neutral interactive host', () => {
         const adapter = new FakeAdapter({
             closeFailure: new Error('native cleanup failed'),
         });
-        const session = await startInteractiveWorkbench({
+        const session = await InteractiveRun.start({
             resolved: reference(),
             onEvent: (event) => {
                 events.push(event);
@@ -197,8 +199,8 @@ class FakeAdapter implements RunnerSessionAdapter {
         };
     }
 
-    private async prompt(input: string) {
-        this.prompts.push(input);
+    private async prompt(input: RunnerInput) {
+        this.prompts.push(normalizeRunnerInput(input).text);
         this.markStarted();
         if (this.options.failure) throw this.options.failure;
         if (this.options.waitForCancellation && this.prompts.length === 1) {
@@ -233,14 +235,33 @@ class FakeAdapter implements RunnerSessionAdapter {
 
 function dependencies(adapter: RunnerSessionAdapter) {
     return {
-        env: {},
+        env: { OPENROUTER_API_KEY: 'fixture-openrouter-key' },
         findExecutable: (name: string) => `/bin/${name}`,
-        registry: new RunnerSessionRegistry([adapter]),
+        registry: new RunnerRegistry([new InteractiveTestRunner(adapter)]),
         now: () => new Date('2026-08-18T12:00:00.000Z'),
     };
 }
 
-function reference(): ResolvedReference {
+class InteractiveTestRunner extends Runner {
+    readonly name = 'opencode';
+    readonly session: RunnerSessionAdapter;
+
+    constructor(session: RunnerSessionAdapter) {
+        super();
+        this.session = session;
+    }
+
+    prepare(
+        workbench: ResolvedWorkbench,
+        environment: Record<string, string | undefined>
+    ): Promise<PreparedRunner> {
+        return RunnerRegistry.standard()
+            .resolve(this.name)
+            .prepare(workbench, environment);
+    }
+}
+
+function reference(): ResolvedWorkbenchReference {
     return {
         workspaceDirectory: '/workspace',
         cleanup: async () => {},
@@ -255,7 +276,7 @@ function reference(): ResolvedReference {
                 version: '0.1.0',
                 name: 'fixture-core',
                 runner: 'opencode',
-                model: 'openrouter/openai/gpt-5.6-terra',
+                model: { id: 'openai/gpt-5.6-terra' },
                 instructions: './instructions.md',
                 skills: [],
                 tools: [],

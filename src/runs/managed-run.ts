@@ -1,36 +1,4 @@
-export const WORKBENCH_EVENT_TYPES = [
-    'run.started',
-    'run.ready',
-    'turn.started',
-    'turn.completed',
-    'output.text',
-    'tool.started',
-    'tool.completed',
-    'file.changed',
-    'input.requested',
-    'usage.updated',
-    'run.completed',
-    'run.failed',
-    'run.cancelled',
-    'runner.event',
-] as const;
-
-export type WorkbenchEventType = (typeof WORKBENCH_EVENT_TYPES)[number];
-
-export interface WorkbenchEvent<T = unknown> {
-    protocol: 0;
-    run_id: string;
-    sequence: number;
-    timestamp: string;
-    type: WorkbenchEventType;
-    runner: string;
-    data: T;
-}
-
-export interface WorkbenchEventDraft {
-    type: WorkbenchEventType;
-    data: Record<string, unknown>;
-}
+import { RunEvents, type WorkbenchEvent, type WorkbenchEventType } from './events.js';
 
 export interface RunRequest {
     runId: string;
@@ -75,26 +43,26 @@ export class ManagedRun implements RunHandle {
     readonly result: Promise<RunResult>;
 
     private readonly channel = new AsyncEventChannel<WorkbenchEvent>();
-    private readonly runner: string;
+    private readonly emitter: RunEvents;
     private readonly onInput: ManagedRunOptions['onInput'];
     private readonly onClose: NonNullable<ManagedRunOptions['onClose']>;
     private readonly onCancel: NonNullable<ManagedRunOptions['onCancel']>;
-    private readonly now: NonNullable<ManagedRunOptions['now']>;
     private readonly resolveResult: (result: RunResult) => void;
-    private sequence = 0;
     private terminal = false;
     private closePromise?: Promise<void>;
     private cancelPromise?: Promise<void>;
 
     constructor(options: ManagedRunOptions) {
-        if (!options.runId.trim()) throw new Error('runId must not be empty');
-        if (!options.runner.trim()) throw new Error('runner must not be empty');
-        this.runId = options.runId;
-        this.runner = options.runner;
+        this.emitter = new RunEvents({
+            runId: options.runId,
+            runner: options.runner,
+            onEvent: (event) => this.channel.push(event),
+            ...(options.now ? { now: options.now } : {}),
+        });
+        this.runId = this.emitter.runId;
         this.onInput = options.onInput;
         this.onClose = options.onClose ?? (() => {});
         this.onCancel = options.onCancel ?? (() => {});
-        this.now = options.now ?? (() => new Date());
         this.events = this.channel;
         let resolveResult!: (result: RunResult) => void;
         this.result = new Promise((resolve) => {
@@ -105,16 +73,7 @@ export class ManagedRun implements RunHandle {
 
     emit<T>(type: WorkbenchEventType, data: T): WorkbenchEvent<T> {
         if (this.terminal) throw new Error('run is already terminal');
-        this.sequence += 1;
-        const event: WorkbenchEvent<T> = {
-            protocol: 0,
-            run_id: this.runId,
-            sequence: this.sequence,
-            timestamp: this.now().toISOString(),
-            type,
-            runner: this.runner,
-            data,
-        };
+        const event = this.emitter.create(type, data);
         this.channel.push(event);
         return event;
     }
