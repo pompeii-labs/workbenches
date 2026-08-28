@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import type { WorkbenchEvent } from '../src/execution.js';
+import type { WorkbenchEvent } from '../src/runs/index.js';
 import {
     addUserMessage,
     emptyTranscript,

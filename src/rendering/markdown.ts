@@ -1,6 +1,16 @@
-import { stripVTControlCharacters } from 'node:util';
-
 import { Marked, type Token, type Tokens } from 'marked';
+
+import {
+    hardWrapTerminalText,
+    identityTerminalStyle,
+    normalizeTerminalColumns,
+    sanitizeTerminalText,
+    type TerminalSegment,
+    type TerminalStyle,
+    terminalWidth,
+    wrapPlainTerminalText,
+    wrapTerminalSegments,
+} from './terminal-text.js';
 
 type Colors = {
     bold(value: string): string;
@@ -11,13 +21,6 @@ type Colors = {
     strikethrough(value: string): string;
     underline(value: string): string;
 };
-
-type Style = (value: string) => string;
-
-interface Segment {
-    text: string;
-    styles: Style[];
-}
 
 interface OpenFence {
     marker: '`' | '~';
@@ -32,17 +35,21 @@ const markdown = new Marked({
 });
 
 const plainColors: Colors = {
-    bold: identity,
-    cyan: identity,
-    dim: identity,
-    green: identity,
-    italic: identity,
-    strikethrough: identity,
-    underline: identity,
+    bold: identityTerminalStyle,
+    cyan: identityTerminalStyle,
+    dim: identityTerminalStyle,
+    green: identityTerminalStyle,
+    italic: identityTerminalStyle,
+    strikethrough: identityTerminalStyle,
+    underline: identityTerminalStyle,
 };
 
 export function renderMarkdownPreview(source: string, columns = 88): string {
     return renderBlocks(source, plainColors, columns).join('\n\n');
+}
+
+export function sanitizeMarkdown(source: string): string {
+    return sanitizeTerminalText(source);
 }
 
 export class TerminalMarkdownStream {
@@ -86,12 +93,16 @@ export class TerminalMarkdownStream {
 }
 
 function renderBlocks(source: string, colors: Colors, columns: number): string[] {
-    const safe = sanitizeMarkdown(source);
+    const safe = sanitizeTerminalText(source);
     if (!safe.trim()) return [];
     try {
-        return renderBlockTokens(markdown.lexer(safe), colors, normalizeWidth(columns));
+        return renderBlockTokens(
+            markdown.lexer(safe),
+            colors,
+            normalizeTerminalColumns(columns)
+        );
     } catch {
-        return wrapPlain(safe, normalizeWidth(columns));
+        return wrapPlainTerminalText(safe, normalizeTerminalColumns(columns));
     }
 }
 
@@ -110,15 +121,15 @@ function renderBlock(token: Token, colors: Colors, columns: number): string {
         const heading = token as Tokens.Heading;
         const styles = heading.depth <= 3 ? [colors.bold, colors.cyan] : [colors.bold];
         const prefix = headingPrefix(heading.depth, colors);
-        const width = Math.max(10, columns - visibleWidth(prefix));
-        const lines = wrapSegments(
+        const width = Math.max(10, columns - terminalWidth(prefix));
+        const lines = wrapTerminalSegments(
             inlineSegments(heading.tokens, colors, styles),
             width
         );
         return lines
             .map(
                 (line, index) =>
-                    `${index === 0 ? prefix : ' '.repeat(visibleWidth(prefix))}${line}`
+                    `${index === 0 ? prefix : ' '.repeat(terminalWidth(prefix))}${line}`
             )
             .join('\n');
     }
@@ -128,7 +139,7 @@ function renderBlock(token: Token, colors: Colors, columns: number): string {
         const segments = tokens.length
             ? inlineSegments(tokens, colors)
             : [{ text: paragraph.text, styles: [] }];
-        return wrapSegments(segments, columns).join('\n');
+        return wrapTerminalSegments(segments, columns).join('\n');
     }
     if (token.type === 'code') return renderCode(token as Tokens.Code, colors, columns);
     if (token.type === 'blockquote') {
@@ -150,25 +161,30 @@ function renderBlock(token: Token, colors: Colors, columns: number): string {
         return renderTable(token as Tokens.Table, colors, columns);
     if (token.type === 'html') {
         const plain = (token as Tokens.HTML).text.replace(/<[^>]*>/gu, '');
-        return wrapPlain(plain, columns).join('\n');
+        return wrapPlainTerminalText(plain, columns).join('\n');
     }
     const childTokens = tokenChildren(token);
     if (childTokens.length) {
-        return wrapSegments(inlineSegments(childTokens, colors), columns).join('\n');
+        return wrapTerminalSegments(inlineSegments(childTokens, colors), columns).join(
+            '\n'
+        );
     }
-    return wrapPlain(token.raw, columns).join('\n');
+    return wrapPlainTerminalText(token.raw, columns).join('\n');
 }
 
 function renderCode(token: Tokens.Code, colors: Colors, columns: number): string {
     const lines: string[] = [];
-    const language = sanitizeMarkdown(token.lang ?? '')
+    const language = sanitizeTerminalText(token.lang ?? '')
         .trim()
         .split(/\s+/u)[0];
     const label = language || 'code';
     lines.push(colors.dim(`┌─ ${label}`));
     const width = Math.max(1, columns - 2);
-    for (const sourceLine of sanitizeMarkdown(token.text).split('\n')) {
-        for (const line of hardWrap(sourceLine.replaceAll('\t', '    '), width)) {
+    for (const sourceLine of sanitizeTerminalText(token.text).split('\n')) {
+        for (const line of hardWrapTerminalText(
+            sourceLine.replaceAll('\t', '    '),
+            width
+        )) {
             lines.push(`${colors.dim('│')} ${colors.cyan(line)}`);
         }
     }
@@ -183,8 +199,8 @@ function renderList(token: Tokens.List, colors: Colors, columns: number): string
             const marker = item.task
                 ? `${item.checked ? colors.green('✓') : colors.dim('○')} `
                 : `${token.ordered ? `${start + index}.` : '•'} `;
-            const indent = ' '.repeat(visibleWidth(marker));
-            const innerWidth = Math.max(10, columns - visibleWidth(marker));
+            const indent = ' '.repeat(terminalWidth(marker));
+            const innerWidth = Math.max(10, columns - terminalWidth(marker));
             const blocks = renderBlockTokens(
                 item.tokens.filter((child) => child.type !== 'checkbox'),
                 colors,
@@ -207,7 +223,9 @@ function renderTable(token: Tokens.Table, colors: Colors, columns: number): stri
     const widths = tableWidths(cells, columns);
     const lines: string[] = [];
     for (const [rowIndex, row] of cells.entries()) {
-        const wrapped = row.map((cell, index) => wrapPlain(cell, widths[index] ?? 3));
+        const wrapped = row.map((cell, index) =>
+            wrapPlainTerminalText(cell, widths[index] ?? 3)
+        );
         const height = Math.max(...wrapped.map((cell) => cell.length));
         for (let lineIndex = 0; lineIndex < height; lineIndex += 1) {
             lines.push(
@@ -247,7 +265,7 @@ function tableWidths(rows: string[][], columns: number): number[] {
     const separatorWidth = Math.max(0, count - 1) * 3;
     const available = Math.max(count * 3, columns - separatorWidth);
     const widths = Array.from({ length: count }, (_, column) =>
-        Math.max(3, ...rows.map((row) => visibleWidth(row[column] ?? '')))
+        Math.max(3, ...rows.map((row) => terminalWidth(row[column] ?? '')))
     );
     while (widths.reduce((sum, width) => sum + width, 0) > available) {
         const largest = Math.max(...widths);
@@ -263,7 +281,7 @@ function alignCell(
     width: number,
     alignment: 'center' | 'left' | 'right' | null | undefined
 ): string {
-    const padding = Math.max(0, width - visibleWidth(value));
+    const padding = Math.max(0, width - terminalWidth(value));
     if (alignment === 'right') return `${' '.repeat(padding)}${value}`;
     if (alignment === 'center') {
         const left = Math.floor(padding / 2);
@@ -275,9 +293,9 @@ function alignCell(
 function inlineSegments(
     tokens: Token[],
     colors: Colors,
-    inherited: Style[] = []
-): Segment[] {
-    const segments: Segment[] = [];
+    inherited: TerminalStyle[] = []
+): TerminalSegment[] {
+    const segments: TerminalSegment[] = [];
     for (const token of tokens) {
         if (token.type === 'strong') {
             const strong = token as Tokens.Strong;
@@ -358,7 +376,7 @@ function inlineSegments(
 }
 
 function plainInline(tokens: Token[]): string {
-    return sanitizeMarkdown(
+    return sanitizeTerminalText(
         tokens
             .map((token) => {
                 if (token.type === 'image') {
@@ -375,88 +393,8 @@ function plainInline(tokens: Token[]): string {
     );
 }
 
-function wrapSegments(segments: Segment[], columns: number): string[] {
-    const width = Math.max(1, Math.floor(columns));
-    const lines: string[] = [];
-    let line = '';
-    let lineWidth = 0;
-    let pendingSpace = false;
-
-    const breakLine = () => {
-        lines.push(line.replace(/\s+$/u, ''));
-        line = '';
-        lineWidth = 0;
-        pendingSpace = false;
-    };
-
-    for (const segment of segments) {
-        const safe = sanitizeMarkdown(segment.text).replaceAll('\t', '    ');
-        for (const part of safe.split(/(\s+)/u)) {
-            if (!part) continue;
-            if (/\s+/u.test(part)) {
-                for (const character of part) {
-                    if (character === '\n') breakLine();
-                    else pendingSpace = lineWidth > 0;
-                }
-                continue;
-            }
-            for (const chunk of hardWrap(part, width)) {
-                const chunkWidth = visibleWidth(chunk);
-                const spacer = pendingSpace && lineWidth > 0 ? 1 : 0;
-                if (lineWidth > 0 && lineWidth + spacer + chunkWidth > width)
-                    breakLine();
-                if (pendingSpace && lineWidth > 0) {
-                    line += ' ';
-                    lineWidth += 1;
-                }
-                line += applyStyles(chunk, segment.styles);
-                lineWidth += chunkWidth;
-                pendingSpace = false;
-                if (lineWidth >= width) breakLine();
-            }
-        }
-    }
-    if (line || lines.length === 0) lines.push(line.replace(/\s+$/u, ''));
-    return lines;
-}
-
-function wrapPlain(value: string, columns: number): string[] {
-    return wrapSegments([{ text: sanitizeMarkdown(value), styles: [] }], columns);
-}
-
-function hardWrap(value: string, columns: number): string[] {
-    if (!value) return [''];
-    const chunks: string[] = [];
-    let chunk = '';
-    let width = 0;
-    for (const character of graphemes(value)) {
-        const nextWidth = visibleWidth(character);
-        if (chunk && width + nextWidth > columns) {
-            chunks.push(chunk);
-            chunk = '';
-            width = 0;
-        }
-        chunk += character;
-        width += nextWidth;
-    }
-    if (chunk) chunks.push(chunk);
-    return chunks;
-}
-
-function graphemes(value: string): string[] {
-    const Segmenter = Intl.Segmenter;
-    if (!Segmenter) return [...value];
-    return [
-        ...new Segmenter(undefined, { granularity: 'grapheme' }).segment(value),
-    ].map((entry) => entry.segment);
-}
-
-function applyStyles(value: string, styles: Style[]): string {
-    return styles.reduce((result, style) => style(result), value);
-}
-
 function safeHref(value: string): string {
-    const href = sanitizeMarkdown(value).trim();
+    const href = sanitizeTerminalText(value).trim();
     if (!href) return '';
     try {
         const url = new URL(href);
@@ -468,37 +406,6 @@ function safeHref(value: string): string {
 
 function tokenChildren(token: Token): Token[] {
     return 'tokens' in token && Array.isArray(token.tokens) ? token.tokens : [];
-}
-
-export function sanitizeMarkdown(value: string): string {
-    return [...stripVTControlCharacters(value).replace(/\r\n?/gu, '\n')]
-        .filter((character) => {
-            const code = character.codePointAt(0) ?? 0;
-            if (code < 32) return code === 9 || code === 10;
-            if (code >= 127 && code <= 159) return false;
-            if (code >= 0x202a && code <= 0x202e) return false;
-            if (code >= 0x2066 && code <= 0x2069) return false;
-            return code !== 0xfeff;
-        })
-        .join('');
-}
-
-function visibleWidth(value: string): number {
-    const plain = stripVTControlCharacters(value);
-    const bun = (
-        globalThis as typeof globalThis & {
-            Bun?: { stringWidth?: (input: string) => number };
-        }
-    ).Bun;
-    return bun?.stringWidth?.(plain) ?? [...plain].length;
-}
-
-function normalizeWidth(columns: number): number {
-    return Number.isFinite(columns) ? Math.max(20, Math.floor(columns)) : 80;
-}
-
-function identity(value: string): string {
-    return value;
 }
 
 function completeBlockBoundary(value: string): number {

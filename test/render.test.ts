@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { stripVTControlCharacters } from 'node:util';
-
-import type { WorkbenchEvent, WorkbenchEventType } from '../src/execution.js';
-import { createEventRenderer } from '../src/render.js';
+import { createEventRenderer } from '../src/rendering/index.js';
+import type { WorkbenchEvent, WorkbenchEventType } from '../src/runs/index.js';
 
 describe('Workbench event renderers', () => {
     test('emits one complete normalized JSON event per line', () => {
