@@ -1,29 +1,33 @@
 import { relative } from 'node:path';
 
-import type { ResolvedWorkbench, RunnerInvocation } from './types.js';
+import { modelLabel } from '../../models/index.js';
+import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 
 export function buildOpenCodeInvocation(
     workbench: ResolvedWorkbench,
     task: string,
     baseEnv: Record<string, string | undefined> = process.env,
     configDirectory?: string,
-    workspaceDirectory = workbench.repositoryDirectory
+    workspaceDirectory = workbench.repositoryDirectory,
+    model = modelLabel(workbench.manifest.model),
+    nativeConfigFile?: string
 ): RunnerInvocation {
     if (!task.trim()) throw new Error('task must not be empty');
     const environment = buildOpenCodeEnvironment(
         workbench,
         baseEnv,
         configDirectory,
-        workspaceDirectory
+        workspaceDirectory,
+        model,
+        nativeConfigFile
     );
 
     return {
         command: [
             'opencode',
             'run',
-            '--pure',
             '--model',
-            workbench.manifest.model,
+            model,
             '--dir',
             workspaceDirectory,
             '--format',
@@ -41,14 +45,18 @@ export function buildOpenCodeSessionInvocation(
     sessionId: string | undefined,
     baseEnv: Record<string, string | undefined> = process.env,
     configDirectory?: string,
-    workspaceDirectory = workbench.repositoryDirectory
+    workspaceDirectory = workbench.repositoryDirectory,
+    model = modelLabel(workbench.manifest.model),
+    nativeConfigFile?: string
 ): RunnerInvocation {
     const invocation = buildOpenCodeInvocation(
         workbench,
         task,
         baseEnv,
         configDirectory,
-        workspaceDirectory
+        workspaceDirectory,
+        model,
+        nativeConfigFile
     );
     if (sessionId === undefined) return invocation;
     const normalized = sessionId.trim();
@@ -69,26 +77,22 @@ export function buildOpenCodeServerInvocation(
     password: string,
     baseEnv: Record<string, string | undefined> = process.env,
     configDirectory?: string,
-    workspaceDirectory = workbench.repositoryDirectory
+    workspaceDirectory = workbench.repositoryDirectory,
+    model = modelLabel(workbench.manifest.model),
+    nativeConfigFile?: string
 ): RunnerInvocation {
     if (!password) throw new Error('OpenCode server password must not be empty');
     return {
-        command: [
-            'opencode',
-            'serve',
-            '--pure',
-            '--hostname',
-            '127.0.0.1',
-            '--port',
-            '0',
-        ],
+        command: ['opencode', 'serve', '--hostname', '127.0.0.1', '--port', '0'],
         cwd: workspaceDirectory,
         env: {
             ...buildOpenCodeEnvironment(
                 workbench,
                 baseEnv,
                 configDirectory,
-                workspaceDirectory
+                workspaceDirectory,
+                model,
+                nativeConfigFile
             ),
             OPENCODE_SERVER_PASSWORD: password,
         },
@@ -99,7 +103,9 @@ function buildOpenCodeEnvironment(
     workbench: ResolvedWorkbench,
     baseEnv: Record<string, string | undefined>,
     configDirectory: string | undefined,
-    workspaceDirectory: string
+    workspaceDirectory: string,
+    model: string,
+    nativeConfigFile: string | undefined
 ): Record<string, string | undefined> {
     if (workbench.manifest.runner !== 'opencode') {
         throw new Error(`Unsupported runner: ${workbench.manifest.runner}`);
@@ -156,7 +162,7 @@ function buildOpenCodeEnvironment(
         $schema: 'https://opencode.ai/config.json',
         autoupdate: false,
         share: 'disabled',
-        model: workbench.manifest.model,
+        model,
         instructions: [instructionPath],
         ...(Object.keys(mcp).length > 0 ? { mcp } : {}),
     };
@@ -165,7 +171,7 @@ function buildOpenCodeEnvironment(
         ...baseEnv,
         PWD: workspaceDirectory,
         OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
-        OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
+        ...(nativeConfigFile ? { OPENCODE_CONFIG: nativeConfigFile } : {}),
         ...(configDirectory ? { OPENCODE_CONFIG_DIR: configDirectory } : {}),
     };
 }

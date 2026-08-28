@@ -1,19 +1,28 @@
-import { buildOpenCodeServerInvocation } from './opencode.js';
-import { OpenCodeEventAdapter } from './opencode-events.js';
-import { stageOpenCodeSkills } from './run.js';
+import { lstat } from 'node:fs/promises';
 import type {
     RunnerAdapterDeclaration,
+    RunnerInput,
     RunnerPermissionDecision,
     RunnerSession,
     RunnerSessionAdapter,
     RunnerSessionStartOptions,
     RunnerTurnResult,
-} from './runner-session.js';
+} from '../session.js';
+import { normalizeRunnerInput } from '../session.js';
+import { stageOpenCodeSkills } from './assets.js';
+import { OpenCodeEventAdapter } from './events.js';
+import { buildOpenCodeServerInvocation } from './invocation.js';
+import {
+    type OpenCodeFetch,
+    OpenCodeServer,
+    type SpawnedOpenCodeServer,
+    spawnOpenCodeServer,
+} from './server.js';
 
 export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
     native: {
         command: 'opencode',
-        verified: [{ version: '1.18.18', surfaces: ['server'] }],
+        verified: [{ version: '1.18.22', surfaces: ['server'] }],
     },
     capabilities: {
         streaming_text: { status: 'supported' },
@@ -22,20 +31,20 @@ export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
         usage: { status: 'supported' },
         permissions: { status: 'supported' },
         multi_turn: { status: 'supported' },
+        steering: {
+            status: 'unsupported',
+            detail: 'OpenCode server mode does not expose a native mid-turn steering command.',
+        },
+        image_input: { status: 'supported' },
+        image_generation: {
+            status: 'unsupported',
+            detail: 'Workbench does not yet provide a normalized image-generation tool or image output event for OpenCode.',
+        },
         cancellation: { status: 'supported' },
         failures: { status: 'supported' },
         unknown_events: { status: 'supported' },
     },
 };
-
-interface SpawnedRunner {
-    exited: Promise<number>;
-    stdout?: ReadableStream<Uint8Array>;
-    stderr?: ReadableStream<Uint8Array>;
-    kill(): void;
-}
-
-type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export interface OpenCodeSessionDependencies {
     spawn?: (
@@ -47,8 +56,8 @@ export interface OpenCodeSessionDependencies {
             stdout: 'pipe';
             stderr: 'pipe';
         }
-    ) => SpawnedRunner;
-    fetch?: Fetch;
+    ) => SpawnedOpenCodeServer;
+    fetch?: OpenCodeFetch;
     password?: () => string;
     startupTimeoutMs?: number;
 }
@@ -60,7 +69,7 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
 
     constructor(dependencies: OpenCodeSessionDependencies = {}) {
         this.dependencies = {
-            spawn: dependencies.spawn ?? defaultSpawn,
+            spawn: dependencies.spawn ?? spawnOpenCodeServer,
             fetch: dependencies.fetch ?? globalThis.fetch,
             password: dependencies.password ?? (() => crypto.randomUUID()),
             startupTimeoutMs: dependencies.startupTimeoutMs ?? 10_000,
@@ -69,10 +78,16 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
 
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
         const staged = await stageOpenCodeSkills(options.workbench);
+        const nativeConfigFile =
+            options.workbench.runnerConfigPath &&
+            (await lstat(options.workbench.runnerConfigPath)).isFile()
+                ? options.workbench.runnerConfigPath
+                : undefined;
         const session = new OpenCodeServerSession({
             ...options,
             ...this.dependencies,
             ...(staged?.directory ? { configDirectory: staged.directory } : {}),
+            ...(nativeConfigFile ? { nativeConfigFile } : {}),
             cleanup: staged?.cleanup ?? (async () => {}),
         });
         try {
@@ -102,33 +117,39 @@ interface AlwaysPermission {
 class OpenCodeServerSession implements RunnerSession {
     private readonly options: RunnerSessionStartOptions &
         Required<OpenCodeSessionDependencies> & {
+            configuration: RunnerSessionStartOptions['configuration'];
             configDirectory?: string;
+            nativeConfigFile?: string;
             cleanup: () => Promise<void>;
         };
-    private readonly eventAbort = new AbortController();
     private readonly closing = deferred<void>();
+    private readonly server: OpenCodeServer;
     private readonly streamedTextParts = new Set<string>();
     private readonly assistantTextParts = new Set<string>();
     private readonly assistantMessages = new Set<string>();
     private readonly alwaysPermissions: AlwaysPermission[] = [];
-    private child: SpawnedRunner | undefined;
-    private serverUrl: string | undefined;
     private nativeSessionId: string | undefined;
-    private passwordValue: string | undefined;
-    private eventLoop: Promise<void> | undefined;
-    private stdoutLoop: Promise<void> | undefined;
-    private stderrLoop: Promise<string> | undefined;
     private active: ActiveTurn | undefined;
     private closed = false;
+    private failure: Error | undefined;
 
     constructor(
         options: RunnerSessionStartOptions &
             Required<OpenCodeSessionDependencies> & {
+                configuration: RunnerSessionStartOptions['configuration'];
                 configDirectory?: string;
+                nativeConfigFile?: string;
                 cleanup: () => Promise<void>;
             }
     ) {
         this.options = options;
+        this.server = new OpenCodeServer({
+            workspaceDirectory: options.workspaceDirectory,
+            spawn: options.spawn,
+            fetch: options.fetch,
+            password: options.password,
+            startupTimeoutMs: options.startupTimeoutMs,
+        });
     }
 
     get id(): string | undefined {
@@ -136,50 +157,22 @@ class OpenCodeServerSession implements RunnerSession {
     }
 
     async start(): Promise<void> {
-        const password = this.options.password();
-        if (!password) throw new Error('OpenCode server password must not be empty');
-        this.passwordValue = password;
-        const invocation = buildOpenCodeServerInvocation(
-            this.options.workbench,
-            password,
-            this.options.environment,
-            this.options.configDirectory,
-            this.options.workspaceDirectory
+        await this.server.start(
+            (password) =>
+                buildOpenCodeServerInvocation(
+                    this.options.workbench,
+                    password,
+                    this.options.environment,
+                    this.options.configDirectory,
+                    this.options.workspaceDirectory,
+                    this.options.configuration.model,
+                    this.options.nativeConfigFile
+                ),
+            (error) => this.fail(error)
         );
-        const child = this.options.spawn(invocation.command, {
-            cwd: invocation.cwd,
-            env: invocation.env,
-            stdin: 'ignore',
-            stdout: 'pipe',
-            stderr: 'pipe',
-        });
-        this.child = child;
-        this.stderrLoop = readLimitedText(child.stderr, 64 * 1024);
-        const ready = deferred<string>();
-        this.stdoutLoop = consumeLines(child.stdout, async (line) => {
-            const url = line.match(/https?:\/\/127\.0\.0\.1:\d+/)?.[0];
-            if (url) ready.resolve(url);
-        });
-        const timeout = setTimeout(
-            () =>
-                ready.reject(new Error('OpenCode server did not become ready in time')),
-            this.options.startupTimeoutMs
-        );
-        void child.exited.then((code) => {
-            if (!this.closed && !this.serverUrl) {
-                ready.reject(new Error(`OpenCode server exited with code ${code}`));
-            } else if (!this.closed) {
-                this.failActive(new Error(`OpenCode server exited with code ${code}`));
-            }
-        });
-        try {
-            this.serverUrl = await ready.promise;
-        } finally {
-            clearTimeout(timeout);
-        }
 
-        const model = parseModel(this.options.workbench.manifest.model);
-        const created = await this.requestJson('/session', {
+        const model = parseModel(this.options.configuration.model);
+        const created = await this.server.requestJson('/session', {
             method: 'POST',
             body: JSON.stringify({
                 title: `Workbench: ${this.options.workbench.manifest.name}`,
@@ -192,21 +185,23 @@ class OpenCodeServerSession implements RunnerSession {
         await this.subscribe();
     }
 
-    async prompt(input: string): Promise<RunnerTurnResult> {
+    async prompt(input: RunnerInput): Promise<RunnerTurnResult> {
         if (this.closed) throw new Error('runner session is closed');
+        if (this.failure) throw this.failure;
         if (this.active) throw new Error('runner session is already processing a turn');
         const sessionId = this.requireSessionId();
         const turn = createActiveTurn();
         this.active = turn;
-        const model = parseModel(this.options.workbench.manifest.model);
+        const model = parseModel(this.options.configuration.model);
+        const normalized = normalizeRunnerInput(input);
         try {
-            await this.request(
+            await this.server.request(
                 `/session/${encodeURIComponent(sessionId)}/prompt_async`,
                 {
                     method: 'POST',
                     body: JSON.stringify({
                         model,
-                        parts: [{ type: 'text', text: input }],
+                        parts: openCodeParts(normalized),
                     }),
                 }
             );
@@ -220,7 +215,7 @@ class OpenCodeServerSession implements RunnerSession {
 
     async cancelTurn(): Promise<void> {
         if (!this.active || this.closed) return;
-        await this.request(
+        await this.server.request(
             `/session/${encodeURIComponent(this.requireSessionId())}/abort`,
             { method: 'POST' }
         );
@@ -232,31 +227,15 @@ class OpenCodeServerSession implements RunnerSession {
         this.closed = true;
         this.closing.resolve(undefined);
         this.finishActive('cancelled');
-        this.eventAbort.abort();
-        this.child?.kill();
-        await Promise.allSettled([
-            this.eventLoop,
-            this.stdoutLoop,
-            this.stderrLoop,
-            this.child?.exited,
-        ]);
+        await this.server.close();
         await this.options.cleanup();
     }
 
     private async subscribe(): Promise<void> {
-        const response = await this.authFetch(this.endpoint('/event'), {
-            signal: this.eventAbort.signal,
-        });
-        if (!response.ok || !response.body) {
-            throw new Error(
-                `OpenCode event stream failed with HTTP ${response.status}`
-            );
-        }
-        this.eventLoop = consumeSse(response.body, async (value) => {
-            await this.consumeEvent(value);
-        }).catch((error) => {
-            if (!this.closed && !isAbortError(error)) this.failActive(asError(error));
-        });
+        await this.server.subscribe(
+            async (value) => this.consumeEvent(value),
+            (error) => this.fail(error)
+        );
     }
 
     private async consumeEvent(value: unknown): Promise<void> {
@@ -386,20 +365,10 @@ class OpenCodeServerSession implements RunnerSession {
         id: string,
         decision: RunnerPermissionDecision
     ): Promise<boolean> {
-        const response = await this.authFetch(
-            this.endpoint(`/permission/${encodeURIComponent(id)}/reply`),
-            {
-                method: 'POST',
-                body: JSON.stringify({ reply: permissionReply(decision) }),
-            }
+        return this.server.replyPermission(
+            `/permission/${encodeURIComponent(id)}/reply`,
+            { reply: permissionReply(decision) }
         );
-        if (response.status === 404) return false;
-        if (!response.ok) {
-            throw new Error(
-                `OpenCode permission reply failed with HTTP ${response.status}`
-            );
-        }
-        return true;
     }
 
     private isAlwaysAllowed(action: string, resources: string[]): boolean {
@@ -425,6 +394,11 @@ class OpenCodeServerSession implements RunnerSession {
         active.reject(error);
     }
 
+    private fail(error: Error) {
+        this.failure ??= error;
+        this.failActive(this.failure);
+    }
+
     private requireSessionId(): string {
         if (!this.nativeSessionId) throw new Error('OpenCode session is not ready');
         return this.nativeSessionId;
@@ -434,34 +408,18 @@ class OpenCodeServerSession implements RunnerSession {
         const messageId = string(value);
         return messageId !== undefined && this.assistantMessages.has(messageId);
     }
+}
 
-    private endpoint(path: string): URL {
-        if (!this.serverUrl) throw new Error('OpenCode server is not ready');
-        const url = new URL(path, this.serverUrl);
-        url.searchParams.set('directory', this.options.workspaceDirectory);
-        return url;
-    }
-
-    private authFetch(input: string | URL | Request, init: RequestInit = {}) {
-        if (!this.passwordValue) throw new Error('OpenCode server is not ready');
-        const headers = new Headers(init.headers);
-        headers.set('Authorization', `Basic ${btoa(`opencode:${this.passwordValue}`)}`);
-        if (init.body) headers.set('Content-Type', 'application/json');
-        return this.options.fetch(input, { ...init, headers });
-    }
-
-    private async request(path: string, init: RequestInit): Promise<Response> {
-        const response = await this.authFetch(this.endpoint(path), init);
-        if (!response.ok) {
-            throw new Error(`OpenCode request failed with HTTP ${response.status}`);
-        }
-        return response;
-    }
-
-    private async requestJson(path: string, init: RequestInit): Promise<unknown> {
-        const response = await this.request(path, init);
-        return response.json();
-    }
+function openCodeParts(input: ReturnType<typeof normalizeRunnerInput>) {
+    return [
+        { type: 'text', text: input.text },
+        ...input.images.map((image) => ({
+            type: 'file',
+            mime: image.mimeType,
+            url: `data:${image.mimeType};base64,${image.data}`,
+            ...(image.name ? { filename: image.name } : {}),
+        })),
+    ];
 }
 
 function createActiveTurn(): ActiveTurn {
@@ -505,73 +463,6 @@ function parseModel(model: string) {
     };
 }
 
-function defaultSpawn(
-    command: string[],
-    options: {
-        cwd: string;
-        env: Record<string, string | undefined>;
-        stdin: 'ignore';
-        stdout: 'pipe';
-        stderr: 'pipe';
-    }
-): SpawnedRunner {
-    return Bun.spawn(command, options);
-}
-
-async function consumeLines(
-    stream: ReadableStream<Uint8Array> | undefined,
-    consume: (line: string) => Promise<void>
-): Promise<void> {
-    if (!stream) return;
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    let pending = '';
-    for (;;) {
-        const next = await reader.read();
-        if (next.done) break;
-        pending += decoder.decode(next.value, { stream: true });
-        const lines = pending.split('\n');
-        pending = lines.pop() ?? '';
-        for (const line of lines) if (line.trim()) await consume(line);
-    }
-    pending += decoder.decode();
-    if (pending.trim()) await consume(pending);
-}
-
-async function consumeSse(
-    stream: ReadableStream<Uint8Array>,
-    consume: (value: unknown) => Promise<void>
-) {
-    let data = '';
-    await consumeLines(stream, async (line) => {
-        if (!line.startsWith('data:')) return;
-        data += line.slice(5).trimStart();
-        if (!data) return;
-        try {
-            await consume(JSON.parse(data));
-            data = '';
-        } catch (error) {
-            if (!(error instanceof SyntaxError)) throw error;
-        }
-    });
-}
-
-async function readLimitedText(
-    stream: ReadableStream<Uint8Array> | undefined,
-    limit: number
-): Promise<string> {
-    if (!stream) return '';
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    let output = '';
-    for (;;) {
-        const next = await reader.read();
-        if (next.done) break;
-        if (output.length < limit) output += decoder.decode(next.value);
-    }
-    return output.slice(0, limit);
-}
-
 function deferred<T>() {
     let resolve!: (value: T) => void;
     let reject!: (error: Error) => void;
@@ -600,8 +491,4 @@ function stringArray(value: unknown): string[] {
 
 function asError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error));
-}
-
-function isAbortError(error: unknown) {
-    return error instanceof Error && error.name === 'AbortError';
 }
