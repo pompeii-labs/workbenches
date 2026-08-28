@@ -3,12 +3,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-    bindWorkbenchEnvironment,
-    loadEnvironmentOverrides,
-    parseEnvironmentAssignments,
-} from '../src/environment.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { WorkbenchEnvironment } from '../src/workbench/index.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -21,9 +17,11 @@ afterEach(async () => {
 });
 
 describe('Workbench environment overrides', () => {
+    const environment = new WorkbenchEnvironment();
+
     test('collects repeatable assignments and splits only the first equals sign', () => {
         expect(
-            parseEnvironmentAssignments([
+            environment.parse([
                 '--env',
                 'FIRST=one',
                 '--env=SECOND=two=three',
@@ -42,12 +40,10 @@ describe('Workbench environment overrides', () => {
     });
 
     test('rejects missing and malformed explicit assignments without echoing values', () => {
-        expect(() => parseEnvironmentAssignments(['--env'])).toThrow(
-            '--env requires NAME=value'
+        expect(() => environment.parse(['--env'])).toThrow('--env requires NAME=value');
+        expect(() => environment.parse(['--env', 'lowercase=secret'])).toThrow(
+            '--env requires an uppercase NAME=value assignment'
         );
-        expect(() =>
-            parseEnvironmentAssignments(['--env', 'lowercase=secret'])
-        ).toThrow('--env requires an uppercase NAME=value assignment');
     });
 
     test('loads dotenv syntax and applies explicit, file, then inherited precedence', async () => {
@@ -56,28 +52,28 @@ describe('Workbench environment overrides', () => {
             join(directory, '.env.test'),
             'export FIRST="from file"\nSECOND=file value\nUNDECLARED=ignored\n'
         );
-        const overrides = await loadEnvironmentOverrides({
+        const overrides = await environment.load({
             envFile: '.env.test',
             cwd: directory,
             rawArgs: ['--env', 'SECOND=explicit'],
         });
-        const environment = bindWorkbenchEnvironment(fixture(), overrides, {
+        const bound = environment.bind(fixture(), overrides, {
             FIRST: 'inherited',
             SECOND: 'inherited',
             PATH: '/bin',
         });
 
-        expect(environment).toEqual({
+        expect(bound).toEqual({
             FIRST: 'from file',
             SECOND: 'explicit',
             PATH: '/bin',
         });
-        expect(environment.UNDECLARED).toBeUndefined();
+        expect(bound.UNDECLARED).toBeUndefined();
     });
 
     test('rejects explicit names not declared by the Workbench', () => {
         expect(() =>
-            bindWorkbenchEnvironment(
+            environment.bind(
                 fixture(),
                 {
                     file: {},
@@ -91,12 +87,12 @@ describe('Workbench environment overrides', () => {
     test('fails cleanly for missing and oversized environment files', async () => {
         const directory = await temporaryDirectory();
         await expect(
-            loadEnvironmentOverrides({ envFile: '.env.missing', cwd: directory })
+            environment.load({ envFile: '.env.missing', cwd: directory })
         ).rejects.toThrow('Environment file is unavailable');
 
         await writeFile(join(directory, '.env.large'), 'A'.repeat(1024 * 1024 + 1));
         await expect(
-            loadEnvironmentOverrides({ envFile: '.env.large', cwd: directory })
+            environment.load({ envFile: '.env.large', cwd: directory })
         ).rejects.toThrow('Environment file exceeds 1 MiB');
     });
 });
@@ -119,7 +115,7 @@ function fixture(): ResolvedWorkbench {
             version: '0.1.0',
             name: 'fixture',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-terra',
+            model: { id: 'openai/gpt-5.6-terra' },
             instructions: './instructions.md',
             skills: [],
             tools: [],

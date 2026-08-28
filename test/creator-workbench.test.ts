@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { resolveWorkbench } from '../src/manifest.js';
+import { Workbench } from '../src/workbench/index.js';
 
 const root = process.cwd();
 const creatorDirectory = join(root, '.workbenches', 'creator');
@@ -22,16 +22,16 @@ async function digest(path: string): Promise<string> {
 
 describe('creator Workbench', () => {
     test('is a valid self-contained draft-0 package', async () => {
-        const workbench = await resolveWorkbench(creatorDirectory);
+        const workbench = await Workbench.load(creatorDirectory);
 
         expect(workbench.manifest).toEqual({
             spec: 0,
-            version: '0.1.1',
+            version: '0.1.3',
             name: 'workbench-creator',
             description:
                 'Design, author, review, and test repository-owned Workbenches.',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-terra',
+            model: { id: 'openai/gpt-5.6-terra' },
             instructions: './instructions.md',
             skills: ['./skills/workbench-authoring'],
             tools: ['wb'],
@@ -46,10 +46,10 @@ describe('creator Workbench', () => {
 
     test('keeps the published reference snapshot unchanged', async () => {
         expect(await digest(join(referencesDirectory, 'spec.md'))).toBe(
-            '1f810926eb9c2bc9cf368bd3a7e58518d62aa0f7925a225add43b3a92c5c1dac'
+            '47f5e81944fe9b1385b7fc37a7307823152f8175f514b2f5b85bbe4afd00dae8'
         );
         expect(await digest(join(referencesDirectory, 'workbench.schema.json'))).toBe(
-            'cee85a3ffb2ed79e280023324c1c1a0441192be07360aaa165a05e2c16e923a1'
+            '8f44c19b7cc4594fe80d5371064df05a7c46cce505e705eba8d7573762aed072'
         );
     });
 });

@@ -4,12 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ResolvedWorkbench } from '../src/types.js';
-import {
-    bindWorkbenchWorkspaces,
-    parseWorkspaceAssignments,
-    validateWorkbenchWorkspaceBindings,
-    workspaceEnvironment,
-} from '../src/workspaces.js';
+import { WorkbenchWorkspaces } from '../src/workbench/index.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -22,9 +17,11 @@ afterEach(async () => {
 });
 
 describe('named workspace bindings', () => {
+    const workspaces = new WorkbenchWorkspaces();
+
     test('parses repeatable bindings without consuming arguments after --', () => {
         expect(
-            parseWorkspaceAssignments([
+            workspaces.parse([
                 '--workspace',
                 'api=../api',
                 '--workspace=schemas=../shared schemas',
@@ -41,19 +38,14 @@ describe('named workspace bindings', () => {
     });
 
     test('rejects malformed and duplicate assignments', () => {
-        expect(() => parseWorkspaceAssignments(['--workspace'])).toThrow(
+        expect(() => workspaces.parse(['--workspace'])).toThrow(
             '--workspace requires NAME=PATH'
         );
-        expect(() => parseWorkspaceAssignments(['--workspace', 'Bad=../api'])).toThrow(
+        expect(() => workspaces.parse(['--workspace', 'Bad=../api'])).toThrow(
             '--workspace requires a lowercase NAME=PATH assignment'
         );
         expect(() =>
-            parseWorkspaceAssignments([
-                '--workspace',
-                'api=../one',
-                '--workspace',
-                'api=../two',
-            ])
+            workspaces.parse(['--workspace', 'api=../one', '--workspace', 'api=../two'])
         ).toThrow('Duplicate workspace binding: api');
     });
 
@@ -63,7 +55,7 @@ describe('named workspace bindings', () => {
         const schemas = join(root, 'schemas');
         await mkdir(api);
         await mkdir(schemas);
-        const bindings = await bindWorkbenchWorkspaces({
+        const bindings = await workspaces.bind({
             workbench: fixture(),
             cwd: root,
             rawArgs: ['--workspace', 'api=./api', '--workspace=schemas=./schemas'],
@@ -74,7 +66,7 @@ describe('named workspace bindings', () => {
             { name: 'schemas', path: await realpath(schemas), access: 'read-only' },
         ]);
         expect(
-            workspaceEnvironment(
+            workspaces.environment(
                 bindings,
                 (path) => `/mapped/${path.split('/').at(-1)}`
             )
@@ -87,18 +79,18 @@ describe('named workspace bindings', () => {
     test('rejects missing, undeclared, and unavailable bindings', async () => {
         const root = await temporaryDirectory();
         const workbench = fixture();
-        await expect(bindWorkbenchWorkspaces({ workbench, cwd: root })).rejects.toThrow(
+        await expect(workspaces.bind({ workbench, cwd: root })).rejects.toThrow(
             'Missing required workspace binding: api'
         );
         await expect(
-            bindWorkbenchWorkspaces({
+            workspaces.bind({
                 workbench,
                 cwd: root,
                 rawArgs: ['--workspace', 'other=.'],
             })
         ).rejects.toThrow('Workspace binding is not declared by fixture: other');
         await expect(
-            bindWorkbenchWorkspaces({
+            workspaces.bind({
                 workbench,
                 cwd: root,
                 rawArgs: ['--workspace', 'api=./missing'],
@@ -110,7 +102,7 @@ describe('named workspace bindings', () => {
         const root = await temporaryDirectory();
         const workbench = fixture();
         await expect(
-            bindWorkbenchWorkspaces({
+            workspaces.bind({
                 workbench,
                 cwd: root,
                 rawArgs: ['--workspace', 'api=.', '--workspace', 'schemas=.'],
@@ -128,17 +120,15 @@ describe('named workspace bindings', () => {
         const workbench = fixture();
 
         await expect(
-            validateWorkbenchWorkspaceBindings(workbench, [
+            workspaces.validate(workbench, [
                 { name: 'api', path, access: 'read-write' },
             ])
         ).resolves.toBeUndefined();
         await expect(
-            validateWorkbenchWorkspaceBindings(workbench, [
-                { name: 'api', path, access: 'read-only' },
-            ])
+            workspaces.validate(workbench, [{ name: 'api', path, access: 'read-only' }])
         ).rejects.toThrow('Workspace binding access does not match manifest: api');
         await expect(
-            validateWorkbenchWorkspaceBindings(workbench, [
+            workspaces.validate(workbench, [
                 { name: 'other', path, access: 'read-write' },
             ])
         ).rejects.toThrow('Workspace binding is not declared by fixture: other');
@@ -163,7 +153,7 @@ function fixture(): ResolvedWorkbench {
             version: '0.1.0',
             name: 'fixture',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-terra',
+            model: { id: 'openai/gpt-5.6-terra' },
             instructions: './instructions.md',
             skills: [],
             tools: [],
