@@ -2,7 +2,7 @@ import { RegistryClient } from '../registry/index.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
 import { WorkbenchSource } from '../workbench/index.js';
 import { WorkbenchPackage } from './package.js';
-import { SavedWorkbenchCatalog } from './saved-catalog.js';
+import { SavedWorkbenchCatalog } from './saved.js';
 import type { CatalogEntry, CatalogUpgradeResult } from './types.js';
 
 export interface SavedWorkbenchUpgradeOptions {

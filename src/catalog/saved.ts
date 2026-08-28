@@ -36,7 +36,9 @@ export class SavedWorkbenchCatalog {
     async list(): Promise<CatalogEntry[]> {
         const path = join(this.home, 'catalog.json');
         const source = await readFile(path, 'utf8').catch(() => null);
-        if (!source) return [];
+        if (!source) {
+            return [];
+        }
         const parsed = JSON.parse(source) as Partial<CatalogFile>;
         if (parsed.version !== 1 || !Array.isArray(parsed.entries)) {
             throw new Error(`Unsupported Workbench catalog: ${path}`);

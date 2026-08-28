@@ -1,5 +1,5 @@
 export { WorkbenchPackage } from './package.js';
-export { SavedWorkbenchCatalog } from './saved-catalog.js';
+export { SavedWorkbenchCatalog } from './saved.js';
 export type { MaterializedSnapshot } from './snapshots.js';
 export type {
     CatalogEntry,
