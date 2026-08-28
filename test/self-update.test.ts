@@ -13,12 +13,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-    availableCliUpdate,
     type CliRelease,
-    compareSemanticVersions,
-    installCliUpdate,
-    releaseTargetName,
-} from '../src/self-update.js';
+    CliUpdater,
+    ReleaseTarget,
+    SemanticVersion,
+} from '../src/releases/index.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -32,11 +31,11 @@ afterEach(async () => {
 
 describe('CLI self-update', () => {
     test('orders stable, prerelease, and build versions', () => {
-        expect(compareSemanticVersions('1.0.0', '1.0.0-alpha.9')).toBe(1);
-        expect(compareSemanticVersions('1.0.0-alpha.10', '1.0.0-alpha.2')).toBe(1);
-        expect(compareSemanticVersions('1.2.0', '1.1.99')).toBe(1);
-        expect(compareSemanticVersions('1.0.0+build.2', '1.0.0+build.1')).toBe(0);
-        expect(() => compareSemanticVersions('latest', '1.0.0')).toThrow(
+        expect(SemanticVersion.compare('1.0.0', '1.0.0-alpha.9')).toBe(1);
+        expect(SemanticVersion.compare('1.0.0-alpha.10', '1.0.0-alpha.2')).toBe(1);
+        expect(SemanticVersion.compare('1.2.0', '1.1.99')).toBe(1);
+        expect(SemanticVersion.compare('1.0.0+build.2', '1.0.0+build.1')).toBe(0);
+        expect(() => SemanticVersion.compare('latest', '1.0.0')).toThrow(
             'Cannot compare CLI versions'
         );
     });
@@ -50,39 +49,39 @@ describe('CLI self-update', () => {
         const fetcher = async () => Response.json(releases);
 
         expect(
-            (await availableCliUpdate('1.0.0-alpha.2', { fetch: fetcher }))?.version
+            (await new CliUpdater({ fetch: fetcher }).available('1.0.0-alpha.2'))
+                ?.version
         ).toBe('1.1.0-beta.1');
-        expect((await availableCliUpdate('1.0.0', { fetch: fetcher }))?.version).toBe(
-            '1.0.1'
-        );
-        expect(await availableCliUpdate('1.1.0', { fetch: fetcher })).toBeUndefined();
+        const updater = new CliUpdater({ fetch: fetcher });
+        expect((await updater.available('1.0.0'))?.version).toBe('1.0.1');
+        expect(await updater.available('1.1.0')).toBeUndefined();
     });
 
     test('rejects failed and malformed release responses', async () => {
         await expect(
-            availableCliUpdate('1.0.0', {
+            new CliUpdater({
                 fetch: async () => {
                     throw new Error('network unavailable');
                 },
-            })
+            }).available('1.0.0')
         ).rejects.toThrow('network unavailable');
         await expect(
-            availableCliUpdate('1.0.0', {
+            new CliUpdater({
                 fetch: async () => new Response('rate limited', { status: 403 }),
-            })
+            }).available('1.0.0')
         ).rejects.toThrow('HTTP 403');
         await expect(
-            availableCliUpdate('1.0.0', {
+            new CliUpdater({
                 fetch: async () => Response.json({ releases: [] }),
-            })
+            }).available('1.0.0')
         ).rejects.toThrow('malformed data');
     });
 
     test('rejects unsupported release targets', () => {
-        expect(() => releaseTargetName('win32', 'x64')).toThrow(
+        expect(() => ReleaseTarget.from('win32', 'x64')).toThrow(
             'Unsupported release operating system'
         );
-        expect(() => releaseTargetName('linux', 'riscv64')).toThrow(
+        expect(() => ReleaseTarget.from('linux', 'riscv64')).toThrow(
             'Unsupported release architecture'
         );
     });
@@ -92,10 +91,10 @@ describe('CLI self-update', () => {
         const target = join(await temporaryDirectory('workbench-update-target-'), 'wb');
         await executableFile(target, '#!/bin/sh\necho old\n');
 
-        const installed = await installCliUpdate(fixture.release, {
+        const installed = await new CliUpdater({
             executable: target,
             fetch: fixture.fetch,
-        });
+        }).install(fixture.release);
 
         expect(installed).toBe(await realpath(target));
         expect(await readFile(target, 'utf8')).toContain('echo updated');
@@ -109,10 +108,10 @@ describe('CLI self-update', () => {
         await executableFile(target, original);
 
         await expect(
-            installCliUpdate(fixture.release, {
+            new CliUpdater({
                 executable: target,
                 fetch: fixture.fetch,
-            })
+            }).install(fixture.release)
         ).rejects.toThrow('Checksum verification failed');
         expect(await readFile(target, 'utf8')).toBe(original);
     });
@@ -124,17 +123,19 @@ describe('CLI self-update', () => {
         );
         await executableFile(target, '#!/bin/sh\necho original\n');
         await expect(
-            installCliUpdate(
-                { version: '1.0.0', tag: 'v1.0.0', prerelease: false, assets: [] },
-                { executable: target }
-            )
+            new CliUpdater({ executable: target }).install({
+                version: '1.0.0',
+                tag: 'v1.0.0',
+                prerelease: false,
+                assets: [],
+            })
         ).rejects.toThrow('does not support this platform');
     });
 });
 
 async function releaseFixture(options: { invalidChecksum?: boolean } = {}) {
     const root = await temporaryDirectory('workbench-self-update-release-');
-    const targetName = releaseTargetName(process.platform, process.arch);
+    const targetName = ReleaseTarget.from(process.platform, process.arch).name;
     const packageDirectory = join(root, targetName);
     const archiveName = `${targetName}.tar.gz`;
     const archive = join(root, archiveName);
