@@ -1,15 +1,15 @@
 import { defineCommand } from 'citty';
 
-import { bindWorkbenchEnvironment, loadEnvironmentOverrides } from '../environment.js';
-import { resolveReference } from '../references.js';
-import { createEventRenderer } from '../render.js';
-import { runWorkbench } from '../run.js';
-import { updateStoredRun } from '../run-store.js';
-import { smokeWorkbenchRuntime } from '../runtime.js';
+import { createEventRenderer } from '../rendering/index.js';
+import { RunDispatcher, RunWorker, WorkbenchRun } from '../runs/index.js';
+import { RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import { launchWorkbenchTui } from '../tui.js';
-import { dispatchStoredRun, executeStoredRun, prepareStoredRun } from '../worker.js';
-import { bindWorkbenchWorkspaces, workspaceEnvironment } from '../workspaces.js';
+import {
+    WorkbenchEnvironment,
+    WorkbenchResolver,
+    WorkbenchWorkspaces,
+} from '../workbench/index.js';
 
 export const runCommand = defineCommand({
     meta: {
@@ -85,25 +85,31 @@ export const runCommand = defineCommand({
         },
     },
     async run({ args, rawArgs }) {
+        rejectUnknownRunOptions(rawArgs);
         if (args.prompt !== undefined && args.task !== undefined) {
             throw new Error('Pass a task either positionally or with --task, not both');
         }
         if (args.json && args.final) {
             throw new Error('--json and --final cannot be used together');
         }
-        const overrides = await loadEnvironmentOverrides({
+        const workbenchEnvironment = new WorkbenchEnvironment();
+        const workbenchWorkspaces = new WorkbenchWorkspaces();
+        const overrides = await workbenchEnvironment.load({
             ...(args['env-file'] ? { envFile: args['env-file'] } : {}),
             rawArgs,
         });
+        const home = workbenchHome();
+        const dispatcher = new RunDispatcher(home);
+        const worker = new RunWorker(home);
         const task = (args.task ?? args.prompt ?? '').trim();
         if (!task) {
             if (args.detach || args.json || args.final || args['dry-run']) {
                 throw new Error('This run mode requires a non-empty task');
             }
-            const resolved = await resolveReference(args.workbench, {
+            const resolved = await new WorkbenchResolver().resolve(args.workbench, {
                 ...(args.dir ? { workspaceDirectory: args.dir } : {}),
             });
-            const workspaces = await bindWorkbenchWorkspaces({
+            const workspaces = await workbenchWorkspaces.bind({
                 workbench: resolved.workbench,
                 rawArgs,
             });
@@ -114,8 +120,9 @@ export const runCommand = defineCommand({
             await launchWorkbenchTui({
                 initial: { alias: args.workbench, resolved },
                 environment: {
-                    ...bindWorkbenchEnvironment(resolved.workbench, overrides),
-                    ...workspaceEnvironment(workspaces),
+                    ...process.env,
+                    ...workbenchEnvironment.bind(resolved.workbench, overrides),
+                    ...workbenchWorkspaces.environment(workspaces),
                 },
                 workspaces,
             });
@@ -127,11 +134,11 @@ export const runCommand = defineCommand({
             );
         }
 
-        const resolved = await resolveReference(args.workbench, {
+        const resolved = await new WorkbenchResolver().resolve(args.workbench, {
             ...(args.dir ? { workspaceDirectory: args.dir } : {}),
         });
         try {
-            const workspaces = await bindWorkbenchWorkspaces({
+            const workspaces = await workbenchWorkspaces.bind({
                 workbench: resolved.workbench,
                 rawArgs,
             });
@@ -139,9 +146,12 @@ export const runCommand = defineCommand({
                 resolved.workbench.manifest.docker?.engine !== undefined,
                 args['allow-host-docker']
             );
-            const environment = bindWorkbenchEnvironment(resolved.workbench, overrides);
+            const environment = {
+                ...process.env,
+                ...workbenchEnvironment.bind(resolved.workbench, overrides),
+            };
             if (args['dry-run']) {
-                const code = await runWorkbench(
+                const code = await WorkbenchRun.execute(
                     {
                         workbenchPath: resolved.workbench.packageDirectory,
                         workspaceDirectory: resolved.workspaceDirectory,
@@ -149,6 +159,8 @@ export const runCommand = defineCommand({
                         dryRun: true,
                         workspaces,
                         allowHostDocker: args['allow-host-docker'],
+                        reference: args.workbench,
+                        home,
                     },
                     { env: environment }
                 );
@@ -156,47 +168,43 @@ export const runCommand = defineCommand({
                 return;
             }
 
-            const home = workbenchHome();
             if (args.detach) {
-                await smokeWorkbenchRuntime({
+                const smoke = await new RuntimeSmoke({
                     workbench: resolved.workbench,
                     workspaceDirectory: resolved.workspaceDirectory,
                     environment,
                     workspaces,
                     allowHostDocker: args['allow-host-docker'],
-                });
-                const stored = await prepareStoredRun({
+                    reference: args.workbench,
                     home,
+                }).check();
+                if (!smoke.authentication.ready) {
+                    throw new Error(
+                        `No authenticated route is available for ${smoke.authentication.model}. Run ${smoke.authentication.connectCommand}.`
+                    );
+                }
+                const stored = await dispatcher.prepare({
                     resolved,
                     task,
                     mode: 'detached',
+                    reference: args.workbench,
                     workspaces,
                     allowHostDocker: args['allow-host-docker'],
                 });
-                try {
-                    await dispatchStoredRun({
-                        home,
-                        id: stored.id,
-                        cwd: resolved.workspaceDirectory,
-                        environment,
-                    });
-                } catch (error) {
-                    await updateStoredRun(home, stored.id, {
-                        status: 'failed',
-                        exit_code: 1,
-                        finished_at: new Date().toISOString(),
-                    });
-                    throw error;
-                }
+                await dispatcher.dispatch({
+                    id: stored.id,
+                    cwd: resolved.workspaceDirectory,
+                    environment,
+                });
                 console.log(stored.id);
                 return;
             }
 
-            const stored = await prepareStoredRun({
-                home,
+            const stored = await dispatcher.prepare({
                 resolved,
                 task,
                 mode: 'foreground',
+                reference: args.workbench,
                 workspaces,
                 allowHostDocker: args['allow-host-docker'],
             });
@@ -206,8 +214,7 @@ export const runCommand = defineCommand({
             });
             let code = 1;
             try {
-                code = await executeStoredRun({
-                    home,
+                code = await worker.execute({
                     id: stored.id,
                     environment,
                     render: (event) => renderer.render(event),
@@ -221,6 +228,34 @@ export const runCommand = defineCommand({
         }
     },
 });
+
+const runOptions = new Set([
+    '--task',
+    '-t',
+    '--json',
+    '--final',
+    '--color',
+    '--no-color',
+    '--detach',
+    '-d',
+    '--dry-run',
+    '--dir',
+    '--env-file',
+    '--env',
+    '--workspace',
+    '--allow-host-docker',
+]);
+
+function rejectUnknownRunOptions(rawArgs: string[]): void {
+    for (const argument of rawArgs) {
+        if (argument === '--') return;
+        if (!argument.startsWith('-') || argument === '-') continue;
+        const name = argument.includes('=') ? argument.split('=', 1)[0] : argument;
+        if (!name || !runOptions.has(name)) {
+            throw new Error(`Unknown run option: ${name ?? argument}`);
+        }
+    }
+}
 
 function validateHostDockerAuthorization(declared: boolean, authorized: boolean): void {
     if (authorized && !declared) {

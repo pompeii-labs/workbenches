@@ -1,14 +1,9 @@
 import { defineCommand } from 'citty';
 
-import { findCatalogEntry, readCatalog } from '../catalog.js';
-import { fetchGitHubWorkbenches } from '../github.js';
-import { resolveReference } from '../references.js';
-import {
-    discoverWorkbenches,
-    parseWorkbenchReference,
-    resolveLocalSource,
-} from '../source.js';
+import { SavedWorkbenchCatalog } from '../catalog/index.js';
+import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
+import { WorkbenchResolver, WorkbenchSource } from '../workbench/index.js';
 
 export const validateCommand = defineCommand({
     meta: {
@@ -25,19 +20,22 @@ export const validateCommand = defineCommand({
     async run({ args }) {
         const home = workbenchHome();
         const saved = !args.source.includes('/')
-            ? findCatalogEntry(await readCatalog(home), args.source)
+            ? await new SavedWorkbenchCatalog(home).find(args.source)
             : undefined;
         if (saved) {
-            const resolved = await resolveReference(args.source, { home });
+            const resolved = await new WorkbenchResolver().resolve(args.source, {
+                home,
+            });
             console.log(
                 `valid\t${resolved.workbench.manifest.name}@${resolved.workbench.manifest.version}`
             );
             return;
         }
-        const reference = parseWorkbenchReference(args.source);
-        const local = await resolveLocalSource(reference.source);
+        const source = new WorkbenchSource();
+        const reference = source.parse(args.source);
+        const local = await source.local(reference.source);
         if (local) {
-            const workbenches = await discoverWorkbenches(local.directory);
+            const workbenches = await source.discover(local.directory);
             const selected = reference.selector
                 ? workbenches.filter(
                       (workbench) =>
@@ -54,7 +52,7 @@ export const validateCommand = defineCommand({
             }
             return;
         }
-        const workbenches = await fetchGitHubWorkbenches(
+        const workbenches = await new GitHubWorkbenchSource().fetchAll(
             reference.source,
             reference.selector
         );

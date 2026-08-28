@@ -1,17 +1,10 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { defineCommand } from 'citty';
 import pc from 'picocolors';
-
 import {
-    type Account,
-    type RegistryProfile,
-    registryProfile,
-    requireAccount,
-} from '../account.js';
-import { type OciPublishProgress, publishOciArchive } from '../oci-publisher.js';
-import { registryImageHost, registryImageOrigin } from '../registry.js';
+    RegistryAccountStore,
+    type RegistryImageProgress,
+    RegistryImagePublisher,
+} from '../registry/index.js';
 
 export const loginCommand = defineCommand({
     meta: {
@@ -26,8 +19,8 @@ export const loginCommand = defineCommand({
         },
     },
     async run({ args }) {
-        const account = await requireAccount();
-        const host = await loginImageClient(args.client, account);
+        const account = await new RegistryAccountStore().require();
+        const host = await new RegistryImagePublisher({ account }).login(args.client);
         console.log(`connected\t${host}\t${args.client}`);
     },
 });
@@ -64,21 +57,20 @@ export const pushCommand = defineCommand({
         },
     },
     async run({ args }) {
-        const account = await requireAccount();
-        const profile = await registryProfile(account);
-        const progress = imageProgress();
-        const target = await pushImage(
-            {
-                image: args.image,
-                ...(args.publisher ? { publisher: args.publisher } : {}),
-                name: args.as,
-                tag: args.tag,
-                client: args.client,
-            },
+        const accounts = new RegistryAccountStore();
+        const account = await accounts.require();
+        const profile = await accounts.profile(account);
+        const target = await new RegistryImagePublisher({
             account,
             profile,
-            { progress }
-        );
+            progress: new ImageProgressRenderer().render,
+        }).push({
+            image: args.image,
+            ...(args.publisher ? { publisher: args.publisher } : {}),
+            name: args.as,
+            tag: args.tag,
+            client: args.client,
+        });
         console.log(`pushed\t${target}`);
     },
 });
@@ -94,97 +86,11 @@ export const imageCommand = defineCommand({
     },
 });
 
-export function imageReference(publisher: string, name: string, tag: string): string {
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(publisher)) {
-        throw new Error(`Invalid publisher slug: ${publisher}`);
-    }
-    if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(name)) {
-        throw new Error(`Invalid registry image name: ${name}`);
-    }
-    if (!/^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/.test(tag)) {
-        throw new Error(`Invalid registry image tag: ${tag}`);
-    }
-    return `${registryImageHost()}/${publisher}/${name}:${tag}`;
-}
+class ImageProgressRenderer {
+    private activeBlob = 0;
+    private reported = -1;
 
-export async function loginImageClient(
-    client: string,
-    account: Account,
-    run: ClientRunner = runClient
-): Promise<string> {
-    await loginClient(client, account, run);
-    return registryImageHost();
-}
-
-export async function pushImage(
-    options: {
-        image: string;
-        publisher?: string;
-        name: string;
-        tag: string;
-        client: string;
-    },
-    account: Account,
-    profile: RegistryProfile,
-    dependencies: {
-        run?: ClientRunner;
-        fetch?: typeof fetch;
-        progress?: (event: OciPublishProgress | { type: 'exporting' }) => void;
-    } = {}
-): Promise<string> {
-    const publisher = options.publisher
-        ? profile.publishers.find((candidate) => candidate.slug === options.publisher)
-        : profile.publishers.length === 1
-          ? profile.publishers[0]
-          : undefined;
-    if (!publisher) {
-        if (options.publisher) {
-            throw new Error(
-                `Publisher is unavailable to this account: ${options.publisher}`
-            );
-        }
-        if (profile.publishers.length === 0) {
-            throw new Error('Create or join a publisher before pushing');
-        }
-        throw new Error(
-            `Choose a publisher with --publisher: ${profile.publishers
-                .map((candidate) => candidate.slug)
-                .join(', ')}`
-        );
-    }
-    const target = imageReference(publisher.slug, options.name, options.tag);
-    const directory = await mkdtemp(join(tmpdir(), 'workbench-image-push-'));
-    const archive = join(directory, 'image.tar');
-    try {
-        dependencies.progress?.({ type: 'exporting' });
-        await (dependencies.run ?? runClient)(options.client, [
-            'image',
-            'save',
-            '--output',
-            archive,
-            options.image,
-        ]);
-        await publishOciArchive({
-            archive,
-            registryOrigin: registryImageOrigin(),
-            registryHost: registryImageHost(),
-            publisher: publisher.slug,
-            image: options.name,
-            tag: options.tag,
-            accountToken: account.token,
-            ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),
-            ...(dependencies.progress ? { progress: dependencies.progress } : {}),
-        });
-        return target;
-    } finally {
-        await rm(directory, { recursive: true, force: true });
-    }
-}
-
-function imageProgress(): (event: OciPublishProgress | { type: 'exporting' }) => void {
-    let activeBlob = 0;
-    let reported = -1;
-    return (event) => {
+    readonly render = (event: RegistryImageProgress): void => {
         if (event.type === 'exporting') {
             process.stderr.write(`${pc.cyan('→')} Exporting local image\n`);
             return;
@@ -208,9 +114,15 @@ function imageProgress(): (event: OciPublishProgress | { type: 'exporting' }) =>
             event.size === 0
                 ? 100
                 : Math.floor((event.uploaded / event.size) * 10) * 10;
-        if (event.blob === activeBlob && percent === reported && percent < 100) return;
-        activeBlob = event.blob;
-        reported = percent;
+        if (
+            event.blob === this.activeBlob &&
+            percent === this.reported &&
+            percent < 100
+        ) {
+            return;
+        }
+        this.activeBlob = event.blob;
+        this.reported = percent;
         const kind = event.mediaType.includes('config') ? 'config' : 'layer';
         process.stderr.write(
             `  ${pc.cyan('•')} ${kind} ${event.blob}/${event.blobs} · ${Math.min(percent, 100)}% · ${formatBytes(event.uploaded)} / ${formatBytes(event.size)}\n`
@@ -225,45 +137,4 @@ function formatBytes(value: number): string {
         return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
     }
     return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
-}
-
-type ClientRunner = (client: string, args: string[], input?: string) => Promise<void>;
-
-async function loginClient(
-    client: string,
-    account: Account,
-    run: ClientRunner
-): Promise<void> {
-    await run(
-        client,
-        ['login', registryImageHost(), '--username', 'workbench', '--password-stdin'],
-        account.token
-    );
-}
-
-async function runClient(
-    client: string,
-    args: string[],
-    input?: string
-): Promise<void> {
-    let child: ReturnType<typeof Bun.spawn>;
-    try {
-        child = Bun.spawn([client, ...args], {
-            stdin: input === undefined ? 'inherit' : 'pipe',
-            stdout: 'inherit',
-            stderr: 'inherit',
-        });
-    } catch (error) {
-        throw new Error(
-            `${client} could not be started: ${error instanceof Error ? error.message : String(error)}`
-        );
-    }
-    if (input !== undefined && typeof child.stdin === 'object') {
-        child.stdin.write(`${input}\n`);
-        child.stdin.end();
-    }
-    const code = await child.exited;
-    if (code !== 0) {
-        throw new Error(`${client} exited with code ${code}`);
-    }
 }

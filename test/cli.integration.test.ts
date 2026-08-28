@@ -13,6 +13,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { seedModelCatalogFixture } from './model-catalog-fixture.js';
+
 const projectDirectory = resolve(import.meta.dir, '..');
 const cliPath = join(projectDirectory, 'src', 'cli.ts');
 const temporaryDirectories: string[] = [];
@@ -51,6 +53,47 @@ describe('CLI integration', () => {
             'Required CLI tool is unavailable: missing-workbench-tool'
         );
         await expect(stat(record)).rejects.toThrow();
+    });
+
+    test('explains how to install Pi before connecting a Pi Workbench', async () => {
+        const fixture = await createFixture({ runner: 'pi' });
+        const bin = await fakeBin();
+        const result = await executeCli(['connect', fixture.packageDirectory], {
+            PATH: `${bin}:/usr/bin:/bin`,
+        });
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(
+            'Pi is required for this Workbench but is not installed.'
+        );
+        expect(result.stderr).toContain(
+            'npm install -g @earendil-works/pi-coding-agent'
+        );
+        expect(result.stderr).not.toContain('Executable not found');
+    });
+
+    test('rejects unknown run options without launching the runner', async () => {
+        const fixture = await createFixture();
+        const record = join(fixture.root, 'runner-was-called');
+        const bin = await fakeBin();
+
+        for (const [option, args] of [
+            ['--model', ['--model', 'not-allowed']],
+            ['--model', ['--model=not-allowed']],
+            ['--not-supported', ['--not-supported']],
+        ] as const) {
+            const result = await executeCli(
+                ['run', fixture.packageDirectory, ...args],
+                {
+                    PATH: `${bin}:${process.env.PATH}`,
+                    WB_TEST_RECORD: record,
+                }
+            );
+
+            expect(result.code).toBe(1);
+            expect(result.stderr).toContain(`Unknown run option: ${option}`);
+            await expect(stat(record)).rejects.toThrow();
+        }
     });
 
     test('runs the translated request through the selected local runner', async () => {
@@ -401,6 +444,15 @@ describe('CLI integration', () => {
         expect(dispatched.stderr).toBe('');
         expect(dispatched.stdout.trim()).toMatch(/^wb_[a-z0-9]{20,64}$/);
 
+        const active = await executeCli(['ps', '--json'], environment);
+        expect(active.code).toBe(0);
+        expect(active.stderr).toBe('');
+        expect(JSON.parse(active.stdout)).toMatchObject({
+            id: dispatched.stdout.trim(),
+            mode: 'detached',
+            workbench: 'fixture-core',
+        });
+
         const attached = await executeCli(['attach', '--json'], environment);
         expect(attached.code).toBe(0);
         const events = attached.stdout
@@ -419,6 +471,12 @@ describe('CLI integration', () => {
         );
         expect(replayed.code).toBe(0);
         expect(replayed.stdout).toBe('fixture response\n');
+
+        const finished = await executeCli(['ps'], environment);
+        expect(finished.stdout).toBe('No active detached runs.\n');
+        const history = await executeCli(['ps', '--all'], environment);
+        expect(history.stdout).toContain(dispatched.stdout.trim());
+        expect(history.stdout).toContain('completed');
     });
 
     test('cancels the latest active detached run and records a terminal event', async () => {
@@ -636,7 +694,15 @@ describe('CLI integration', () => {
                 ],
                 environment
             );
-            expect(allowed.code).toBe(0);
+            expect({
+                code: allowed.code,
+                stdout: allowed.stdout,
+                stderr: allowed.stderr,
+            }).toEqual({
+                code: 0,
+                stdout: expect.any(String),
+                stderr: '',
+            });
             const commands = await readFile(docker.record, 'utf8');
             expect(commands).toContain(`${socketPath}:/var/run/docker.sock`);
             expect(commands).toContain(`${fixture.root}:${fixture.root}`);
@@ -682,7 +748,10 @@ describe('CLI integration', () => {
             ['run', fixture.packageDirectory, '--task', 'inspect', '--detach'],
             environment
         );
-        expect(dispatched.code).toBe(0);
+        expect({ code: dispatched.code, stderr: dispatched.stderr }).toEqual({
+            code: 0,
+            stderr: '',
+        });
         const id = dispatched.stdout.trim();
         expect(id).toMatch(/^wb_[a-z0-9]{20,64}$/);
 
@@ -768,7 +837,7 @@ describe('CLI integration', () => {
             name: 'fixture-core',
             version: '0.2.0',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-terra',
+            model: 'openai/gpt-5.6-terra',
             runtime: 'local',
         });
 
@@ -807,7 +876,7 @@ describe('CLI integration', () => {
         );
         expect(manifest).toContain('name: core');
         expect(manifest).toContain('runner: "opencode"');
-        expect(manifest).toContain('model: "openrouter/openai/gpt-5.6-terra"');
+        expect(manifest).toContain('model:\n  id: "openai/gpt-5.6-terra"');
         expect(manifest).toContain(
             'description: Repository-maintained expertise for core tasks.'
         );
@@ -820,7 +889,14 @@ describe('CLI integration', () => {
         expect(validated.stdout).toContain('valid\tcore');
 
         const customized = await executeCli(
-            ['init', 'review', '--runner', 'pi', '--model', 'example/custom-model'],
+            [
+                'init',
+                'review',
+                '--runner',
+                'pi',
+                '--model',
+                'anthropic/claude-sonnet-4-5',
+            ],
             {},
             repository
         );
@@ -830,7 +906,25 @@ describe('CLI integration', () => {
             'utf8'
         );
         expect(customManifest).toContain('runner: "pi"');
-        expect(customManifest).toContain('model: "example/custom-model"');
+        expect(customManifest).toContain('model:\n  id: "anthropic/claude-sonnet-4-5"');
+
+        const customValidated = await executeCli(
+            ['validate', join(repository, '.workbenches/review')],
+            {},
+            repository
+        );
+        expect(customValidated.code).toBe(0);
+
+        const unknown = await executeCli(
+            ['init', 'unknown', '--model', 'example/custom-model'],
+            {},
+            repository
+        );
+        expect(unknown.code).toBe(1);
+        expect(unknown.stderr).toContain('not available in the model catalog');
+        expect(
+            await stat(join(repository, '.workbenches/unknown')).catch(() => null)
+        ).toBeNull();
 
         const duplicate = await executeCli(['init', 'core'], {}, repository);
         expect(duplicate.code).toBe(1);
@@ -861,9 +955,15 @@ async function executeCli(
 ) {
     const home =
         environment.WORKBENCH_HOME ?? (await temporaryDirectory('workbench-cli-home-'));
+    await seedModelCatalogFixture(home);
     const child = Bun.spawn([process.execPath, cliPath, ...arguments_], {
         cwd,
-        env: { ...process.env, ...environment, WORKBENCH_HOME: home },
+        env: {
+            ...process.env,
+            OPENROUTER_API_KEY: 'fixture-openrouter-key',
+            ...environment,
+            WORKBENCH_HOME: home,
+        },
         stdout: 'pipe',
         stderr: 'pipe',
     });
@@ -896,6 +996,7 @@ async function createFixture(
     options: {
         tools?: string[];
         skill?: boolean;
+        runner?: 'opencode' | 'pi';
         runtime?: 'local' | 'docker';
         image?: string;
         localImage?: boolean;
@@ -932,8 +1033,9 @@ async function createFixture(
             'spec: 0',
             'version: 0.1.0',
             'name: fixture-core',
-            'runner: opencode',
-            'model: openrouter/openai/gpt-5.6-terra',
+            `runner: ${options.runner ?? 'opencode'}`,
+            'model:',
+            '  id: openai/gpt-5.6-terra',
             'instructions: ./instructions.md',
             ...(options.skill
                 ? ['skills:', '  - ./skills/fixture-skill']
@@ -1002,6 +1104,7 @@ async function fakeDocker() {
             '    ;;',
             '  "context inspect") printf "%s\\n" "unix://$WB_DOCKER_SOCKET" ;;',
             '  "buildx build") : > "$WB_DOCKER_STATE" ;;',
+            '  "volume create") printf "%s\\n" "$3" ;;',
             '  "container rm") exit 0 ;;',
             '  "run --rm")',
             '    last=""',
@@ -1058,6 +1161,9 @@ async function fakeBin(
             '  printf "%s\\n" "$@" > "$WB_TEST_RECORD.args"',
             '  printf "%s\\n" "$OPENCODE_CONFIG_CONTENT" > "$WB_TEST_RECORD.config"',
             '  printf "%s\\n" "$OPENCODE_CONFIG_DIR" > "$WB_TEST_RECORD.config-dir"',
+            '  printf "%s\\n" "$OPENCODE_CONFIG" > "$WB_TEST_RECORD.native-config"',
+            '  printf "%s\\n" "$OPENAI_API_KEY" > "$WB_TEST_RECORD.openai-key"',
+            '  printf "%s\\n" "$BASE_URL" > "$WB_TEST_RECORD.base-url"',
             '  printf "%s\\n" "$PROJECT_TOKEN" > "$WB_TEST_RECORD.project-token"',
             '  printf "%s\\n" "$OPTIONAL_TOKEN" > "$WB_TEST_RECORD.optional-token"',
             '  printf "%s\\n" "$UNDECLARED_TOKEN" > "$WB_TEST_RECORD.undeclared-token"',

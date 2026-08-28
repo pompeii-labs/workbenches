@@ -2,14 +2,10 @@ import { basename } from 'node:path';
 
 import { defineCommand } from 'citty';
 
-import { readCatalog } from '../catalog.js';
-import { listGitHubWorkbenches } from '../github.js';
-import {
-    discoverWorkbenches,
-    parseWorkbenchReference,
-    resolveLocalSource,
-} from '../source.js';
+import { SavedWorkbenchCatalog } from '../catalog/index.js';
+import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
+import { WorkbenchSource } from '../workbench/index.js';
 
 export const listCommand = defineCommand({
     meta: { name: 'list', description: 'List saved or published Workbenches.' },
@@ -27,17 +23,20 @@ export const listCommand = defineCommand({
     },
     async run({ args }) {
         if (!args.source || args.saved) {
-            for (const entry of await readCatalog(workbenchHome())) {
+            for (const entry of await new SavedWorkbenchCatalog(
+                workbenchHome()
+            ).list()) {
                 console.log(
                     `${entry.alias}\t${entry.name}@${entry.version}\t${entry.source}#${entry.selector}`
                 );
             }
             return;
         }
-        const reference = parseWorkbenchReference(args.source);
-        const local = await resolveLocalSource(reference.source);
+        const source = new WorkbenchSource();
+        const reference = source.parse(args.source);
+        const local = await source.local(reference.source);
         if (local) {
-            const workbenches = await discoverWorkbenches(local.directory);
+            const workbenches = await source.discover(local.directory);
             if (workbenches.length === 0) {
                 console.log('No Workbenches found.');
                 return;
@@ -56,7 +55,7 @@ export const listCommand = defineCommand({
             }
             return;
         }
-        const workbenches = await listGitHubWorkbenches(reference.source);
+        const workbenches = await new GitHubWorkbenchSource().list(reference.source);
         const selected = reference.selector
             ? workbenches.filter(
                   (workbench) =>

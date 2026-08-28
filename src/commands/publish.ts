@@ -2,13 +2,9 @@ import { basename } from 'node:path';
 
 import { defineCommand } from 'citty';
 
-import { registryProfile, registryRequest, requireAccount } from '../account.js';
-import { packageDigest, workbenchPackageFiles } from '../catalog.js';
-import {
-    parseWorkbenchReference,
-    resolveLocalSource,
-    selectWorkbench,
-} from '../source.js';
+import { WorkbenchPackage } from '../catalog/index.js';
+import { RegistryAccountStore } from '../registry/index.js';
+import { WorkbenchSource } from '../workbench/index.js';
 
 interface PublicationResponse {
     workbenches: Array<{
@@ -40,8 +36,9 @@ export const publishCommand = defineCommand({
         },
     },
     async run({ args }) {
-        const account = await requireAccount();
-        const profile = await registryProfile(account);
+        const accounts = new RegistryAccountStore();
+        const account = await accounts.require();
+        const profile = await accounts.profile(account);
         const publisher = args.publisher
             ? profile.publishers.find((candidate) => candidate.slug === args.publisher)
             : profile.publishers.length === 1
@@ -63,15 +60,19 @@ export const publishCommand = defineCommand({
             );
         }
 
-        const reference = parseWorkbenchReference(args.source ?? '.');
-        const source = await resolveLocalSource(reference.source);
+        const workbenchSource = new WorkbenchSource();
+        const reference = workbenchSource.parse(args.source ?? '.');
+        const source = await workbenchSource.local(reference.source);
         if (!source) throw new Error('wb publish requires a local Workbench');
-        const workbench = await selectWorkbench(source.directory, reference.selector);
+        const workbench = await workbenchSource.select(
+            source.directory,
+            reference.selector
+        );
         const slug = args.as ?? basename(workbench.packageDirectory);
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
             throw new Error(`Invalid registry Workbench slug: ${slug}`);
         }
-        const files = await workbenchPackageFiles(workbench);
+        const files = await new WorkbenchPackage(workbench).files();
         const total = files.reduce((bytes, file) => bytes + file.bytes.byteLength, 0);
         if (files.length > 256) {
             throw new Error('Workbench package exceeds 256 files');
@@ -84,8 +85,8 @@ export const publishCommand = defineCommand({
             throw new Error(`Workbench package file is too large: ${oversized.path}`);
         }
 
-        const digest = packageDigest(files);
-        const response = await registryRequest<PublicationResponse>(
+        const digest = WorkbenchPackage.digest(files);
+        const response = await accounts.client.request<PublicationResponse>(
             '/v1/publications',
             {
                 method: 'POST',

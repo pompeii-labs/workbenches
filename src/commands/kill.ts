@@ -1,12 +1,6 @@
 import { defineCommand } from 'citty';
 
-import {
-    clearStoredRunCancellation,
-    followRunEvents,
-    latestActiveDetachedRun,
-    readStoredRun,
-    requestStoredRunCancellation,
-} from '../run-store.js';
+import { RunStore } from '../runs/index.js';
 import { workbenchHome } from '../storage.js';
 
 export const killCommand = defineCommand({
@@ -23,15 +17,16 @@ export const killCommand = defineCommand({
     },
     async run({ args }) {
         const home = workbenchHome();
+        const store = new RunStore(home);
         const run = args.run
-            ? await readStoredRun(home, args.run)
-            : await latestActiveDetachedRun(home);
-        await requestStoredRunCancellation(home, run.id);
-        for await (const _event of followRunEvents(home, run.id)) {
+            ? await store.read(args.run)
+            : await store.latestActiveDetached();
+        await store.requestCancellation(run.id);
+        for await (const _event of store.follow(run.id)) {
             // The worker owns the event stream; kill only waits for its acknowledgement.
         }
-        await clearStoredRunCancellation(home, run.id);
-        const finished = await readStoredRun(home, run.id);
+        await store.clearCancellation(run.id);
+        const finished = await store.read(run.id);
         if (finished.status !== 'cancelled') {
             throw new Error(
                 `Workbench run finished as ${finished.status} before cancellation: ${run.id}`

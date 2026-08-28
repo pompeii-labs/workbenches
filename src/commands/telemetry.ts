@@ -1,7 +1,6 @@
 import { defineCommand } from 'citty';
 
-import { workbenchHome } from '../storage.js';
-import { runTelemetryEnabled, setRunTelemetry } from '../telemetry.js';
+import { RegistryTelemetry } from '../registry/index.js';
 
 export const telemetryCommand = defineCommand({
     meta: {
@@ -20,11 +19,11 @@ export const telemetryCommand = defineCommand({
         if (state !== 'on' && state !== 'off' && state !== 'status') {
             throw new Error('Telemetry state must be on, off, or status');
         }
-        const home = workbenchHome();
+        const telemetry = new RegistryTelemetry();
         if (state === 'on' || state === 'off') {
-            await setRunTelemetry(home, state === 'on');
+            await telemetry.setEnabled(state === 'on');
         }
-        const enabled = await runTelemetryEnabled(home);
+        const enabled = await telemetry.enabled();
         console.log(`anonymous run reporting: ${enabled ? 'on' : 'off'}`);
     },
 });

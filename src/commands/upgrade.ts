@@ -1,8 +1,7 @@
 import { defineCommand } from 'citty';
 
-import { readCatalog } from '../catalog.js';
+import { SavedWorkbenchCatalog, SavedWorkbenchUpgrade } from '../catalog/index.js';
 import { workbenchHome } from '../storage.js';
-import { upgradeSavedWorkbench } from '../upgrade.js';
 
 export const upgradeCommand = defineCommand({
     meta: {
@@ -18,7 +17,7 @@ export const upgradeCommand = defineCommand({
     },
     async run({ args }) {
         const home = workbenchHome();
-        const entries = await readCatalog(home);
+        const entries = await new SavedWorkbenchCatalog(home).list();
         const aliases = args.alias ? [args.alias] : entries.map((entry) => entry.alias);
         if (aliases.length === 0) {
             console.log('No saved Workbenches.');
@@ -26,9 +25,10 @@ export const upgradeCommand = defineCommand({
         }
 
         const failures: string[] = [];
+        const upgrade = new SavedWorkbenchUpgrade(home);
         for (const alias of aliases) {
             try {
-                const result = await upgradeSavedWorkbench(home, alias);
+                const result = await upgrade.upgrade(alias);
                 if (!result.changed) {
                     console.log(`current\t${alias}\t${result.entry.version}`);
                     continue;

@@ -1,19 +1,10 @@
 import { defineCommand } from 'citty';
 
-import { addRemoteToCatalog, addToCatalog } from '../catalog.js';
-import { fetchGitHubWorkbench } from '../github.js';
-import {
-    fetchRegistryWorkbench,
-    parseRegistryReference,
-    resolveRegistryPackage,
-} from '../registry.js';
-import {
-    parseWorkbenchReference,
-    resolveLocalSource,
-    selectWorkbench,
-} from '../source.js';
+import { SavedWorkbenchCatalog } from '../catalog/index.js';
+import { RegistryClient, RegistryTelemetry } from '../registry/index.js';
+import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
-import { reportRegistryEvent, showTelemetryNotice } from '../telemetry.js';
+import { WorkbenchSource } from '../workbench/index.js';
 
 export const addCommand = defineCommand({
     meta: { name: 'add', description: 'Save an immutable Workbench package snapshot.' },
@@ -29,15 +20,17 @@ export const addCommand = defineCommand({
         },
     },
     async run({ args }) {
-        const reference = parseWorkbenchReference(args.source);
-        const source = await resolveLocalSource(reference.source);
+        const catalog = new SavedWorkbenchCatalog(workbenchHome());
+        const github = new GitHubWorkbenchSource();
+        const workbenchSource = new WorkbenchSource();
+        const reference = workbenchSource.parse(args.source);
+        const source = await workbenchSource.local(reference.source);
         if (source) {
-            const workbench = await selectWorkbench(
+            const workbench = await workbenchSource.select(
                 source.directory,
                 reference.selector
             );
-            const entry = await addToCatalog({
-                home: workbenchHome(),
+            const entry = await catalog.add({
                 alias: args.as ?? workbench.manifest.name,
                 source: source.source,
                 ...(source.revision ? { revision: source.revision } : {}),
@@ -48,15 +41,17 @@ export const addCommand = defineCommand({
             );
             return;
         }
+        const registryClient = new RegistryClient();
         const registryReference = reference.selector
             ? undefined
-            : parseRegistryReference(reference.source);
+            : RegistryClient.parseReference(reference.source);
         if (registryReference) {
-            const registry = await resolveRegistryPackage(registryReference);
+            const registry = await registryClient.resolve(registryReference);
             if (registry) {
+                const telemetry = new RegistryTelemetry();
                 const workbench = registry.artifactUrl
-                    ? await fetchRegistryWorkbench(registry)
-                    : await fetchGitHubWorkbench(registry.source, registry.selector, {
+                    ? await registryClient.fetchWorkbench(registry)
+                    : await github.fetch(registry.source, registry.selector, {
                           revision: registry.revision,
                       });
                 const catalogRegistry = {
@@ -65,8 +60,7 @@ export const addCommand = defineCommand({
                     workbench: registry.reference.workbench,
                     version_id: registry.versionId,
                 };
-                const entry = await addRemoteToCatalog({
-                    home: workbenchHome(),
+                const entry = await catalog.addRemote({
                     alias: args.as ?? workbench.manifest.name,
                     workbench,
                     expectedDigest: registry.digest,
@@ -75,20 +69,16 @@ export const addCommand = defineCommand({
                 console.log(
                     `saved\t${entry.alias}\t${entry.digest}\t${entry.revision ?? ''}`
                 );
-                await reportRegistryEvent({
+                await telemetry.report({
                     registry: catalogRegistry,
                     kind: 'save',
                 });
-                await showTelemetryNotice(workbenchHome());
+                await telemetry.showNotice();
                 return;
             }
         }
-        const workbench = await fetchGitHubWorkbench(
-            reference.source,
-            reference.selector
-        );
-        const entry = await addRemoteToCatalog({
-            home: workbenchHome(),
+        const workbench = await github.fetch(reference.source, reference.selector);
+        const entry = await catalog.addRemote({
             alias: args.as ?? workbench.manifest.name,
             workbench,
         });

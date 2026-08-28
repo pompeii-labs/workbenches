@@ -1,6 +1,6 @@
 import { defineCommand } from 'citty';
 
-import { removeFromCatalog } from '../catalog.js';
+import { SavedWorkbenchCatalog } from '../catalog/index.js';
 import { workbenchHome } from '../storage.js';
 
 export const removeCommand = defineCommand({
@@ -13,7 +13,9 @@ export const removeCommand = defineCommand({
         },
     },
     async run({ args }) {
-        const entry = await removeFromCatalog(workbenchHome(), args.alias);
+        const entry = await new SavedWorkbenchCatalog(workbenchHome()).remove(
+            args.alias
+        );
         console.log(`removed\t${entry.alias}`);
     },
 });

@@ -2,8 +2,7 @@ import { hostname, platform } from 'node:os';
 
 import { defineCommand } from 'citty';
 
-import { registryProfile, registryRequest, saveAccount } from '../account.js';
-import { registryApiUrl } from '../registry.js';
+import { RegistryAccountStore, RegistryClient } from '../registry/index.js';
 
 interface LoginRequest {
     id: string;
@@ -33,7 +32,9 @@ export const loginCommand = defineCommand({
         },
     },
     async run({ args }) {
-        const login = await registryRequest<LoginRequest>('/v1/logins', {
+        const client = new RegistryClient();
+        const accounts = new RegistryAccountStore({ client });
+        const login = await client.request<LoginRequest>('/v1/logins', {
             method: 'POST',
             body: { label: `${hostname()} (${platform()})` },
         });
@@ -43,20 +44,20 @@ export const loginCommand = defineCommand({
 
         while (new Date(login.expires_at) > new Date()) {
             await wait(login.interval * 1000);
-            const result = await registryRequest<TokenResponse>('/v1/tokens', {
+            const result = await client.request<TokenResponse>('/v1/tokens', {
                 method: 'POST',
                 body: { login_id: login.id, secret: login.secret },
             });
             if (result.status === 'pending') continue;
             const account = {
-                url: registryApiUrl(),
+                url: client.apiUrl,
                 token: result.token,
                 tokenId: result.token_id,
                 email: '',
                 expiresAt: result.expires_at,
             };
-            const profile = await registryProfile(account);
-            await saveAccount({ ...account, email: profile.user.email });
+            const profile = await accounts.profile(account);
+            await accounts.save({ ...account, email: profile.user.email });
             console.log(`Signed in as ${profile.user.email}`);
             return;
         }
