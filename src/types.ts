@@ -29,13 +29,21 @@ export interface WorkbenchDockerConfiguration {
     engine?: { mode: 'host' };
 }
 
-export interface WorkbenchManifest {
-    spec: 0;
+export interface WorkbenchModelRoute {
+    provider: string;
+    model?: string;
+}
+
+export interface WorkbenchModelPolicy {
+    id: string;
+    routes?: WorkbenchModelRoute[];
+}
+
+interface WorkbenchManifestBase {
     version: string;
     name: string;
     description?: string;
     runner: string;
-    model: string;
     instructions: string;
     skills: string[];
     tools: string[];
@@ -46,6 +54,12 @@ export interface WorkbenchManifest {
     image?: string | WorkbenchImageBuild;
     docker?: WorkbenchDockerConfiguration;
 }
+
+export type WorkbenchManifest = WorkbenchManifestBase & {
+    spec: 0;
+    model: WorkbenchModelPolicy;
+    runner_config?: string;
+};
 
 export interface ResolvedWorkbenchSkill {
     name: string;
@@ -58,6 +72,7 @@ export interface ResolvedWorkbench {
     packageDirectory: string;
     repositoryDirectory: string;
     instructionsPath: string;
+    runnerConfigPath?: string;
     skills: ResolvedWorkbenchSkill[];
     manifest: WorkbenchManifest;
 }
