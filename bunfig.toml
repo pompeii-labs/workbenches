@@ -2,5 +2,5 @@
 coverageSkipTestFiles = true
 coverageReporter = ["text", "lcov"]
 coverageDir = "coverage"
-coverageThreshold = { lines = 0.85, functions = 0.65 }
+coverageThreshold = { line = 0.85, function = 0.65 }
 coveragePathIgnorePatterns = ["src/tui/app.tsx"]
