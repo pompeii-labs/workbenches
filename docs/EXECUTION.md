@@ -29,8 +29,8 @@ No runner is asked to interpret the Workbench manifest itself.
 Each registered runner adapter declares the native command it drives, the exact
 native versions and interfaces it has been verified against, and an exhaustive
 capability map. The initial capability catalog covers streamed assistant text,
-tool events, file changes, usage, permissions, multiple turns, cancellation,
-failures, and unknown native events.
+tool events, file changes, usage, permissions, multiple turns, steering, image
+input, image generation, cancellation, failures, and unknown native events.
 
 Every capability has one of three outcomes:
 
@@ -46,11 +46,11 @@ claim that untested future runner releases conform.
 
 The shared runner conformance suite exercises streamed text, tool and file
 lifecycle, usage, explicit permission decisions, multi-turn continuity,
-cancellation, failures, and unknown native events through the normalized
-session boundary. It also injects reasoning, credentials, shell commands, tool
-output, and arbitrary future payloads and asserts that none cross that boundary.
-Unknown native events become a minimal `runner.event` marker containing only
-their native type.
+steering, image input, cancellation, failures, and unknown native events through
+the normalized session boundary. It also injects reasoning, credentials, shell
+commands, tool output, image data, and arbitrary future payloads and asserts
+that none cross that boundary. Unknown native events become a minimal
+`runner.event` marker containing only their native type.
 
 ## Runtime provider contract
 
@@ -136,11 +136,19 @@ temporary-filesystem capacity limits.
 
 Preflight containers have networking disabled. A launched runner uses Docker's
 bridge network because model providers and remote MCPs require outbound access.
-The container receives only the Workbench's declared environment plus
-engine-generated runner configuration. Values are written to a mode-`0600`
-ephemeral Docker environment file and removed after the container exits; values
-do not appear in Docker command arguments, and the host Docker client retains
-its own environment.
+The container receives the Workbench's declared environment, environment names
+used by its allowed model providers, and engine-generated runner configuration.
+Once a route is selected, provider environment values for routes that were not
+selected are removed. Values are written to a mode-`0600` ephemeral Docker
+environment file and removed after the container exits. Values do not appear in
+Docker command arguments, and the host Docker client retains its own
+environment.
+
+Each supported runner uses a private named Docker volume for its native
+credential store. `wb connect` runs the runner's own authentication flow in the
+same image and volume that later runs use. The Workbench package is never given
+ownership of the volume, and the engine does not read or upload the stored token
+contents.
 
 The reference binaries currently target macOS and Linux. Numeric host-user
 mapping is applied only where the host runtime exposes it. Docker Desktop uses
@@ -183,27 +191,39 @@ The host decides how long the session lives:
 - A detached client transfers ownership of the same session to a background
   host and exits without cancelling it.
 
-`close()` ends the session gracefully. `cancel()` requests immediate termination.
-Both eventually produce exactly one terminal event and result.
+`close()` ends the session gracefully. `cancelTurn()` requests cancellation of
+the active turn while preserving the host process when the native interface
+allows it.
 
-## Run handle
+## Runner session
 
 Every runner adapter exposes the same host-facing control surface:
 
 ```ts
-interface RunHandle {
-    runId: string;
-    events: AsyncIterable<WorkbenchEvent>;
-    send(input: string): Promise<void>;
+interface RunnerPromptInput {
+    text: string;
+    images?: Array<{
+        data: string;
+        mimeType: string;
+        name?: string;
+    }>;
+}
+
+interface RunnerSession {
+    id?: string;
+    prompt(input: string | RunnerPromptInput): Promise<RunnerTurnResult>;
+    steer?(input: string | RunnerPromptInput): Promise<void>;
+    followUp?(input: string | RunnerPromptInput): Promise<void>;
+    cancelTurn(): Promise<void>;
     close(): Promise<void>;
-    cancel(reason?: string): Promise<void>;
-    result: Promise<RunResult>;
 }
 ```
 
-`send()` may deliver immediately or queue until the runner's next legal input
-boundary. The manifest does not declare runner features. Adapter behavior and
-runtime negotiation determine what is possible.
+`steer()` and `followUp()` may deliver immediately or queue until the runner's
+next legal input boundary. Image data is translated into the runner's native
+input but never copied into normalized events. The manifest does not declare
+runner features. Adapter declarations and runtime negotiation determine what is
+possible.
 
 ## Canonical events
 
@@ -309,7 +329,8 @@ Run metadata and `events.ndjson` live under
 `$WORKBENCH_HOME/runs/<id>/` (normally the Workbench data directory). The initial
 task is stored only until the worker consumes it, then removed. Direct foreground
 runs use the same store, so their history can also be attached after completion.
-Attach is read-only. `wb kill [id]` cooperatively cancels a detached run; without
+Attach is read-only. `wb ps` lists active detached runs; `wb ps --all` includes
+finished detached runs. `wb kill [id]` cooperatively cancels a detached run; without
 an ID it selects the latest active detached run. The worker observes a private
 cancellation request, terminates the runner child, emits `run.cancelled`, and
 then marks the durable record cancelled.

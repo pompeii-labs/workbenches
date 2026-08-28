@@ -63,7 +63,8 @@ name: migrations
 description: Design, review, and safely apply project migrations.
 
 runner: opencode
-model: openrouter/openai/gpt-5.6-terra
+model:
+  id: openai/gpt-5.6-terra
 
 instructions: ./instructions.md
 skills:
@@ -102,10 +103,10 @@ into the runner's native configuration.
 This repository contains `workbench`, also available as `wb`: the TypeScript
 reference engine and command-line client for the standard.
 
-The project is in public pre-alpha development. The draft-0 format, OpenCode
-adapter, local runtime, and Docker runtime for one-shot and detached execution
-are implemented. The format is not yet stable. Other runners and hosted
-runtimes are not yet supported by the reference engine.
+The project is in public pre-alpha development. The draft-0 format, OpenCode and
+Pi adapters, local runtime, and Docker runtime for one-shot and detached
+execution are implemented. The format is not yet stable. Other runners and
+hosted runtimes are not yet supported by the reference engine.
 
 ### Install the current prerelease
 
@@ -136,7 +137,7 @@ Run `init` from a repository root to create `.workbenches/<name>`:
 
 ```sh
 wb init core
-wb init migrations --runner opencode --model openrouter/openai/gpt-5.6-terra
+wb init migrations --runner opencode --model openai/gpt-5.6-terra
 ```
 
 This repository also publishes a `creator` Workbench containing the current
@@ -229,6 +230,40 @@ likely typo. Values are used only for that invocation and are not written to
 saved run metadata or normalized events. Prefer `--env-file` or inherited
 environment for secrets because command-line values may be retained in shell
 history.
+
+### Connect the locked runner
+
+The Workbench author selects the runner, model, allowed provider routes, and
+native runner configuration. Those choices cannot be overridden when the
+Workbench runs. Choose one of the runner's compatible connections:
+
+```sh
+wb connect project-core
+wb run project-core --task "Review this migration"
+```
+
+If more than one compatible connection is available, `wb connect` asks which
+one this Workbench should use. Run it again to switch connections. When the
+runner exposes a documented command-line login operation, `wb connect` can
+also open it for another provider. It never injects login commands into an
+interactive runner conversation. The selection is stored in
+`~/.workbench/connections.json`; it does not change the Workbench package,
+runner, model, or credential store.
+
+Local Workbenches use the runner's normal local credential store. OpenCode
+exposes a command-line login operation, so Docker Workbenches can retain its
+native credentials in a private Docker volume. Pi currently exposes credential
+inspection but not command-line login. Configure Pi before local runs. A Docker
+Pi Workbench must declare its provider environment and receive it through
+`--env-file` or `--env` on each command. The CLI checks only whether an allowed
+provider is ready. It does not read, upload, or rewrite provider tokens.
+
+Pi is distributed separately by the Pi project and must be installed in the
+selected runtime:
+
+```sh
+npm install -g @earendil-works/pi-coding-agent
+```
 
 Bind additional repositories or directories only when the manifest declares
 them:
@@ -327,7 +362,8 @@ read-only or read-write access.
 Generated runner state is isolated in a writable, ephemeral mount because some
 runners update their own configuration at launch. The container root filesystem
 is read-only and `/tmp` is a writable temporary filesystem. The engine does not
-impose a CPU, memory, or temporary-filesystem size limit in draft 0.
+impose a CPU, memory, or temporary-filesystem size limit in execution protocol
+draft 0.
 
 The reference binaries currently support macOS and Linux. On platforms that
 expose a numeric host user and group, containers run under that identity so
@@ -335,7 +371,7 @@ workspace writes retain host ownership. Docker Desktop still mediates bind
 mounts through its virtual machine, so filesystem performance and permission
 details can differ from native Linux. Images must tolerate a read-only root and
 write caches beneath the provided temporary `HOME`; interactive Docker sessions
-are not supported in draft 0.
+are not supported in execution protocol draft 0.
 
 If the Workbench itself must use the host Docker engine, it must declare that
 high-risk requirement:
@@ -372,6 +408,8 @@ wb run project-core --task "Perform the migration" --detach
 wb attach wb_...
 wb attach              # latest dispatched run
 wb attach wb_... --json
+wb ps                  # active detached runs
+wb ps --all            # detached run history
 wb kill wb_...
 wb kill                # latest active detached run
 ```
@@ -391,10 +429,18 @@ wb run project-core
 ```
 
 The OpenCode interactive adapter currently supports multi-turn context,
-streaming, cancellation, tool events, and explicit permission decisions for the
-local runtime. It is not durable, and Docker Workbenches currently require a
-one-shot task: interactive sessions cannot yet be detached, recovered, or
-steered while a turn is active.
+streaming, image input, cancellation, tool events, and explicit permission
+decisions for the local runtime. OpenCode's server interface does not currently
+provide native mid-turn steering. The Pi adapter supports multi-turn context,
+streaming, image input, steering at Pi's next legal model boundary, follow-up
+input, cancellation, and tool events. Pi does not provide a native permission
+request protocol or MCP transport.
+
+The terminal client does not yet expose image attachment or steering controls.
+Those operations are available through the normalized runner session boundary.
+Image generation and normalized image output are not implemented yet.
+Interactive sessions are not durable, and Docker Workbenches currently require
+a one-shot task: interactive sessions cannot yet be detached or recovered.
 
 ## Source and authorization boundaries
 
@@ -412,9 +458,10 @@ values.
 For `runtime: local`, declared tools must exist on the host. For `runtime:
 docker`, declared tools and the runner must exist inside the resolved image;
 host installations do not satisfy the requirement. Only manifest-declared
-environment values are bound into the container, and their values do not appear
-in Docker command arguments. Preflight failure stops execution before model
-tokens are spent.
+environment values and credential variables for the selected model provider are
+bound into the container. Their values do not appear in Docker command
+arguments or the environment of the host Docker client process. Preflight
+failure stops execution before model tokens are spent.
 
 ## Specification and documentation
 

@@ -70,6 +70,12 @@ Then refine the generated files.
   repeatable evidence. When evidence is absent, preserve an existing valid
   choice or retain the scaffold default and report that it remains unevaluated;
   do not invent a replacement.
+- Lock the runner and model policy to the combination supported by the
+  maintainer. Use ordered model routes only for providers that serve the same
+  model. Consumers connect credentials with `wb connect`; they do not override
+  the package's runner, model, provider routes, or native configuration.
+- Put required runner-native configuration under the package and declare it
+  with `runner_config`. Never package credential files or literal secrets.
 - Keep `instructions` and every skill inside the package so it can be saved as a
   self-contained snapshot.
 - Declare exact executable names in `tools`. Presence is preflighted; version

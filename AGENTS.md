@@ -159,6 +159,8 @@ run:
 ```sh
 wb attach wb_...
 wb attach wb_... --json
+wb ps
+wb ps --all
 wb kill wb_...
 ```
 
@@ -186,6 +188,19 @@ Never write credentials into `workbench.yml`, task text, saved package metadata,
 or command output. Do not bypass a failed preflight by invoking the runner
 directly. Report the missing runner, tool, runtime, or environment binding so it
 can be fixed before model tokens are spent.
+
+When a Workbench has compatible credentials through more than one provider,
+use `wb connect <name>` to choose the active connection. The engine remembers
+that local choice without changing the Workbench's locked runner or model and
+without copying runner credentials into the package.
+
+Workbench can open authentication only through a runner's documented
+command-line operation. Never inject a login command or simulated user input
+into an interactive runner conversation. OpenCode exposes a command-line login
+flow. The current Pi adapter can select credentials already available to Pi,
+but Pi does not expose a command-line login operation. Configure Pi separately
+for local runs. Docker Pi Workbenches must declare and receive provider
+credentials through `--env-file` or `--env`.
 
 A Workbench run has the same ability to inspect or change the target workspace
 that its selected runner and runtime provide. Treat it as code execution, review
@@ -223,7 +238,7 @@ From a repository root, scaffold `.workbenches/<name>`:
 ```sh
 wb init core
 wb init migrations --runner opencode \
-  --model openrouter/openai/gpt-5.6-terra
+  --model openai/gpt-5.6-terra
 ```
 
 Edit the generated manifest and instructions, add focused skills when useful,
@@ -279,13 +294,18 @@ wb run workbench-creator \
 ## Current reference-engine support
 
 The repository is in public pre-alpha development. The current reference engine
-supports the draft-0 manifest and OpenCode runner. Local execution supports
-one-shot, detached, and experimental interactive sessions. Docker execution
-supports image preparation, in-container smoke checks, one-shot runs, and
-detached runs; its interactive TUI path is not yet supported. Other runners and
-hosted runtimes are part of the standard's extensible design but are not yet
-runnable through this release. Reject unsupported combinations explicitly; do
-not silently fall back to a different runner or to the host environment.
+supports the draft-0 manifest plus OpenCode and Pi runners. Local execution
+supports one-shot, detached, and experimental interactive sessions. Docker
+execution supports image preparation, in-container smoke checks, one-shot runs,
+and detached runs; its interactive TUI path is not yet supported. OpenCode and
+Pi have different native capabilities, which must be reported honestly rather
+than hidden behind a fallback. Other runners and hosted runtimes are part of the
+standard's extensible design but are not yet runnable through this release.
+
+The Workbench author locks its runner, model policy, provider routes, and native
+runner configuration. Consumers connect credentials with `wb connect`; they do
+not override those author choices. Never place credential values in a manifest,
+saved run, dry-run output, or normalized event.
 
 For normative package semantics, read `SPEC.md`. For the normalized run and
 event contract, read `docs/EXECUTION.md`.
