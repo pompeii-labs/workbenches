@@ -3,8 +3,8 @@ import { expect, test } from 'bun:test';
 import {
     type RuntimePrepareRequest,
     type RuntimeProvider,
-    RuntimeProviderRegistry,
-} from '../src/runtime.js';
+    RuntimeRegistry,
+} from '../src/runtimes/index.js';
 
 export function runtimeProviderContract(options: {
     createProvider: () => RuntimeProvider;
@@ -15,9 +15,7 @@ export function runtimeProviderContract(options: {
     test('prepares repeatedly without changing its runtime-visible layout', async () => {
         const request = await resolveRequest(options.request);
         const candidate = options.createProvider();
-        const provider = new RuntimeProviderRegistry([candidate]).resolve(
-            candidate.name
-        );
+        const provider = new RuntimeRegistry([candidate]).resolve(candidate.name);
         const first = await provider.prepare(request);
         const second = await provider.prepare(request);
         try {
@@ -38,7 +36,7 @@ export function runtimeProviderContract(options: {
     test('requires successful preflight before launch', async () => {
         const request = await resolveRequest(options.request);
         const candidate = options.createProvider();
-        const runtime = await new RuntimeProviderRegistry([candidate])
+        const runtime = await new RuntimeRegistry([candidate])
             .resolve(candidate.name)
             .prepare(request);
         try {
@@ -65,7 +63,7 @@ export function runtimeProviderContract(options: {
     test('cancels a launched process and makes cleanup idempotent', async () => {
         const request = await resolveRequest(options.request);
         const candidate = options.createProvider();
-        const runtime = await new RuntimeProviderRegistry([candidate])
+        const runtime = await new RuntimeRegistry([candidate])
             .resolve(candidate.name)
             .prepare(request);
         await runtime.preflight();
