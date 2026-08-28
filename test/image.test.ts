@@ -7,21 +7,19 @@ import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { pack } from 'tar-stream';
 
+import { loginCommand, pushCommand } from '../src/commands/image.js';
 import {
-    imageReference,
-    loginCommand,
-    loginImageClient,
-    pushCommand,
-    pushImage,
-} from '../src/commands/image.js';
-import { setRegistryApiUrl } from '../src/registry.js';
+    RegistryClient,
+    RegistryImagePublisher,
+    registryImageReference,
+} from '../src/registry/index.js';
 
 const projectDirectory = resolve(import.meta.dir, '..');
 const cliPath = join(projectDirectory, 'src', 'cli.ts');
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
-    setRegistryApiUrl(undefined);
+    RegistryClient.configureApiUrl(undefined);
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -31,28 +29,28 @@ afterEach(async () => {
 
 describe('Workbench image references', () => {
     test('uses the production OCI registry host by default', () => {
-        expect(imageReference('pompeii-labs', 'creator', '0.1.0')).toBe(
+        expect(registryImageReference('pompeii-labs', 'creator', '0.1.0')).toBe(
             'images.workbenches.dev/pompeii-labs/creator:0.1.0'
         );
     });
 
     test('uses the configured development registry host', () => {
-        setRegistryApiUrl('https://pompeii.ngrok.app');
-        expect(imageReference('pompeii-labs', 'creator', 'latest')).toBe(
-            'pompeii.ngrok.app/pompeii-labs/creator:latest'
+        RegistryClient.configureApiUrl('https://registry.example.com');
+        expect(registryImageReference('pompeii-labs', 'creator', 'latest')).toBe(
+            'registry.example.com/pompeii-labs/creator:latest'
         );
     });
 
     test('rejects invalid image names and tags', () => {
-        expect(() => imageReference('Bad Publisher', 'creator', 'latest')).toThrow(
-            'Invalid publisher slug'
-        );
-        expect(() => imageReference('pompeii-labs', 'Bad Name', 'latest')).toThrow(
-            'Invalid registry image name'
-        );
-        expect(() => imageReference('pompeii-labs', 'creator', 'bad tag')).toThrow(
-            'Invalid registry image tag'
-        );
+        expect(() =>
+            registryImageReference('Bad Publisher', 'creator', 'latest')
+        ).toThrow('Invalid publisher slug');
+        expect(() =>
+            registryImageReference('pompeii-labs', 'Bad Name', 'latest')
+        ).toThrow('Invalid registry image name');
+        expect(() =>
+            registryImageReference('pompeii-labs', 'creator', 'bad tag')
+        ).toThrow('Invalid registry image tag');
     });
 });
 
@@ -61,7 +59,7 @@ describe('Workbench image commands', () => {
         const fixture = await imageFixture();
         const previousHome = process.env.WORKBENCH_HOME;
         process.env.WORKBENCH_HOME = fixture.home;
-        setRegistryApiUrl(fixture.apiUrl);
+        RegistryClient.configureApiUrl(fixture.apiUrl);
         const output = spyOn(console, 'log').mockImplementation(() => undefined);
         try {
             await runDefinedCommand(loginCommand, { client: fixture.client });
@@ -101,21 +99,22 @@ describe('Workbench image commands', () => {
         };
         try {
             await expect(
-                pushImage(
-                    { ...image, publisher: 'unavailable' },
+                new RegistryImagePublisher({
                     account,
-                    testRegistryProfile(['pompeii-labs'])
-                )
+                    profile: testRegistryProfile(['pompeii-labs']),
+                }).push({ ...image, publisher: 'unavailable' })
             ).rejects.toThrow('Publisher is unavailable to this account: unavailable');
             await expect(
-                pushImage(image, account, testRegistryProfile([]))
+                new RegistryImagePublisher({
+                    account,
+                    profile: testRegistryProfile([]),
+                }).push(image)
             ).rejects.toThrow('Create or join a publisher before pushing');
             await expect(
-                pushImage(
-                    image,
+                new RegistryImagePublisher({
                     account,
-                    testRegistryProfile(['pompeii-labs', 'lux-db'])
-                )
+                    profile: testRegistryProfile(['pompeii-labs', 'lux-db']),
+                }).push(image)
             ).rejects.toThrow(
                 'Choose a publisher with --publisher: pompeii-labs, lux-db'
             );
@@ -125,12 +124,11 @@ describe('Workbench image commands', () => {
     });
 
     test('reports an OCI client that cannot be started', async () => {
-        setRegistryApiUrl('http://127.0.0.1:57401');
+        RegistryClient.configureApiUrl('http://127.0.0.1:57401');
         await expect(
-            loginImageClient(
-                '/definitely/unavailable/workbench-oci-client',
-                testAccount('http://127.0.0.1:57401', 'test-token')
-            )
+            new RegistryImagePublisher({
+                account: testAccount('http://127.0.0.1:57401', 'test-token'),
+            }).login('/definitely/unavailable/workbench-oci-client')
         ).rejects.toThrow('could not be started');
     });
 
