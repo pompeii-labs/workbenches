@@ -2,10 +2,10 @@
 
 The current Workbench maintainers are:
 
-- [@mattyhogan](https://github.com/mattyhogan) — project lead, specification,
+- [@mattyhogan](https://github.com/mattyhogan), project lead, specification,
   and releases
-- [@rockstox](https://github.com/rockstox) — repository maintainer
-- [@coachjackferg](https://github.com/coachjackferg) — repository maintainer
+- [@rockstox](https://github.com/rockstox), repository maintainer
+- [@coachjackferg](https://github.com/coachjackferg), repository maintainer
 
 Maintainers review changes, protect compatibility, coordinate security reports,
 and manage releases. Repository CODEOWNERS and branch protection require a

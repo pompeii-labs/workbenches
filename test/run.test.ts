@@ -2,11 +2,14 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { WorkbenchEvent } from '../src/execution.js';
-import { runWorkbench } from '../src/run.js';
-import { type RuntimeAsset, RuntimeProviderRegistry } from '../src/runtime.js';
+import { type WorkbenchEvent, WorkbenchRun } from '../src/runs/index.js';
+import { type RuntimeAsset, RuntimeRegistry } from '../src/runtimes/index.js';
 
 const temporaryDirectories: string[] = [];
+const TEST_ENVIRONMENT = {
+    PATH: '/fixture/bin',
+    OPENROUTER_API_KEY: 'fixture-openrouter-key',
+};
 
 afterEach(async () => {
     await Promise.all(
@@ -23,7 +26,7 @@ describe('local run lifecycle', () => {
         let spawned = false;
         const events: WorkbenchEvent[] = [];
 
-        const code = await runWorkbench(
+        const code = await WorkbenchRun.execute(
             {
                 workbenchPath: fixture.packageDirectory,
                 task: 'task',
@@ -32,6 +35,7 @@ describe('local run lifecycle', () => {
                 },
             },
             {
+                env: TEST_ENVIRONMENT,
                 findExecutable(name) {
                     checked.push(name);
                     return null;
@@ -57,7 +61,7 @@ describe('local run lifecycle', () => {
         let spawned = false;
         const events: WorkbenchEvent[] = [];
 
-        const code = await runWorkbench(
+        const code = await WorkbenchRun.execute(
             {
                 workbenchPath: fixture.packageDirectory,
                 task: 'task',
@@ -66,6 +70,7 @@ describe('local run lifecycle', () => {
                 },
             },
             {
+                env: TEST_ENVIRONMENT,
                 findExecutable(name) {
                     checked.push(name);
                     return name === 'lux' ? null : `/bin/${name}`;
@@ -90,14 +95,14 @@ describe('local run lifecycle', () => {
         let output = '';
         let spawned = false;
 
-        const code = await runWorkbench(
+        const code = await WorkbenchRun.execute(
             {
                 workbenchPath: fixture.packageDirectory,
                 task: 'inspect',
                 dryRun: true,
             },
             {
-                env: { PATH: '/bin' },
+                env: TEST_ENVIRONMENT,
                 findExecutable: () => '/bin/opencode',
                 write(value) {
                     output += value;
@@ -114,6 +119,9 @@ describe('local run lifecycle', () => {
         expect(JSON.parse(output)).toMatchObject({
             cwd: fixture.root,
             skills: [],
+            model_route: {
+                catalog_version: expect.any(String),
+            },
         });
     });
 
@@ -125,7 +133,7 @@ describe('local run lifecycle', () => {
         let launches = 0;
         let launchCompleted = false;
 
-        const code = await runWorkbench(
+        const code = await WorkbenchRun.execute(
             {
                 workbenchPath: fixture.packageDirectory,
                 task: 'inspect',
@@ -136,7 +144,7 @@ describe('local run lifecycle', () => {
                 },
             },
             {
-                env: { PATH: '/fixture/bin' },
+                env: TEST_ENVIRONMENT,
                 findExecutable: () => '/fixture/bin/opencode',
                 spawn(nextCommand, options) {
                     command = nextCommand;
@@ -158,6 +166,83 @@ describe('local run lifecycle', () => {
         expect(launchCompleted).toBeTrue();
     });
 
+    test('runs a Pi Workbench through the same lifecycle and normalized protocol', async () => {
+        const fixture = await createFixture({ runner: 'pi' });
+        const events: WorkbenchEvent[] = [];
+        let command: string[] = [];
+        const stdout = [
+            { type: 'session', version: 3, id: 'pi_run' },
+            { type: 'agent_start' },
+            { type: 'turn_start' },
+            {
+                type: 'message_update',
+                assistantMessageEvent: {
+                    type: 'thinking_delta',
+                    delta: 'MUST_NOT_RENDER_REASONING',
+                },
+            },
+            {
+                type: 'message_update',
+                assistantMessageEvent: { type: 'text_delta', delta: 'Pi works' },
+            },
+            { type: 'turn_end', message: { stopReason: 'stop' } },
+            { type: 'agent_end', messages: [] },
+        ]
+            .map((event) => JSON.stringify(event))
+            .join('\n');
+
+        const code = await WorkbenchRun.execute(
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'inspect',
+                onEvent: (event) => void events.push(event),
+            },
+            {
+                env: TEST_ENVIRONMENT,
+                findExecutable: () => '/bin/pi',
+                spawn(nextCommand) {
+                    if (nextCommand.includes('--list-models')) {
+                        return {
+                            exited: Promise.resolve(0),
+                            stdout: new Response('').body as ReadableStream<Uint8Array>,
+                            stderr: new Response(
+                                'provider  model\nopenrouter  openai/gpt-5.6-terra\n'
+                            ).body as ReadableStream<Uint8Array>,
+                        };
+                    }
+                    command = nextCommand;
+                    return {
+                        exited: Promise.resolve(0),
+                        stdout: new Response(`${stdout}\n`)
+                            .body as ReadableStream<Uint8Array>,
+                        stderr: new Response('').body as ReadableStream<Uint8Array>,
+                    };
+                },
+            }
+        );
+
+        expect(code).toBe(0);
+        expect(command.slice(0, 3)).toEqual(['pi', '--mode', 'json']);
+        expect(command.at(-1)).toBe('inspect');
+        expect(events[0]).toMatchObject({
+            type: 'run.started',
+            data: {
+                model_route: {
+                    catalog_version: expect.any(String),
+                },
+            },
+        });
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                type: 'output.text',
+                runner: 'pi',
+                data: { text: 'Pi works' },
+            })
+        );
+        expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER_REASONING');
+        expect(events.at(-1)).toMatchObject({ type: 'run.completed' });
+    });
+
     test('reports the safe error carried by a failed OpenCode event', async () => {
         const fixture = await createFixture();
         const events: WorkbenchEvent[] = [];
@@ -172,7 +257,7 @@ describe('local run lifecycle', () => {
             },
         })}\n`;
 
-        const code = await runWorkbench(
+        const code = await WorkbenchRun.execute(
             {
                 workbenchPath: fixture.packageDirectory,
                 task: 'inspect',
@@ -181,6 +266,7 @@ describe('local run lifecycle', () => {
                 },
             },
             {
+                env: TEST_ENVIRONMENT,
                 findExecutable: () => '/bin/opencode',
                 spawn() {
                     return {
@@ -207,7 +293,7 @@ describe('local run lifecycle', () => {
         const fixture = await createFixture();
         const events: WorkbenchEvent[] = [];
 
-        const code = await runWorkbench(
+        const code = await WorkbenchRun.execute(
             {
                 workbenchPath: fixture.packageDirectory,
                 task: 'inspect',
@@ -216,6 +302,7 @@ describe('local run lifecycle', () => {
                 },
             },
             {
+                env: TEST_ENVIRONMENT,
                 findExecutable: () => '/bin/opencode',
                 spawn() {
                     return {
@@ -236,12 +323,89 @@ describe('local run lifecycle', () => {
         });
     });
 
+    test('redacts declared Workbench environment values from failures', async () => {
+        const fixture = await createFixture({ env: ['OPENAI_API_KEY'] });
+        const events: WorkbenchEvent[] = [];
+        const targetSecret = 'mapped-target-secret';
+
+        const code = await WorkbenchRun.execute(
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'inspect',
+                onEvent(event) {
+                    events.push(event);
+                },
+            },
+            {
+                env: {
+                    ...TEST_ENVIRONMENT,
+                    OPENAI_API_KEY: targetSecret,
+                },
+                findExecutable: () => '/bin/opencode',
+                spawn() {
+                    return {
+                        exited: Promise.resolve(1),
+                        stdout: new Response('').body as ReadableStream<Uint8Array>,
+                        stderr: new Response(`credential ${targetSecret}\n`)
+                            .body as ReadableStream<Uint8Array>,
+                    };
+                },
+            }
+        );
+
+        expect(code).toBe(1);
+        expect(JSON.stringify(events)).not.toContain(targetSecret);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: {
+                message: 'OpenCode exited with code 1: credential [REDACTED]',
+            },
+        });
+    });
+
+    test('redacts model provider credentials that are not declared as Workbench env', async () => {
+        const fixture = await createFixture();
+        const events: WorkbenchEvent[] = [];
+        const targetSecret = TEST_ENVIRONMENT.OPENROUTER_API_KEY;
+
+        const code = await WorkbenchRun.execute(
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'inspect',
+                onEvent(event) {
+                    events.push(event);
+                },
+            },
+            {
+                env: TEST_ENVIRONMENT,
+                findExecutable: () => '/bin/opencode',
+                spawn() {
+                    return {
+                        exited: Promise.resolve(1),
+                        stdout: new Response('').body as ReadableStream<Uint8Array>,
+                        stderr: new Response(`credential ${targetSecret}\n`)
+                            .body as ReadableStream<Uint8Array>,
+                    };
+                },
+            }
+        );
+
+        expect(code).toBe(1);
+        expect(JSON.stringify(events)).not.toContain(targetSecret);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: {
+                message: 'OpenCode exited with code 1: credential [REDACTED]',
+            },
+        });
+    });
+
     test('cleans staged skills when runner launch throws', async () => {
         const fixture = await createFixture({ skill: true });
         let stagedDirectory = '';
         const events: WorkbenchEvent[] = [];
 
-        const code = await runWorkbench(
+        const code = await WorkbenchRun.execute(
             {
                 workbenchPath: fixture.packageDirectory,
                 task: 'inspect',
@@ -250,6 +414,7 @@ describe('local run lifecycle', () => {
                 },
             },
             {
+                env: TEST_ENVIRONMENT,
                 findExecutable: () => '/bin/opencode',
                 spawn(_command, options) {
                     stagedDirectory = options.env.OPENCODE_CONFIG_DIR ?? '';
@@ -270,7 +435,7 @@ describe('local run lifecycle', () => {
     test('stages generated runner configuration as writable runtime state', async () => {
         const fixture = await createFixture({ skill: true });
         let assets: RuntimeAsset[] = [];
-        const runtimeRegistry = new RuntimeProviderRegistry([
+        const runtimeRegistry = new RuntimeRegistry([
             {
                 name: 'local',
                 async prepare(request) {
@@ -295,6 +460,12 @@ describe('local run lifecycle', () => {
                             stdout: new Response('').body as ReadableStream<Uint8Array>,
                             stderr: new Response('').body as ReadableStream<Uint8Array>,
                         }),
+                        execute: async () => ({
+                            code: 0,
+                            stdout: 'OpenRouter api\n',
+                            stderr: '',
+                        }),
+                        interact: async () => 0,
                         cancel() {},
                         async cleanup() {},
                     };
@@ -302,9 +473,9 @@ describe('local run lifecycle', () => {
             },
         ]);
 
-        const code = await runWorkbench(
+        const code = await WorkbenchRun.execute(
             { workbenchPath: fixture.packageDirectory, task: 'inspect' },
-            { runtimeRegistry }
+            { runtimeRegistry, env: TEST_ENVIRONMENT }
         );
 
         expect(code).toBe(0);
@@ -325,7 +496,7 @@ describe('local run lifecycle', () => {
             finish = resolve;
         });
 
-        const code = await runWorkbench(
+        const code = await WorkbenchRun.execute(
             {
                 workbenchPath: fixture.packageDirectory,
                 task: 'wait',
@@ -335,6 +506,7 @@ describe('local run lifecycle', () => {
                 },
             },
             {
+                env: TEST_ENVIRONMENT,
                 findExecutable: () => '/bin/opencode',
                 spawn() {
                     queueMicrotask(() => controller.abort());
@@ -361,7 +533,9 @@ describe('local run lifecycle', () => {
     });
 });
 
-async function createFixture(options: { tools?: string[]; skill?: boolean } = {}) {
+async function createFixture(
+    options: { tools?: string[]; skill?: boolean; runner?: string; env?: string[] } = {}
+) {
     const root = await mkdtemp(join(tmpdir(), 'workbench-run-'));
     temporaryDirectories.push(root);
     const packageDirectory = join(root, '.workbenches', 'core');
@@ -381,8 +555,9 @@ async function createFixture(options: { tools?: string[]; skill?: boolean } = {}
             'spec: 0',
             'version: 0.1.0',
             'name: fixture-core',
-            'runner: opencode',
-            'model: openrouter/openai/gpt-5.6-terra',
+            `runner: ${options.runner ?? 'opencode'}`,
+            'model:',
+            '  id: openai/gpt-5.6-terra',
             'instructions: ./instructions.md',
             ...(options.skill
                 ? ['skills:', '  - ./skills/fixture-skill']
@@ -391,7 +566,15 @@ async function createFixture(options: { tools?: string[]; skill?: boolean } = {}
                 ? ['tools:', ...options.tools.map((tool) => `  - ${tool}`)]
                 : ['tools: []']),
             'mcps: []',
-            'env: {}',
+            ...(options.env?.length
+                ? [
+                      'env:',
+                      ...options.env.flatMap((name) => [
+                          `  ${name}:`,
+                          '    required: true',
+                      ]),
+                  ]
+                : ['env: {}']),
             'runtime: local',
             '',
         ].join('\n')

@@ -11,13 +11,13 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-
+import { DockerBuildContext } from '../src/runtimes/docker/build-context.js';
+import { DockerCredentialVolume } from '../src/runtimes/docker/credentials.js';
 import {
     type DockerCommandResult,
     DockerRuntimeProvider,
-    stageDockerBuildContext,
-} from '../src/docker.js';
-import { RuntimeProviderRegistry } from '../src/runtime.js';
+} from '../src/runtimes/docker/index.js';
+import { RuntimeRegistry } from '../src/runtimes/index.js';
 import type { ResolvedWorkbench, SpawnedRunner } from '../src/types.js';
 import { runtimeProviderContract } from './runtime-provider-contract.js';
 
@@ -191,13 +191,99 @@ describe('Docker runtime provider', () => {
         }
     });
 
+    test('remaps packaged runner configuration into the container', async () => {
+        const fixture = await createFixture({
+            image: 'ghcr.io/example/lux:0.1.0',
+        });
+        const runnerConfigPath = join(fixture.packageDirectory, 'opencode.json');
+        await writeFile(runnerConfigPath, '{"share":"disabled"}\n');
+        fixture.workbench.runnerConfigPath = runnerConfigPath;
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock([]),
+        }).prepare(request(fixture));
+        try {
+            expect(runtime.workbench.runnerConfigPath).toBe('/workbench/opencode.json');
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('does not create or mount credential storage while preparing an image build', async () => {
+        const fixture = await createFixture({
+            image: 'ghcr.io/example/lux:0.1.0',
+        });
+        const commands: string[][] = [];
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock(commands),
+        }).prepare({ ...request(fixture), purpose: 'build' });
+        try {
+            expect(
+                commands.some(
+                    (command) => command[1] === 'volume' && command[2] === 'create'
+                )
+            ).toBeFalse();
+            expect(runtime.environment.WORKBENCH_CREDENTIALS_DIR).toBeUndefined();
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('runs native authentication in the runner credential volume', async () => {
+        const fixture = await createFixture({
+            image: 'ghcr.io/example/lux:0.1.0',
+        });
+        const commands: string[][] = [];
+        let interactiveCommand: string[] = [];
+        let interactiveEnvironment = '';
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock(commands),
+            interact(command) {
+                interactiveCommand = command;
+                const environmentFile = command[command.indexOf('--env-file') + 1];
+                if (environmentFile) {
+                    interactiveEnvironment = readFileSync(environmentFile, 'utf8');
+                }
+                return Promise.resolve(0);
+            },
+            user: () => ({ uid: 501, gid: 20 }),
+        }).prepare({ ...request(fixture), purpose: 'connect' });
+        try {
+            await expect(
+                runtime.interact({
+                    command: ['opencode', 'auth', 'login'],
+                    cwd: runtime.workspaceDirectory,
+                    env: runtime.environment,
+                })
+            ).resolves.toBe(0);
+            const volume = DockerCredentialVolume.nameFor('opencode');
+            expect(
+                commands.some(
+                    (command) =>
+                        command[1] === 'volume' &&
+                        command[2] === 'create' &&
+                        command[3] === volume
+                )
+            ).toBeTrue();
+            expect(interactiveCommand).toContain(`${volume}:/workbench-credentials`);
+            expect(interactiveCommand).toContain('--interactive');
+            expect(interactiveEnvironment).toContain(
+                'XDG_DATA_HOME=/workbench-credentials\n'
+            );
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('fails smoke on a missing in-image tool before spawning a runner', async () => {
         const fixture = await createFixture({
             image: 'ghcr.io/example/lux:0.1.0',
             tools: ['cargo', 'lux'],
         });
         let spawned = false;
-        const runtime = await new RuntimeProviderRegistry([
+        const runtime = await new RuntimeRegistry([
             new DockerRuntimeProvider({
                 findExecutable: () => '/usr/bin/docker',
                 command: dockerMock([], { missing: 'lux' }),
@@ -219,10 +305,9 @@ describe('Docker runtime provider', () => {
         }
     });
 
-    test('mounts only declared assets and passes authorization by name', async () => {
+    test('mounts only declared assets and isolates model provider credentials', async () => {
         const fixture = await createFixture({
             image: 'ghcr.io/example/lux:0.1.0',
-            env: { OPENROUTER_API_KEY: { required: true } },
         });
         let spawnedCommand: string[] = [];
         let spawnedEnvironment: Record<string, string | undefined> = {};
@@ -274,6 +359,9 @@ describe('Docker runtime provider', () => {
             expect(spawnedCommand).toContain('--read-only');
             expect(spawnedCommand).toContain('501:20');
             expect(spawnedCommand).toContain('--env-file');
+            expect(spawnedCommand).toContain(
+                `${DockerCredentialVolume.nameFor('opencode')}:/workbench-credentials`
+            );
             expect(environmentFileMode).toBe(0o600);
             expect(spawnedCommand.join(' ')).not.toContain('super-secret-value');
             expect(spawnedEnvironment.OPENROUTER_API_KEY).toBeUndefined();
@@ -288,7 +376,9 @@ describe('Docker runtime provider', () => {
                 `${fixture.packageDirectory}:/workspace/.workbenches/core:ro`
             );
             const preflightCommands = commands.filter(
-                (command) => command[1] === 'run'
+                (command) =>
+                    command[1] === 'run' &&
+                    command.includes('command -v "$1" 2>/dev/null')
             );
             expect(preflightCommands.length).toBeGreaterThan(0);
             for (const command of preflightCommands) {
@@ -432,7 +522,7 @@ describe('Docker runtime provider', () => {
             image: 'ghcr.io/example/lux:0.1.0',
             env: { PROJECT_TOKEN: { required: true } },
         });
-        const runtime = await new RuntimeProviderRegistry([
+        const runtime = await new RuntimeRegistry([
             new DockerRuntimeProvider({
                 findExecutable: () => '/usr/bin/docker',
                 command: dockerMock([]),
@@ -457,7 +547,7 @@ describe('Docker build preparation', () => {
         await writeFile(join(fixture.root, '.env'), 'TOKEN=do-not-copy\n');
         await mkdir(join(fixture.root, '.git'));
         await writeFile(join(fixture.root, '.git', 'config'), 'private path\n');
-        const staged = await stageDockerBuildContext(fixture.workbench);
+        const staged = await DockerBuildContext.stage(fixture.workbench);
         try {
             expect(await readFile(join(staged.context, 'safe.txt'), 'utf8')).toBe(
                 'safe\n'
@@ -536,7 +626,7 @@ describe('Docker build preparation', () => {
             join(fixture.packageDirectory, 'private-link')
         );
 
-        await expect(stageDockerBuildContext(fixture.workbench)).rejects.toThrow(
+        await expect(DockerBuildContext.stage(fixture.workbench)).rejects.toThrow(
             'Absolute symlink is not allowed in Docker build context: .workbenches/core/private-link'
         );
     });
@@ -555,7 +645,7 @@ describe('Docker build preparation', () => {
         }
         fixture.workbench.manifest.image.context = './outside-context';
 
-        await expect(stageDockerBuildContext(fixture.workbench)).rejects.toThrow(
+        await expect(DockerBuildContext.stage(fixture.workbench)).rejects.toThrow(
             'Docker build context resolves outside the repository: ./outside-context'
         );
     });
@@ -593,6 +683,9 @@ function dockerMock(
                     ],
                 })}\n`
             );
+        }
+        if (command[1] === 'volume' && command[2] === 'create') {
+            return result(0, `${command[3] ?? ''}\n`);
         }
         if (command[1] === 'run') {
             const requested = command.at(-1);
@@ -650,7 +743,7 @@ async function createFixture(options: {
             version: '0.1.0',
             name: 'lux-core',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-terra',
+            model: { id: 'openai/gpt-5.6-terra' },
             instructions: './instructions.md',
             skills: [],
             tools: options.tools ?? [],

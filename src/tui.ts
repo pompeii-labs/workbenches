@@ -1,9 +1,9 @@
-import type { ResolvedReference } from './references.js';
 import type { WorkbenchWorkspaceBinding } from './types.js';
+import type { ResolvedWorkbenchReference } from './workbench/index.js';
 
 export async function launchWorkbenchTui(
     options: {
-        initial?: { alias: string; resolved: ResolvedReference };
+        initial?: { alias: string; resolved: ResolvedWorkbenchReference };
         environment?: Record<string, string | undefined>;
         workspaces?: WorkbenchWorkspaceBinding[];
     } = {}

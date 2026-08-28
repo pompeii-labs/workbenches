@@ -3,11 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-    reportRegistryEvent,
-    runTelemetryEnabled,
-    setRunTelemetry,
-} from '../src/telemetry.js';
+import { RegistryTelemetry } from '../src/registry/index.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -22,15 +18,7 @@ afterEach(async () => {
 describe('anonymous registry counters', () => {
     test('reports the exact immutable version without execution content', async () => {
         let request: Request | undefined;
-        const accepted = await reportRegistryEvent({
-            registry: {
-                url: 'https://api.workbenches.dev',
-                publisher: 'example',
-                workbench: 'core',
-                version_id: '08f3e3ef-4c2c-4b1e-b0fd-b4ca2b6fda11',
-            },
-            kind: 'run',
-            idempotencyKey: '78c4bf29-7b13-48bb-a2f8-95e933fd03dc',
+        const telemetry = new RegistryTelemetry({
             fetch: async (input, init) => {
                 request =
                     input instanceof Request
@@ -41,6 +29,16 @@ describe('anonymous registry counters', () => {
                           );
                 return Response.json({ accepted: true }, { status: 202 });
             },
+        });
+        const accepted = await telemetry.report({
+            registry: {
+                url: 'https://api.workbenches.dev',
+                publisher: 'example',
+                workbench: 'core',
+                version_id: '08f3e3ef-4c2c-4b1e-b0fd-b4ca2b6fda11',
+            },
+            kind: 'run',
+            idempotencyKey: '78c4bf29-7b13-48bb-a2f8-95e933fd03dc',
         });
 
         expect(accepted).toBeTrue();
@@ -65,7 +63,11 @@ describe('anonymous registry counters', () => {
 
     test('never turns a failed counter request into a CLI failure', async () => {
         expect(
-            await reportRegistryEvent({
+            await new RegistryTelemetry({
+                fetch: async () => {
+                    throw new Error('offline');
+                },
+            }).report({
                 registry: {
                     url: 'https://api.workbenches.dev',
                     publisher: 'example',
@@ -73,22 +75,28 @@ describe('anonymous registry counters', () => {
                     version_id: '08f3e3ef-4c2c-4b1e-b0fd-b4ca2b6fda11',
                 },
                 kind: 'save',
-                fetch: async () => {
-                    throw new Error('offline');
-                },
             })
         ).toBeFalse();
     });
 
     test('persists run reporting preference and honors standard opt-outs', async () => {
         const home = await temporaryHome();
-        expect(await runTelemetryEnabled(home, {})).toBeTrue();
-        await setRunTelemetry(home, false);
-        expect(await runTelemetryEnabled(home, {})).toBeFalse();
-        await setRunTelemetry(home, true);
-        expect(await runTelemetryEnabled(home, { DO_NOT_TRACK: '1' })).toBeFalse();
+        const telemetry = new RegistryTelemetry({ home, environment: {} });
+        expect(await telemetry.enabled()).toBeTrue();
+        await telemetry.setEnabled(false);
+        expect(await telemetry.enabled()).toBeFalse();
+        await telemetry.setEnabled(true);
         expect(
-            await runTelemetryEnabled(home, { WB_TELEMETRY_DISABLED: '1' })
+            await new RegistryTelemetry({
+                home,
+                environment: { DO_NOT_TRACK: '1' },
+            }).enabled()
+        ).toBeFalse();
+        expect(
+            await new RegistryTelemetry({
+                home,
+                environment: { WB_TELEMETRY_DISABLED: '1' },
+            }).enabled()
         ).toBeFalse();
     });
 });

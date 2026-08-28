@@ -4,13 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-    addRemoteToCatalog,
-    addToCatalog,
-    packageDigest,
-    readCatalog,
-} from '../src/catalog.js';
-import { resolveWorkbench } from '../src/manifest.js';
-import { upgradeSavedWorkbench } from '../src/upgrade.js';
+    SavedWorkbenchCatalog,
+    SavedWorkbenchUpgrade,
+    WorkbenchPackage,
+} from '../src/catalog/index.js';
+import { Workbench } from '../src/workbench/index.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -26,15 +24,14 @@ describe('saved Workbench upgrades', () => {
     test('repoints a local alias only after the new snapshot is ready', async () => {
         const fixture = await localFixture('0.1.0');
         const home = await temporaryDirectory('workbench-upgrade-local-');
-        const saved = await addToCatalog({
-            home,
+        const saved = await new SavedWorkbenchCatalog(home).add({
             alias: 'fixture-core',
             source: fixture.root,
-            workbench: await resolveWorkbench(fixture.packageDirectory),
+            workbench: await Workbench.load(fixture.packageDirectory),
         });
 
         await fixture.writeVersion('0.2.0', '# updated\n');
-        const result = await upgradeSavedWorkbench(home, 'fixture-core');
+        const result = await new SavedWorkbenchUpgrade(home).upgrade('fixture-core');
 
         expect(result.changed).toBeTrue();
         expect(result.previous.version).toBe('0.1.0');
@@ -49,65 +46,67 @@ describe('saved Workbench upgrades', () => {
     test('does not rewrite an alias when its package is already current', async () => {
         const fixture = await localFixture('0.1.0');
         const home = await temporaryDirectory('workbench-upgrade-current-');
-        const saved = await addToCatalog({
-            home,
+        const catalog = new SavedWorkbenchCatalog(home);
+        const saved = await catalog.add({
             alias: 'fixture-core',
             source: fixture.root,
-            workbench: await resolveWorkbench(fixture.packageDirectory),
+            workbench: await Workbench.load(fixture.packageDirectory),
         });
 
-        const result = await upgradeSavedWorkbench(home, 'fixture-core');
+        const result = await new SavedWorkbenchUpgrade(home).upgrade('fixture-core');
 
         expect(result.changed).toBeFalse();
         expect(result.entry).toEqual(saved);
-        expect(await readCatalog(home)).toEqual([saved]);
+        expect(await catalog.list()).toEqual([saved]);
     });
 
     test('keeps shared snapshots until the final alias moves away', async () => {
         const fixture = await localFixture('0.1.0');
         const home = await temporaryDirectory('workbench-upgrade-shared-');
-        const workbench = await resolveWorkbench(fixture.packageDirectory);
-        const first = await addToCatalog({
-            home,
+        const catalog = new SavedWorkbenchCatalog(home);
+        const workbench = await Workbench.load(fixture.packageDirectory);
+        const first = await catalog.add({
             alias: 'fixture-one',
             source: fixture.root,
             workbench,
         });
-        await addToCatalog({
-            home,
+        await catalog.add({
             alias: 'fixture-two',
             source: fixture.root,
             workbench,
         });
         await fixture.writeVersion('0.2.0', '# updated\n');
 
-        await upgradeSavedWorkbench(home, 'fixture-one');
+        const upgrade = new SavedWorkbenchUpgrade(home);
+        await upgrade.upgrade('fixture-one');
         expect((await stat(first.packagePath)).isDirectory()).toBeTrue();
-        await upgradeSavedWorkbench(home, 'fixture-two');
+        await upgrade.upgrade('fixture-two');
         await expect(stat(first.packagePath)).rejects.toThrow();
     });
 
     test('preserves the existing alias when a candidate package is invalid', async () => {
         const fixture = await localFixture('0.1.0');
         const home = await temporaryDirectory('workbench-upgrade-invalid-');
-        const saved = await addToCatalog({
-            home,
+        const catalog = new SavedWorkbenchCatalog(home);
+        const saved = await catalog.add({
             alias: 'fixture-core',
             source: fixture.root,
-            workbench: await resolveWorkbench(fixture.packageDirectory),
+            workbench: await Workbench.load(fixture.packageDirectory),
         });
         await writeFile(join(fixture.packageDirectory, 'workbench.yml'), 'spec: 99\n');
 
-        await expect(upgradeSavedWorkbench(home, 'fixture-core')).rejects.toThrow();
-        expect(await readCatalog(home)).toEqual([saved]);
+        await expect(
+            new SavedWorkbenchUpgrade(home).upgrade('fixture-core')
+        ).rejects.toThrow();
+        expect(await catalog.list()).toEqual([saved]);
         expect((await stat(saved.packagePath)).isDirectory()).toBeTrue();
     });
 
     test('resolves and verifies a newer registry artifact', async () => {
         const home = await temporaryDirectory('workbench-upgrade-registry-');
+        const catalog = new SavedWorkbenchCatalog(home);
         const initial = remotePackage('0.1.0', 'a'.repeat(40));
-        const saved = await addRemoteToCatalog({
-            home,
+        const saved = await catalog.addRemote({
             alias: 'registry-core',
             workbench: initial.workbench,
             registry: {
@@ -118,7 +117,7 @@ describe('saved Workbench upgrades', () => {
             },
         });
         const next = remotePackage('0.2.0', 'b'.repeat(40));
-        const digest = packageDigest(next.workbench.files);
+        const digest = WorkbenchPackage.digest(next.workbench.files);
         const fetcher = async (input: string | URL | Request) => {
             const url = String(input);
             if (url === 'https://registry.example/v1/resolutions') {
@@ -148,9 +147,9 @@ describe('saved Workbench upgrades', () => {
             return new Response('not found', { status: 404 });
         };
 
-        const result = await upgradeSavedWorkbench(home, 'registry-core', {
+        const result = await new SavedWorkbenchUpgrade(home, {
             fetch: fetcher,
-        });
+        }).upgrade('registry-core');
 
         expect(result.changed).toBeTrue();
         expect(result.entry.version).toBe('0.2.0');
@@ -161,9 +160,9 @@ describe('saved Workbench upgrades', () => {
 
     test('refreshes a GitHub-backed snapshot from the default branch', async () => {
         const home = await temporaryDirectory('workbench-upgrade-github-');
+        const catalog = new SavedWorkbenchCatalog(home);
         const initial = remotePackage('0.1.0', 'a'.repeat(40));
-        await addRemoteToCatalog({
-            home,
+        await catalog.addRemote({
             alias: 'github-core',
             workbench: initial.workbench,
         });
@@ -204,9 +203,9 @@ describe('saved Workbench upgrades', () => {
             return new Response('not found', { status: 404 });
         };
 
-        const result = await upgradeSavedWorkbench(home, 'github-core', {
+        const result = await new SavedWorkbenchUpgrade(home, {
             fetch: fetcher,
-        });
+        }).upgrade('github-core');
 
         expect(result.changed).toBeTrue();
         expect(result.entry.version).toBe('0.2.0');
@@ -239,7 +238,7 @@ function remotePackage(version: string, revision: string) {
                 version,
                 name: 'fixture-core',
                 runner: 'opencode' as const,
-                model: 'openrouter/openai/gpt-5.6-terra',
+                model: { id: 'openai/gpt-5.6-terra' },
                 instructions: './instructions.md',
                 skills: [],
                 tools: [],
@@ -261,7 +260,8 @@ function manifest(version: string): string {
         `version: ${version}`,
         'name: fixture-core',
         'runner: opencode',
-        'model: openrouter/openai/gpt-5.6-terra',
+        'model:',
+        '  id: openai/gpt-5.6-terra',
         'instructions: ./instructions.md',
         'skills: []',
         'tools: []',

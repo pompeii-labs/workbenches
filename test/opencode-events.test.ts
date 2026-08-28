@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { OpenCodeEventAdapter } from '../src/opencode-events.js';
+import { OpenCodeEventAdapter } from '../src/runners/opencode/events.js';
 
 describe('OpenCode event adapter', () => {
     test('normalizes text and terminal usage without retaining provider metadata', () => {

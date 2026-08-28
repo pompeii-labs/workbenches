@@ -1,20 +1,23 @@
 import { defineCommand } from 'citty';
 
-import { currentAccount, deleteAccount, registryRequest } from '../account.js';
+import { RegistryAccountStore } from '../registry/index.js';
 
 export const logoutCommand = defineCommand({
     meta: { name: 'logout', description: 'Disconnect the CLI from workbenches.dev.' },
     async run() {
-        const account = await currentAccount();
+        const accounts = new RegistryAccountStore();
+        const account = await accounts.current();
         if (!account) {
             console.log('Not signed in');
             return;
         }
-        await registryRequest(`/v1/tokens/${account.tokenId}`, {
-            method: 'DELETE',
-            token: account.token,
-        }).catch(() => undefined);
-        await deleteAccount();
+        await accounts.client
+            .request(`/v1/tokens/${account.tokenId}`, {
+                method: 'DELETE',
+                token: account.token,
+            })
+            .catch(() => undefined);
+        await accounts.remove();
         console.log('Signed out');
     },
 });

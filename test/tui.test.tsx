@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { testRender } from '@opentui/solid';
 
-import type { CatalogEntry } from '../src/catalog.js';
+import type { CatalogEntry } from '../src/catalog/index.js';
 import { Transcript, WorkbenchApp } from '../src/tui/app.js';
+import { holdRendererUntilShutdown } from '../src/tui/lifecycle.js';
+import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
 const renderers: Array<{ destroy(): void }> = [];
 
@@ -11,6 +13,43 @@ afterEach(() => {
 });
 
 describe.serial('Workbench TUI', () => {
+    test('holds the CLI lifecycle until the renderer shuts down', async () => {
+        let finish: () => void = () => {};
+        const shutdown = new Promise<void>((resolve) => {
+            finish = resolve;
+        });
+        let settled = false;
+        const lifecycle = holdRendererUntilShutdown({
+            mount: async () => {},
+            shutdown,
+            destroy: () => finish(),
+        }).then(() => {
+            settled = true;
+        });
+
+        await Bun.sleep(0);
+        expect(settled).toBe(false);
+        finish();
+        await lifecycle;
+        expect(settled).toBe(true);
+    });
+
+    test('shuts the renderer down when mounting fails', async () => {
+        let destroyed = false;
+        await expect(
+            holdRendererUntilShutdown({
+                mount: async () => {
+                    throw new Error('mount failed');
+                },
+                shutdown: Promise.resolve(),
+                destroy: () => {
+                    destroyed = true;
+                },
+            })
+        ).rejects.toThrow('mount failed');
+        expect(destroyed).toBe(true);
+    });
+
     test('renders the premium home with saved Workbench details', async () => {
         const setup = await testRender(
             () => (
@@ -39,6 +78,32 @@ describe.serial('Workbench TUI', () => {
         expect(initial).toContain('↑↓ navigate · enter open · esc quit');
     });
 
+    test('renders the canonical model label in an interactive session header', async () => {
+        const setup = await testRender(
+            () => (
+                <WorkbenchApp
+                    entries={[]}
+                    initial={{
+                        alias: 'pi-smoke',
+                        resolved: resolvedWorkbench('pi-smoke', 'pi'),
+                    }}
+                    resolve={async () => {
+                        throw new Error('not opened in this test');
+                    }}
+                    start={async () => {
+                        throw new Error('not started in this test');
+                    }}
+                />
+            ),
+            { width: 100, height: 28 }
+        );
+        renderers.push(setup.renderer);
+        await setup.flush();
+
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain('pi · openai/gpt-5.4-mini · local');
+    });
+
     test('renders streamed assistant Markdown as rich TUI content', async () => {
         const setup = await testRender(
             () => (
@@ -56,11 +121,16 @@ describe.serial('Workbench TUI', () => {
             { width: 100, height: 32 }
         );
         renderers.push(setup.renderer);
-        await setup.flush();
-        await Bun.sleep(250);
-        await setup.flush();
-
-        const frame = setup.captureCharFrame();
+        let frame = setup.captureCharFrame();
+        for (
+            let attempt = 0;
+            attempt < 200 && !frame.includes('Findings');
+            attempt += 1
+        ) {
+            await Bun.sleep(10);
+            await setup.renderOnce();
+            frame = setup.captureCharFrame();
+        }
         expect(frame).toContain('Findings');
         expect(frame).toContain('This is important.');
         expect(frame).toContain('Checked');
@@ -121,5 +191,32 @@ function entry(alias: string): CatalogEntry {
         packagePath: `/tmp/${alias}`,
         addedAt: '2026-08-18T00:00:00.000Z',
         revision: '0123456789abcdef',
+    };
+}
+
+function resolvedWorkbench(name: string, runner: string): ResolvedWorkbenchReference {
+    return {
+        workspaceDirectory: '/tmp/workspace',
+        cleanup: async () => {},
+        workbench: {
+            manifestPath: `/tmp/${name}/workbench.yml`,
+            packageDirectory: `/tmp/${name}`,
+            repositoryDirectory: '/tmp',
+            instructionsPath: `/tmp/${name}/instructions.md`,
+            skills: [],
+            manifest: {
+                spec: 0,
+                version: '0.1.0',
+                name,
+                runner,
+                model: { id: 'openai/gpt-5.4-mini' },
+                instructions: './instructions.md',
+                skills: [],
+                tools: [],
+                mcps: [],
+                env: {},
+                runtime: 'local',
+            },
+        },
     };
 }

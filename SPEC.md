@@ -38,7 +38,8 @@ name: project-core
 description: Work on the project using its maintainers' own practices.
 
 runner: opencode
-model: openrouter/openai/gpt-5.6-terra
+model:
+  id: openai/gpt-5.6-terra
 
 instructions: ./instructions.md
 skills:
@@ -72,18 +73,84 @@ runtime: local
 The Workbench chooses its runner, model, and runtime. A consuming host either
 supports that recipe or reports that it cannot run it.
 
-`spec` is the integer Workbench schema version. A released spec parser is
-immutable: engines select the matching parser, normalize its output into the
-current internal representation, and retain old parsers for backward
-compatibility. Unknown future specs fail without guessing. `version` is the
-Workbench author's semantic release version; source revisions and content
-digests remain the authority for reproducibility.
+## Runner, model, and authentication
+
+The Workbench author locks the runner and model policy. A person starting a run
+cannot replace the runner, model, allowed provider routes, or packaged native
+runner configuration. This keeps a published Workbench equivalent to the
+configuration its maintainer tested.
+
+A model object identifies a model independently from the service used to reach
+it:
+
+```yaml
+runner: opencode
+model:
+  id: openai/gpt-5.6-terra
+```
+
+The identifier uses `lab/model`, where `lab` identifies the organization that
+defines the model. It is not a provider selection. An engine resolves the model
+through verified model metadata and chooses the first route for which the
+selected runner has compatible credentials. The engine may update that metadata
+independently of the Workbench package, but the metadata version used for a run
+is part of the resolved runner configuration.
+
+An author can restrict or order the allowed providers:
+
+```yaml
+model:
+  id: openai/gpt-5.6-terra
+  routes:
+    - provider: openai
+    - provider: openrouter
+```
+
+Routes must serve the same model identity. They are not fallbacks to different
+models. A route can include a provider-native model identifier when it differs
+from the catalog or when the model is absent from the catalog:
+
+```yaml
+model:
+  id: private-lab/review-model
+  routes:
+    - provider: internal-gateway
+      model: deployment-42
+runner_config: ./runner
+```
+
+An unknown model requires explicit native model identifiers for every route and
+a packaged `runner_config`. `runner_config` is a package-relative file or
+directory interpreted only by the selected runner adapter. Pi requires a
+directory. The path must remain inside the Workbench package and cannot contain
+symbolic links, credential files, or literal credential values. Configuration
+can name environment bindings declared by the manifest, but values are supplied
+only when the Workbench runs.
+
+A Workbench package never owns a person's runner credentials. Engines verify
+that at least one allowed route is ready before sending a model request. When a
+runner exposes a documented command-line authentication operation, an engine
+can offer it as part of connection setup. An engine must never inject login
+commands or simulated user input into an interactive runner conversation. When
+no command-line operation exists, the person configures the runner separately
+or supplies a declared environment credential when the Workbench runs. Local
+runtimes use the runner's normal local credential store. Isolated runtimes can
+mount a private, persistent credential store only when it can be populated
+through a supported command-line flow. Engines must not parse, copy into
+package state, upload, or print provider token contents.
+
+`spec` is the integer Workbench schema version. Draft 0 is an unreleased format
+and can change while the standard remains in pre-release development. Once a
+spec is released, its parser becomes immutable: engines select the matching
+parser, normalize its output into the current internal representation, and
+retain old parsers for backward compatibility. Unknown future specs fail
+without guessing. `version` is the Workbench author's semantic release version;
+source revisions and content digests remain the authority for reproducibility.
 
 The published machine-readable schema for this draft is
-[`schemas/v0/workbench.schema.json`](schemas/v0/workbench.schema.json). The
-reference engine dispatches to a dedicated spec-0 parser before producing its
-canonical internal model. Future parsers are added alongside it rather than
-changing spec-0 interpretation.
+[`schemas/v0/workbench.schema.json`](schemas/v0/workbench.schema.json). Future
+released parsers are added alongside older released parsers rather than changing
+their interpretation.
 
 Environment values never appear in the manifest. The person or host starting a
 run supplies them.

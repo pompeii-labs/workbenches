@@ -6,12 +6,14 @@ import packageMetadata from '../package.json' with { type: 'json' };
 import { addCommand } from './commands/add.js';
 import { attachCommand } from './commands/attach.js';
 import { buildCommand } from './commands/build.js';
+import { connectCommand } from './commands/connect.js';
 import { imageCommand } from './commands/image.js';
 import { initCommand } from './commands/init.js';
 import { killCommand } from './commands/kill.js';
 import { listCommand } from './commands/list.js';
 import { loginCommand } from './commands/login.js';
 import { logoutCommand } from './commands/logout.js';
+import { psCommand } from './commands/ps.js';
 import { publishCommand } from './commands/publish.js';
 import { removeCommand } from './commands/remove.js';
 import { runCommand } from './commands/run.js';
@@ -22,9 +24,11 @@ import { upgradeCommand } from './commands/upgrade.js';
 import { validateCommand } from './commands/validate.js';
 import { viewCommand } from './commands/view.js';
 import { whoamiCommand } from './commands/whoami.js';
-import { setRegistryApiUrl } from './registry.js';
+import { ModelCatalog } from './models/catalog.js';
+import { RegistryClient } from './registry/index.js';
+import { RunWorker } from './runs/index.js';
+import { workbenchHome } from './storage.js';
 import { launchWorkbenchTui } from './tui.js';
-import { executeDetachedStoredRun } from './worker.js';
 
 const bareInvocation = import.meta.main && process.argv.length === 2;
 
@@ -52,7 +56,9 @@ export const workbenchCommand = defineCommand({
         logout: logoutCommand,
         whoami: whoamiCommand,
         publish: publishCommand,
+        ps: psCommand,
         build: buildCommand,
+        connect: connectCommand,
         add: addCommand,
         remove: removeCommand,
         run: runCommand,
@@ -66,7 +72,8 @@ if (import.meta.main) {
         const home = process.argv[3];
         const id = process.argv[4];
         if (!home || !id) process.exit(2);
-        process.exit(await executeDetachedStoredRun({ home, id }));
+        await new ModelCatalog({ home }).loadCached();
+        process.exit(await new RunWorker(home).executeDetached(id));
     }
     const defaultConsoleError = console.error;
     console.error = (value?: unknown, ...optional: unknown[]) => {
@@ -78,11 +85,21 @@ if (import.meta.main) {
     };
     try {
         const invocation = extractApiUrl(process.argv.slice(2));
-        setRegistryApiUrl(invocation.apiUrl);
+        RegistryClient.configureApiUrl(invocation.apiUrl);
+        if (usesModelCatalog(invocation.args, bareInvocation)) {
+            await new ModelCatalog({ home: workbenchHome() }).refresh();
+        }
         await runMain(workbenchCommand, { rawArgs: invocation.args });
     } finally {
         console.error = defaultConsoleError;
     }
+}
+
+function usesModelCatalog(args: string[], bare: boolean): boolean {
+    if (bare) return true;
+    return new Set(['build', 'connect', 'init', 'run', 'smoke', 'view']).has(
+        args[0] ?? ''
+    );
 }
 
 export function extractApiUrl(args: string[]): {

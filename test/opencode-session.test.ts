@@ -1,8 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-
-import type { WorkbenchEventDraft } from '../src/execution.js';
-import { OpenCodeSessionAdapter } from '../src/opencode-session.js';
-import type { RunnerPermissionRequest } from '../src/runner-session.js';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ModelRouter } from '../src/models/index.js';
+import { OpenCodeSessionAdapter } from '../src/runners/opencode/session.js';
+import type { RunnerPermissionRequest } from '../src/runners/session.js';
+import type { WorkbenchEventDraft } from '../src/runs/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import {
     RUNNER_CONFORMANCE_UNSAFE_VALUES,
@@ -23,6 +26,81 @@ runnerAdapterContract({
 });
 
 describe('OpenCode interactive server adapter', () => {
+    test('stages a packaged config directory without treating it as a config file', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'opencode-config-test-'));
+        const config = join(directory, 'runner');
+        await mkdir(config);
+        const fixture = workbench();
+        fixture.manifest = {
+            ...fixture.manifest,
+            spec: 0,
+            model: { id: 'openai/gpt-5.6-terra' },
+            runner_config: './runner',
+        };
+        fixture.runnerConfigPath = config;
+        const server = new FakeOpenCodeServer();
+        try {
+            const session = await server.adapter().start({
+                workbench: fixture,
+                workspaceDirectory: '/workspace',
+                environment: {},
+                configuration: new ModelRouter().resolve({
+                    workbench: fixture,
+                }),
+                host: {
+                    emit: async () => {},
+                    requestPermission: async () => 'reject',
+                },
+            });
+            expect(server.spawnEnvironment.OPENCODE_CONFIG).toBeUndefined();
+            expect(server.spawnEnvironment.OPENCODE_CONFIG_DIR).toContain(
+                'workbench-opencode-'
+            );
+            await session.close();
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
+    test('translates structured image input to native file parts', async () => {
+        const server = new FakeOpenCodeServer();
+        const events: WorkbenchEventDraft[] = [];
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async (event) => void events.push(event),
+                requestPermission: async () => 'reject',
+            },
+        });
+        server.onPrompt = () => server.completeTurn('described');
+
+        await session.prompt({
+            text: 'describe this',
+            images: [
+                {
+                    data: 'aW1hZ2UtYnl0ZXM=',
+                    mimeType: 'image/png',
+                    name: 'screen.png',
+                },
+            ],
+        });
+        await session.close();
+
+        expect(server.promptBodies[0]?.parts).toEqual([
+            { type: 'text', text: 'describe this' },
+            {
+                type: 'file',
+                mime: 'image/png',
+                url: 'data:image/png;base64,aW1hZ2UtYnl0ZXM=',
+                filename: 'screen.png',
+            },
+        ]);
+        expect(JSON.stringify(events)).not.toContain('aW1hZ2UtYnl0ZXM=');
+    });
+
     test('keeps context in one native server session across streamed turns', async () => {
         const server = new FakeOpenCodeServer();
         const events: WorkbenchEventDraft[] = [];
@@ -31,6 +109,7 @@ describe('OpenCode interactive server adapter', () => {
             workbench: workbench(),
             workspaceDirectory: '/workspace',
             environment: {},
+            configuration: configuration(),
             host: {
                 emit: async (event) => void events.push(event),
                 requestPermission: async () => 'reject',
@@ -93,6 +172,7 @@ describe('OpenCode interactive server adapter', () => {
             workbench: workbench(),
             workspaceDirectory: '/workspace',
             environment: {},
+            configuration: configuration(),
             host: {
                 emit: async (event) => void events.push(event),
                 requestPermission: async (request) => {
@@ -152,6 +232,7 @@ describe('OpenCode interactive server adapter', () => {
             workbench: workbench(),
             workspaceDirectory: '/workspace',
             environment: {},
+            configuration: configuration(),
             host: {
                 emit: async () => {},
                 requestPermission: async () => {
@@ -187,6 +268,7 @@ describe('OpenCode interactive server adapter', () => {
             workbench: workbench(),
             workspaceDirectory: '/workspace',
             environment: {},
+            configuration: configuration(),
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'allow_once',
@@ -213,6 +295,7 @@ describe('OpenCode interactive server adapter', () => {
             workbench: workbench(),
             workspaceDirectory: '/workspace',
             environment: {},
+            configuration: configuration(),
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
@@ -241,6 +324,7 @@ describe('OpenCode interactive server adapter', () => {
             workbench: workbench(),
             workspaceDirectory: '/workspace',
             environment: {},
+            configuration: configuration(),
             host: {
                 emit: async () => {},
                 requestPermission: () => {
@@ -265,6 +349,27 @@ describe('OpenCode interactive server adapter', () => {
         await expect(turn).resolves.toEqual({ reason: 'cancelled' });
         expect(server.permissionReplies).toEqual([]);
     });
+
+    test('rejects a later turn when the event stream failed while idle', async () => {
+        const server = new FakeOpenCodeServer();
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject',
+            },
+        });
+
+        server.failEventStream();
+        await Bun.sleep(0);
+        await expect(session.prompt('after failure')).rejects.toThrow(
+            'OpenCode event stream failed'
+        );
+        await session.close();
+    });
 });
 
 class FakeOpenCodeServer {
@@ -274,6 +379,7 @@ class FakeOpenCodeServer {
     aborts = 0;
     kills = 0;
     permissionReplyStatus = 200;
+    spawnEnvironment: Record<string, string | undefined> = {};
     onPrompt?: (body: Record<string, unknown>) => void;
     onPermissionReply?: (body: Record<string, unknown>) => void;
     private eventController?: ReadableStreamDefaultController<Uint8Array>;
@@ -284,7 +390,10 @@ class FakeOpenCodeServer {
     adapter() {
         return new OpenCodeSessionAdapter({
             password: () => 'test-password',
-            spawn: () => this.process(),
+            spawn: (_command, options) => {
+                this.spawnEnvironment = options.env;
+                return this.process();
+            },
             fetch: (input, init) => this.fetch(input, init),
             startupTimeoutMs: 100,
         });
@@ -372,6 +481,10 @@ class FakeOpenCodeServer {
             this.onPrompt = (body) => this.completeTurn(String(firstPartText(body)));
             return;
         }
+        if (scenario === 'image_input') {
+            this.onPrompt = () => this.completeTurn('image received');
+            return;
+        }
         if (scenario === 'cancellation') {
             this.onPrompt = () =>
                 this.emit('session.status', { status: { type: 'busy' } });
@@ -407,6 +520,10 @@ class FakeOpenCodeServer {
                 })}\n\n`
             )
         );
+    }
+
+    failEventStream() {
+        this.eventController?.error(new Error('native stream failure'));
     }
 
     completeTurn(text: string) {
@@ -506,7 +623,13 @@ class FakeOpenCodeServer {
             const stream = new ReadableStream<Uint8Array>({
                 start: (controller) => {
                     this.eventController = controller;
-                    init.signal?.addEventListener('abort', () => controller.close());
+                    init.signal?.addEventListener('abort', () => {
+                        try {
+                            controller.close();
+                        } catch {
+                            // The failure test has already errored this stream.
+                        }
+                    });
                 },
             });
             return new Response(stream, { status: 200 });
@@ -593,7 +716,7 @@ function workbench(): ResolvedWorkbench {
             version: '0.1.0',
             name: 'fixture-core',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-terra',
+            model: { id: 'openai/gpt-5.6-terra' },
             instructions: './instructions.md',
             skills: [],
             tools: [],
@@ -602,4 +725,8 @@ function workbench(): ResolvedWorkbench {
             runtime: 'local',
         },
     };
+}
+
+function configuration() {
+    return new ModelRouter().resolve({ workbench: workbench() });
 }

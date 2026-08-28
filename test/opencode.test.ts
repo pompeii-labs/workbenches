@@ -5,7 +5,7 @@ import {
     buildOpenCodeServerInvocation,
     buildOpenCodeSessionInvocation,
     publicInvocation,
-} from '../src/opencode.js';
+} from '../src/runners/opencode/invocation.js';
 import type { ResolvedWorkbench, WorkbenchManifest } from '../src/types.js';
 
 describe('OpenCode adapter translation', () => {
@@ -85,7 +85,7 @@ describe('OpenCode adapter translation', () => {
 
         expect(visible.cwd).toBe('/repo');
         expect(visible.opencode_config).toMatchObject({
-            model: 'openrouter/openai/gpt-5.6-terra',
+            model: 'openai/gpt-5.6-terra',
             instructions: ['.workbenches/core/instructions.md'],
         });
         expect(visible.command.at(-1)).toBe('do work');
@@ -93,18 +93,40 @@ describe('OpenCode adapter translation', () => {
         expect(visible.command).not.toContain('/repo/.workbenches/core/workbench.yml');
     });
 
-    test('isolates project config and disables OpenCode sharing and updates', () => {
+    test('preserves project config while enforcing Workbench safety settings', () => {
         const invocation = buildOpenCodeInvocation(workbench(), 'task', {});
         const visible = publicInvocation(invocation);
 
-        expect(invocation.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe('true');
+        expect(invocation.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBeUndefined();
         expect(visible.opencode_config).toMatchObject({
             autoupdate: false,
             share: 'disabled',
         });
-        expect(visible.command).toContain('--pure');
+        expect(visible.command).not.toContain('--pure');
         expect(visible.command).toContain('--format');
         expect(visible.command).toContain('json');
+    });
+
+    test('applies the locked model route and packaged config without changing the manifest', () => {
+        const invocation = buildOpenCodeInvocation(
+            workbench(),
+            'task',
+            {},
+            undefined,
+            '/workspace',
+            'openai/gpt-5.6-terra',
+            '/configs/openai.json'
+        );
+        const visible = publicInvocation(invocation);
+
+        expect(invocation.command).toContain('openai/gpt-5.6-terra');
+        expect(invocation.env.OPENCODE_CONFIG).toBe('/configs/openai.json');
+        expect(visible.opencode_config).toMatchObject({
+            model: 'openai/gpt-5.6-terra',
+        });
+        expect(workbench().manifest.model).toEqual({
+            id: 'openai/gpt-5.6-terra',
+        });
     });
 
     test('resumes a native OpenCode session without changing Workbench config', () => {
@@ -125,7 +147,7 @@ describe('OpenCode adapter translation', () => {
         expect(
             JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT ?? '{}')
         ).toMatchObject({
-            model: 'openrouter/openai/gpt-5.6-terra',
+            model: 'openai/gpt-5.6-terra',
             instructions: ['/repo/.workbenches/core/instructions.md'],
         });
     });
@@ -147,7 +169,6 @@ describe('OpenCode adapter translation', () => {
         expect(invocation.command).toEqual([
             'opencode',
             'serve',
-            '--pure',
             '--hostname',
             '127.0.0.1',
             '--port',
@@ -162,7 +183,7 @@ describe('OpenCode adapter translation', () => {
 });
 
 function workbench(
-    overrides: Partial<WorkbenchManifest> = {},
+    overrides: Partial<Extract<WorkbenchManifest, { spec: 0 }>> = {},
     withSkill = false
 ): ResolvedWorkbench {
     const manifest: WorkbenchManifest = {
@@ -170,7 +191,7 @@ function workbench(
         version: '0.1.0',
         name: 'fixture-core',
         runner: 'opencode',
-        model: 'openrouter/openai/gpt-5.6-terra',
+        model: { id: 'openai/gpt-5.6-terra' },
         instructions: './instructions.md',
         skills: withSkill ? ['./skills/migrations'] : [],
         tools: [],

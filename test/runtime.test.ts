@@ -1,12 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-    createRuntimeProviderRegistry,
     LocalRuntimeProvider,
     RuntimeError,
-    RuntimeProviderRegistry,
-    smokeWorkbenchRuntime,
-} from '../src/runtime.js';
+    RuntimeRegistry,
+    RuntimeSmoke,
+} from '../src/runtimes/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { runtimeProviderContract } from './runtime-provider-contract.js';
 
@@ -61,17 +60,62 @@ describe('local runtime provider contract', () => {
         await runtime.cleanup();
     });
 
+    test('executes captured commands and hands interactive commands to the terminal', async () => {
+        let interactiveCommand: string[] = [];
+        let interactiveOptions: Record<string, unknown> = {};
+        const provider = new LocalRuntimeProvider({
+            findExecutable: (name) => `/bin/${name}`,
+            spawn: () => ({
+                exited: Promise.resolve(7),
+                stdout: new Blob(['runner output']).stream(),
+                stderr: new Blob(['runner warning']).stream(),
+            }),
+            interact: async (command, options) => {
+                interactiveCommand = command;
+                interactiveOptions = options;
+                return 4;
+            },
+        });
+        const runtime = await new RuntimeRegistry([provider])
+            .resolve('local')
+            .prepare(request);
+        const invocation = {
+            command: ['opencode', 'auth', 'login'],
+            cwd: '/workspace',
+            env: { PATH: '/bin' },
+        };
+
+        await expect(runtime.execute(invocation)).resolves.toEqual({
+            code: 7,
+            stdout: 'runner output',
+            stderr: 'runner warning',
+        });
+        await expect(runtime.interact(invocation)).resolves.toBe(4);
+        expect(interactiveCommand).toEqual(invocation.command);
+        expect(interactiveOptions).toMatchObject({
+            cwd: '/workspace',
+            stdin: 'inherit',
+            stdout: 'inherit',
+            stderr: 'inherit',
+        });
+
+        await runtime.cleanup();
+        await expect(runtime.execute(invocation)).rejects.toThrow(
+            'Runtime has already been cleaned up'
+        );
+    });
+
     test('smokes through the selected provider and rejects local images', async () => {
-        const registry = createRuntimeProviderRegistry({
+        const registry = RuntimeRegistry.standard({
             findExecutable: (name) => `/bin/${name}`,
         });
         await expect(
-            smokeWorkbenchRuntime({
+            new RuntimeSmoke({
                 workbench: fixture,
                 workspaceDirectory: '/target',
-                environment: {},
+                environment: { OPENROUTER_API_KEY: 'fixture-openrouter-key' },
                 registry,
-            })
+            }).check()
         ).resolves.toMatchObject({
             runner: { name: 'opencode', path: '/bin/opencode' },
         });
@@ -102,17 +146,17 @@ describe('local runtime provider contract', () => {
 describe('runtime provider registry', () => {
     test('rejects duplicate, blank, and unsupported providers', () => {
         const local = new LocalRuntimeProvider();
-        expect(() => new RuntimeProviderRegistry([local, local])).toThrow(
+        expect(() => new RuntimeRegistry([local, local])).toThrow(
             'Duplicate runtime provider: local'
         );
         expect(
             () =>
-                new RuntimeProviderRegistry([
+                new RuntimeRegistry([
                     { name: ' ', prepare: async () => Promise.reject() },
                 ])
         ).toThrow('Runtime provider name must not be empty');
 
-        const registry = new RuntimeProviderRegistry([local]);
+        const registry = new RuntimeRegistry([local]);
         expect(() => registry.resolve('docker')).toThrow('Unsupported runtime: docker');
         try {
             registry.resolve('docker');
@@ -135,7 +179,7 @@ function workbench(): ResolvedWorkbench {
             version: '0.1.0',
             name: 'fixture-core',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-terra',
+            model: { id: 'openai/gpt-5.6-terra' },
             instructions: './instructions.md',
             skills: [],
             tools: [],

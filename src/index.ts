@@ -1,22 +1,179 @@
-export * from './catalog.js';
-export * from './docker.js';
-export * from './execution.js';
-export * from './github.js';
-export * from './interactive.js';
-export * from './manifest.js';
-export * from './opencode.js';
-export * from './opencode-events.js';
-export * from './opencode-session.js';
-export * from './preflight.js';
-export * from './references.js';
-export * from './render.js';
-export * from './run.js';
-export * from './run-store.js';
-export * from './runner-session.js';
-export * from './self-update.js';
-export * from './source.js';
-export * from './storage.js';
-export * from './types.js';
-export * from './upgrade.js';
-export * from './view.js';
-export * from './worker.js';
+export {
+    type CatalogEntry,
+    type CatalogRegistryReference,
+    type CatalogUpgrade,
+    type CatalogUpgradeResult,
+    SavedWorkbenchCatalog,
+    SavedWorkbenchUpgrade,
+    type SavedWorkbenchUpgradeOptions,
+    type SnapshotFile,
+    WorkbenchPackage,
+} from './catalog/index.js';
+export {
+    ConnectionInspector,
+    ConnectionManager,
+    ConnectionStore,
+    type RunnerAuthenticationStatus,
+    type RunnerConnectionContext,
+    type RunnerConnectionSelection,
+} from './connections/index.js';
+export {
+    type AuthenticatedModelRoute,
+    connectCommand,
+    ModelCatalog,
+    type ModelCatalogData,
+    type ModelCatalogFetch,
+    type ModelCatalogModel,
+    type ModelCatalogProvider,
+    type ModelCatalogResult,
+    type ModelCatalogSnapshot,
+    type ModelRoute,
+    ModelRouter,
+    modelLabel,
+    type ResolvedRunnerConfiguration,
+    type ResolveModelRouteOptions,
+} from './models/index.js';
+export {
+    RegistryClient,
+    type RegistryClientOptions,
+    type RegistryPackage,
+    type RegistryReference,
+} from './registry/index.js';
+export {
+    type CliRelease,
+    type CliReleaseAsset,
+    CliUpdater,
+    type CliUpdaterOptions,
+    ReleaseTarget,
+    SemanticVersion,
+} from './releases/index.js';
+export {
+    createEventRenderer,
+    type EventRenderer,
+    type EventRendererOptions,
+    type OutputMode,
+} from './rendering/index.js';
+export {
+    type NormalizedRunnerInput,
+    normalizeRunnerInput,
+    OPENCODE_SESSION_DECLARATION,
+    OpenCodeRunner,
+    OpenCodeSessionAdapter,
+    type OpenCodeSessionDependencies,
+    PI_SESSION_DECLARATION,
+    PiRunner,
+    PiSessionAdapter,
+    type PiSessionDependencies,
+    type PreparedRunner,
+    RUNNER_CAPABILITIES,
+    Runner,
+    type RunnerAdapterDeclaration,
+    type RunnerCapability,
+    type RunnerCapabilityStatus,
+    type RunnerCapabilitySupport,
+    type RunnerEventNormalizer,
+    type RunnerImageInput,
+    type RunnerInput,
+    type RunnerPermissionDecision,
+    type RunnerPermissionRequest,
+    type RunnerPromptInput,
+    RunnerRegistry,
+    type RunnerSession,
+    type RunnerSessionAdapter,
+    type RunnerSessionHost,
+    type RunnerSessionStartOptions,
+    type RunnerSummary,
+    type RunnerTurnResult,
+    type VerifiedRunnerSurface,
+} from './runners/index.js';
+export {
+    type CreateStoredRunOptions,
+    type DispatchRunOptions,
+    type ExecuteStoredRunOptions,
+    InteractiveRun,
+    type InteractiveRunDependencies,
+    type InteractiveRunOptions,
+    type InteractiveRunSession,
+    ManagedRun,
+    type PrepareRunOptions,
+    RunDispatcher,
+    RunEvents,
+    type RunEventsOptions,
+    type RunHandle,
+    type RunRequest,
+    type RunResult,
+    type RunStatus,
+    RunStore,
+    RunWorker,
+    type StoredRun,
+    type StoredRunRequest,
+    type StoredRunStatus,
+    WORKBENCH_EVENT_TYPES,
+    type WorkbenchEvent,
+    type WorkbenchEventDraft,
+    type WorkbenchEventType,
+    WorkbenchRun,
+    type WorkbenchRunDependencies,
+    type WorkbenchRunOptions,
+} from './runs/index.js';
+export {
+    type DockerCommandResult,
+    type DockerPreparation,
+    type DockerRuntimeDependencies,
+    DockerRuntimeProvider,
+    LocalRuntime,
+    LocalRuntimeProvider,
+    type PreparedRuntime,
+    type RuntimeAsset,
+    type RuntimeCommandOptions,
+    type RuntimeCommandResult,
+    type RuntimeDependencies,
+    RuntimeError,
+    type RuntimePreparation,
+    type RuntimePrepareRequest,
+    type RuntimeProvider,
+    RuntimeRegistry,
+    RuntimeSmoke,
+} from './runtimes/index.js';
+export {
+    type GitHubInspectionOptions,
+    type GitHubRepository,
+    type GitHubSourceOptions,
+    GitHubWorkbenchSource,
+    type RemotePackageFile,
+    type RemoteWorkbenchPackage,
+    type RemoteWorkbenchSummary,
+} from './sources/index.js';
+export { workbenchHome } from './storage.js';
+export type {
+    ResolvedWorkbench,
+    ResolvedWorkbenchSkill,
+    RunnerInvocation,
+    SpawnedRunner,
+    WorkbenchDockerConfiguration,
+    WorkbenchEnvRequirement,
+    WorkbenchImageBuild,
+    WorkbenchManifest,
+    WorkbenchMcp,
+    WorkbenchModelPolicy,
+    WorkbenchModelRoute,
+    WorkbenchWorkspaceBinding,
+    WorkbenchWorkspaceRequirement,
+} from './types.js';
+export {
+    type PreflightResult,
+    type ResolvedWorkbenchReference,
+    RunnerConfiguration,
+    Workbench,
+    WorkbenchEnvironment,
+    WorkbenchInspection,
+    WorkbenchInspector,
+    WorkbenchManifestParser,
+    type WorkbenchOrigin,
+    WorkbenchPreflight,
+    type WorkbenchReference,
+    WorkbenchResolver,
+    WorkbenchSource,
+    type WorkbenchView,
+    WorkbenchWorkspaces,
+} from './workbench/index.js';

@@ -1,7 +1,7 @@
 import { defineCommand } from 'citty';
 
-import { createEventRenderer } from '../render.js';
-import { followRunEvents, latestStoredRun, readStoredRun } from '../run-store.js';
+import { createEventRenderer } from '../rendering/index.js';
+import { RunStore } from '../runs/index.js';
 import { workbenchHome } from '../storage.js';
 
 export const attachCommand = defineCommand({
@@ -36,21 +36,20 @@ export const attachCommand = defineCommand({
             throw new Error('--json and --final cannot be used together');
         }
         const home = workbenchHome();
-        const initial = args.run
-            ? await readStoredRun(home, args.run)
-            : await latestStoredRun(home);
+        const store = new RunStore(home);
+        const initial = args.run ? await store.read(args.run) : await store.latest();
         const renderer = createEventRenderer({
             mode: args.json ? 'json' : args.final ? 'final' : 'human',
             ...(args.color === undefined ? {} : { color: args.color }),
         });
         try {
-            for await (const event of followRunEvents(home, initial.id)) {
+            for await (const event of store.follow(initial.id)) {
                 renderer.render(event);
             }
         } finally {
             renderer.finish();
         }
-        const completed = await readStoredRun(home, initial.id);
+        const completed = await store.read(initial.id);
         if (completed.status === 'failed') process.exitCode = completed.exit_code ?? 1;
         if (completed.status === 'cancelled') process.exitCode = 130;
     },

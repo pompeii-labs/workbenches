@@ -3,18 +3,12 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-    currentAccount,
-    deleteAccount,
-    registryRequest,
-    saveAccount,
-} from '../src/account.js';
-import { setRegistryApiUrl } from '../src/registry.js';
+import { RegistryAccountStore, RegistryClient } from '../src/registry/index.js';
 
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
-    setRegistryApiUrl(undefined);
+    RegistryClient.configureApiUrl(undefined);
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -32,40 +26,44 @@ describe('CLI registry account', () => {
             email: 'person@example.com',
             expiresAt: '2027-08-21T00:00:00.000Z',
         };
-        setRegistryApiUrl(account.url);
+        RegistryClient.configureApiUrl(account.url);
+        const accounts = new RegistryAccountStore({
+            home,
+            client: new RegistryClient(),
+        });
 
-        await saveAccount(account, home);
+        await accounts.save(account);
 
-        expect(await currentAccount(home)).toEqual(account);
+        expect(await accounts.current()).toEqual(account);
         expect((await stat(join(home, 'credentials.json'))).mode & 0o777).toBe(0o600);
-        await deleteAccount(home);
-        expect(await currentAccount(home)).toBeUndefined();
+        await accounts.remove();
+        expect(await accounts.current()).toBeUndefined();
     });
 
     test('sends bearer credentials and surfaces safe API errors', async () => {
-        setRegistryApiUrl('https://registry.example');
+        RegistryClient.configureApiUrl('https://registry.example');
         const requests: RequestInit[] = [];
-        const value = await registryRequest<{ ok: boolean }>('/v1/profile', {
-            token: `wb_${'a'.repeat(64)}`,
-            fetcher: async (_input, init) => {
+        const client = new RegistryClient({
+            fetch: async (_input, init) => {
                 requests.push(init ?? {});
                 return Response.json({ ok: true });
             },
+        });
+        const value = await client.request<{ ok: boolean }>('/v1/profile', {
+            token: `wb_${'a'.repeat(64)}`,
         });
         expect(value).toEqual({ ok: true });
         expect(new Headers(requests[0]?.headers).get('authorization')).toBe(
             `Bearer wb_${'a'.repeat(64)}`
         );
 
-        await expect(
-            registryRequest('/v1/profile', {
-                fetcher: async () =>
-                    Response.json(
-                        { error: { message: 'Sign in again' } },
-                        { status: 401 }
-                    ),
-            })
-        ).rejects.toThrow('Sign in again');
+        const unauthorized = new RegistryClient({
+            fetch: async () =>
+                Response.json({ error: { message: 'Sign in again' } }, { status: 401 }),
+        });
+        await expect(unauthorized.request('/v1/profile')).rejects.toThrow(
+            'Sign in again'
+        );
     });
 });
 

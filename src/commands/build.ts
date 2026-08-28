@@ -1,7 +1,7 @@
 import { defineCommand } from 'citty';
 
-import { resolveReference } from '../references.js';
-import { createRuntimeProviderRegistry } from '../runtime.js';
+import { RuntimeRegistry } from '../runtimes/index.js';
+import { WorkbenchResolver } from '../workbench/index.js';
 
 export const buildCommand = defineCommand({
     meta: {
@@ -26,7 +26,7 @@ export const buildCommand = defineCommand({
         },
     },
     async run({ args }) {
-        const resolved = await resolveReference(args.workbench, {
+        const resolved = await new WorkbenchResolver().resolve(args.workbench, {
             ...(args.dir ? { workspaceDirectory: args.dir } : {}),
         });
         const workbench = resolved.workbench;
@@ -35,7 +35,12 @@ export const buildCommand = defineCommand({
                 `Workbench runtime does not prepare an image: ${workbench.manifest.runtime}`
             );
         }
-        const runtime = await createRuntimeProviderRegistry()
+        if (!args.json) {
+            process.stderr.write(
+                `Preparing runtime image for ${workbench.manifest.name}...\n`
+            );
+        }
+        const runtime = await RuntimeRegistry.standard()
             .resolve(workbench.manifest.runtime)
             .prepare({
                 workbench,

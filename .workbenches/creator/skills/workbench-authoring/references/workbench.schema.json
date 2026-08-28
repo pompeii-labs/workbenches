@@ -13,6 +13,21 @@
         "instructions",
         "runtime"
     ],
+    "allOf": [
+        {
+            "if": {
+                "required": ["docker"],
+                "properties": {
+                    "docker": { "required": ["engine"] }
+                }
+            },
+            "then": {
+                "properties": {
+                    "runtime": { "const": "docker" }
+                }
+            }
+        }
+    ],
     "properties": {
         "spec": { "const": 0 },
         "version": {
@@ -22,7 +37,8 @@
         "name": { "type": "string", "minLength": 1 },
         "description": { "type": "string", "minLength": 1 },
         "runner": { "type": "string", "minLength": 1 },
-        "model": { "type": "string", "minLength": 1 },
+        "model": { "$ref": "#/$defs/model" },
+        "runner_config": { "type": "string", "minLength": 1 },
         "instructions": { "type": "string", "minLength": 1 },
         "skills": {
             "type": "array",
@@ -45,15 +61,54 @@
             "additionalProperties": { "$ref": "#/$defs/environment" },
             "default": {}
         },
+        "workspaces": {
+            "type": "object",
+            "propertyNames": {
+                "pattern": "^(?!primary$)[a-z0-9]+(?:-[a-z0-9]+)*$"
+            },
+            "additionalProperties": { "$ref": "#/$defs/workspace" },
+            "default": {}
+        },
         "runtime": { "type": "string", "minLength": 1 },
         "image": {
             "oneOf": [
                 { "type": "string", "minLength": 1 },
                 { "$ref": "#/$defs/imageBuild" }
             ]
+        },
+        "docker": {
+            "$ref": "#/$defs/docker"
         }
     },
     "$defs": {
+        "model": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id"],
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+                },
+                "routes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/$defs/modelRoute" }
+                }
+            }
+        },
+        "modelRoute": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider"],
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                },
+                "model": { "type": "string", "minLength": 1 }
+            }
+        },
         "imageBuild": {
             "type": "object",
             "additionalProperties": false,
@@ -68,6 +123,31 @@
             "additionalProperties": false,
             "properties": {
                 "required": { "type": "boolean", "default": true }
+            }
+        },
+        "workspace": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "required": { "type": "boolean", "default": true },
+                "access": {
+                    "enum": ["read-only", "read-write"],
+                    "default": "read-only"
+                }
+            }
+        },
+        "docker": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "engine": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["mode"],
+                    "properties": {
+                        "mode": { "const": "host" }
+                    }
+                }
             }
         },
         "mcp": {

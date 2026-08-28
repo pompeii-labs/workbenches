@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { WORKBENCH_EVENT_TYPES } from '../src/execution.js';
+import { WORKBENCH_EVENT_TYPES } from '../src/runs/index.js';
 
 interface EventSchema {
     $id: string;

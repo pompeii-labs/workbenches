@@ -1,4 +1,4 @@
-import type { WorkbenchEvent } from '../execution.js';
+import type { WorkbenchEvent } from '../runs/index.js';
 
 export type TranscriptItem =
     | { id: string; kind: 'user'; text: string }

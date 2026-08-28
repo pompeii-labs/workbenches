@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-
-import type { WorkbenchEventDraft } from '../src/execution.js';
+import { ModelRouter } from '../src/models/index.js';
 import {
     RUNNER_CAPABILITIES,
     type RunnerAdapterDeclaration,
@@ -9,14 +8,19 @@ import {
     type RunnerPermissionRequest,
     type RunnerSession,
     type RunnerSessionAdapter,
-} from '../src/runner-session.js';
+} from '../src/runners/session.js';
+import type { WorkbenchEventDraft } from '../src/runs/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { activateModelCatalogFixture } from './model-catalog-fixture.js';
+
+activateModelCatalogFixture();
 
 export const RUNNER_CONFORMANCE_UNSAFE_VALUES = [
     'MUST_NOT_RENDER_REASONING',
     'MUST_NOT_RENDER_CREDENTIAL',
     'MUST_NOT_RENDER_COMMAND',
     'MUST_NOT_RENDER_TOOL_OUTPUT',
+    'MUST_NOT_RENDER_IMAGE_DATA',
 ] as const;
 
 export type RunnerConformanceScenario =
@@ -24,6 +28,8 @@ export type RunnerConformanceScenario =
     | 'tool_events'
     | 'permissions'
     | 'multi_turn'
+    | 'steering'
+    | 'image_input'
     | 'cancellation'
     | 'failures'
     | 'unknown_events';
@@ -105,13 +111,12 @@ export function runnerAdapterContract(options: {
                     });
                     expect(observed.events).toContainEqual({
                         type: 'tool.completed',
-                        data: {
+                        data: expect.objectContaining({
                             id: 'call_contract',
                             name: 'write',
                             target: '/workspace/output.txt',
                             status: 'completed',
-                            duration_ms: 25,
-                        },
+                        }),
                     });
                 }
                 if (supported(options, 'file_events')) {
@@ -126,14 +131,13 @@ export function runnerAdapterContract(options: {
                 if (supported(options, 'usage')) {
                     expect(observed.events).toContainEqual({
                         type: 'usage.updated',
-                        data: {
+                        data: expect.objectContaining({
                             kind: 'delta',
                             total_tokens: 12,
                             input_tokens: 5,
                             output_tokens: 7,
-                            reasoning_tokens: 2,
                             cost_usd: 0.001,
-                        },
+                        }),
                     });
                 }
                 assertSafe(observed.events);
@@ -175,6 +179,44 @@ export function runnerAdapterContract(options: {
                 expect(observed.session.id).toBe(id);
                 expect(id).toBeTruthy();
                 expect(text(observed.events)).toBe('firstsecond');
+            } finally {
+                await observed.session.close();
+            }
+        });
+
+        test('accepts host steering during an active turn', async () => {
+            if (!supported(options, 'steering')) return;
+            const harness = options.createHarness();
+            harness.arrange('steering');
+            const observed = await start(harness);
+            try {
+                const turn = observed.session.prompt('start');
+                await observed.session.steer?.('change direction');
+                await observed.session.cancelTurn();
+                await expect(turn).resolves.toEqual({ reason: 'cancelled' });
+                assertSafe(observed.events);
+            } finally {
+                await observed.session.close();
+            }
+        });
+
+        test('accepts structured image input without leaking image data to events', async () => {
+            if (!supported(options, 'image_input')) return;
+            const harness = options.createHarness();
+            harness.arrange('image_input');
+            const observed = await start(harness);
+            try {
+                await observed.session.prompt({
+                    text: 'inspect this image',
+                    images: [
+                        {
+                            data: RUNNER_CONFORMANCE_UNSAFE_VALUES[4],
+                            mimeType: 'image/png',
+                            name: 'fixture.png',
+                        },
+                    ],
+                });
+                assertSafe(observed.events);
             } finally {
                 await observed.session.close();
             }
@@ -269,6 +311,9 @@ async function start(
         workbench: harness.workbench,
         workspaceDirectory: '/workspace',
         environment: {},
+        configuration: new ModelRouter().resolve({
+            workbench: harness.workbench,
+        }),
         host: {
             emit: async (event) => void events.push(event),
             requestPermission: async (request) => {

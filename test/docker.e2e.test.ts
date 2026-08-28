@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DockerRuntimeProvider } from '../src/docker.js';
+import { DockerRuntimeProvider } from '../src/runtimes/docker/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 
 const temporaryDirectories: string[] = [];
@@ -199,7 +199,7 @@ async function createFixture(options: { hostDocker?: boolean } = {}): Promise<{
             version: '0.1.0',
             name: 'docker-runtime-probe',
             runner: 'sh',
-            model: 'unused',
+            model: { id: 'openai/gpt-5.6-terra' },
             instructions: './instructions.md',
             skills: [],
             tools: [],

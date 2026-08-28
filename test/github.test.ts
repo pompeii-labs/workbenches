@@ -3,15 +3,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { addRemoteToCatalog, readCatalog } from '../src/catalog.js';
-import {
-    fetchGitHubWorkbench,
-    fetchGitHubWorkbenches,
-    listGitHubWorkbenches,
-    parseGitHubRepository,
-    resolvedRemoteWorkbench,
-} from '../src/github.js';
-import { preflightWorkbench } from '../src/preflight.js';
+import { SavedWorkbenchCatalog } from '../src/catalog/index.js';
+import { GitHubWorkbenchSource } from '../src/sources/index.js';
+import { WorkbenchPreflight } from '../src/workbench/index.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -25,36 +19,37 @@ afterEach(async () => {
 
 describe('GitHub Workbench provider', () => {
     test('normalizes slugs and repository URLs without accepting ambiguous URLs', () => {
-        expect(parseGitHubRepository('lux-db/lux')).toEqual({
+        const github = new GitHubWorkbenchSource();
+        expect(github.repository('lux-db/lux')).toEqual({
             owner: 'lux-db',
             repo: 'lux',
             source: 'https://github.com/lux-db/lux',
         });
-        expect(parseGitHubRepository('https://github.com/lux-db/lux.git/')).toEqual({
+        expect(github.repository('https://github.com/lux-db/lux.git/')).toEqual({
             owner: 'lux-db',
             repo: 'lux',
             source: 'https://github.com/lux-db/lux',
         });
-        expect(() => parseGitHubRepository('http://github.com/lux-db/lux')).toThrow(
+        expect(() => github.repository('http://github.com/lux-db/lux')).toThrow(
             'must use HTTPS'
         );
-        expect(() => parseGitHubRepository('https://gitlab.com/lux-db/lux')).toThrow(
+        expect(() => github.repository('https://gitlab.com/lux-db/lux')).toThrow(
             'Unsupported remote Workbench host: gitlab.com'
         );
+        expect(() => github.repository('https://token@github.com/lux-db/lux')).toThrow(
+            'may not contain credentials'
+        );
         expect(() =>
-            parseGitHubRepository('https://token@github.com/lux-db/lux')
-        ).toThrow('may not contain credentials');
-        expect(() =>
-            parseGitHubRepository('https://github.com/lux-db/lux/tree/main')
+            github.repository('https://github.com/lux-db/lux/tree/main')
         ).toThrow('must identify one repository');
     });
 
     test('lists manifests entirely through the API and forwards optional auth', async () => {
         const api = githubApiFixture();
-        const workbenches = await listGitHubWorkbenches('lux-db/lux', {
+        const workbenches = await new GitHubWorkbenchSource({
             fetch: api.fetch,
             env: { GITHUB_TOKEN: 'secret-token' },
-        });
+        }).list('lux-db/lux');
 
         expect(workbenches).toHaveLength(1);
         expect(workbenches[0]).toMatchObject({
@@ -75,10 +70,10 @@ describe('GitHub Workbench provider', () => {
 
     test('fetches and validates only the selected package in memory', async () => {
         const api = githubApiFixture();
-        const workbench = await fetchGitHubWorkbench(
+        const github = new GitHubWorkbenchSource({ fetch: api.fetch, env: {} });
+        const workbench = await github.fetch(
             'https://github.com/lux-db/lux',
-            'migrations',
-            { fetch: api.fetch, env: {} }
+            'migrations'
         );
 
         expect(workbench.files.map((file) => file.path).sort()).toEqual([
@@ -88,18 +83,19 @@ describe('GitHub Workbench provider', () => {
         ]);
         expect(workbench.manifest.tools).toEqual(['lux']);
         expect(
-            preflightWorkbench(resolvedRemoteWorkbench(workbench), {
-                env: {},
+            new WorkbenchPreflight({
+                environment: {},
                 findExecutable: (name) => `/bin/${name}`,
-            }).disabledMcps
+            }).check(github.resolve(workbench)).disabledMcps
         ).toEqual(['lux']);
     });
 
     test('pins registry-backed package inspection to the published commit', async () => {
         const api = githubApiFixture();
-        const workbench = await fetchGitHubWorkbench('lux-db/lux', 'migrations', {
+        const workbench = await new GitHubWorkbenchSource({
             fetch: api.fetch,
             env: {},
+        }).fetch('lux-db/lux', 'migrations', {
             revision: 'published-commit',
         });
 
@@ -112,13 +108,13 @@ describe('GitHub Workbench provider', () => {
 
     test('writes remote package bytes only when explicitly added', async () => {
         const api = githubApiFixture();
-        const workbench = await fetchGitHubWorkbench('lux-db/lux', 'migrations', {
+        const workbench = await new GitHubWorkbenchSource({
             fetch: api.fetch,
             env: {},
-        });
+        }).fetch('lux-db/lux', 'migrations');
         const home = await temporaryDirectory();
-        const entry = await addRemoteToCatalog({
-            home,
+        const catalog = new SavedWorkbenchCatalog(home);
+        const entry = await catalog.addRemote({
             alias: 'lux-migrations',
             workbench,
         });
@@ -126,7 +122,7 @@ describe('GitHub Workbench provider', () => {
         expect(await readFile(join(entry.packagePath, 'instructions.md'), 'utf8')).toBe(
             '# Migrations\n'
         );
-        expect((await readCatalog(home))[0]).toMatchObject({
+        expect((await catalog.list())[0]).toMatchObject({
             alias: 'lux-migrations',
             source: 'https://github.com/lux-db/lux',
             revision: 'commit-sha',
@@ -135,10 +131,10 @@ describe('GitHub Workbench provider', () => {
 
     test('validates every package without requiring a selector', async () => {
         const api = githubApiFixture();
-        const workbenches = await fetchGitHubWorkbenches('lux-db/lux', undefined, {
+        const workbenches = await new GitHubWorkbenchSource({
             fetch: api.fetch,
             env: {},
-        });
+        }).fetchAll('lux-db/lux');
         expect(workbenches.map((workbench) => workbench.selector)).toEqual([
             'migrations',
         ]);
@@ -157,70 +153,70 @@ describe('GitHub Workbench provider', () => {
         [403, { 'x-ratelimit-remaining': '0' }, 'rate limit exceeded'],
     ])('reports GitHub HTTP %i cleanly', async (status, headers, message) => {
         await expect(
-            listGitHubWorkbenches('lux-db/lux', {
+            new GitHubWorkbenchSource({
                 fetch: async () => response({}, status, headers),
                 env: {},
-            })
+            }).list('lux-db/lux')
         ).rejects.toThrow(message);
     });
 
     test('reports network, malformed, empty, and oversized repository failures', async () => {
         await expect(
-            listGitHubWorkbenches('lux-db/lux', {
+            new GitHubWorkbenchSource({
                 fetch: async () => {
                     throw new Error('offline');
                 },
                 env: {},
-            })
+            }).list('lux-db/lux')
         ).rejects.toThrow('Could not reach GitHub');
 
         await expect(
-            listGitHubWorkbenches('lux-db/lux', {
+            new GitHubWorkbenchSource({
                 fetch: async () => new Response('not json'),
                 env: {},
-            })
+            }).list('lux-db/lux')
         ).rejects.toThrow('malformed response');
 
         const noBranch = githubApiFixture({ metadata: {} });
         await expect(
-            listGitHubWorkbenches('lux-db/lux', {
+            new GitHubWorkbenchSource({
                 fetch: noBranch.fetch,
                 env: {},
-            })
+            }).list('lux-db/lux')
         ).rejects.toThrow('has no default branch');
 
         const truncated = githubApiFixture({ truncated: true });
         await expect(
-            listGitHubWorkbenches('lux-db/lux', {
+            new GitHubWorkbenchSource({
                 fetch: truncated.fetch,
                 env: {},
-            })
+            }).list('lux-db/lux')
         ).rejects.toThrow('tree is too large');
     });
 
     test('rejects missing files, path escapes, and remote symlinks', async () => {
         const missingInstructions = githubApiFixture({ includeInstructions: false });
         await expect(
-            fetchGitHubWorkbench('lux-db/lux', 'migrations', {
+            new GitHubWorkbenchSource({
                 fetch: missingInstructions.fetch,
                 env: {},
-            })
+            }).fetch('lux-db/lux', 'migrations')
         ).rejects.toThrow('Instructions file does not exist');
 
         const escaping = githubApiFixture({ instructions: '../../outside.md' });
         await expect(
-            fetchGitHubWorkbench('lux-db/lux', 'migrations', {
+            new GitHubWorkbenchSource({
                 fetch: escaping.fetch,
                 env: {},
-            })
+            }).fetch('lux-db/lux', 'migrations')
         ).rejects.toThrow('must remain inside the Workbench package');
 
         const symlink = githubApiFixture({ symlink: true });
         await expect(
-            fetchGitHubWorkbench('lux-db/lux', 'migrations', {
+            new GitHubWorkbenchSource({
                 fetch: symlink.fetch,
                 env: {},
-            })
+            }).fetch('lux-db/lux', 'migrations')
         ).rejects.toThrow('may not contain symlinks or submodules');
     });
 });
@@ -304,7 +300,8 @@ function manifestSource(instructions: string) {
         'name: lux-migrations',
         'description: Safely manage Lux migrations.',
         'runner: opencode',
-        'model: openrouter/openai/gpt-5.6-terra',
+        'model:',
+        '  id: openai/gpt-5.6-terra',
         `instructions: ${instructions}`,
         'skills:',
         '  - ./skills/lux-migrations',

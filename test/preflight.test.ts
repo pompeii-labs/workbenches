@@ -1,14 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-
-import { preflightWorkbench } from '../src/preflight.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { WorkbenchPreflight } from '../src/workbench/index.js';
 
 describe('Workbench smoke preflight', () => {
     test('reports resolved executables and optional integrations without launching', () => {
-        const result = preflightWorkbench(workbench(), {
-            env: {},
+        const result = new WorkbenchPreflight({
+            environment: {},
             findExecutable: (name) => `/bin/${name}`,
-        });
+        }).check(workbench());
 
         expect(result).toEqual({
             runner: { name: 'opencode', path: '/bin/opencode' },
@@ -21,10 +20,10 @@ describe('Workbench smoke preflight', () => {
     });
 
     test('enables an MCP when its declared environment is present', () => {
-        const result = preflightWorkbench(workbench(), {
-            env: { LUX_TOKEN: 'bound' },
+        const result = new WorkbenchPreflight({
+            environment: { LUX_TOKEN: 'bound' },
             findExecutable: (name) => `/bin/${name}`,
-        });
+        }).check(workbench());
         expect(result.enabledMcps).toEqual(['lux']);
         expect(result.disabledMcps).toEqual([]);
     });
@@ -33,10 +32,10 @@ describe('Workbench smoke preflight', () => {
         const fixture = workbench();
         fixture.manifest.runner = 'codex';
 
-        const result = preflightWorkbench(fixture, {
-            env: { LUX_TOKEN: 'bound' },
+        const result = new WorkbenchPreflight({
+            environment: { LUX_TOKEN: 'bound' },
             findExecutable: (name) => `/bin/${name}`,
-        });
+        }).check(fixture);
 
         expect(result.runner).toEqual({ name: 'codex', path: '/bin/codex' });
     });
@@ -46,12 +45,12 @@ describe('Workbench smoke preflight', () => {
         fixture.manifest.runtime = 'docker';
         let checked = false;
         expect(() =>
-            preflightWorkbench(fixture, {
+            new WorkbenchPreflight({
                 findExecutable() {
                     checked = true;
                     return '/bin/tool';
                 },
-            })
+            }).check(fixture)
         ).toThrow('Unsupported runtime: docker');
         expect(checked).toBeFalse();
     });
@@ -60,19 +59,19 @@ describe('Workbench smoke preflight', () => {
         const required = workbench();
         required.manifest.env.LUX_TOKEN = { required: true };
         expect(() =>
-            preflightWorkbench(required, {
-                env: {},
+            new WorkbenchPreflight({
+                environment: {},
                 findExecutable: (name) => `/bin/${name}`,
-            })
+            }).check(required)
         ).toThrow('Missing required environment variable: LUX_TOKEN');
 
         const undeclared = workbench();
         undeclared.manifest.env = {};
         expect(() =>
-            preflightWorkbench(undeclared, {
-                env: { LUX_TOKEN: 'bound' },
+            new WorkbenchPreflight({
+                environment: { LUX_TOKEN: 'bound' },
                 findExecutable: (name) => `/bin/${name}`,
-            })
+            }).check(undeclared)
         ).toThrow('references undeclared environment variable: LUX_TOKEN');
     });
 });
@@ -89,7 +88,7 @@ function workbench(): ResolvedWorkbench {
             version: '0.1.0',
             name: 'lux-migrations',
             runner: 'opencode',
-            model: 'openrouter/openai/gpt-5.6-terra',
+            model: { id: 'openai/gpt-5.6-terra' },
             instructions: './instructions.md',
             skills: [],
             tools: ['lux'],
