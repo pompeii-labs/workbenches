@@ -219,11 +219,19 @@ interface RunnerSession {
 }
 ```
 
-`steer()` and `followUp()` may deliver immediately or queue until the runner's
-next legal input boundary. Image data is translated into the runner's native
-input but never copied into normalized events. The manifest does not declare
-runner features. Adapter declarations and runtime negotiation determine what is
-possible.
+`steer()` changes an active turn through the runner's native steering operation
+and must never silently become a later follow-up. The Workbench host owns a FIFO
+follow-up queue so ordering does not depend on runner-specific behavior. Image
+data is translated into the runner's native input but never copied into
+normalized events. The manifest does not declare runner features. Adapter
+declarations and runtime negotiation determine what is possible.
+
+Clients control a stored run through `RunHandle`. A handle follows the durable
+event stream, resolves the terminal result, sends idle-turn input, steers an
+active turn, queues follow-up input, cancels a turn, answers permission requests,
+and closes or cancels the run. The handle writes transient requests to a private
+run-scoped control inbox. Persisted receipts and normalized input lifecycle events
+contain request IDs and dispositions, never prompt or image contents.
 
 ## Canonical events
 
@@ -238,7 +246,8 @@ turn.started      turn.completed
 output.text
 tool.started      tool.completed
 file.changed
-input.requested
+input.requested   input.accepted
+input.queued      input.delivered      input.rejected
 usage.updated
 run.completed     run.failed     run.cancelled
 runner.event
@@ -328,7 +337,8 @@ the most recently dispatched run in `WORKBENCH_HOME`.
 Run metadata and `events.ndjson` live under
 `$WORKBENCH_HOME/runs/<id>/` (normally the Workbench data directory). The initial
 task is stored only until the worker consumes it, then removed. Direct foreground
-runs use the same store, so their history can also be attached after completion.
+runs use the same stored handle and event stream, so their history can also be
+attached after completion.
 Attach is read-only. `wb ps` lists active detached runs; `wb ps --all` includes
 finished detached runs. `wb kill [id]` cooperatively cancels a detached run; without
 an ID it selects the latest active detached run. The worker observes a private

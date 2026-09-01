@@ -7,7 +7,7 @@ import type {
     RunnerPermissionDecision,
     RunnerPermissionRequest,
 } from '../runners/session.js';
-import type { InteractiveRunSession, WorkbenchEvent } from '../runs/index.js';
+import type { RunHandle, WorkbenchEvent } from '../runs/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import {
     addUserMessage,
@@ -24,11 +24,7 @@ export interface ChatScreenProps {
     start: (options: {
         resolved: ResolvedWorkbenchReference;
         reference: string;
-        onEvent: (event: WorkbenchEvent) => void;
-        onPermission: (
-            request: RunnerPermissionRequest
-        ) => Promise<RunnerPermissionDecision>;
-    }) => Promise<InteractiveRunSession>;
+    }) => Promise<RunHandle>;
     onBack: () => void;
     onExit: () => void;
     homeAvailable: boolean;
@@ -39,38 +35,54 @@ export function ChatScreen(props: ChatScreenProps) {
     const [error, setError] = createSignal('');
     const [permission, setPermission] = createSignal<{
         request: RunnerPermissionRequest;
-        resolve: (decision: RunnerPermissionDecision) => void;
     }>();
-    let session: InteractiveRunSession | undefined;
+    let session: RunHandle | undefined;
     let composer!: InputRenderable;
     let leaving = false;
     const events = new TranscriptEventBuffer((event) =>
         setState((current) => reduceTranscript(current, event))
     );
 
-    const decidePermission = (decision: RunnerPermissionDecision) => {
+    const decidePermission = async (decision: RunnerPermissionDecision) => {
         const pending = permission();
         if (!pending) return;
         setPermission(undefined);
         setState((current) => ({ ...current, status: 'Working' }));
-        pending.resolve(decision);
+        try {
+            await session?.respondToPermission(pending.request.id, decision);
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+        }
     };
     const close = async (back: boolean) => {
         if (leaving) return;
         leaving = true;
-        decidePermission('reject');
+        await decidePermission('reject');
         await session?.close().catch(() => {});
         await props.resolved.cleanup();
         if (back) props.onBack();
         else props.onExit();
     };
+    const cancelTurn = async () => {
+        try {
+            await session?.cancelTurn();
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+        }
+    };
+    const fail = (cause: unknown) => {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setState((current) => ({ ...current, busy: false, status: 'Failed' }));
+    };
     const submit = async (value: string) => {
         const task = value.trim();
-        if (!task || !session || state().busy || permission()) return;
+        if (!task || !session || permission()) return;
+        const steering = state().busy;
         composer.value = '';
         setState((current) => addUserMessage(current, task));
         try {
-            await session.send(task);
+            if (steering) await session.steer(task);
+            else await session.send(task);
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : String(cause);
             setError(message);
@@ -83,12 +95,13 @@ export function ChatScreen(props: ChatScreenProps) {
             session = await props.start({
                 resolved: props.resolved,
                 reference: props.alias,
-                onEvent: (event) => events.push(event),
-                onPermission: (request) =>
-                    new Promise((resolve) => {
-                        setPermission({ request, resolve });
-                    }),
             });
+            void consumeEvents(session, (event) => {
+                const requested = permissionFromEvent(event);
+                if (requested) setPermission({ request: requested });
+                events.push(event);
+            }).catch(fail);
+            void session.result.catch(fail);
             composer?.focus();
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : String(cause));
@@ -99,8 +112,8 @@ export function ChatScreen(props: ChatScreenProps) {
         events.dispose();
         if (!leaving) {
             leaving = true;
-            decidePermission('reject');
-            void session?.close();
+            void decidePermission('reject');
+            void session?.close().catch(() => {});
             void props.resolved.cleanup();
         }
     });
@@ -109,29 +122,29 @@ export function ChatScreen(props: ChatScreenProps) {
         if (pending) {
             if (key.ctrl && key.name === 'c') {
                 key.preventDefault();
-                decidePermission('reject');
-                void session?.cancelTurn();
+                void decidePermission('reject');
+                void cancelTurn();
                 return;
             }
             if (key.name === 'y') {
                 key.preventDefault();
-                decidePermission('allow_once');
+                void decidePermission('allow_once');
                 return;
             }
             if (key.name === 'a' && pending.request.allowAlways) {
                 key.preventDefault();
-                decidePermission('allow_always');
+                void decidePermission('allow_always');
                 return;
             }
             if (key.name === 'n' || key.name === 'escape') {
                 key.preventDefault();
-                decidePermission('reject');
+                void decidePermission('reject');
                 return;
             }
         }
         if (key.ctrl && key.name === 'c') {
             key.preventDefault();
-            if (state().busy) void session?.cancelTurn();
+            if (state().busy) void cancelTurn();
             else void close(false);
         } else if (key.name === 'escape' && props.homeAvailable && !state().busy) {
             key.preventDefault();
@@ -222,7 +235,9 @@ export function ChatScreen(props: ChatScreenProps) {
                                 value.focus();
                             }}
                             placeholder={
-                                state().busy ? 'Workbench is working…' : 'Ask anything'
+                                state().busy
+                                    ? 'Steer the current turn…'
+                                    : 'Ask anything'
                             }
                             placeholderColor={theme.faint}
                             textColor={theme.text}
@@ -238,7 +253,6 @@ export function ChatScreen(props: ChatScreenProps) {
                 {(
                     pending: Accessor<{
                         request: RunnerPermissionRequest;
-                        resolve: (decision: RunnerPermissionDecision) => void;
                     }>
                 ) => (
                     <box
@@ -267,11 +281,38 @@ export function ChatScreen(props: ChatScreenProps) {
                 </text>
                 <text fg={theme.faint}>
                     {usageLabel(state().totalTokens, state().costUsd)}
-                    {state().busy ? 'ctrl+c cancel' : 'enter send · ctrl+c quit'}
+                    {state().busy
+                        ? 'enter steer · ctrl+c cancel'
+                        : 'enter send · ctrl+c quit'}
                 </text>
             </box>
         </box>
     );
+}
+
+async function consumeEvents(
+    session: RunHandle,
+    consume: (event: WorkbenchEvent) => void
+): Promise<void> {
+    for await (const event of session.events) consume(event);
+}
+
+function permissionFromEvent(
+    event: WorkbenchEvent
+): RunnerPermissionRequest | undefined {
+    if (event.type !== 'input.requested') return undefined;
+    const data = object(event.data);
+    const id = string(data?.id);
+    const action = string(data?.action);
+    const message = string(data?.message);
+    if (!id || !action || !message) return undefined;
+    return {
+        id,
+        action,
+        message,
+        resources: strings(data?.resources),
+        allowAlways: strings(data?.options).includes('allow_always'),
+    };
 }
 
 function usageLabel(tokens: number | undefined, cost: number | undefined): string {
@@ -279,4 +320,20 @@ function usageLabel(tokens: number | undefined, cost: number | undefined): strin
     if (tokens !== undefined) details.push(`${tokens.toLocaleString()} tokens`);
     if (cost !== undefined) details.push(`$${cost.toFixed(4)}`);
     return details.length ? `${details.join(' · ')} · ` : '';
+}
+
+function object(value: unknown): Record<string, unknown> | undefined {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : undefined;
+}
+
+function string(value: unknown): string | undefined {
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function strings(value: unknown): string[] {
+    return Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === 'string')
+        : [];
 }

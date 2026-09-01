@@ -436,11 +436,16 @@ streaming, image input, steering at Pi's next legal model boundary, follow-up
 input, cancellation, and tool events. Pi does not provide a native permission
 request protocol or MCP transport.
 
-The terminal client does not yet expose image attachment or steering controls.
-Those operations are available through the normalized runner session boundary.
-Image generation and normalized image output are not implemented yet.
-Interactive sessions are not durable, and Docker Workbenches currently require
-a one-shot task: interactive sessions cannot yet be detached or recovered.
+While a response is active, submitting another message steers the current turn.
+The terminal client does not yet expose image attachment. Image generation and
+normalized image output are not implemented yet.
+
+Interactive sessions run in a background worker and expose the same durable run
+handle used to follow one-shot execution. Normalized events survive a terminal
+client disconnect, and another handle can replay the stream and control the same
+live runner session. User prompts and permission decisions are transient control
+messages, not durable run history. Docker Workbenches still require a one-shot
+task; interactive Docker sessions are not yet supported.
 
 ## Source and authorization boundaries
 

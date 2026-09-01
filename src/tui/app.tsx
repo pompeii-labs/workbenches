@@ -2,11 +2,7 @@ import { useRenderer } from '@opentui/solid';
 import { createSignal, Match, Switch } from 'solid-js';
 
 import type { CatalogEntry } from '../catalog/index.js';
-import type {
-    RunnerPermissionDecision,
-    RunnerPermissionRequest,
-} from '../runners/session.js';
-import type { InteractiveRunSession, WorkbenchEvent } from '../runs/index.js';
+import type { RunHandle } from '../runs/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import { ChatScreen } from './chat.js';
 import { HomeScreen } from './home.js';
@@ -21,11 +17,7 @@ export interface TuiAppProps {
     start: (options: {
         resolved: ResolvedWorkbenchReference;
         reference: string;
-        onEvent: (event: WorkbenchEvent) => void;
-        onPermission: (
-            request: RunnerPermissionRequest
-        ) => Promise<RunnerPermissionDecision>;
-    }) => Promise<InteractiveRunSession>;
+    }) => Promise<RunHandle>;
 }
 
 export function WorkbenchApp(props: TuiAppProps) {
