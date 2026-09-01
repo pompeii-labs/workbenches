@@ -99,6 +99,8 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
 
 interface ActiveTurn {
     adapter: OpenCodeEventAdapter;
+    inputMessageIds: Set<string>;
+    assistantMessageIds: Set<string>;
     promise: Promise<RunnerTurnResult>;
     resolve: (result: RunnerTurnResult) => void;
     reject: (error: Error) => void;
@@ -124,7 +126,6 @@ class OpenCodeServerSession implements RunnerSession {
     private readonly server: OpenCodeServer;
     private readonly streamedTextParts = new Set<string>();
     private readonly assistantTextParts = new Set<string>();
-    private readonly assistantMessages = new Set<string>();
     private readonly alwaysPermissions: AlwaysPermission[] = [];
     private nativeSessionId: string | undefined;
     private active: ActiveTurn | undefined;
@@ -188,7 +189,8 @@ class OpenCodeServerSession implements RunnerSession {
         if (this.failure) throw this.failure;
         if (this.active) throw new Error('runner session is already processing a turn');
         const sessionId = this.requireSessionId();
-        const turn = createActiveTurn();
+        const messageId = createMessageId();
+        const turn = createActiveTurn(messageId);
         this.active = turn;
         const model = parseModel(this.options.configuration.model);
         const normalized = normalizeRunnerInput(input);
@@ -198,6 +200,7 @@ class OpenCodeServerSession implements RunnerSession {
                 {
                     method: 'POST',
                     body: JSON.stringify({
+                        messageID: messageId,
                         model,
                         parts: openCodeParts(normalized),
                     }),
@@ -218,16 +221,24 @@ class OpenCodeServerSession implements RunnerSession {
             throw new Error('runner session is not processing a turn');
         }
         const normalized = normalizeRunnerInput(input);
-        await this.server.request(
-            `/session/${encodeURIComponent(this.requireSessionId())}/prompt_async`,
-            {
-                method: 'POST',
-                body: JSON.stringify({
-                    model: parseModel(this.options.configuration.model),
-                    parts: openCodeParts(normalized),
-                }),
-            }
-        );
+        const messageId = createMessageId();
+        this.active.inputMessageIds.add(messageId);
+        try {
+            await this.server.request(
+                `/session/${encodeURIComponent(this.requireSessionId())}/prompt_async`,
+                {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        messageID: messageId,
+                        model: parseModel(this.options.configuration.model),
+                        parts: openCodeParts(normalized),
+                    }),
+                }
+            );
+        } catch (error) {
+            this.active.inputMessageIds.delete(messageId);
+            throw error;
+        }
     }
 
     async cancelTurn(): Promise<void> {
@@ -278,19 +289,30 @@ class OpenCodeServerSession implements RunnerSession {
         if (type === 'message.updated') {
             const info = record(properties.info);
             const messageId = string(info?.id);
-            if (messageId && info?.role === 'assistant') {
-                this.assistantMessages.add(messageId);
+            const parentId = string(info?.parentID);
+            if (
+                this.active &&
+                messageId &&
+                parentId &&
+                info?.role === 'assistant' &&
+                this.active.inputMessageIds.has(parentId)
+            ) {
+                this.active.assistantMessageIds.add(messageId);
+                this.active.seenActivity = true;
             }
             return;
         }
         if (!this.active) return;
         if (type === 'session.error') {
+            const errorName = string(record(properties.error)?.name);
+            if (this.active.cancelRequested && errorName === 'MessageAbortedError') {
+                return;
+            }
             this.failActive(new Error('OpenCode session failed'));
             return;
         }
         if (type === 'session.status') {
             const status = string(record(properties.status)?.type);
-            if (status === 'busy') this.active.seenActivity = true;
             if (
                 status === 'idle' &&
                 (this.active.seenActivity || this.active.cancelRequested)
@@ -303,15 +325,10 @@ class OpenCodeServerSession implements RunnerSession {
             }
             return;
         }
-        if (
-            type === 'session.idle' &&
-            (this.active.seenActivity || this.active.cancelRequested)
-        ) {
-            this.finishActive(
-                this.active.cancelRequested
-                    ? 'cancelled'
-                    : this.active.adapter.summary().completionReason
-            );
+        if (type === 'session.idle') {
+            // OpenCode emits this legacy event in addition to session.status=idle.
+            // Treating both as completion lets a delayed duplicate from a cancelled
+            // turn finish the next turn. The status event is the canonical boundary.
             return;
         }
         if (type === 'message.part.delta') {
@@ -444,7 +461,10 @@ class OpenCodeServerSession implements RunnerSession {
 
     private isAssistantMessage(value: unknown): boolean {
         const messageId = string(value);
-        return messageId !== undefined && this.assistantMessages.has(messageId);
+        return (
+            messageId !== undefined &&
+            this.active?.assistantMessageIds.has(messageId) === true
+        );
     }
 }
 
@@ -460,7 +480,7 @@ function openCodeParts(input: ReturnType<typeof normalizeRunnerInput>) {
     ];
 }
 
-function createActiveTurn(): ActiveTurn {
+function createActiveTurn(messageId: string): ActiveTurn {
     let resolve!: (result: RunnerTurnResult) => void;
     let reject!: (error: Error) => void;
     const promise = new Promise<RunnerTurnResult>((accepted, rejected) => {
@@ -469,6 +489,8 @@ function createActiveTurn(): ActiveTurn {
     });
     return {
         adapter: new OpenCodeEventAdapter(),
+        inputMessageIds: new Set([messageId]),
+        assistantMessageIds: new Set(),
         promise,
         resolve,
         reject,
@@ -476,6 +498,10 @@ function createActiveTurn(): ActiveTurn {
         seenActivity: false,
         settled: false,
     };
+}
+
+function createMessageId(): string {
+    return `msg_${crypto.randomUUID().replaceAll('-', '')}`;
 }
 
 function permissionReply(decision: RunnerPermissionDecision) {

@@ -196,6 +196,7 @@ describe('OpenCode interactive server adapter', () => {
         await session.close();
 
         expect(server.promptBodies[1]).toEqual({
+            messageID: expect.stringMatching(/^msg_[a-f0-9]{32}$/),
             model: {
                 providerID: 'openai',
                 modelID: 'gpt-5.6-terra',
@@ -385,6 +386,12 @@ describe('OpenCode interactive server adapter', () => {
             cancellationSettled = true;
         });
         await server.aborted;
+        server.emit('session.error', {
+            error: {
+                name: 'MessageAbortedError',
+                data: { message: 'The operation was aborted' },
+            },
+        });
         await Bun.sleep(0);
         expect(cancellationSettled).toBeFalse();
 
@@ -392,13 +399,70 @@ describe('OpenCode interactive server adapter', () => {
         await cancellation;
         await expect(first).resolves.toEqual({ reason: 'cancelled' });
 
-        server.onPrompt = () => server.completeTurn('recovered');
-        await expect(session.prompt('try again')).resolves.toEqual({ reason: 'stop' });
+        let recoveredSettled = false;
+        server.onPrompt = () => {
+            server.emit('session.status', { status: { type: 'busy' } });
+            server.emit('session.idle', {});
+            server.emit('session.status', { status: { type: 'idle' } });
+        };
+        const recovered = session.prompt('try again').then((result) => {
+            recoveredSettled = true;
+            return result;
+        });
+        await Bun.sleep(0);
+        expect(recoveredSettled).toBeFalse();
+
+        server.completeTurn('recovered');
+        await expect(recovered).resolves.toEqual({ reason: 'stop' });
         await session.close();
 
         expect(events.filter((event) => event.type === 'output.text')).toEqual([
             { type: 'output.text', data: { text: 'recovered' } },
         ]);
+    });
+
+    test('does not hide an unexpected native failure during cancellation', async () => {
+        const server = new FakeOpenCodeServer();
+        server.autoIdleOnAbort = false;
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject',
+            },
+        });
+        server.onPrompt = () => {};
+
+        const turn = session.prompt('cancel during a native failure');
+        await server.prompted;
+        const cancellation = session.cancelTurn();
+        const failures = Promise.allSettled([turn, cancellation]);
+        await server.aborted;
+        server.emit('session.error', {
+            error: {
+                name: 'ProviderAuthError',
+                data: { message: 'Authentication failed' },
+            },
+        });
+
+        expect(await failures).toEqual([
+            {
+                status: 'rejected',
+                reason: expect.objectContaining({
+                    message: 'OpenCode session failed',
+                }),
+            },
+            {
+                status: 'rejected',
+                reason: expect.objectContaining({
+                    message: 'OpenCode session failed',
+                }),
+            },
+        ]);
+        await session.close();
     });
 
     test('can close while the host has not answered a permission request', async () => {
@@ -666,12 +730,17 @@ class FakeOpenCodeServer {
             info: {
                 id: this.currentAssistantMessageId(),
                 role: 'assistant',
+                parentID: this.currentInputMessageId(),
             },
         });
     }
 
     currentAssistantMessageId() {
         return `message_${this.promptBodies.length}`;
+    }
+
+    currentInputMessageId() {
+        return String(this.promptBodies.at(-1)?.messageID);
     }
 
     private process() {
