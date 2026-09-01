@@ -1,6 +1,6 @@
 import { defineCommand } from 'citty';
 
-import { RunStore } from '../runs/index.js';
+import { RunDispatcher, RunStore } from '../runs/index.js';
 import { workbenchHome } from '../storage.js';
 
 export const killCommand = defineCommand({
@@ -21,7 +21,7 @@ export const killCommand = defineCommand({
         const run = args.run
             ? await store.read(args.run)
             : await store.latestActiveDetached();
-        await store.requestCancellation(run.id);
+        await new RunDispatcher(home).handle(run.id).cancel('requested');
         for await (const _event of store.follow(run.id)) {
             // The worker owns the event stream; kill only waits for its acknowledgement.
         }

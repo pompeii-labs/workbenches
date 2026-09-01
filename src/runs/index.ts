@@ -1,4 +1,12 @@
 export {
+    RunControl,
+    type RunControlDisposition,
+    type RunControlKind,
+    type RunControlReceipt,
+    type RunControlRequest,
+    type RunControlSubmission,
+} from './control.js';
+export {
     type DispatchRunOptions,
     type PrepareRunOptions,
     RunDispatcher,
@@ -12,18 +20,22 @@ export {
     type WorkbenchEventType,
 } from './events.js';
 export {
+    type RunHandle,
+    type RunResult,
+    type RunStatus,
+    StoredRunHandle,
+} from './handle.js';
+export {
     InteractiveRun,
     type InteractiveRunDependencies,
     type InteractiveRunOptions,
     type InteractiveRunSession,
 } from './interactive-run.js';
 export {
-    ManagedRun,
-    type RunHandle,
-    type RunRequest,
-    type RunResult,
-    type RunStatus,
-} from './managed-run.js';
+    type ExecuteInteractiveRunOptions,
+    InteractiveRunWorker,
+    type InteractiveRunWorkerDependencies,
+} from './interactive-worker.js';
 export {
     type CreateStoredRunOptions,
     RunStore,

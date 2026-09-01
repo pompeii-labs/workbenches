@@ -3,12 +3,13 @@ import { basename } from 'node:path';
 import { modelLabel } from '../models/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
+import { type RunHandle, StoredRunHandle } from './handle.js';
 import { RunStore, type StoredRun } from './store.js';
 
 export interface PrepareRunOptions {
     resolved: ResolvedWorkbenchReference;
-    task: string;
-    mode: 'foreground' | 'detached';
+    task?: string;
+    mode: 'foreground' | 'detached' | 'interactive';
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
     reference?: string;
@@ -49,12 +50,16 @@ export class RunDispatcher {
             request: {
                 workbench_path: workbench.packageDirectory,
                 workspace: options.resolved.workspaceDirectory,
-                task: options.task,
+                task: options.task ?? '',
                 workspaces: options.workspaces ?? [],
                 allow_host_docker: options.allowHostDocker ?? false,
                 reference: options.reference ?? workbench.manifest.name,
             },
         });
+    }
+
+    handle(id: string): RunHandle {
+        return new StoredRunHandle(this.home, id);
     }
 
     async dispatch(options: DispatchRunOptions): Promise<number> {

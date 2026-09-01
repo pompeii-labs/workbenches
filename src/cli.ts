@@ -73,7 +73,7 @@ if (import.meta.main) {
         const id = process.argv[4];
         if (!home || !id) process.exit(2);
         await new ModelCatalog({ home }).loadCached();
-        process.exit(await new RunWorker(home).executeDetached(id));
+        process.exit(await new RunWorker(home).executeDispatched(id));
     }
     const defaultConsoleError = console.error;
     console.error = (value?: unknown, ...optional: unknown[]) => {

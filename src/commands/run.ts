@@ -1,7 +1,12 @@
 import { defineCommand } from 'citty';
 
 import { createEventRenderer } from '../rendering/index.js';
-import { RunDispatcher, RunWorker, WorkbenchRun } from '../runs/index.js';
+import {
+    RunDispatcher,
+    RunWorker,
+    type WorkbenchEvent,
+    WorkbenchRun,
+} from '../runs/index.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import { launchWorkbenchTui } from '../tui.js';
@@ -212,13 +217,17 @@ export const runCommand = defineCommand({
                 mode: args.json ? 'json' : args.final ? 'final' : 'human',
                 ...(args.color === undefined ? {} : { color: args.color }),
             });
+            const handle = dispatcher.handle(stored.id);
+            const rendering = renderEvents(handle.events, (event) =>
+                renderer.render(event)
+            );
             let code = 1;
             try {
                 code = await worker.execute({
                     id: stored.id,
                     environment,
-                    render: (event) => renderer.render(event),
                 });
+                await rendering;
             } finally {
                 renderer.finish();
             }
@@ -228,6 +237,13 @@ export const runCommand = defineCommand({
         }
     },
 });
+
+async function renderEvents(
+    events: AsyncIterable<WorkbenchEvent>,
+    render: (event: WorkbenchEvent) => void
+): Promise<void> {
+    for await (const event of events) render(event);
+}
 
 const runOptions = new Set([
     '--task',

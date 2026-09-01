@@ -70,7 +70,7 @@ export class RunEvents {
         this.now = options.now ?? (() => new Date());
     }
 
-    create<T>(type: WorkbenchEventType, data: T): WorkbenchEvent<T> {
+    private create<T>(type: WorkbenchEventType, data: T): WorkbenchEvent<T> {
         this.sequence += 1;
         return {
             protocol: 0,
