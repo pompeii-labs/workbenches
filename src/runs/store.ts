@@ -13,6 +13,7 @@ import {
 import { join } from 'node:path';
 import type { CatalogRegistryReference } from '../catalog/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
+import { RunControl } from './control.js';
 import type { WorkbenchEvent } from './events.js';
 
 export type StoredRunStatus =
@@ -31,7 +32,7 @@ export interface StoredRun {
     runner: string;
     model: string;
     workspace: string;
-    mode?: 'foreground' | 'detached';
+    mode?: 'foreground' | 'detached' | 'interactive';
     workspaces?: WorkbenchWorkspaceBinding[];
     allow_host_docker?: boolean;
     registry?: CatalogRegistryReference;
@@ -40,6 +41,7 @@ export interface StoredRun {
     started_at?: string;
     finished_at?: string;
     pid?: number;
+    runner_session_id?: string;
     exit_code?: number;
 }
 
@@ -78,6 +80,12 @@ export class RunStore {
         return terminalStatuses.has(status);
     }
 
+    assertWorkerAlive(run: StoredRun): void {
+        if (run.pid && !this.processAlive(run.pid)) {
+            throw new Error(`Workbench run worker exited unexpectedly: ${run.id}`);
+        }
+    }
+
     async create(options: CreateStoredRunOptions): Promise<StoredRun> {
         const id = options.id ?? RunStore.createId();
         RunStore.validateId(id);
@@ -100,6 +108,7 @@ export class RunStore {
                 ...options.request,
             } satisfies StoredRunRequest),
             writeFile(this.eventsPath(id), '', { mode: 0o600 }),
+            new RunControl(this.home, id).initialize(),
         ]);
         return metadata;
     }
@@ -154,6 +163,16 @@ export class RunStore {
         await appendFile(this.eventsPath(id), `${JSON.stringify(event)}\n`, {
             mode: 0o600,
         });
+    }
+
+    async readEvents(id: string): Promise<WorkbenchEvent[]> {
+        RunStore.validateId(id);
+        await this.read(id);
+        const source = await readFile(this.eventsPath(id), 'utf8');
+        return source
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => this.parseEvent(line, id));
     }
 
     async latest(): Promise<StoredRun> {
@@ -250,9 +269,7 @@ export class RunStore {
                 if (pending.trim()) yield this.parseEvent(pending, id);
                 return;
             }
-            if (run.pid && !this.processAlive(run.pid)) {
-                throw new Error(`Workbench run worker exited unexpectedly: ${id}`);
-            }
+            this.assertWorkerAlive(run);
             await this.delay(pollMilliseconds);
         }
     }
