@@ -7,12 +7,13 @@ import type {
     RunnerPermissionDecision,
     RunnerPermissionRequest,
 } from '../runners/session.js';
-import type { RunHandle, WorkbenchEvent } from '../runs/index.js';
+import type { RunControlReceipt, RunHandle, WorkbenchEvent } from '../runs/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import {
     addUserMessage,
     emptyTranscript,
     reduceTranscript,
+    reduceTranscriptDuringCancellation,
     TranscriptEventBuffer,
 } from './model.js';
 import { theme } from './theme.js';
@@ -30,6 +31,23 @@ export interface ChatScreenProps {
     homeAvailable: boolean;
 }
 
+export class TurnCancellation {
+    private pendingRequest: Promise<RunControlReceipt> | undefined;
+
+    get pending(): boolean {
+        return this.pendingRequest !== undefined;
+    }
+
+    request(session: Pick<RunHandle, 'cancelTurn'>): Promise<RunControlReceipt> {
+        if (this.pendingRequest) return this.pendingRequest;
+        const pending = session.cancelTurn().finally(() => {
+            if (this.pendingRequest === pending) this.pendingRequest = undefined;
+        });
+        this.pendingRequest = pending;
+        return pending;
+    }
+}
+
 export function ChatScreen(props: ChatScreenProps) {
     const [state, setState] = createSignal(emptyTranscript());
     const [error, setError] = createSignal('');
@@ -37,10 +55,15 @@ export function ChatScreen(props: ChatScreenProps) {
         request: RunnerPermissionRequest;
     }>();
     let session: RunHandle | undefined;
+    const cancellation = new TurnCancellation();
     let composer!: InputRenderable;
     let leaving = false;
     const events = new TranscriptEventBuffer((event) =>
-        setState((current) => reduceTranscript(current, event))
+        setState((current) => {
+            return cancellation.pending
+                ? reduceTranscriptDuringCancellation(current, event)
+                : reduceTranscript(current, event);
+        })
     );
 
     const decidePermission = async (decision: RunnerPermissionDecision) => {
@@ -63,12 +86,32 @@ export function ChatScreen(props: ChatScreenProps) {
         if (back) props.onBack();
         else props.onExit();
     };
-    const cancelTurn = async () => {
-        try {
-            await session?.cancelTurn();
-        } catch (cause) {
-            setError(cause instanceof Error ? cause.message : String(cause));
-        }
+    const cancelTurn = (): Promise<void> => {
+        if (cancellation.pending) return Promise.resolve();
+        const active = session;
+        if (!active) return Promise.resolve();
+        setError('');
+        setState((current) => ({ ...current, busy: true, status: 'Cancelling' }));
+        return cancellation
+            .request(active)
+            .then((receipt) => {
+                setState((current) => ({
+                    ...current,
+                    busy: false,
+                    status:
+                        receipt.disposition === 'already_idle'
+                            ? 'Ready'
+                            : 'Interrupted',
+                }));
+            })
+            .catch((cause) => {
+                setError(cause instanceof Error ? cause.message : String(cause));
+                setState((current) => ({
+                    ...current,
+                    busy: false,
+                    status: 'Cancellation failed',
+                }));
+            });
     };
     const fail = (cause: unknown) => {
         setError(cause instanceof Error ? cause.message : String(cause));

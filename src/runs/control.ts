@@ -33,6 +33,7 @@ export type RunControlDisposition =
     | 'delivered'
     | 'queued'
     | 'cancelled'
+    | 'already_idle'
     | 'cancellation_requested'
     | 'closed';
 

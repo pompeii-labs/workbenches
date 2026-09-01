@@ -129,6 +129,34 @@ describe('interactive run worker', () => {
         );
     });
 
+    test('treats repeated turn cancellation as idempotent once idle', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const adapter = new ControlledAdapter();
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+
+        await expect(handle.cancelTurn()).resolves.toMatchObject({
+            disposition: 'already_idle',
+        });
+        await handle.close();
+        await execution;
+        await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
+
+        expect(await collect(handle.events)).not.toContainEqual(
+            expect.objectContaining({
+                type: 'input.rejected',
+                data: expect.objectContaining({
+                    kind: 'cancel_turn',
+                    code: 'turn_idle',
+                }),
+            })
+        );
+    });
+
     test('routes permission decisions through the durable control channel', async () => {
         const home = await temporaryHome();
         const stored = await fixtureRun(home);

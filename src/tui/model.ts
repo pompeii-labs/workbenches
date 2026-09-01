@@ -182,7 +182,12 @@ export function reduceTranscript(
         };
     }
     if (event.type === 'turn.completed') {
-        return { ...state, busy: false, status: 'Ready' };
+        return {
+            ...state,
+            busy: false,
+            status:
+                field(event.data, 'reason') === 'cancelled' ? 'Interrupted' : 'Ready',
+        };
     }
     if (event.type === 'run.failed') {
         return {
@@ -217,6 +222,21 @@ export function reduceTranscript(
         };
     }
     return state;
+}
+
+export function reduceTranscriptDuringCancellation(
+    state: TranscriptState,
+    event: WorkbenchEvent
+): TranscriptState {
+    const next = reduceTranscript(state, event);
+    if (
+        event.type === 'turn.completed' ||
+        event.type === 'run.failed' ||
+        event.type === 'run.cancelled'
+    ) {
+        return next;
+    }
+    return { ...next, busy: true, status: 'Cancelling' };
 }
 
 function field(value: unknown, key: string): string {

@@ -2,7 +2,14 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { testRender } from '@opentui/solid';
 
 import type { CatalogEntry } from '../src/catalog/index.js';
+import type {
+    RunControlDisposition,
+    RunControlKind,
+    RunControlReceipt,
+    RunHandle,
+} from '../src/runs/index.js';
 import { Transcript, WorkbenchApp } from '../src/tui/app.js';
+import { TurnCancellation } from '../src/tui/chat.js';
 import { holdRendererUntilShutdown } from '../src/tui/lifecycle.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
@@ -102,6 +109,28 @@ describe.serial('Workbench TUI', () => {
 
         const frame = setup.captureCharFrame();
         expect(frame).toContain('pi · openai/gpt-5.4-mini · local');
+    });
+
+    test('coalesces repeated cancellation requests while one is pending', async () => {
+        let cancelCalls = 0;
+        const cancellation = deferred<RunControlReceipt>();
+        const session: Pick<RunHandle, 'cancelTurn'> = {
+            cancelTurn: () => {
+                cancelCalls += 1;
+                return cancellation.promise;
+            },
+        };
+        const controller = new TurnCancellation();
+
+        const first = controller.request(session);
+        const second = controller.request(session);
+        expect(cancelCalls).toBe(1);
+        expect(second).toBe(first);
+        expect(controller.pending).toBeTrue();
+
+        cancellation.resolve(receipt('cancel_turn', 'cancelled'));
+        await Promise.all([first, second]);
+        expect(controller.pending).toBeFalse();
     });
 
     test('renders streamed assistant Markdown as rich TUI content', async () => {
@@ -219,4 +248,26 @@ function resolvedWorkbench(name: string, runner: string): ResolvedWorkbenchRefer
             },
         },
     };
+}
+
+function receipt(
+    kind: RunControlKind,
+    disposition: RunControlDisposition
+): RunControlReceipt {
+    return {
+        version: 1,
+        id: crypto.randomUUID(),
+        kind,
+        outcome: 'accepted',
+        resolved_at: '2026-09-01T00:00:00.000Z',
+        disposition,
+    };
+}
+
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((accepted) => {
+        resolve = accepted;
+    });
+    return { promise, resolve };
 }

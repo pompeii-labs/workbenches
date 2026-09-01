@@ -5,6 +5,7 @@ import {
     addUserMessage,
     emptyTranscript,
     reduceTranscript,
+    reduceTranscriptDuringCancellation,
     TranscriptEventBuffer,
 } from '../src/tui/model.js';
 
@@ -102,6 +103,35 @@ describe('TUI transcript model', () => {
             tone: 'muted',
         });
         expect(reduceTranscript(state, event(7, 'runner.event', {}))).toBe(state);
+    });
+
+    test('distinguishes an interrupted turn from a completed turn', () => {
+        const thinking = addUserMessage(emptyTranscript(), 'Stop this turn');
+        const interrupted = reduceTranscript(
+            thinking,
+            event(1, 'turn.completed', { reason: 'cancelled' })
+        );
+
+        expect(interrupted).toMatchObject({
+            busy: false,
+            status: 'Interrupted',
+        });
+    });
+
+    test('does not regress to thinking while cancellation is pending', () => {
+        const cancelling = {
+            ...addUserMessage(emptyTranscript(), 'Stop this turn'),
+            status: 'Cancelling',
+        };
+        const delayedStart = reduceTranscriptDuringCancellation(
+            cancelling,
+            event(1, 'turn.started', { index: 1 })
+        );
+
+        expect(delayedStart).toMatchObject({
+            busy: true,
+            status: 'Cancelling',
+        });
     });
 
     test('batches text deltas but flushes before lifecycle events', () => {

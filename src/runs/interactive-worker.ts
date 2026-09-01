@@ -187,7 +187,12 @@ export class InteractiveRunWorker {
     private async cancelTurn(request: RunControlRequest): Promise<void> {
         const session = this.requireSession();
         if (!this.activeTurn || !session.busy) {
-            return this.reject(request, 'turn_idle', 'No Workbench turn is active');
+            await this.accept(request);
+            await this.control.resolve(request, {
+                outcome: 'accepted',
+                disposition: 'already_idle',
+            });
+            return;
         }
         await this.accept(request);
         this.drainPaused = true;
