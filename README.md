@@ -430,8 +430,8 @@ wb run project-core
 
 The OpenCode interactive adapter currently supports multi-turn context,
 streaming, image input, cancellation, tool events, and explicit permission
-decisions for the local runtime. OpenCode's server interface does not currently
-provide native mid-turn steering. The Pi adapter supports multi-turn context,
+decisions for the local runtime. It also supports native mid-turn steering through
+OpenCode's current session input API. The Pi adapter supports multi-turn context,
 streaming, image input, steering at Pi's next legal model boundary, follow-up
 input, cancellation, and tool events. Pi does not provide a native permission
 request protocol or MCP transport.

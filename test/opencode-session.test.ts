@@ -164,6 +164,54 @@ describe('OpenCode interactive server adapter', () => {
         expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER_REASONING');
     });
 
+    test('delivers steering to the active turn through the current session API', async () => {
+        const server = new FakeOpenCodeServer();
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject',
+            },
+        });
+        server.onPrompt = () =>
+            server.emit('session.status', { status: { type: 'busy' } });
+
+        const turn = session.prompt('start here');
+        await server.prompted;
+        await session.steer?.({
+            text: 'change direction',
+            images: [
+                {
+                    data: 'aW1hZ2UtYnl0ZXM=',
+                    mimeType: 'image/png',
+                    name: 'direction.png',
+                },
+            ],
+        });
+        await session.cancelTurn();
+        await expect(turn).resolves.toEqual({ reason: 'cancelled' });
+        await session.close();
+
+        expect(server.promptBodies[1]).toEqual({
+            model: {
+                providerID: 'openai',
+                modelID: 'gpt-5.6-terra',
+            },
+            parts: [
+                { type: 'text', text: 'change direction' },
+                {
+                    type: 'file',
+                    mime: 'image/png',
+                    url: 'data:image/png;base64,aW1hZ2UtYnl0ZXM=',
+                    filename: 'direction.png',
+                },
+            ],
+        });
+    });
+
     test('pauses for a host permission decision and replies before continuing', async () => {
         const server = new FakeOpenCodeServer();
         const requests: RunnerPermissionRequest[] = [];
@@ -314,6 +362,45 @@ describe('OpenCode interactive server adapter', () => {
         expect(server.kills).toBe(1);
     });
 
+    test('waits for native idle after an immediate cancellation before accepting another turn', async () => {
+        const server = new FakeOpenCodeServer();
+        server.autoIdleOnAbort = false;
+        const events: WorkbenchEventDraft[] = [];
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async (event) => void events.push(event),
+                requestPermission: async () => 'reject',
+            },
+        });
+        server.onPrompt = () => {};
+
+        const first = session.prompt('cancel immediately');
+        await server.prompted;
+        let cancellationSettled = false;
+        const cancellation = session.cancelTurn().then(() => {
+            cancellationSettled = true;
+        });
+        await server.aborted;
+        await Bun.sleep(0);
+        expect(cancellationSettled).toBeFalse();
+
+        server.emit('session.status', { status: { type: 'idle' } });
+        await cancellation;
+        await expect(first).resolves.toEqual({ reason: 'cancelled' });
+
+        server.onPrompt = () => server.completeTurn('recovered');
+        await expect(session.prompt('try again')).resolves.toEqual({ reason: 'stop' });
+        await session.close();
+
+        expect(events.filter((event) => event.type === 'output.text')).toEqual([
+            { type: 'output.text', data: { text: 'recovered' } },
+        ]);
+    });
+
     test('can close while the host has not answered a permission request', async () => {
         const server = new FakeOpenCodeServer();
         let permissionRequested!: () => void;
@@ -379,6 +466,7 @@ class FakeOpenCodeServer {
     aborts = 0;
     kills = 0;
     permissionReplyStatus = 200;
+    autoIdleOnAbort = true;
     spawnEnvironment: Record<string, string | undefined> = {};
     onPrompt?: (body: Record<string, unknown>) => void;
     onPermissionReply?: (body: Record<string, unknown>) => void;
@@ -386,6 +474,14 @@ class FakeOpenCodeServer {
     private stdoutController?: ReadableStreamDefaultController<Uint8Array>;
     private stderrController?: ReadableStreamDefaultController<Uint8Array>;
     private exit!: (code: number) => void;
+    private resolvePrompted!: () => void;
+    private resolveAborted!: () => void;
+    readonly prompted = new Promise<void>((resolve) => {
+        this.resolvePrompted = resolve;
+    });
+    readonly aborted = new Promise<void>((resolve) => {
+        this.resolveAborted = resolve;
+    });
 
     adapter() {
         return new OpenCodeSessionAdapter({
@@ -637,11 +733,18 @@ class FakeOpenCodeServer {
         if (url.pathname.endsWith('/prompt_async')) {
             const body = JSON.parse(String(init.body)) as Record<string, unknown>;
             this.promptBodies.push(body);
+            this.resolvePrompted();
             queueMicrotask(() => this.onPrompt?.(body));
             return new Response(null, { status: 204 });
         }
         if (url.pathname.endsWith('/abort')) {
             this.aborts += 1;
+            this.resolveAborted();
+            if (this.autoIdleOnAbort) {
+                queueMicrotask(() =>
+                    this.emit('session.status', { status: { type: 'idle' } })
+                );
+            }
             return Response.json(true);
         }
         if (url.pathname.endsWith('/reply')) {

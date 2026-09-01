@@ -31,10 +31,7 @@ export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
         usage: { status: 'supported' },
         permissions: { status: 'supported' },
         multi_turn: { status: 'supported' },
-        steering: {
-            status: 'unsupported',
-            detail: 'OpenCode server mode does not expose a native mid-turn steering command.',
-        },
+        steering: { status: 'supported' },
         image_input: { status: 'supported' },
         image_generation: {
             status: 'unsupported',
@@ -105,6 +102,7 @@ interface ActiveTurn {
     promise: Promise<RunnerTurnResult>;
     resolve: (result: RunnerTurnResult) => void;
     reject: (error: Error) => void;
+    cancelRequested: boolean;
     seenActivity: boolean;
     settled: boolean;
 }
@@ -213,13 +211,39 @@ class OpenCodeServerSession implements RunnerSession {
         });
     }
 
-    async cancelTurn(): Promise<void> {
-        if (!this.active || this.closed) return;
+    async steer(input: RunnerInput): Promise<void> {
+        if (this.closed) throw new Error('runner session is closed');
+        if (this.failure) throw this.failure;
+        if (!this.active) {
+            throw new Error('runner session is not processing a turn');
+        }
+        const normalized = normalizeRunnerInput(input);
         await this.server.request(
-            `/session/${encodeURIComponent(this.requireSessionId())}/abort`,
-            { method: 'POST' }
+            `/session/${encodeURIComponent(this.requireSessionId())}/prompt_async`,
+            {
+                method: 'POST',
+                body: JSON.stringify({
+                    model: parseModel(this.options.configuration.model),
+                    parts: openCodeParts(normalized),
+                }),
+            }
         );
-        this.finishActive('cancelled');
+    }
+
+    async cancelTurn(): Promise<void> {
+        const active = this.active;
+        if (!active || this.closed) return;
+        active.cancelRequested = true;
+        try {
+            await this.server.request(
+                `/session/${encodeURIComponent(this.requireSessionId())}/abort`,
+                { method: 'POST' }
+            );
+            await active.promise;
+        } catch (error) {
+            if (!active.settled) active.cancelRequested = false;
+            throw error;
+        }
     }
 
     async close(): Promise<void> {
@@ -267,13 +291,27 @@ class OpenCodeServerSession implements RunnerSession {
         if (type === 'session.status') {
             const status = string(record(properties.status)?.type);
             if (status === 'busy') this.active.seenActivity = true;
-            if (status === 'idle' && this.active.seenActivity) {
-                this.finishActive(this.active.adapter.summary().completionReason);
+            if (
+                status === 'idle' &&
+                (this.active.seenActivity || this.active.cancelRequested)
+            ) {
+                this.finishActive(
+                    this.active.cancelRequested
+                        ? 'cancelled'
+                        : this.active.adapter.summary().completionReason
+                );
             }
             return;
         }
-        if (type === 'session.idle' && this.active.seenActivity) {
-            this.finishActive(this.active.adapter.summary().completionReason);
+        if (
+            type === 'session.idle' &&
+            (this.active.seenActivity || this.active.cancelRequested)
+        ) {
+            this.finishActive(
+                this.active.cancelRequested
+                    ? 'cancelled'
+                    : this.active.adapter.summary().completionReason
+            );
             return;
         }
         if (type === 'message.part.delta') {
@@ -434,6 +472,7 @@ function createActiveTurn(): ActiveTurn {
         promise,
         resolve,
         reject,
+        cancelRequested: false,
         seenActivity: false,
         settled: false,
     };
