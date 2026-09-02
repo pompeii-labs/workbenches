@@ -1,4 +1,3 @@
-import type { InputRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/solid';
 import { type Accessor, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 
@@ -11,6 +10,8 @@ import type {
 } from '../runners/session.js';
 import type { RunControlReceipt, RunHandle, WorkbenchEvent } from '../runs/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
+import { SessionCommands } from './commands/session.js';
+import { useDialog } from './dialog/index.js';
 import {
     addUserMessage,
     emptyTranscript,
@@ -19,11 +20,14 @@ import {
     reduceTranscriptDuringCancellation,
     TranscriptEventBuffer,
 } from './model.js';
+import { Composer, type ComposerRef } from './prompt/composer.js';
+import { PromptHistory } from './prompt/history.js';
 import { QuestionPrompt, questionFromEvent } from './question.js';
 import { useTheme } from './theme/index.js';
 import { Transcript } from './transcript.js';
 
 export interface ChatScreenProps {
+    home: string;
     alias: string;
     resolved: ResolvedWorkbenchReference;
     start: (options: {
@@ -53,8 +57,11 @@ export class TurnCancellation {
 }
 
 export function ChatScreen(props: ChatScreenProps) {
-    const { theme } = useTheme();
+    const themes = useTheme();
+    const { theme } = themes;
+    const dialog = useDialog();
     const [state, setState] = createSignal(emptyTranscript());
+    const [sessionReady, setSessionReady] = createSignal(false);
     const [error, setError] = createSignal('');
     const [permission, setPermission] = createSignal<{
         request: RunnerPermissionRequest;
@@ -63,7 +70,8 @@ export function ChatScreen(props: ChatScreenProps) {
     const [questionResponsePending, setQuestionResponsePending] = createSignal(false);
     let session: RunHandle | undefined;
     const cancellation = new TurnCancellation();
-    let composer!: InputRenderable;
+    const history = new PromptHistory(props.home);
+    let composer: ComposerRef | undefined;
     let leaving = false;
     const events = new TranscriptEventBuffer((event) =>
         setState((current) => {
@@ -146,7 +154,7 @@ export function ChatScreen(props: ChatScreenProps) {
         if (!task || !session || permission() || question()) return;
         const steering = state().busy;
         const queuedId = steering ? crypto.randomUUID() : undefined;
-        composer.value = '';
+        setError('');
         setState((current) =>
             steering
                 ? queueUserMessage(current, task, queuedId)
@@ -174,11 +182,17 @@ export function ChatScreen(props: ChatScreenProps) {
     };
 
     onMount(async () => {
+        void history.load().catch((cause) => {
+            setError(
+                `Prompt history could not be loaded: ${cause instanceof Error ? cause.message : String(cause)}`
+            );
+        });
         try {
             session = await props.start({
                 resolved: props.resolved,
                 reference: props.alias,
             });
+            setSessionReady(true);
             void consumeEvents(session, (event) => {
                 const requested = permissionFromEvent(event);
                 if (requested) setPermission({ request: requested });
@@ -211,6 +225,7 @@ export function ChatScreen(props: ChatScreenProps) {
         }
     });
     useKeyboard((key) => {
+        if (dialog.active()) return;
         const pendingQuestion = question();
         if (pendingQuestion) {
             if (key.ctrl && key.name === 'c') {
@@ -255,6 +270,19 @@ export function ChatScreen(props: ChatScreenProps) {
     });
 
     const manifest = props.resolved.workbench.manifest;
+    const commands = new SessionCommands({
+        home: props.home,
+        alias: props.alias,
+        resolved: props.resolved,
+        dialog,
+        themes,
+        actions: {
+            clearTranscript: () => setState((current) => ({ ...current, items: [] })),
+            cancelTurn,
+            exit: () => close(false),
+            showError: setError,
+        },
+    });
     return (
         <box flexDirection="column" flexGrow={1} paddingX={3} paddingY={1}>
             <box
@@ -307,25 +335,6 @@ export function ChatScreen(props: ChatScreenProps) {
                         />
                     )}
                 </For>
-                <For each={state().queued} fallback={<box height={0} />}>
-                    {(item) => (
-                        <box
-                            flexDirection="column"
-                            border={['left']}
-                            borderColor={theme.accent}
-                            paddingLeft={1}
-                            marginY={1}
-                        >
-                            <box flexDirection="row" justifyContent="space-between">
-                                <text fg={theme.accent}>YOU</text>
-                                <text fg={theme.faint}> QUEUED </text>
-                            </box>
-                            <text fg={theme.muted} wrapMode="word">
-                                {item.text}
-                            </text>
-                        </box>
-                    )}
-                </For>
                 <Show when={error().length > 0} fallback={<box height={0} />}>
                     <box
                         border={['left']}
@@ -344,36 +353,26 @@ export function ChatScreen(props: ChatScreenProps) {
                     <Show
                         when={permission()}
                         fallback={
-                            <box
-                                border={true}
-                                borderStyle="rounded"
-                                borderColor={state().busy ? theme.faint : theme.accent}
-                                backgroundColor={theme.panelRaised}
-                                paddingX={1}
-                                flexDirection="row"
-                            >
-                                <text fg={state().busy ? theme.faint : theme.accent}>
-                                    ›{' '}
-                                </text>
-                                <input
-                                    ref={(value) => {
-                                        composer = value;
-                                        value.focus();
-                                    }}
-                                    placeholder={
-                                        state().busy
-                                            ? 'Steer the current turn…'
-                                            : 'Ask anything'
-                                    }
-                                    placeholderColor={theme.faint}
-                                    textColor={theme.text}
-                                    focusedTextColor={theme.text}
-                                    backgroundColor={theme.panelRaised}
-                                    focusedBackgroundColor={theme.panelRaised}
-                                    flexGrow={1}
-                                    on:enter={(value: string) => void submit(value)}
-                                />
-                            </box>
+                            <Composer
+                                ref={(value) => {
+                                    composer = value;
+                                }}
+                                busy={state().busy}
+                                disabled={!sessionReady()}
+                                queued={state().queued}
+                                history={history}
+                                commands={commands.registry}
+                                onSubmit={submit}
+                                onCommand={(command, argument) =>
+                                    commands.run(command, argument)
+                                }
+                                onUnknownCommand={(name) =>
+                                    setError(
+                                        `Unknown command: ${name}. Type /help to browse commands.`
+                                    )
+                                }
+                                onOpenPalette={() => commands.openPalette()}
+                            />
                         }
                     >
                         {(
@@ -422,8 +421,8 @@ export function ChatScreen(props: ChatScreenProps) {
                     {question()
                         ? 'answer required · ctrl+c cancel'
                         : state().busy
-                          ? 'enter steer · ctrl+c cancel'
-                          : 'enter send · ctrl+c quit'}
+                          ? 'ctrl+c cancel'
+                          : 'ctrl+c quit'}
                 </text>
             </box>
         </box>

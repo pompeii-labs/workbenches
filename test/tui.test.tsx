@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import type { Renderable, TextareaRenderable } from '@opentui/core';
 import { testRender } from '@opentui/solid';
 
 import type { CatalogEntry } from '../src/catalog/index.js';
@@ -65,6 +66,7 @@ describe.serial('Workbench TUI', () => {
             () => (
                 <ThemeProvider controller={themes}>
                     <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
                         entries={[entry('lux-core'), entry('lux-migrations')]}
                         resolve={async () => {
                             throw new Error('not opened in this test');
@@ -95,6 +97,7 @@ describe.serial('Workbench TUI', () => {
             () => (
                 <ThemeProvider controller={themes}>
                     <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
                         entries={[]}
                         initial={{
                             alias: 'pi-smoke',
@@ -116,6 +119,43 @@ describe.serial('Workbench TUI', () => {
 
         const frame = setup.captureCharFrame();
         expect(frame).toContain('pi · openai/gpt-5.4-mini · local');
+    });
+
+    test('opens local slash commands without sending them to the runner', async () => {
+        let sent = 0;
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => fakeHandle(() => sent++)}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('/theme');
+        await setup.flush();
+        expect(setup.captureCharFrame()).toContain('/theme');
+
+        prompt.submit();
+        await setup.flush();
+        expect(setup.captureCharFrame()).toContain('Themes');
+        expect(setup.captureCharFrame()).toContain('Flexoki');
+        expect(sent).toBe(0);
     });
 
     test('coalesces repeated cancellation requests while one is pending', async () => {
@@ -323,4 +363,55 @@ function deferred<T>() {
         resolve = accepted;
     });
     return { promise, resolve };
+}
+
+function fakeHandle(onSend: () => void): RunHandle {
+    const control = async () => receipt('send', 'queued');
+    return {
+        runId: 'wb_tui_test',
+        events: (async function* () {
+            yield {
+                protocol: 0,
+                run_id: 'wb_tui_test',
+                sequence: 1,
+                timestamp: '2026-09-02T00:00:00.000Z',
+                type: 'run.ready',
+                runner: 'opencode',
+                data: {},
+            };
+        })(),
+        result: new Promise(() => {}),
+        send: async () => {
+            onSend();
+            return control();
+        },
+        steer: async () => {
+            onSend();
+            return control();
+        },
+        followUp: control,
+        cancelTurn: () => control(),
+        respondToPermission: () => control(),
+        respondToQuestion: () => control(),
+        close: () => control(),
+        cancel: () => control(),
+    };
+}
+
+function findPrompt(root: Renderable): TextareaRenderable {
+    const prompt = findPromptOrUndefined(root);
+    if (prompt) return prompt;
+    throw new Error('Prompt textarea was not rendered');
+}
+
+function findPromptOrUndefined(root: Renderable): TextareaRenderable | undefined {
+    for (const child of root.getChildren()) {
+        const candidate = child as Renderable & { traits?: { status?: string } };
+        if (candidate.traits?.status === 'PROMPT') {
+            return child as TextareaRenderable;
+        }
+        const nested = findPromptOrUndefined(child);
+        if (nested) return nested;
+    }
+    return undefined;
 }

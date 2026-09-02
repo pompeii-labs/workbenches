@@ -49,6 +49,7 @@ export async function renderWorkbenchTui(
                 () => (
                     <ThemeProvider controller={themes}>
                         <WorkbenchApp
+                            home={home}
                             entries={entries}
                             {...(options.initial ? { initial: options.initial } : {})}
                             resolve={(alias) => resolver.resolve(alias, { home })}
