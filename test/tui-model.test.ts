@@ -226,7 +226,7 @@ describe('TUI transcript model', () => {
 
     test('keeps steering visibly queued until the runner consumes it', () => {
         let state = addUserMessage(emptyTranscript(), 'hello', 'user-1');
-        state = queueUserMessage(state, 'testing', 'user-2');
+        state = queueUserMessage(state, 'testing', 'user-2', ['reference.png']);
         state = reduceTranscript(
             state,
             event(1, 'output.text', { id: 'output-1', text: 'Hello.' })
@@ -236,14 +236,21 @@ describe('TUI transcript model', () => {
             { id: 'user-1', kind: 'user', text: 'hello' },
             { id: 'output-1', kind: 'assistant', text: 'Hello.' },
         ]);
-        expect(state.queued).toEqual([{ id: 'user-2', text: 'testing' }]);
+        expect(state.queued).toEqual([
+            { id: 'user-2', text: 'testing', images: ['reference.png'] },
+        ]);
 
         state = reduceTranscript(
             state,
             event(2, 'input.queued', { id: 'control-1', kind: 'steer' })
         );
         expect(state.queued).toEqual([
-            { id: 'user-2', text: 'testing', controlId: 'control-1' },
+            {
+                id: 'user-2',
+                text: 'testing',
+                images: ['reference.png'],
+                controlId: 'control-1',
+            },
         ]);
         state = reduceTranscript(
             state,
@@ -260,7 +267,12 @@ describe('TUI transcript model', () => {
         expect(state.items).toEqual([
             { id: 'user-1', kind: 'user', text: 'hello' },
             { id: 'output-1', kind: 'assistant', text: 'Hello.' },
-            { id: 'user-2', kind: 'user', text: 'testing' },
+            {
+                id: 'user-2',
+                kind: 'user',
+                text: 'testing',
+                images: ['reference.png'],
+            },
             { id: 'output-2', kind: 'assistant', text: 'Testing received.' },
         ]);
         expect(state.queued).toEqual([]);

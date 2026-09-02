@@ -10,7 +10,7 @@ export interface ToolTranscriptItem {
 }
 
 export type TranscriptItem =
-    | { id: string; kind: 'user'; text: string }
+    | { id: string; kind: 'user'; text: string; images?: string[] }
     | { id: string; kind: 'assistant'; text: string }
     | ToolTranscriptItem
     | { id: string; kind: 'notice'; text: string; tone: 'muted' | 'error' };
@@ -22,6 +22,7 @@ export type TranscriptDisplayItem =
 export interface QueuedTranscriptInput {
     id: string;
     text: string;
+    images?: string[];
     controlId?: string;
 }
 
@@ -122,11 +123,15 @@ export function groupTranscriptItems(items: TranscriptItem[]): TranscriptDisplay
 export function addUserMessage(
     state: TranscriptState,
     text: string,
-    id: string = crypto.randomUUID()
+    id: string = crypto.randomUUID(),
+    images: string[] = []
 ): TranscriptState {
     return {
         ...state,
-        items: [...state.items, { id, kind: 'user', text }],
+        items: [
+            ...state.items,
+            { id, kind: 'user', text, ...(images.length > 0 ? { images } : {}) },
+        ],
         busy: true,
         status: 'Thinking',
     };
@@ -135,11 +140,15 @@ export function addUserMessage(
 export function queueUserMessage(
     state: TranscriptState,
     text: string,
-    id: string = crypto.randomUUID()
+    id: string = crypto.randomUUID(),
+    images: string[] = []
 ): TranscriptState {
     return {
         ...state,
-        queued: [...state.queued, { id, text }],
+        queued: [
+            ...state.queued,
+            { id, text, ...(images.length > 0 ? { images } : {}) },
+        ],
     };
 }
 
@@ -169,7 +178,12 @@ export function reduceTranscript(
             queued: state.queued.filter((_, inputIndex) => inputIndex !== index),
             items: [
                 ...state.items,
-                { id: delivered.id, kind: 'user', text: delivered.text },
+                {
+                    id: delivered.id,
+                    kind: 'user',
+                    text: delivered.text,
+                    ...(delivered.images ? { images: delivered.images } : {}),
+                },
             ],
         };
     }

@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch } from 'solid-js';
+import { type Accessor, For, Match, Show, Switch } from 'solid-js';
 
 import { renderMarkdownPreview, sanitizeMarkdown } from '../rendering/index.js';
 import type { TranscriptDisplayItem } from './model.js';
@@ -14,6 +14,21 @@ export function Transcript(props: { item: TranscriptDisplayItem; streaming: bool
                     <text fg={theme.text} wrapMode="word">
                         {props.item.kind === 'user' ? props.item.text : ''}
                     </text>
+                    <Show
+                        when={
+                            props.item.kind === 'user' && props.item.images?.length
+                                ? props.item.images
+                                : undefined
+                        }
+                    >
+                        {(images: Accessor<string[]>) => (
+                            <text fg={theme.textMuted}>
+                                {images()
+                                    .map((name) => `[image ${name}]`)
+                                    .join(' ')}
+                            </text>
+                        )}
+                    </Show>
                 </box>
             </Match>
             <Match when={props.item.kind === 'assistant'}>

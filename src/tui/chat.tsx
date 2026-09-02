@@ -10,6 +10,7 @@ import {
 } from 'solid-js';
 
 import { modelLabel } from '../models/index.js';
+import { RunnerRegistry } from '../runners/registry.js';
 import type {
     RunnerPermissionDecision,
     RunnerPermissionRequest,
@@ -29,6 +30,10 @@ import {
     reduceTranscriptDuringCancellation,
     TranscriptEventBuffer,
 } from './model.js';
+import {
+    PromptAttachmentReader,
+    type PromptImageAttachment,
+} from './prompt/attachments.js';
 import { Composer, type ComposerRef } from './prompt/composer.js';
 import { PromptHistory } from './prompt/history.js';
 import { QuestionPrompt, questionFromEvent } from './question.js';
@@ -71,6 +76,7 @@ export function ChatScreen(props: ChatScreenProps) {
     const dialog = useDialog();
     const [state, setState] = createSignal(emptyTranscript());
     const [sessionReady, setSessionReady] = createSignal(false);
+    const [attachments, setAttachments] = createSignal<PromptImageAttachment[]>([]);
     const [error, setError] = createSignal('');
     const [permission, setPermission] = createSignal<{
         request: RunnerPermissionRequest;
@@ -80,6 +86,12 @@ export function ChatScreen(props: ChatScreenProps) {
     let session: RunHandle | undefined;
     const cancellation = new TurnCancellation();
     const history = new PromptHistory(props.home);
+    const attachmentReader = new PromptAttachmentReader(
+        props.resolved.workspaceDirectory
+    );
+    const imageInput = RunnerRegistry.standard().session(
+        props.resolved.workbench.manifest.runner
+    ).declaration.capabilities.image_input;
     let composer: ComposerRef | undefined;
     let leaving = false;
     const events = new TranscriptEventBuffer((event) =>
@@ -163,18 +175,33 @@ export function ChatScreen(props: ChatScreenProps) {
         if (!task || !session || permission() || question()) return;
         const steering = state().busy;
         const queuedId = steering ? crypto.randomUUID() : undefined;
+        const images = attachments();
+        const imageNames = images.map((image) => image.name);
+        const input =
+            images.length > 0
+                ? {
+                      text: task,
+                      images: images.map(({ data, mimeType, name }) => ({
+                          data,
+                          mimeType,
+                          name,
+                      })),
+                  }
+                : task;
         setError('');
+        setAttachments([]);
         setState((current) =>
             steering
-                ? queueUserMessage(current, task, queuedId)
-                : addUserMessage(current, task)
+                ? queueUserMessage(current, task, queuedId, imageNames)
+                : addUserMessage(current, task, crypto.randomUUID(), imageNames)
         );
         try {
-            if (steering) await session.steer(task);
-            else await session.send(task);
+            if (steering) await session.steer(input);
+            else await session.send(input);
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : String(cause);
             setError(message);
+            setAttachments((current) => [...images, ...current]);
             setState((current) => ({
                 ...current,
                 ...(queuedId
@@ -187,6 +214,29 @@ export function ChatScreen(props: ChatScreenProps) {
                 busy: false,
                 status: 'Failed',
             }));
+        }
+    };
+    const paste = async (value: string): Promise<boolean> => {
+        try {
+            const image = await attachmentReader.readPasted(value);
+            if (!image) return false;
+            if (imageInput.status === 'unsupported') {
+                setError(
+                    imageInput.detail ??
+                        `${props.resolved.workbench.manifest.runner} does not support image input`
+                );
+                return true;
+            }
+            setAttachments((current) =>
+                current.some((attachment) => attachment.path === image.path)
+                    ? current
+                    : [...current, image]
+            );
+            setError('');
+            return true;
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+            return true;
         }
     };
 
@@ -369,10 +419,13 @@ export function ChatScreen(props: ChatScreenProps) {
                                 }}
                                 busy={state().busy}
                                 disabled={!sessionReady()}
+                                acceptsImages={imageInput.status !== 'unsupported'}
                                 queued={state().queued}
+                                attachments={attachments()}
                                 history={history}
                                 commands={commands.registry}
                                 onSubmit={submit}
+                                onPaste={paste}
                                 onCommand={(command, argument) =>
                                     commands.run(command, argument)
                                 }

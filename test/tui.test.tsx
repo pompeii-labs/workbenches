@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Renderable, TextareaRenderable } from '@opentui/core';
 import { testRender } from '@opentui/solid';
 
 import type { CatalogEntry } from '../src/catalog/index.js';
+import type { RunnerInput } from '../src/runners/session.js';
 import type {
     RunControlDisposition,
     RunControlKind,
@@ -17,10 +21,16 @@ import { ThemeController, ThemeProvider } from '../src/tui/theme/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
 const renderers: Array<{ destroy(): void }> = [];
+const temporaryDirectories: string[] = [];
 const themes = new ThemeController('/tmp/workbench-tui-tests');
 
-afterEach(() => {
+afterEach(async () => {
     for (const renderer of renderers.splice(0)) renderer.destroy();
+    await Promise.all(
+        temporaryDirectories
+            .splice(0)
+            .map((directory) => rm(directory, { recursive: true, force: true }))
+    );
 });
 
 describe.serial('Workbench TUI', () => {
@@ -156,6 +166,66 @@ describe.serial('Workbench TUI', () => {
         expect(setup.captureCharFrame()).toContain('Themes');
         expect(setup.captureCharFrame()).toContain('Flexoki');
         expect(sent).toBe(0);
+    });
+
+    test('turns a dragged image path into a transient prompt attachment', async () => {
+        const workspace = await mkdtemp(join(tmpdir(), 'workbench-tui-drop-'));
+        temporaryDirectories.push(workspace);
+        const image = join(workspace, 'reference image.png');
+        await writeFile(image, Uint8Array.from([1, 2, 3]));
+        let submitted: RunnerInput | undefined;
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench(
+                                'creator',
+                                'opencode',
+                                workspace
+                            ),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () =>
+                            fakeHandle((input) => {
+                                submitted = input;
+                            })
+                        }
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        await setup.mockInput.pasteBracketedText(image.replaceAll(' ', '\\ '));
+        await Bun.sleep(5);
+        await setup.flush();
+
+        expect(setup.captureCharFrame()).toContain('[image reference image.png]');
+        const prompt = findPrompt(setup.renderer.root);
+        expect(prompt.plainText).toBe('');
+        prompt.setText('Inspect this image');
+        prompt.submit();
+        await setup.flush();
+
+        expect(submitted).toEqual({
+            text: 'Inspect this image',
+            images: [
+                {
+                    name: 'reference image.png',
+                    mimeType: 'image/png',
+                    data: 'AQID',
+                },
+            ],
+        });
     });
 
     test('coalesces repeated cancellation requests while one is pending', async () => {
@@ -357,9 +427,13 @@ function entry(alias: string): CatalogEntry {
     };
 }
 
-function resolvedWorkbench(name: string, runner: string): ResolvedWorkbenchReference {
+function resolvedWorkbench(
+    name: string,
+    runner: string,
+    workspaceDirectory = '/tmp/workspace'
+): ResolvedWorkbenchReference {
     return {
-        workspaceDirectory: '/tmp/workspace',
+        workspaceDirectory,
         cleanup: async () => {},
         workbench: {
             manifestPath: `/tmp/${name}/workbench.yml`,
@@ -406,7 +480,7 @@ function deferred<T>() {
     return { promise, resolve };
 }
 
-function fakeHandle(onSend: () => void): RunHandle {
+function fakeHandle(onSend: (input: RunnerInput) => void): RunHandle {
     const control = async () => receipt('send', 'queued');
     return {
         runId: 'wb_tui_test',
@@ -422,12 +496,12 @@ function fakeHandle(onSend: () => void): RunHandle {
             };
         })(),
         result: new Promise(() => {}),
-        send: async () => {
-            onSend();
+        send: async (input) => {
+            onSend(input);
             return control();
         },
-        steer: async () => {
-            onSend();
+        steer: async (input) => {
+            onSend(input);
             return control();
         },
         followUp: control,

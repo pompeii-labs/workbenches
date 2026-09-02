@@ -1,8 +1,13 @@
-import type { TextareaRenderable } from '@opentui/core';
+import {
+    decodePasteBytes,
+    type PasteEvent,
+    type TextareaRenderable,
+} from '@opentui/core';
 import { createMemo, createSignal, For, Show } from 'solid-js';
 import type { TuiCommand, TuiCommandRegistry } from '../commands/registry.js';
 import type { QueuedTranscriptInput } from '../model.js';
 import { useTheme } from '../theme/index.js';
+import type { PromptImageAttachment } from './attachments.js';
 import type { PromptHistory } from './history.js';
 
 export interface ComposerRef {
@@ -13,10 +18,13 @@ export interface ComposerRef {
 export interface ComposerProps {
     busy: boolean;
     disabled: boolean;
+    acceptsImages: boolean;
     queued: QueuedTranscriptInput[];
+    attachments: PromptImageAttachment[];
     history: PromptHistory;
     commands: TuiCommandRegistry;
     onSubmit: (value: string) => void | Promise<void>;
+    onPaste: (value: string) => Promise<boolean>;
     onCommand: (command: TuiCommand, argument: string) => void | Promise<void>;
     onUnknownCommand: (name: string) => void;
     onOpenPalette: () => void;
@@ -98,7 +106,25 @@ export function Composer(props: ComposerProps) {
                                     {' '}
                                     {queued.text}
                                 </text>
+                                <Show when={queued.images?.length}>
+                                    <text fg={theme.secondary}>
+                                        {' '}
+                                        {queued.images
+                                            ?.map((name) => `[image ${name}]`)
+                                            .join(' ')}
+                                    </text>
+                                </Show>
                             </box>
+                        )}
+                    </For>
+                </box>
+            </Show>
+            <Show when={props.attachments.length > 0}>
+                <box flexDirection="row" gap={1} marginBottom={1} paddingX={1}>
+                    <text fg={theme.textMuted}>ATTACHED</text>
+                    <For each={props.attachments}>
+                        {(attachment) => (
+                            <text fg={theme.secondary}>[image {attachment.name}]</text>
                         )}
                     </For>
                 </box>
@@ -188,6 +214,20 @@ export function Composer(props: ComposerProps) {
                         setSelected(0);
                         props.history.reset();
                     }}
+                    onPaste={(event: PasteEvent) => {
+                        if (props.disabled) {
+                            event.preventDefault();
+                            return;
+                        }
+                        const text = decodePasteBytes(event.bytes)
+                            .replace(/\r\n/gu, '\n')
+                            .replace(/\r/gu, '\n');
+                        event.preventDefault();
+                        void props.onPaste(text).then((attached) => {
+                            if (attached || !input || input.isDestroyed) return;
+                            input.insertText(text);
+                        });
+                    }}
                     onKeyDown={(key) => {
                         if (props.disabled) {
                             key.preventDefault();
@@ -231,7 +271,10 @@ export function Composer(props: ComposerProps) {
                 />
             </box>
             <box flexDirection="row" justifyContent="space-between" paddingX={1}>
-                <text fg={theme.textMuted}>shift+enter newline · ctrl+k commands</text>
+                <text fg={theme.textMuted}>
+                    {props.acceptsImages ? 'drop image · ' : ''}shift+enter newline ·
+                    ctrl+k commands
+                </text>
                 <text fg={theme.textMuted}>
                     {props.busy ? 'enter steer' : 'enter send'}
                 </text>

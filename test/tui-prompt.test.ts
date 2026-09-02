@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { TuiCommandRegistry } from '../src/tui/commands/registry.js';
+import { PromptAttachmentReader } from '../src/tui/prompt/attachments.js';
 import {
     PromptHistory,
     parsePromptHistory,
@@ -51,6 +52,32 @@ describe('TUI prompt history', () => {
                 .trim()
                 .split('\n')
         ).toHaveLength(2);
+    });
+});
+
+describe('TUI prompt attachments', () => {
+    test('loads supported images without exposing a file path to the runner', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-attachments-'));
+        homes.push(home);
+        await writeFile(join(home, 'reference image.png'), Uint8Array.from([1, 2, 3]));
+
+        const attachment = await new PromptAttachmentReader(home).readPasted(
+            'reference\\ image.png'
+        );
+        expect(attachment).toMatchObject({
+            name: 'reference image.png',
+            mimeType: 'image/png',
+            data: 'AQID',
+        });
+        expect(attachment?.path).toBe(join(home, 'reference image.png'));
+    });
+
+    test('leaves ordinary pasted text and unsupported files in the composer', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-attachments-'));
+        homes.push(home);
+        const reader = new PromptAttachmentReader(home);
+        expect(await reader.readPasted('ordinary pasted text')).toBeUndefined();
+        expect(await reader.readPasted('credentials.json')).toBeUndefined();
     });
 });
 
