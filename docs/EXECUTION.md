@@ -39,6 +39,12 @@ Every capability has one of three outcomes:
 - `degraded` is usable with a documented semantic limitation.
 - `unsupported` is rejected or omitted deliberately, with a documented reason.
 
+Adapters translate native runner behavior; they do not create runner features.
+A capability can be `supported` only when the verified native interface exposes
+the behavior being normalized. The engine does not inject tools, extensions, or
+prompts to manufacture a missing capability. Publisher-supplied `runner_config`
+remains native runner configuration and does not change the adapter declaration.
+
 An adapter cannot be registered without a verified native version, a named
 native interface, and an outcome for every capability. A declaration is
 evidence about the listed native versions and interfaces only. It is not a

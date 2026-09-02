@@ -8,6 +8,7 @@ import { type PreparedRunner, Runner } from '../src/runners/runner.js';
 import {
     normalizeRunnerInput,
     type RunnerInput,
+    type RunnerQuestionResponse,
     type RunnerSession,
     type RunnerSessionAdapter,
     type RunnerSessionStartOptions,
@@ -239,6 +240,76 @@ describe('interactive run worker', () => {
         );
     });
 
+    test('routes question answers through the durable control channel', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const adapter = new ControlledAdapter({ requestQuestion: true });
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+
+        const turn = handle.send('configure deployment');
+        await adapter.questionRequested;
+        await expect(
+            handle.respondToQuestion('question-1', {
+                outcome: 'answered',
+                answers: [['private answer']],
+            })
+        ).resolves.toMatchObject({ disposition: 'delivered' });
+        await turn;
+        await handle.close();
+        await execution;
+
+        expect(adapter.questionResponses).toEqual([
+            { outcome: 'answered', answers: [['private answer']] },
+        ]);
+        const events = await collect(handle.events);
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                type: 'question.requested',
+                data: expect.objectContaining({ id: 'question-1' }),
+            })
+        );
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                type: 'question.answered',
+                data: { id: 'question-1', answer_count: 1 },
+            })
+        );
+        expect(JSON.stringify(events)).not.toContain('private answer');
+    });
+
+    test('rejects an active question when its turn is cancelled', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const adapter = new ControlledAdapter({ requestQuestion: true });
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+
+        const turn = handle.send('configure deployment');
+        await adapter.questionRequested;
+        await expect(handle.cancelTurn()).resolves.toMatchObject({
+            disposition: 'cancelled',
+        });
+        await turn;
+        await handle.close();
+        await execution;
+
+        expect(adapter.questionResponses).toEqual([{ outcome: 'rejected' }]);
+        const events = await collect(handle.events);
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                type: 'question.rejected',
+                data: { id: 'question-1' },
+            })
+        );
+    });
+
     test('records a normalized terminal event when startup fails', async () => {
         const home = await temporaryHome();
         const stored = await fixtureRun(home);
@@ -380,6 +451,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
     readonly prompts: string[] = [];
     readonly steers: string[] = [];
     readonly permissionDecisions: string[] = [];
+    readonly questionResponses: RunnerQuestionResponse[] = [];
     cancellations = 0;
     starts = 0;
     private host?: RunnerSessionStartOptions['host'];
@@ -387,6 +459,8 @@ class ControlledAdapter implements RunnerSessionAdapter {
     private readonly promptWaiters: Array<() => void> = [];
     private readonly markPermissionRequested: () => void;
     readonly permissionRequested: Promise<void>;
+    private readonly markQuestionRequested: () => void;
+    readonly questionRequested: Promise<void>;
 
     private readonly steeringDelivery: Promise<void>;
     private readonly resolveSteeringDelivery: () => void;
@@ -394,6 +468,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
     constructor(
         private readonly options: {
             requestPermission?: boolean;
+            requestQuestion?: boolean;
             deferSteeringDelivery?: boolean;
         } = {}
     ) {
@@ -402,6 +477,11 @@ class ControlledAdapter implements RunnerSessionAdapter {
             markPermissionRequested = resolve;
         });
         this.markPermissionRequested = markPermissionRequested;
+        let markQuestionRequested!: () => void;
+        this.questionRequested = new Promise((resolve) => {
+            markQuestionRequested = resolve;
+        });
+        this.markQuestionRequested = markQuestionRequested;
         let resolveSteeringDelivery!: () => void;
         this.steeringDelivery = new Promise((resolve) => {
             resolveSteeringDelivery = resolve;
@@ -445,6 +525,20 @@ class ControlledAdapter implements RunnerSessionAdapter {
                     allowAlways: true,
                 });
                 if (decision) this.permissionDecisions.push(decision);
+            } else if (this.options.requestQuestion) {
+                this.markQuestionRequested();
+                const response = await this.host?.requestQuestion({
+                    id: 'question-1',
+                    questions: [
+                        {
+                            question: 'Which environment?',
+                            options: [{ label: 'Production' }, { label: 'Staging' }],
+                            multiple: false,
+                            custom: true,
+                        },
+                    ],
+                });
+                if (response) this.questionResponses.push(response);
             } else {
                 await new Promise<void>((resolve) => {
                     this.releaseFirst = resolve;

@@ -9,6 +9,8 @@ import {
     type RunnerInputDelivery,
     type RunnerPermissionDecision,
     type RunnerPermissionRequest,
+    type RunnerQuestionRequest,
+    type RunnerQuestionResponse,
     type RunnerSession,
 } from '../runners/session.js';
 import { type PreparedRuntime, RuntimeRegistry } from '../runtimes/index.js';
@@ -51,6 +53,9 @@ export interface InteractiveRunOptions {
     onPermission?: (
         request: RunnerPermissionRequest
     ) => Promise<RunnerPermissionDecision> | RunnerPermissionDecision;
+    onQuestion?: (
+        request: RunnerQuestionRequest
+    ) => Promise<RunnerQuestionResponse> | RunnerQuestionResponse;
     dependencies?: InteractiveRunDependencies;
     workspaces?: WorkbenchWorkspaceBinding[];
 }
@@ -118,6 +123,8 @@ export class InteractiveRun {
                     },
                     requestPermission: (request) =>
                         this.requestPermission(emitter, request),
+                    requestQuestion: (request) =>
+                        this.requestQuestion(emitter, request),
                 },
             });
             await emitter.emit('run.ready', {
@@ -207,6 +214,9 @@ export class InteractiveRun {
         emitter: RunEvents,
         request: RunnerPermissionRequest
     ): Promise<RunnerPermissionDecision> {
+        const decision = this.options.onPermission
+            ? this.options.onPermission(request)
+            : Promise.resolve('reject' as const);
         await emitter.emit('input.requested', {
             id: request.id,
             kind: 'permission',
@@ -219,9 +229,37 @@ export class InteractiveRun {
                 'reject',
             ],
         });
-        return this.options.onPermission
-            ? await this.options.onPermission(request)
-            : 'reject';
+        return decision;
+    }
+
+    private async requestQuestion(
+        emitter: RunEvents,
+        request: RunnerQuestionRequest
+    ): Promise<RunnerQuestionResponse> {
+        const response = this.options.onQuestion
+            ? this.options.onQuestion(request)
+            : Promise.resolve({ outcome: 'rejected' as const });
+        await emitter.emit('question.requested', {
+            id: request.id,
+            questions: request.questions.map((question) => ({
+                question: question.question,
+                ...(question.header ? { header: question.header } : {}),
+                options: question.options.map((option) => ({
+                    label: option.label,
+                    ...(option.description ? { description: option.description } : {}),
+                })),
+                multiple: question.multiple,
+                custom: question.custom,
+            })),
+        });
+        const resolved = await response;
+        await emitter.emit(
+            resolved.outcome === 'answered' ? 'question.answered' : 'question.rejected',
+            resolved.outcome === 'answered'
+                ? { id: request.id, answer_count: resolved.answers.length }
+                : { id: request.id }
+        );
+        return resolved;
     }
 
     private static errorMessage(error: unknown): string {

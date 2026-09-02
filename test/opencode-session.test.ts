@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRouter } from '../src/models/index.js';
 import { OpenCodeSessionAdapter } from '../src/runners/opencode/session.js';
-import type { RunnerPermissionRequest } from '../src/runners/session.js';
+import type {
+    RunnerPermissionRequest,
+    RunnerQuestionRequest,
+} from '../src/runners/session.js';
 import type { WorkbenchEventDraft } from '../src/runs/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import {
@@ -50,6 +53,7 @@ describe('OpenCode interactive server adapter', () => {
                 host: {
                     emit: async () => {},
                     requestPermission: async () => 'reject',
+                    requestQuestion: async () => ({ outcome: 'rejected' }),
                 },
             });
             expect(server.spawnEnvironment.OPENCODE_CONFIG).toBeUndefined();
@@ -73,6 +77,7 @@ describe('OpenCode interactive server adapter', () => {
             host: {
                 emit: async (event) => void events.push(event),
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         server.onPrompt = () => server.completeTurn('described');
@@ -113,6 +118,7 @@ describe('OpenCode interactive server adapter', () => {
             host: {
                 emit: async (event) => void events.push(event),
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
 
@@ -175,6 +181,7 @@ describe('OpenCode interactive server adapter', () => {
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         server.onPrompt = () =>
@@ -225,6 +232,7 @@ describe('OpenCode interactive server adapter', () => {
             host: {
                 emit: async (event) => void events.push(event),
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         server.onPrompt = () =>
@@ -270,6 +278,7 @@ describe('OpenCode interactive server adapter', () => {
                     requests.push(request);
                     return 'allow_once';
                 },
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         server.onPrompt = () => {
@@ -330,6 +339,7 @@ describe('OpenCode interactive server adapter', () => {
                     prompts += 1;
                     return 'allow_always';
                 },
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         server.onPrompt = () => {
@@ -352,6 +362,134 @@ describe('OpenCode interactive server adapter', () => {
         expect(server.permissionReplies).toEqual([{ reply: 'always' }]);
     });
 
+    test('normalizes native questions and returns answers to OpenCode', async () => {
+        const server = new FakeOpenCodeServer();
+        const requests: RunnerQuestionRequest[] = [];
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject',
+                requestQuestion: async (request) => {
+                    requests.push(request);
+                    return {
+                        outcome: 'answered',
+                        answers: [['Production'], ['Email', 'Push']],
+                    };
+                },
+            },
+        });
+        server.onPrompt = () => {
+            server.emit('session.status', { status: { type: 'busy' } });
+            server.emit('question.asked', {
+                id: 'que_1',
+                questions: [
+                    {
+                        header: 'Environment',
+                        question: 'Where should this deploy?',
+                        options: [
+                            {
+                                label: 'Production',
+                                description: 'Deploy for customers',
+                            },
+                            { label: 'Staging', description: 'Test it first' },
+                        ],
+                        custom: false,
+                    },
+                    {
+                        header: 'Channels',
+                        question: 'Which channels should be enabled?',
+                        options: [
+                            { label: 'Email', description: 'Email delivery' },
+                            { label: 'Push', description: 'Push delivery' },
+                        ],
+                        multiple: true,
+                    },
+                ],
+            });
+        };
+        server.onQuestionResponse = () => server.completeTurn('configured');
+
+        await session.prompt('configure deployment');
+        await session.close();
+
+        expect(requests).toEqual([
+            {
+                id: 'que_1',
+                questions: [
+                    {
+                        header: 'Environment',
+                        question: 'Where should this deploy?',
+                        options: [
+                            {
+                                label: 'Production',
+                                description: 'Deploy for customers',
+                            },
+                            { label: 'Staging', description: 'Test it first' },
+                        ],
+                        multiple: false,
+                        custom: false,
+                    },
+                    {
+                        header: 'Channels',
+                        question: 'Which channels should be enabled?',
+                        options: [
+                            { label: 'Email', description: 'Email delivery' },
+                            { label: 'Push', description: 'Push delivery' },
+                        ],
+                        multiple: true,
+                        custom: true,
+                    },
+                ],
+            },
+        ]);
+        expect(server.questionResponses).toEqual([
+            {
+                path: '/question/que_1/reply',
+                body: { answers: [['Production'], ['Email', 'Push']] },
+            },
+        ]);
+    });
+
+    test('rejects a dismissed native question through OpenCode', async () => {
+        const server = new FakeOpenCodeServer();
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+        server.onPrompt = () => {
+            server.emit('session.status', { status: { type: 'busy' } });
+            server.emit('question.asked', {
+                id: 'que_dismissed',
+                questions: [
+                    {
+                        question: 'Continue?',
+                        options: [{ label: 'Yes' }, { label: 'No' }],
+                        custom: false,
+                    },
+                ],
+            });
+        };
+        server.onQuestionResponse = () => server.completeTurn('dismissed');
+
+        await session.prompt('ask before continuing');
+        await session.close();
+
+        expect(server.questionResponses).toEqual([
+            { path: '/question/que_dismissed/reject' },
+        ]);
+    });
+
     test('does not fail a turn when a permission was already resolved', async () => {
         const server = new FakeOpenCodeServer();
         server.permissionReplyStatus = 404;
@@ -363,6 +501,7 @@ describe('OpenCode interactive server adapter', () => {
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'allow_once',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         server.onPrompt = () => {
@@ -390,6 +529,7 @@ describe('OpenCode interactive server adapter', () => {
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         server.onPrompt = () =>
@@ -417,6 +557,7 @@ describe('OpenCode interactive server adapter', () => {
             host: {
                 emit: async (event) => void events.push(event),
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         server.onPrompt = () => {};
@@ -480,6 +621,7 @@ describe('OpenCode interactive server adapter', () => {
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         server.onPrompt = () => {};
@@ -530,6 +672,7 @@ describe('OpenCode interactive server adapter', () => {
                     permissionRequested();
                     return new Promise(() => {});
                 },
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         server.onPrompt = () => {
@@ -559,6 +702,7 @@ describe('OpenCode interactive server adapter', () => {
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
 
@@ -574,6 +718,10 @@ describe('OpenCode interactive server adapter', () => {
 class FakeOpenCodeServer {
     readonly promptBodies: Record<string, unknown>[] = [];
     readonly permissionReplies: Record<string, unknown>[] = [];
+    readonly questionResponses: Array<{
+        path: string;
+        body?: Record<string, unknown>;
+    }> = [];
     createdSessions = 0;
     aborts = 0;
     kills = 0;
@@ -582,6 +730,7 @@ class FakeOpenCodeServer {
     spawnEnvironment: Record<string, string | undefined> = {};
     onPrompt?: (body: Record<string, unknown>) => void;
     onPermissionReply?: (body: Record<string, unknown>) => void;
+    onQuestionResponse?: () => void;
     private eventController?: ReadableStreamDefaultController<Uint8Array>;
     private stdoutController?: ReadableStreamDefaultController<Uint8Array>;
     private stderrController?: ReadableStreamDefaultController<Uint8Array>;
@@ -683,6 +832,26 @@ class FakeOpenCodeServer {
                 });
             };
             this.onPermissionReply = () => this.completeTurn('approved');
+            return;
+        }
+        if (scenario === 'questions') {
+            this.onPrompt = () => {
+                this.emit('session.status', { status: { type: 'busy' } });
+                this.emit('question.asked', {
+                    id: 'question_contract',
+                    questions: [
+                        {
+                            question: 'Where should this deploy?',
+                            options: [
+                                { label: 'Production', description: '' },
+                                { label: 'Staging', description: '' },
+                            ],
+                            custom: false,
+                        },
+                    ],
+                });
+            };
+            this.onQuestionResponse = () => this.completeTurn('configured');
             return;
         }
         if (scenario === 'multi_turn') {
@@ -878,6 +1047,17 @@ class FakeOpenCodeServer {
                     this.emit('session.status', { status: { type: 'idle' } })
                 );
             }
+            return Response.json(true);
+        }
+        if (url.pathname.startsWith('/question/')) {
+            const body = init.body
+                ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+                : undefined;
+            this.questionResponses.push({
+                path: url.pathname,
+                ...(body ? { body } : {}),
+            });
+            queueMicrotask(() => this.onQuestionResponse?.());
             return Response.json(true);
         }
         if (url.pathname.endsWith('/reply')) {

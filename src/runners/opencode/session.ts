@@ -4,6 +4,7 @@ import type {
     RunnerInput,
     RunnerInputDelivery,
     RunnerPermissionDecision,
+    RunnerQuestionPrompt,
     RunnerSession,
     RunnerSessionAdapter,
     RunnerSessionStartOptions,
@@ -13,6 +14,7 @@ import { normalizeRunnerInput } from '../session.js';
 import { stageOpenCodeSkills } from './assets.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
+import { OpenCodeQuestion } from './question.js';
 import {
     type OpenCodeFetch,
     OpenCodeServer,
@@ -23,7 +25,10 @@ import {
 export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
     native: {
         command: 'opencode',
-        verified: [{ version: '1.18.22', surfaces: ['server'] }],
+        verified: [
+            { version: '1.18.22', surfaces: ['server'] },
+            { version: '1.18.26', surfaces: ['server'] },
+        ],
     },
     capabilities: {
         streaming_text: { status: 'supported' },
@@ -31,6 +36,7 @@ export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
         file_events: { status: 'supported' },
         usage: { status: 'supported' },
         permissions: { status: 'supported' },
+        questions: { status: 'supported' },
         multi_turn: { status: 'supported' },
         steering: { status: 'supported' },
         image_input: { status: 'supported' },
@@ -129,6 +135,7 @@ class OpenCodeServerSession implements RunnerSession {
     private readonly streamedTextParts = new Set<string>();
     private readonly assistantTextParts = new Set<string>();
     private readonly alwaysPermissions: AlwaysPermission[] = [];
+    private readonly questions = new OpenCodeQuestion();
     private nativeSessionId: string | undefined;
     private active: ActiveTurn | undefined;
     private closed = false;
@@ -291,6 +298,11 @@ class OpenCodeServerSession implements RunnerSession {
             await this.answerPermission(properties);
             return;
         }
+        if (type === 'question.asked') {
+            await this.answerQuestion(properties);
+            return;
+        }
+        if (type === 'question.replied' || type === 'question.rejected') return;
 
         const sessionId = string(properties.sessionID);
         if (!sessionId || sessionId !== this.nativeSessionId) return;
@@ -427,6 +439,44 @@ class OpenCodeServerSession implements RunnerSession {
                 resources: new Set(always.length > 0 ? always : resources),
             });
         }
+    }
+
+    private async answerQuestion(properties: Record<string, unknown>) {
+        const id = string(properties.id);
+        const sessionId = string(properties.sessionID);
+        if (!id || !sessionId || sessionId !== this.nativeSessionId) return;
+        let questions: RunnerQuestionPrompt[];
+        try {
+            questions = this.questions.fromNative(properties.questions);
+        } catch (error) {
+            await this.server
+                .replyQuestion(`/question/${encodeURIComponent(id)}/reject`)
+                .catch(() => false);
+            throw error;
+        }
+        const response = await Promise.race([
+            this.options.host.requestQuestion({ id, questions }),
+            this.closing.promise.then(() => undefined),
+        ]);
+        if (!response || this.closed) return;
+        if (response.outcome === 'rejected') {
+            await this.server.replyQuestion(
+                `/question/${encodeURIComponent(id)}/reject`
+            );
+            return;
+        }
+        let answers: string[][];
+        try {
+            answers = this.questions.answers(questions, response);
+        } catch (error) {
+            await this.server
+                .replyQuestion(`/question/${encodeURIComponent(id)}/reject`)
+                .catch(() => false);
+            throw error;
+        }
+        await this.server.replyQuestion(`/question/${encodeURIComponent(id)}/reply`, {
+            answers,
+        });
     }
 
     private async replyPermission(

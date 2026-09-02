@@ -5,6 +5,7 @@ import {
     normalizeRunnerInput,
     type RunnerInput,
     type RunnerPermissionDecision,
+    type RunnerQuestionResponse,
 } from '../runners/session.js';
 
 export type RunControlKind =
@@ -13,6 +14,7 @@ export type RunControlKind =
     | 'follow_up'
     | 'cancel_turn'
     | 'permission'
+    | 'question'
     | 'close'
     | 'cancel';
 
@@ -25,6 +27,10 @@ export interface RunControlRequest {
     permission?: {
         id: string;
         decision: RunnerPermissionDecision;
+    };
+    question?: {
+        id: string;
+        response: RunnerQuestionResponse;
     };
     reason?: string;
 }
@@ -57,6 +63,10 @@ export type RunControlSubmission =
     | {
           kind: 'permission';
           permission: { id: string; decision: RunnerPermissionDecision };
+      }
+    | {
+          kind: 'question';
+          question: { id: string; response: RunnerQuestionResponse };
       };
 
 interface RunControlOptions {
@@ -147,6 +157,7 @@ export class RunControl {
             ...('permission' in submission
                 ? { permission: submission.permission }
                 : {}),
+            ...('question' in submission ? { question: submission.question } : {}),
             ...('reason' in submission && submission.reason?.trim()
                 ? { reason: submission.reason.trim() }
                 : {}),
@@ -294,6 +305,7 @@ const runControlKinds = new Set<RunControlKind>([
     'follow_up',
     'cancel_turn',
     'permission',
+    'question',
     'close',
     'cancel',
 ]);

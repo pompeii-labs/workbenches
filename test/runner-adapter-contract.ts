@@ -6,6 +6,7 @@ import {
     type RunnerCapability,
     type RunnerPermissionDecision,
     type RunnerPermissionRequest,
+    type RunnerQuestionRequest,
     type RunnerSession,
     type RunnerSessionAdapter,
 } from '../src/runners/session.js';
@@ -27,6 +28,7 @@ export type RunnerConformanceScenario =
     | 'streaming_text'
     | 'tool_events'
     | 'permissions'
+    | 'questions'
     | 'multi_turn'
     | 'steering'
     | 'image_input'
@@ -162,6 +164,35 @@ export function runnerAdapterContract(options: {
                         allowAlways: true,
                     },
                 ]);
+            } finally {
+                await observed.session.close();
+            }
+        });
+
+        test('pauses for a normalized question and returns the answer', async () => {
+            if (!supported(options, 'questions')) return;
+            const harness = options.createHarness();
+            harness.arrange('questions');
+            const observed = await start(harness);
+            try {
+                await observed.session.prompt('ask a question');
+                expect(observed.questions).toEqual([
+                    {
+                        id: expect.any(String),
+                        questions: [
+                            {
+                                question: 'Where should this deploy?',
+                                options: [
+                                    { label: 'Production' },
+                                    { label: 'Staging' },
+                                ],
+                                multiple: false,
+                                custom: false,
+                            },
+                        ],
+                    },
+                ]);
+                assertSafe(observed.events);
             } finally {
                 await observed.session.close();
             }
@@ -304,9 +335,11 @@ async function start(
     session: RunnerSession;
     events: WorkbenchEventDraft[];
     permissions: RunnerPermissionRequest[];
+    questions: RunnerQuestionRequest[];
 }> {
     const events: WorkbenchEventDraft[] = [];
     const permissions: RunnerPermissionRequest[] = [];
+    const questions: RunnerQuestionRequest[] = [];
     const session = await harness.adapter.start({
         workbench: harness.workbench,
         workspaceDirectory: '/workspace',
@@ -320,9 +353,13 @@ async function start(
                 permissions.push(request);
                 return decision;
             },
+            requestQuestion: async (request) => {
+                questions.push(request);
+                return { outcome: 'answered', answers: [['Production']] };
+            },
         },
     });
-    return { session, events, permissions };
+    return { session, events, permissions, questions };
 }
 
 function assertSafe(events: WorkbenchEventDraft[]): void {

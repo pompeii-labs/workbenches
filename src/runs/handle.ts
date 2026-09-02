@@ -1,4 +1,8 @@
-import type { RunnerInput, RunnerPermissionDecision } from '../runners/session.js';
+import type {
+    RunnerInput,
+    RunnerPermissionDecision,
+    RunnerQuestionResponse,
+} from '../runners/session.js';
 import {
     RunControl,
     type RunControlReceipt,
@@ -25,6 +29,10 @@ export interface RunHandle {
     respondToPermission(
         id: string,
         decision: RunnerPermissionDecision
+    ): Promise<RunControlReceipt>;
+    respondToQuestion(
+        id: string,
+        response: RunnerQuestionResponse
     ): Promise<RunControlReceipt>;
     close(): Promise<RunControlReceipt>;
     cancel(reason?: string): Promise<RunControlReceipt>;
@@ -72,6 +80,18 @@ export class StoredRunHandle implements RunHandle {
         return this.submit({
             kind: 'permission',
             permission: { id: normalized, decision },
+        });
+    }
+
+    respondToQuestion(
+        id: string,
+        response: RunnerQuestionResponse
+    ): Promise<RunControlReceipt> {
+        const normalized = id.trim();
+        if (!normalized) return Promise.reject(new Error('question ID is required'));
+        return this.submit({
+            kind: 'question',
+            question: { id: normalized, response },
         });
     }
 

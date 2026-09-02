@@ -1,6 +1,8 @@
 import type {
     RunnerPermissionDecision,
     RunnerPermissionRequest,
+    RunnerQuestionRequest,
+    RunnerQuestionResponse,
 } from '../runners/session.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { Workbench } from '../workbench/workbench.js';
@@ -28,6 +30,10 @@ export class InteractiveRunWorker {
     private readonly permissions = new Map<
         string,
         (decision: RunnerPermissionDecision) => void
+    >();
+    private readonly questions = new Map<
+        string,
+        (response: RunnerQuestionResponse) => void
     >();
     private readonly queued: RunControlRequest[] = [];
     private session: InteractiveRunSession | undefined;
@@ -72,6 +78,7 @@ export class InteractiveRunWorker {
                 workspaces: request.workspaces ?? [],
                 onEvent: (event) => this.store.appendEvent(this.runId, event),
                 onPermission: (permission) => this.waitForPermission(permission),
+                onQuestion: (question) => this.waitForQuestion(question),
                 dependencies: {
                     env: options.environment ?? process.env,
                     ...(this.dependencies.findExecutable
@@ -96,6 +103,7 @@ export class InteractiveRunWorker {
         } finally {
             this.receiveAbort.abort();
             this.rejectPermissions();
+            this.rejectQuestions();
             await this.control
                 .rejectPending(
                     'run_terminal',
@@ -123,6 +131,9 @@ export class InteractiveRunWorker {
             }
             if (request.kind === 'permission') {
                 return await this.answerPermission(request);
+            }
+            if (request.kind === 'question') {
+                return await this.answerQuestion(request);
             }
             if (request.kind === 'close') return await this.close(request, false);
             await this.close(request, true);
@@ -208,6 +219,7 @@ export class InteractiveRunWorker {
         await this.accept(request);
         this.drainPaused = true;
         try {
+            this.rejectQuestions();
             await session.cancelTurn();
             await session.recordInput('input.delivered', this.eventData(request));
             await this.control.resolve(request, {
@@ -240,6 +252,26 @@ export class InteractiveRunWorker {
         });
     }
 
+    private async answerQuestion(request: RunControlRequest): Promise<void> {
+        const question = request.question;
+        const resolve = question ? this.questions.get(question.id) : undefined;
+        if (!question || !resolve) {
+            return this.reject(
+                request,
+                'question_unavailable',
+                'Question request is no longer active'
+            );
+        }
+        await this.accept(request);
+        this.questions.delete(question.id);
+        resolve(question.response);
+        await this.session?.recordInput('input.delivered', this.eventData(request));
+        await this.control.resolve(request, {
+            outcome: 'accepted',
+            disposition: 'delivered',
+        });
+    }
+
     private async close(request: RunControlRequest, cancelled: boolean): Promise<void> {
         if (this.terminal) {
             return this.reject(
@@ -252,6 +284,7 @@ export class InteractiveRunWorker {
         this.terminal = true;
         this.receiveAbort.abort();
         this.rejectPermissions();
+        this.rejectQuestions();
         await this.rejectQueued('run_terminal');
         try {
             if (cancelled) await this.session?.cancel(request.reason);
@@ -347,12 +380,29 @@ export class InteractiveRunWorker {
         this.permissions.clear();
     }
 
+    private waitForQuestion(
+        request: RunnerQuestionRequest
+    ): Promise<RunnerQuestionResponse> {
+        return new Promise((resolve) => {
+            this.questions.get(request.id)?.({ outcome: 'rejected' });
+            this.questions.set(request.id, resolve);
+        });
+    }
+
+    private rejectQuestions(): void {
+        for (const resolve of this.questions.values()) {
+            resolve({ outcome: 'rejected' });
+        }
+        this.questions.clear();
+    }
+
     private async fail(error: unknown): Promise<void> {
         if (this.terminal) return;
         this.terminal = true;
         this.exitCode = 1;
         this.receiveAbort.abort();
         this.rejectPermissions();
+        this.rejectQuestions();
         await this.rejectQueued('run_failed').catch(() => {});
         await this.session?.close().catch(() => {});
         await this.recordFailure(error).catch(() => {});
