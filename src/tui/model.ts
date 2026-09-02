@@ -244,6 +244,12 @@ export function reduceTranscript(
     if (event.type === 'input.requested') {
         return { ...state, busy: true, status: 'Needs permission' };
     }
+    if (event.type === 'question.requested') {
+        return { ...state, busy: true, status: 'Needs input' };
+    }
+    if (event.type === 'question.answered' || event.type === 'question.rejected') {
+        return { ...state, busy: true, status: 'Working' };
+    }
     if (event.type === 'usage.updated') {
         const tokens = numeric(event.data, 'total_tokens');
         const cost = numeric(event.data, 'cost_usd');

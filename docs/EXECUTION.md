@@ -29,8 +29,9 @@ No runner is asked to interpret the Workbench manifest itself.
 Each registered runner adapter declares the native command it drives, the exact
 native versions and interfaces it has been verified against, and an exhaustive
 capability map. The initial capability catalog covers streamed assistant text,
-tool events, file changes, usage, permissions, multiple turns, steering, image
-input, image generation, cancellation, failures, and unknown native events.
+tool events, file changes, usage, permissions, questions, multiple turns,
+steering, image input, image generation, cancellation, failures, and unknown
+native events.
 
 Every capability has one of three outcomes:
 
@@ -51,9 +52,9 @@ evidence about the listed native versions and interfaces only. It is not a
 claim that untested future runner releases conform.
 
 The shared runner conformance suite exercises streamed text, tool and file
-lifecycle, usage, explicit permission decisions, multi-turn continuity,
-steering, image input, cancellation, failures, and unknown native events through
-the normalized session boundary. It also injects reasoning, credentials, shell
+lifecycle, usage, explicit permission decisions, questions, multi-turn
+continuity, steering, image input, cancellation, failures, and unknown native
+events through the normalized session boundary. It also injects reasoning, credentials, shell
 commands, tool output, image data, and arbitrary future payloads and asserts
 that none cross that boundary. Unknown native events become a minimal
 `runner.event` marker containing only their native type.
@@ -242,10 +243,12 @@ keep steering visibly queued without adding it to the conversation early.
 
 Clients control a stored run through `RunHandle`. A handle follows the durable
 event stream, resolves the terminal result, sends idle-turn input, steers an
-active turn, queues follow-up input, cancels a turn, answers permission requests,
-and closes or cancels the run. The handle writes transient requests to a private
-run-scoped control inbox. Persisted receipts and normalized input lifecycle events
-contain request IDs and dispositions, never prompt or image contents.
+active turn, queues follow-up input, cancels a turn, answers permission requests
+and questions, and closes or cancels the run. The handle writes transient
+requests to a private run-scoped control inbox. Persisted receipts and normalized
+input lifecycle events contain request IDs and dispositions, never prompt, image,
+or raw question-answer contents. Runner output can still reference an answer
+after receiving it.
 
 ## Canonical events
 
@@ -262,6 +265,7 @@ tool.started      tool.completed
 file.changed
 input.requested   input.accepted
 input.queued      input.delivered      input.rejected
+question.requested    question.answered    question.rejected
 usage.updated
 run.completed     run.failed     run.cancelled
 runner.event

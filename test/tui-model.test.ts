@@ -106,6 +106,33 @@ describe('TUI transcript model', () => {
         expect(reduceTranscript(state, event(7, 'runner.event', {}))).toBe(state);
     });
 
+    test('represents a normalized question lifecycle', () => {
+        let state = reduceTranscript(
+            addUserMessage(emptyTranscript(), 'Configure deployment'),
+            event(1, 'question.requested', {
+                id: 'question-1',
+                questions: [
+                    {
+                        question: 'Which environment?',
+                        options: [{ label: 'Production' }, { label: 'Staging' }],
+                        multiple: false,
+                        custom: false,
+                    },
+                ],
+            })
+        );
+        expect(state).toMatchObject({ busy: true, status: 'Needs input' });
+
+        state = reduceTranscript(
+            state,
+            event(2, 'question.answered', {
+                id: 'question-1',
+                answer_count: 1,
+            })
+        );
+        expect(state).toMatchObject({ busy: true, status: 'Working' });
+    });
+
     test('distinguishes an interrupted turn from a completed turn', () => {
         const thinking = addUserMessage(emptyTranscript(), 'Stop this turn');
         const interrupted = reduceTranscript(

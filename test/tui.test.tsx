@@ -11,6 +11,7 @@ import type {
 import { Transcript, WorkbenchApp } from '../src/tui/app.js';
 import { TurnCancellation } from '../src/tui/chat.js';
 import { holdRendererUntilShutdown } from '../src/tui/lifecycle.js';
+import { QuestionPrompt } from '../src/tui/question.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
 const renderers: Array<{ destroy(): void }> = [];
@@ -206,6 +207,46 @@ describe.serial('Workbench TUI', () => {
         expect(frame).not.toContain('[x]');
         expect(frame).not.toContain('[ ]');
         expect(frame).not.toContain('```');
+    });
+
+    test('renders a normalized runner question with choices', async () => {
+        const setup = await testRender(
+            () => (
+                <QuestionPrompt
+                    request={{
+                        id: 'question-1',
+                        questions: [
+                            {
+                                header: 'Environment',
+                                question: 'Where should this deploy?',
+                                options: [
+                                    {
+                                        label: 'Production',
+                                        description: 'Deploy for customers',
+                                    },
+                                    {
+                                        label: 'Staging',
+                                        description: 'Test it first',
+                                    },
+                                ],
+                                multiple: false,
+                                custom: false,
+                            },
+                        ],
+                    }}
+                    onRespond={() => {}}
+                />
+            ),
+            { width: 80, height: 18 }
+        );
+        renderers.push(setup.renderer);
+        await setup.flush();
+
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain('? Environment');
+        expect(frame).toContain('Where should this deploy?');
+        expect(frame).toContain('Production');
+        expect(frame).toContain('Deploy for customers');
     });
 });
 

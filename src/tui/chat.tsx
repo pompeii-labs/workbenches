@@ -6,6 +6,8 @@ import { modelLabel } from '../models/index.js';
 import type {
     RunnerPermissionDecision,
     RunnerPermissionRequest,
+    RunnerQuestionRequest,
+    RunnerQuestionResponse,
 } from '../runners/session.js';
 import type { RunControlReceipt, RunHandle, WorkbenchEvent } from '../runs/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
@@ -17,6 +19,7 @@ import {
     reduceTranscriptDuringCancellation,
     TranscriptEventBuffer,
 } from './model.js';
+import { QuestionPrompt, questionFromEvent } from './question.js';
 import { theme } from './theme.js';
 import { Transcript } from './transcript.js';
 
@@ -55,6 +58,8 @@ export function ChatScreen(props: ChatScreenProps) {
     const [permission, setPermission] = createSignal<{
         request: RunnerPermissionRequest;
     }>();
+    const [question, setQuestion] = createSignal<RunnerQuestionRequest>();
+    const [questionResponsePending, setQuestionResponsePending] = createSignal(false);
     let session: RunHandle | undefined;
     const cancellation = new TurnCancellation();
     let composer!: InputRenderable;
@@ -78,10 +83,27 @@ export function ChatScreen(props: ChatScreenProps) {
             setError(cause instanceof Error ? cause.message : String(cause));
         }
     };
+    const respondToQuestion = async (response: RunnerQuestionResponse) => {
+        const pending = question();
+        if (!pending || questionResponsePending()) return;
+        setQuestionResponsePending(true);
+        setState((current) => ({ ...current, status: 'Submitting answer' }));
+        try {
+            await session?.respondToQuestion(pending.id, response);
+            setQuestion(undefined);
+            setState((current) => ({ ...current, status: 'Working' }));
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+            setState((current) => ({ ...current, status: 'Needs input' }));
+        } finally {
+            setQuestionResponsePending(false);
+        }
+    };
     const close = async (back: boolean) => {
         if (leaving) return;
         leaving = true;
         await decidePermission('reject');
+        await respondToQuestion({ outcome: 'rejected' });
         await session?.close().catch(() => {});
         await props.resolved.cleanup();
         if (back) props.onBack();
@@ -120,7 +142,7 @@ export function ChatScreen(props: ChatScreenProps) {
     };
     const submit = async (value: string) => {
         const task = value.trim();
-        if (!task || !session || permission()) return;
+        if (!task || !session || permission() || question()) return;
         const steering = state().busy;
         const queuedId = steering ? crypto.randomUUID() : undefined;
         composer.value = '';
@@ -159,6 +181,15 @@ export function ChatScreen(props: ChatScreenProps) {
             void consumeEvents(session, (event) => {
                 const requested = permissionFromEvent(event);
                 if (requested) setPermission({ request: requested });
+                const asked = questionFromEvent(event);
+                if (asked) setQuestion(asked);
+                if (
+                    (event.type === 'question.answered' ||
+                        event.type === 'question.rejected') &&
+                    object(event.data)?.id === question()?.id
+                ) {
+                    setQuestion(undefined);
+                }
                 events.push(event);
             }).catch(fail);
             void session.result.catch(fail);
@@ -173,11 +204,21 @@ export function ChatScreen(props: ChatScreenProps) {
         if (!leaving) {
             leaving = true;
             void decidePermission('reject');
+            void respondToQuestion({ outcome: 'rejected' });
             void session?.close().catch(() => {});
             void props.resolved.cleanup();
         }
     });
     useKeyboard((key) => {
+        const pendingQuestion = question();
+        if (pendingQuestion) {
+            if (key.ctrl && key.name === 'c') {
+                key.preventDefault();
+                void respondToQuestion({ outcome: 'rejected' });
+                void cancelTurn();
+            }
+            return;
+        }
         const pending = permission();
         if (pending) {
             if (key.ctrl && key.name === 'c') {
@@ -297,61 +338,78 @@ export function ChatScreen(props: ChatScreenProps) {
             </scrollbox>
 
             <Show
-                when={permission()}
+                when={question()}
                 fallback={
-                    <box
-                        border={true}
-                        borderStyle="rounded"
-                        borderColor={state().busy ? theme.faint : theme.accent}
-                        backgroundColor={theme.panelRaised}
-                        paddingX={1}
-                        flexDirection="row"
+                    <Show
+                        when={permission()}
+                        fallback={
+                            <box
+                                border={true}
+                                borderStyle="rounded"
+                                borderColor={state().busy ? theme.faint : theme.accent}
+                                backgroundColor={theme.panelRaised}
+                                paddingX={1}
+                                flexDirection="row"
+                            >
+                                <text fg={state().busy ? theme.faint : theme.accent}>
+                                    ›{' '}
+                                </text>
+                                <input
+                                    ref={(value) => {
+                                        composer = value;
+                                        value.focus();
+                                    }}
+                                    placeholder={
+                                        state().busy
+                                            ? 'Steer the current turn…'
+                                            : 'Ask anything'
+                                    }
+                                    placeholderColor={theme.faint}
+                                    textColor={theme.text}
+                                    focusedTextColor={theme.text}
+                                    backgroundColor={theme.panelRaised}
+                                    focusedBackgroundColor={theme.panelRaised}
+                                    flexGrow={1}
+                                    on:enter={(value: string) => void submit(value)}
+                                />
+                            </box>
+                        }
                     >
-                        <text fg={state().busy ? theme.faint : theme.accent}>› </text>
-                        <input
-                            ref={(value) => {
-                                composer = value;
-                                value.focus();
-                            }}
-                            placeholder={
-                                state().busy
-                                    ? 'Steer the current turn…'
-                                    : 'Ask anything'
-                            }
-                            placeholderColor={theme.faint}
-                            textColor={theme.text}
-                            focusedTextColor={theme.text}
-                            backgroundColor={theme.panelRaised}
-                            focusedBackgroundColor={theme.panelRaised}
-                            flexGrow={1}
-                            on:enter={(value: string) => void submit(value)}
-                        />
-                    </box>
+                        {(
+                            pending: Accessor<{
+                                request: RunnerPermissionRequest;
+                            }>
+                        ) => (
+                            <box
+                                height={5}
+                                border={true}
+                                borderStyle="rounded"
+                                borderColor={theme.yellow}
+                                backgroundColor={theme.panelRaised}
+                                paddingX={1}
+                                flexDirection="column"
+                            >
+                                <text fg={theme.yellow} wrapMode="word">
+                                    ? {pending().request.message}
+                                </text>
+                                <text fg={theme.faint}>
+                                    y allow once
+                                    {pending().request.allowAlways
+                                        ? ' · a always allow'
+                                        : ''}{' '}
+                                    · n deny
+                                </text>
+                            </box>
+                        )}
+                    </Show>
                 }
             >
-                {(
-                    pending: Accessor<{
-                        request: RunnerPermissionRequest;
-                    }>
-                ) => (
-                    <box
-                        height={5}
-                        border={true}
-                        borderStyle="rounded"
-                        borderColor={theme.yellow}
-                        backgroundColor={theme.panelRaised}
-                        paddingX={1}
-                        flexDirection="column"
-                    >
-                        <text fg={theme.yellow} wrapMode="word">
-                            ? {pending().request.message}
-                        </text>
-                        <text fg={theme.faint}>
-                            y allow once
-                            {pending().request.allowAlways ? ' · a always allow' : ''} ·
-                            n deny
-                        </text>
-                    </box>
+                {(pending: Accessor<RunnerQuestionRequest>) => (
+                    <QuestionPrompt
+                        request={pending()}
+                        disabled={questionResponsePending()}
+                        onRespond={(response) => void respondToQuestion(response)}
+                    />
                 )}
             </Show>
             <box flexDirection="row" justifyContent="space-between" marginTop={1}>
@@ -360,9 +418,11 @@ export function ChatScreen(props: ChatScreenProps) {
                 </text>
                 <text fg={theme.faint}>
                     {usageLabel(state().totalTokens, state().costUsd)}
-                    {state().busy
-                        ? 'enter steer · ctrl+c cancel'
-                        : 'enter send · ctrl+c quit'}
+                    {question()
+                        ? 'answer required · ctrl+c cancel'
+                        : state().busy
+                          ? 'enter steer · ctrl+c cancel'
+                          : 'enter send · ctrl+c quit'}
                 </text>
             </box>
         </box>
