@@ -421,7 +421,7 @@ runner and records a terminal `run.cancelled` event.
 ### Interactive client
 
 Running `wb`, `workbench`, or `wb run <name>` without a task opens the
-experimental terminal client:
+terminal client:
 
 ```sh
 wb
@@ -445,8 +445,18 @@ event data. A runner can still reference the answer in later assistant output.
 OpenCode can submit a batch of prompts and multi-select choices.
 
 While a response is active, submitting another message steers the current turn.
-The terminal client does not yet expose image attachment. Image generation and
-normalized image output are not implemented yet.
+The message stays visibly queued until the runner confirms delivery. `Ctrl+C`
+cancels an active turn without closing the session. For image-capable runners,
+drag a PNG, JPEG, GIF, or WebP file into the composer, or paste its local path.
+Attachment bytes remain transient and are not copied into normalized events.
+Image generation and normalized image output are not implemented yet.
+
+Type `/` or press `Ctrl+K` to browse local terminal commands. The initial command
+set covers Workbench, runtime, model, capability, and session details; transcript
+clearing; turn cancellation; themes; and clean exit.
+Commands are handled by Workbench and are never sent to the runner as prompts.
+`/theme` includes Flexoki, GitHub, Catppuccin, Dracula, Tokyo Night, and Rosé Pine
+themes adapted from OpenCode under the attribution in `NOTICE`.
 
 Interactive sessions run in a background worker and expose the same durable run
 handle used to follow one-shot execution. Normalized events survive a terminal

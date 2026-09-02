@@ -250,6 +250,31 @@ input lifecycle events contain request IDs and dispositions, never prompt, image
 or raw question-answer contents. Runner output can still reference an answer
 after receiving it.
 
+## Interactive terminal client
+
+Running `wb run <ref>` without a task opens a runner-neutral terminal session.
+The composer supports multiple lines, persistent local prompt history, command
+discovery with `/` or `Ctrl+K`, queued steering, turn cancellation, and supported
+image attachments. Follow-up input remains beside the composer as queued until
+the normalized input lifecycle confirms delivery.
+
+For a runner with native image input, dragging a supported image file into the
+composer, or pasting its local path, attaches it to the next message. The
+terminal-provided path is replaced by an attachment marker and is never sent as
+prompt text.
+
+Slash commands inspect or control the Workbench client. They are never passed to
+the runner as model input. Commands expose Workbench, runtime, locked model,
+native runner capability, and recent session details; select a persisted theme;
+clear the local transcript; cancel the active turn; or close the session. A
+command backed by an unsupported native capability is hidden or explains why it
+is unavailable. Workbench does not inject replacement tools into a runner to
+make unsupported capabilities appear present.
+
+The built-in terminal themes are adapted from OpenCode under the repository's
+MIT attribution. Theme choice is local CLI state under `WORKBENCH_HOME`; it does
+not modify a Workbench package or affect execution.
+
 ## Canonical events
 
 Events are ordered by a monotonically increasing `sequence` within one run and
