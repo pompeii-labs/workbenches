@@ -20,7 +20,7 @@ import {
     TranscriptEventBuffer,
 } from './model.js';
 import { QuestionPrompt, questionFromEvent } from './question.js';
-import { theme } from './theme.js';
+import { useTheme } from './theme/index.js';
 import { Transcript } from './transcript.js';
 
 export interface ChatScreenProps {
@@ -53,6 +53,7 @@ export class TurnCancellation {
 }
 
 export function ChatScreen(props: ChatScreenProps) {
+    const { theme } = useTheme();
     const [state, setState] = createSignal(emptyTranscript());
     const [error, setError] = createSignal('');
     const [permission, setPermission] = createSignal<{

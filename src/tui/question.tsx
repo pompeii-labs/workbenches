@@ -8,7 +8,7 @@ import type {
     RunnerQuestionResponse,
 } from '../runners/session.js';
 import type { WorkbenchEvent } from '../runs/index.js';
-import { theme } from './theme.js';
+import { useTheme } from './theme/index.js';
 
 interface QuestionPromptProps {
     request: RunnerQuestionRequest;
@@ -19,6 +19,7 @@ interface QuestionPromptProps {
 type Choice = { kind: 'option'; label: string } | { kind: 'custom' } | { kind: 'done' };
 
 export function QuestionPrompt(props: QuestionPromptProps) {
+    const { theme } = useTheme();
     let selector: SelectRenderable | undefined;
     const [index, setIndex] = createSignal(0);
     const [answers, setAnswers] = createSignal<string[][]>([]);

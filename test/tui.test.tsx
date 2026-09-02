@@ -12,9 +12,11 @@ import { Transcript, WorkbenchApp } from '../src/tui/app.js';
 import { TurnCancellation } from '../src/tui/chat.js';
 import { holdRendererUntilShutdown } from '../src/tui/lifecycle.js';
 import { QuestionPrompt } from '../src/tui/question.js';
+import { ThemeController, ThemeProvider } from '../src/tui/theme/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
 const renderers: Array<{ destroy(): void }> = [];
+const themes = new ThemeController('/tmp/workbench-tui-tests');
 
 afterEach(() => {
     for (const renderer of renderers.splice(0)) renderer.destroy();
@@ -61,15 +63,17 @@ describe.serial('Workbench TUI', () => {
     test('renders the premium home with saved Workbench details', async () => {
         const setup = await testRender(
             () => (
-                <WorkbenchApp
-                    entries={[entry('lux-core'), entry('lux-migrations')]}
-                    resolve={async () => {
-                        throw new Error('not opened in this test');
-                    }}
-                    start={async () => {
-                        throw new Error('not started in this test');
-                    }}
-                />
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        entries={[entry('lux-core'), entry('lux-migrations')]}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => {
+                            throw new Error('not started in this test');
+                        }}
+                    />
+                </ThemeProvider>
             ),
             { width: 100, height: 28 }
         );
@@ -89,19 +93,21 @@ describe.serial('Workbench TUI', () => {
     test('renders the canonical model label in an interactive session header', async () => {
         const setup = await testRender(
             () => (
-                <WorkbenchApp
-                    entries={[]}
-                    initial={{
-                        alias: 'pi-smoke',
-                        resolved: resolvedWorkbench('pi-smoke', 'pi'),
-                    }}
-                    resolve={async () => {
-                        throw new Error('not opened in this test');
-                    }}
-                    start={async () => {
-                        throw new Error('not started in this test');
-                    }}
-                />
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        entries={[]}
+                        initial={{
+                            alias: 'pi-smoke',
+                            resolved: resolvedWorkbench('pi-smoke', 'pi'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => {
+                            throw new Error('not started in this test');
+                        }}
+                    />
+                </ThemeProvider>
             ),
             { width: 100, height: 28 }
         );
@@ -137,16 +143,18 @@ describe.serial('Workbench TUI', () => {
     test('renders streamed assistant Markdown as rich TUI content', async () => {
         const setup = await testRender(
             () => (
-                <box width="100%" height="100%">
-                    <Transcript
-                        item={{
-                            id: 'assistant-1',
-                            kind: 'assistant',
-                            text: '# Findings\n\nThis is **important**.\n\n- [x] Checked\n- [ ] Follow up\n\n| Area | State |\n|---|---|\n| Auth | Risk |\n\n```ts\nconst safe = true\n// - [x] remains source\n```',
-                        }}
-                        streaming={false}
-                    />
-                </box>
+                <ThemeProvider controller={themes}>
+                    <box width="100%" height="100%">
+                        <Transcript
+                            item={{
+                                id: 'assistant-1',
+                                kind: 'assistant',
+                                text: '# Findings\n\nThis is **important**.\n\n- [x] Checked\n- [ ] Follow up\n\n| Area | State |\n|---|---|\n| Auth | Risk |\n\n```ts\nconst safe = true\n// - [x] remains source\n```',
+                            }}
+                            streaming={false}
+                        />
+                    </box>
+                </ThemeProvider>
             ),
             { width: 100, height: 32 }
         );
@@ -179,16 +187,18 @@ describe.serial('Workbench TUI', () => {
     test('uses a stable marker-free preview while assistant text is streaming', async () => {
         const setup = await testRender(
             () => (
-                <box width="100%" height="100%">
-                    <Transcript
-                        item={{
-                            id: 'assistant-streaming',
-                            kind: 'assistant',
-                            text: '# Findings\n\nThis is **important**.\n\n- [x] Checked\n- [ ] Follow up\n\n```ts\nconst safe = true\n```',
-                        }}
-                        streaming={true}
-                    />
-                </box>
+                <ThemeProvider controller={themes}>
+                    <box width="100%" height="100%">
+                        <Transcript
+                            item={{
+                                id: 'assistant-streaming',
+                                kind: 'assistant',
+                                text: '# Findings\n\nThis is **important**.\n\n- [x] Checked\n- [ ] Follow up\n\n```ts\nconst safe = true\n```',
+                            }}
+                            streaming={true}
+                        />
+                    </box>
+                </ThemeProvider>
             ),
             { width: 100, height: 24 }
         );
@@ -212,30 +222,32 @@ describe.serial('Workbench TUI', () => {
     test('renders a normalized runner question with choices', async () => {
         const setup = await testRender(
             () => (
-                <QuestionPrompt
-                    request={{
-                        id: 'question-1',
-                        questions: [
-                            {
-                                header: 'Environment',
-                                question: 'Where should this deploy?',
-                                options: [
-                                    {
-                                        label: 'Production',
-                                        description: 'Deploy for customers',
-                                    },
-                                    {
-                                        label: 'Staging',
-                                        description: 'Test it first',
-                                    },
-                                ],
-                                multiple: false,
-                                custom: false,
-                            },
-                        ],
-                    }}
-                    onRespond={() => {}}
-                />
+                <ThemeProvider controller={themes}>
+                    <QuestionPrompt
+                        request={{
+                            id: 'question-1',
+                            questions: [
+                                {
+                                    header: 'Environment',
+                                    question: 'Where should this deploy?',
+                                    options: [
+                                        {
+                                            label: 'Production',
+                                            description: 'Deploy for customers',
+                                        },
+                                        {
+                                            label: 'Staging',
+                                            description: 'Test it first',
+                                        },
+                                    ],
+                                    multiple: false,
+                                    custom: false,
+                                },
+                            ],
+                        }}
+                        onRespond={() => {}}
+                    />
+                </ThemeProvider>
             ),
             { width: 80, height: 18 }
         );

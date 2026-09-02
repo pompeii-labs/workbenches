@@ -3,7 +3,7 @@ import { type Accessor, createMemo, createSignal, For, Show } from 'solid-js';
 
 import type { CatalogEntry } from '../catalog/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
-import { theme } from './theme.js';
+import { useTheme } from './theme/index.js';
 
 export interface HomeScreenProps {
     entries: CatalogEntry[];
@@ -13,6 +13,7 @@ export interface HomeScreenProps {
 }
 
 export function HomeScreen(props: HomeScreenProps) {
+    const { theme } = useTheme();
     const [query, setQuery] = createSignal('');
     const [selected, setSelected] = createSignal(0);
     const [status, setStatus] = createSignal('');

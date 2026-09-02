@@ -11,6 +11,7 @@ import {
 } from '../workbench/index.js';
 import { WorkbenchApp } from './app.js';
 import { holdRendererUntilShutdown } from './lifecycle.js';
+import { ThemeController, ThemeProvider } from './theme/index.js';
 
 export async function renderWorkbenchTui(
     options: {
@@ -23,6 +24,8 @@ export async function renderWorkbenchTui(
     const resolver = new WorkbenchResolver();
     const dispatcher = new RunDispatcher(home);
     const entries = await new SavedWorkbenchCatalog(home).list();
+    const themes = new ThemeController(home);
+    await themes.load();
     let finish: () => void = () => {};
     const shutdown = new Promise<void>((resolve) => {
         finish = resolve;
@@ -34,32 +37,37 @@ export async function renderWorkbenchTui(
         targetFps: 30,
         maxFps: 60,
         useMouse: true,
-        backgroundColor: '#101014',
+        backgroundColor: themes.current.background,
         onDestroy: finish,
     });
+    if (renderer.themeMode === 'dark' || renderer.themeMode === 'light') {
+        themes.setMode(renderer.themeMode);
+    }
     await holdRendererUntilShutdown({
         mount: () =>
             render(
                 () => (
-                    <WorkbenchApp
-                        entries={entries}
-                        {...(options.initial ? { initial: options.initial } : {})}
-                        resolve={(alias) => resolver.resolve(alias, { home })}
-                        start={async ({ resolved, reference }) => {
-                            const stored = await dispatcher.prepare({
-                                resolved,
-                                reference,
-                                mode: 'interactive',
-                                workspaces: options.workspaces ?? [],
-                            });
-                            await dispatcher.dispatch({
-                                id: stored.id,
-                                cwd: resolved.workspaceDirectory,
-                                environment: options.environment ?? process.env,
-                            });
-                            return dispatcher.handle(stored.id);
-                        }}
-                    />
+                    <ThemeProvider controller={themes}>
+                        <WorkbenchApp
+                            entries={entries}
+                            {...(options.initial ? { initial: options.initial } : {})}
+                            resolve={(alias) => resolver.resolve(alias, { home })}
+                            start={async ({ resolved, reference }) => {
+                                const stored = await dispatcher.prepare({
+                                    resolved,
+                                    reference,
+                                    mode: 'interactive',
+                                    workspaces: options.workspaces ?? [],
+                                });
+                                await dispatcher.dispatch({
+                                    id: stored.id,
+                                    cwd: resolved.workspaceDirectory,
+                                    environment: options.environment ?? process.env,
+                                });
+                                return dispatcher.handle(stored.id);
+                            }}
+                        />
+                    </ThemeProvider>
                 ),
                 renderer
             ),

@@ -2,9 +2,10 @@ import { Match, Show, Switch } from 'solid-js';
 
 import { renderMarkdownPreview, sanitizeMarkdown } from '../rendering/index.js';
 import type { TranscriptItem } from './model.js';
-import { markdownStyle, theme } from './theme.js';
+import { useTheme } from './theme/index.js';
 
 export function Transcript(props: { item: TranscriptItem; streaming: boolean }) {
+    const { syntax, theme } = useTheme();
     return (
         <Switch>
             <Match when={props.item.kind === 'user'}>
@@ -34,7 +35,7 @@ export function Transcript(props: { item: TranscriptItem; streaming: boolean }) 
                                     ? normalizeTuiMarkdown(props.item.text)
                                     : ''
                             }
-                            syntaxStyle={markdownStyle}
+                            syntaxStyle={syntax()}
                             fg={theme.text}
                             conceal={true}
                             concealCode={true}

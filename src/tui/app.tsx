@@ -6,7 +6,7 @@ import type { RunHandle } from '../runs/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import { ChatScreen } from './chat.js';
 import { HomeScreen } from './home.js';
-import { theme } from './theme.js';
+import { useTheme } from './theme/index.js';
 
 export { Transcript } from './transcript.js';
 
@@ -22,6 +22,7 @@ export interface TuiAppProps {
 
 export function WorkbenchApp(props: TuiAppProps) {
     const renderer = useRenderer();
+    const { theme } = useTheme();
     const [screen, setScreen] = createSignal<
         | { kind: 'home' }
         | { kind: 'chat'; alias: string; resolved: ResolvedWorkbenchReference }
