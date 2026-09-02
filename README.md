@@ -429,18 +429,31 @@ wb run project-core
 ```
 
 The OpenCode interactive adapter currently supports multi-turn context,
-streaming, image input, cancellation, tool events, and explicit permission
-decisions for the local runtime. OpenCode's server interface does not currently
-provide native mid-turn steering. The Pi adapter supports multi-turn context,
-streaming, image input, steering at Pi's next legal model boundary, follow-up
-input, cancellation, and tool events. Pi does not provide a native permission
-request protocol or MCP transport.
+streaming, image input, cancellation, tool events, explicit permission decisions,
+native questions, and native mid-turn steering for the local runtime. The Pi
+adapter supports multi-turn context, streaming, image input, steering at Pi's
+next legal model boundary, follow-up input, cancellation, and tool events. Pi
+does not provide native question or permission request protocols, or native MCP
+transport.
 
-The terminal client does not yet expose image attachment or steering controls.
-Those operations are available through the normalized runner session boundary.
-Image generation and normalized image output are not implemented yet.
-Interactive sessions are not durable, and Docker Workbenches currently require
-a one-shot task: interactive sessions cannot yet be detached or recovered.
+Questions use one runner-neutral contract for choices, free-form answers, and
+multi-select prompts when the selected runner exposes a native question protocol.
+The terminal client pauses on a normalized question and returns the response
+through that native protocol. Question prompts are part of the normalized event
+stream. The raw answer control message remains transient and is not written as
+event data. A runner can still reference the answer in later assistant output.
+OpenCode can submit a batch of prompts and multi-select choices.
+
+While a response is active, submitting another message steers the current turn.
+The terminal client does not yet expose image attachment. Image generation and
+normalized image output are not implemented yet.
+
+Interactive sessions run in a background worker and expose the same durable run
+handle used to follow one-shot execution. Normalized events survive a terminal
+client disconnect, and another handle can replay the stream and control the same
+live runner session. User prompts, permission decisions, and question answers are
+transient control messages, not durable run history. Docker Workbenches still
+require a one-shot task; interactive Docker sessions are not yet supported.
 
 ## Source and authorization boundaries
 

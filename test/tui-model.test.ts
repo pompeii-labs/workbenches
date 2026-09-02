@@ -4,7 +4,9 @@ import type { WorkbenchEvent } from '../src/runs/index.js';
 import {
     addUserMessage,
     emptyTranscript,
+    queueUserMessage,
     reduceTranscript,
+    reduceTranscriptDuringCancellation,
     TranscriptEventBuffer,
 } from '../src/tui/model.js';
 
@@ -104,6 +106,164 @@ describe('TUI transcript model', () => {
         expect(reduceTranscript(state, event(7, 'runner.event', {}))).toBe(state);
     });
 
+    test('represents a normalized question lifecycle', () => {
+        let state = reduceTranscript(
+            addUserMessage(emptyTranscript(), 'Configure deployment'),
+            event(1, 'question.requested', {
+                id: 'question-1',
+                questions: [
+                    {
+                        question: 'Which environment?',
+                        options: [{ label: 'Production' }, { label: 'Staging' }],
+                        multiple: false,
+                        custom: false,
+                    },
+                ],
+            })
+        );
+        expect(state).toMatchObject({ busy: true, status: 'Needs input' });
+
+        state = reduceTranscript(
+            state,
+            event(2, 'question.answered', {
+                id: 'question-1',
+                answer_count: 1,
+            })
+        );
+        expect(state).toMatchObject({ busy: true, status: 'Working' });
+    });
+
+    test('distinguishes an interrupted turn from a completed turn', () => {
+        const thinking = addUserMessage(emptyTranscript(), 'Stop this turn');
+        const interrupted = reduceTranscript(
+            thinking,
+            event(1, 'turn.completed', { reason: 'cancelled' })
+        );
+
+        expect(interrupted).toMatchObject({
+            busy: false,
+            status: 'Interrupted',
+        });
+    });
+
+    test('keeps multiple assistant messages from one steered turn separate', () => {
+        let state = addUserMessage(emptyTranscript(), 'Start here', 'user-1');
+        state = reduceTranscript(
+            state,
+            event(1, 'output.text', { id: 'output-1', text: 'First reply.' })
+        );
+        state = queueUserMessage(state, 'Change direction', 'user-2');
+        state = reduceTranscript(
+            state,
+            event(2, 'output.text', { id: 'output-1', text: ' Done.' })
+        );
+        state = reduceTranscript(
+            state,
+            event(3, 'input.queued', { id: 'control-1', kind: 'steer' })
+        );
+        state = reduceTranscript(
+            state,
+            event(4, 'input.delivered', { id: 'control-1', kind: 'steer' })
+        );
+        state = reduceTranscript(
+            state,
+            event(5, 'output.text', { id: 'output-2', text: 'Steered reply.' })
+        );
+
+        expect(state.items).toEqual([
+            { id: 'user-1', kind: 'user', text: 'Start here' },
+            { id: 'output-1', kind: 'assistant', text: 'First reply. Done.' },
+            { id: 'user-2', kind: 'user', text: 'Change direction' },
+            { id: 'output-2', kind: 'assistant', text: 'Steered reply.' },
+        ]);
+        expect(state.queued).toEqual([]);
+    });
+
+    test('keeps steering visibly queued until the runner consumes it', () => {
+        let state = addUserMessage(emptyTranscript(), 'hello', 'user-1');
+        state = queueUserMessage(state, 'testing', 'user-2');
+        state = reduceTranscript(
+            state,
+            event(1, 'output.text', { id: 'output-1', text: 'Hello.' })
+        );
+
+        expect(state.items).toEqual([
+            { id: 'user-1', kind: 'user', text: 'hello' },
+            { id: 'output-1', kind: 'assistant', text: 'Hello.' },
+        ]);
+        expect(state.queued).toEqual([{ id: 'user-2', text: 'testing' }]);
+
+        state = reduceTranscript(
+            state,
+            event(2, 'input.queued', { id: 'control-1', kind: 'steer' })
+        );
+        expect(state.queued).toEqual([
+            { id: 'user-2', text: 'testing', controlId: 'control-1' },
+        ]);
+        state = reduceTranscript(
+            state,
+            event(3, 'input.delivered', { id: 'control-1', kind: 'steer' })
+        );
+        state = reduceTranscript(
+            state,
+            event(4, 'output.text', {
+                id: 'output-2',
+                text: 'Testing received.',
+            })
+        );
+
+        expect(state.items).toEqual([
+            { id: 'user-1', kind: 'user', text: 'hello' },
+            { id: 'output-1', kind: 'assistant', text: 'Hello.' },
+            { id: 'user-2', kind: 'user', text: 'testing' },
+            { id: 'output-2', kind: 'assistant', text: 'Testing received.' },
+        ]);
+        expect(state.queued).toEqual([]);
+    });
+
+    test('matches queued steering lifecycle events by control ID', () => {
+        let state = addUserMessage(emptyTranscript(), 'first', 'user-1');
+        state = queueUserMessage(state, 'second', 'user-2');
+        state = queueUserMessage(state, 'third', 'user-3');
+        state = reduceTranscript(
+            state,
+            event(1, 'input.queued', { id: 'control-1', kind: 'steer' })
+        );
+        state = reduceTranscript(
+            state,
+            event(2, 'input.queued', { id: 'control-2', kind: 'steer' })
+        );
+        state = reduceTranscript(
+            state,
+            event(3, 'input.delivered', { id: 'control-2', kind: 'steer' })
+        );
+
+        expect(state.items.at(-1)).toEqual({
+            id: 'user-3',
+            kind: 'user',
+            text: 'third',
+        });
+        expect(state.queued).toEqual([
+            { id: 'user-2', text: 'second', controlId: 'control-1' },
+        ]);
+    });
+
+    test('does not regress to thinking while cancellation is pending', () => {
+        const cancelling = {
+            ...addUserMessage(emptyTranscript(), 'Stop this turn'),
+            status: 'Cancelling',
+        };
+        const delayedStart = reduceTranscriptDuringCancellation(
+            cancelling,
+            event(1, 'turn.started', { index: 1 })
+        );
+
+        expect(delayedStart).toMatchObject({
+            busy: true,
+            status: 'Cancelling',
+        });
+    });
+
     test('batches text deltas but flushes before lifecycle events', () => {
         const callbacks: Array<() => void> = [];
         const consumed: WorkbenchEvent[] = [];
@@ -134,10 +294,25 @@ describe('TUI transcript model', () => {
         ]);
         expect(consumed[1]?.data).toEqual({ text: 'Before tool' });
 
-        buffer.push(event(5, 'output.text', { text: 'discard me' }));
+        buffer.push(event(5, 'output.text', { id: 'output-1', text: 'First' }));
+        buffer.push(event(6, 'output.text', { id: 'output-1', text: ' reply.' }));
+        callbacks.at(-1)?.();
+        expect(consumed.at(-1)?.data).toEqual({
+            id: 'output-1',
+            text: 'First reply.',
+        });
+
+        buffer.push(event(7, 'output.text', { id: 'output-1', text: 'First' }));
+        buffer.push(event(8, 'output.text', { id: 'output-2', text: 'Second' }));
+        expect(consumed.at(-1)?.data).toEqual({
+            id: 'output-1',
+            text: 'First',
+        });
+
+        buffer.push(event(9, 'output.text', { text: 'discard me' }));
         buffer.dispose();
         callbacks.at(-1)?.();
-        expect(consumed).toHaveLength(3);
+        expect(consumed).toHaveLength(6);
     });
 });
 

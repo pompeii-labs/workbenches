@@ -57,6 +57,47 @@ describe('runner-neutral interactive host', () => {
         expect(adapter.permissionDecisions).toEqual(['reject']);
     });
 
+    test('normalizes runner questions without persisting answer text', async () => {
+        const events: WorkbenchEvent[] = [];
+        const adapter = new FakeAdapter({ requestQuestion: true });
+        const session = await InteractiveRun.start({
+            resolved: reference(),
+            onEvent: (event) => void events.push(event),
+            onQuestion: async () => ({
+                outcome: 'answered',
+                answers: [['private answer']],
+            }),
+            dependencies: dependencies(adapter),
+        });
+
+        await session.send('inspect');
+        await session.close();
+
+        expect(adapter.questionResponses).toEqual([
+            { outcome: 'answered', answers: [['private answer']] },
+        ]);
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                type: 'question.requested',
+                data: expect.objectContaining({
+                    id: 'question-1',
+                    questions: [
+                        expect.objectContaining({
+                            question: 'Which environment?',
+                        }),
+                    ],
+                }),
+            })
+        );
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                type: 'question.answered',
+                data: { id: 'question-1', answer_count: 1 },
+            })
+        );
+        expect(JSON.stringify(events)).not.toContain('private answer');
+    });
+
     test('owns Workbench lifecycle while an adapter owns native transport', async () => {
         const events: WorkbenchEvent[] = [];
         const adapter = new FakeAdapter();
@@ -162,6 +203,7 @@ class FakeAdapter implements RunnerSessionAdapter {
     cancellations = 0;
     closes = 0;
     readonly permissionDecisions: string[] = [];
+    readonly questionResponses: unknown[] = [];
     private host?: RunnerSessionStartOptions['host'];
     private release?: () => void;
     private readonly markStarted: () => void;
@@ -171,6 +213,7 @@ class FakeAdapter implements RunnerSessionAdapter {
         failure?: Error;
         closeFailure?: Error;
         requestPermission?: boolean;
+        requestQuestion?: boolean;
     };
 
     constructor(
@@ -179,6 +222,7 @@ class FakeAdapter implements RunnerSessionAdapter {
             failure?: Error;
             closeFailure?: Error;
             requestPermission?: boolean;
+            requestQuestion?: boolean;
         } = {}
     ) {
         this.options = options;
@@ -217,6 +261,20 @@ class FakeAdapter implements RunnerSessionAdapter {
                 allowAlways: true,
             });
             if (decision) this.permissionDecisions.push(decision);
+        }
+        if (this.options.requestQuestion) {
+            const response = await this.host?.requestQuestion({
+                id: 'question-1',
+                questions: [
+                    {
+                        question: 'Which environment?',
+                        options: [{ label: 'Production' }, { label: 'Staging' }],
+                        multiple: false,
+                        custom: true,
+                    },
+                ],
+            });
+            if (response) this.questionResponses.push(response);
         }
         await this.host?.emit({ type: 'output.text', data: { text: 'done' } });
         return { reason: 'stop' };

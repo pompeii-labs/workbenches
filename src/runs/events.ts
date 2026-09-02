@@ -8,6 +8,13 @@ export const WORKBENCH_EVENT_TYPES = [
     'tool.completed',
     'file.changed',
     'input.requested',
+    'input.accepted',
+    'input.queued',
+    'input.delivered',
+    'input.rejected',
+    'question.requested',
+    'question.answered',
+    'question.rejected',
     'usage.updated',
     'run.completed',
     'run.failed',
@@ -35,6 +42,7 @@ export interface WorkbenchEventDraft {
 export interface RunEventsOptions {
     runId: string;
     runner: string;
+    initialSequence?: number;
     onEvent?: (event: WorkbenchEvent) => Promise<void> | void;
     now?: () => Date;
 }
@@ -46,17 +54,26 @@ export class RunEvents {
     private readonly onEvent: NonNullable<RunEventsOptions['onEvent']>;
     private readonly now: NonNullable<RunEventsOptions['now']>;
     private sequence = 0;
+    private delivery = Promise.resolve();
 
     constructor(options: RunEventsOptions) {
         if (!options.runId.trim()) throw new Error('runId must not be empty');
         if (!options.runner.trim()) throw new Error('runner must not be empty');
+        if (
+            options.initialSequence !== undefined &&
+            (!Number.isSafeInteger(options.initialSequence) ||
+                options.initialSequence < 0)
+        ) {
+            throw new Error('initialSequence must be a non-negative integer');
+        }
         this.runId = options.runId;
         this.runner = options.runner;
+        this.sequence = options.initialSequence ?? 0;
         this.onEvent = options.onEvent ?? (() => {});
         this.now = options.now ?? (() => new Date());
     }
 
-    create<T>(type: WorkbenchEventType, data: T): WorkbenchEvent<T> {
+    private create<T>(type: WorkbenchEventType, data: T): WorkbenchEvent<T> {
         this.sequence += 1;
         return {
             protocol: 0,
@@ -75,7 +92,12 @@ export class RunEvents {
 
     async emit<T>(type: WorkbenchEventType, data: T): Promise<WorkbenchEvent<T>> {
         const event = this.create(type, data);
-        await this.onEvent(event);
+        const delivered = this.delivery.then(() => this.onEvent(event));
+        this.delivery = delivered.then(
+            () => undefined,
+            () => undefined
+        );
+        await delivered;
         return event;
     }
 }

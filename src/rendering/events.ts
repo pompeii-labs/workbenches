@@ -163,6 +163,25 @@ class HumanEventRenderer implements EventRenderer {
             );
             return;
         }
+        if (event.type === 'question.requested') {
+            this.endAnswer();
+            this.stdout(
+                `  ${colors.yellow('?')} ${colors.yellow('Question')} ${colors.dim(`· ${questionText(event.data) || 'Answer required'}`)}\n`
+            );
+            return;
+        }
+        if (event.type === 'question.answered') {
+            this.endAnswer();
+            this.stdout(`  ${colors.green('✓')} ${colors.dim('Answer received')}\n`);
+            return;
+        }
+        if (event.type === 'question.rejected') {
+            this.endAnswer();
+            this.stdout(
+                `  ${colors.yellow('○')} ${colors.dim('Question dismissed')}\n`
+            );
+            return;
+        }
         if (event.type === 'run.completed') {
             this.endAnswer();
             const duration = durationLabel(number(event.data, 'duration_ms'));
@@ -216,6 +235,12 @@ function number(value: unknown, key: string): number | undefined {
     return typeof candidate === 'number' && Number.isFinite(candidate)
         ? candidate
         : undefined;
+}
+
+function questionText(value: unknown): string {
+    const questions = record(value)?.questions;
+    if (!Array.isArray(questions)) return '';
+    return text(questions[0], 'question');
 }
 
 function stringArray(value: unknown, key: string): string[] {

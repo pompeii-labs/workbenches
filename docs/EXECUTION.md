@@ -29,8 +29,9 @@ No runner is asked to interpret the Workbench manifest itself.
 Each registered runner adapter declares the native command it drives, the exact
 native versions and interfaces it has been verified against, and an exhaustive
 capability map. The initial capability catalog covers streamed assistant text,
-tool events, file changes, usage, permissions, multiple turns, steering, image
-input, image generation, cancellation, failures, and unknown native events.
+tool events, file changes, usage, permissions, questions, multiple turns,
+steering, image input, image generation, cancellation, failures, and unknown
+native events.
 
 Every capability has one of three outcomes:
 
@@ -39,15 +40,21 @@ Every capability has one of three outcomes:
 - `degraded` is usable with a documented semantic limitation.
 - `unsupported` is rejected or omitted deliberately, with a documented reason.
 
+Adapters translate native runner behavior; they do not create runner features.
+A capability can be `supported` only when the verified native interface exposes
+the behavior being normalized. The engine does not inject tools, extensions, or
+prompts to manufacture a missing capability. Publisher-supplied `runner_config`
+remains native runner configuration and does not change the adapter declaration.
+
 An adapter cannot be registered without a verified native version, a named
 native interface, and an outcome for every capability. A declaration is
 evidence about the listed native versions and interfaces only. It is not a
 claim that untested future runner releases conform.
 
 The shared runner conformance suite exercises streamed text, tool and file
-lifecycle, usage, explicit permission decisions, multi-turn continuity,
-steering, image input, cancellation, failures, and unknown native events through
-the normalized session boundary. It also injects reasoning, credentials, shell
+lifecycle, usage, explicit permission decisions, questions, multi-turn
+continuity, steering, image input, cancellation, failures, and unknown native
+events through the normalized session boundary. It also injects reasoning, credentials, shell
 commands, tool output, image data, and arbitrary future payloads and asserts
 that none cross that boundary. Unknown native events become a minimal
 `runner.event` marker containing only their native type.
@@ -219,11 +226,29 @@ interface RunnerSession {
 }
 ```
 
-`steer()` and `followUp()` may deliver immediately or queue until the runner's
-next legal input boundary. Image data is translated into the runner's native
-input but never copied into normalized events. The manifest does not declare
-runner features. Adapter declarations and runtime negotiation determine what is
-possible.
+`steer()` changes an active turn through the runner's native steering operation
+and must never silently become a later follow-up. The Workbench host owns a FIFO
+follow-up queue so ordering does not depend on runner-specific behavior. Image
+data is translated into the runner's native input but never copied into
+normalized events. The manifest does not declare runner features. Adapter
+declarations and runtime negotiation determine what is possible.
+
+Input lifecycle events distinguish admission from consumption. `input.accepted`
+means the host accepted the control request. `input.queued` means the input is
+waiting inside the host or runner. `input.delivered` means it left that queue for
+the runner's active execution path. An adapter can delay delivery until it sees
+native evidence of consumption. OpenCode steering does this when the runner
+creates the assistant message parented by that input. A client can therefore
+keep steering visibly queued without adding it to the conversation early.
+
+Clients control a stored run through `RunHandle`. A handle follows the durable
+event stream, resolves the terminal result, sends idle-turn input, steers an
+active turn, queues follow-up input, cancels a turn, answers permission requests
+and questions, and closes or cancels the run. The handle writes transient
+requests to a private run-scoped control inbox. Persisted receipts and normalized
+input lifecycle events contain request IDs and dispositions, never prompt, image,
+or raw question-answer contents. Runner output can still reference an answer
+after receiving it.
 
 ## Canonical events
 
@@ -238,7 +263,9 @@ turn.started      turn.completed
 output.text
 tool.started      tool.completed
 file.changed
-input.requested
+input.requested   input.accepted
+input.queued      input.delivered      input.rejected
+question.requested    question.answered    question.rejected
 usage.updated
 run.completed     run.failed     run.cancelled
 runner.event
@@ -328,7 +355,8 @@ the most recently dispatched run in `WORKBENCH_HOME`.
 Run metadata and `events.ndjson` live under
 `$WORKBENCH_HOME/runs/<id>/` (normally the Workbench data directory). The initial
 task is stored only until the worker consumes it, then removed. Direct foreground
-runs use the same store, so their history can also be attached after completion.
+runs use the same stored handle and event stream, so their history can also be
+attached after completion.
 Attach is read-only. `wb ps` lists active detached runs; `wb ps --all` includes
 finished detached runs. `wb kill [id]` cooperatively cancels a detached run; without
 an ID it selects the latest active detached run. The worker observes a private

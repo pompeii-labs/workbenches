@@ -1,6 +1,7 @@
 import type {
     RunnerAdapterDeclaration,
     RunnerInput,
+    RunnerInputDelivery,
     RunnerSession,
     RunnerSessionAdapter,
     RunnerSessionStartOptions,
@@ -26,7 +27,11 @@ export const PI_SESSION_DECLARATION: RunnerAdapterDeclaration = {
         usage: { status: 'supported' },
         permissions: {
             status: 'unsupported',
-            detail: 'Pi has no built-in permission request protocol. Permission gates require a Pi extension.',
+            detail: 'Pi does not provide a native permission request protocol.',
+        },
+        questions: {
+            status: 'unsupported',
+            detail: 'Pi does not provide a native question request protocol.',
         },
         multi_turn: { status: 'supported' },
         steering: { status: 'supported' },
@@ -199,12 +204,13 @@ class PiRpcSession implements RunnerSession {
         });
     }
 
-    async steer(input: RunnerInput): Promise<void> {
+    async steer(input: RunnerInput): Promise<RunnerInputDelivery> {
         if (this.failure) throw this.failure;
         if (!this.active || this.closed) {
             throw new Error('runner session is not processing a turn');
         }
         await this.command('steer', piPrompt(normalizeRunnerInput(input)));
+        return { delivered: Promise.resolve() };
     }
 
     async followUp(input: RunnerInput): Promise<void> {

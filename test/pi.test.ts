@@ -126,6 +126,14 @@ describe('Pi adapter translation', () => {
         ).toBe('# Review\n');
     });
 
+    test('does not inject unsupported question tooling into Pi', async () => {
+        const workbench = await fixture();
+        const staged = await stagePiConfig(workbench, {});
+        temporaryDirectories.push(staged.directory);
+
+        await expect(lstat(join(staged.directory, 'extensions'))).rejects.toThrow();
+    });
+
     test('fails explicitly when a Workbench declares MCP transport', async () => {
         const workbench = await fixture();
         workbench.manifest.mcps = [

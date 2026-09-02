@@ -236,7 +236,7 @@ describe('local run lifecycle', () => {
             expect.objectContaining({
                 type: 'output.text',
                 runner: 'pi',
-                data: { text: 'Pi works' },
+                data: expect.objectContaining({ text: 'Pi works' }),
             })
         );
         expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER_REASONING');

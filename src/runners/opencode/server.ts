@@ -132,6 +132,20 @@ export class OpenCodeServer {
         return true;
     }
 
+    async replyQuestion(path: string, body?: unknown): Promise<boolean> {
+        const response = await this.authFetch(this.endpoint(path), {
+            method: 'POST',
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        if (response.status === 404) return false;
+        if (!response.ok) {
+            throw new Error(
+                `OpenCode question reply failed with HTTP ${response.status}`
+            );
+        }
+        return true;
+    }
+
     async close(): Promise<void> {
         if (this.closed) return;
         this.closed = true;

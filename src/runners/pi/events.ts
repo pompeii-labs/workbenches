@@ -17,6 +17,7 @@ export class PiEventAdapter {
     private sessionId: string | undefined;
     private completionReason: string | undefined;
     private failureMessage: string | undefined;
+    private outputId: string | undefined;
 
     consume(value: unknown): PiAdapterResult {
         const event = record(value);
@@ -28,6 +29,7 @@ export class PiEventAdapter {
             this.sessionId ??= string(event.id);
             return this.result([]);
         }
+        if (type === 'message_start') return this.messageStart(event);
         if (type === 'message_update') return this.messageUpdate(event);
         if (type === 'message_end') return this.messageEnd(event);
         if (type === 'tool_execution_start') return this.toolStart(event);
@@ -76,7 +78,17 @@ export class PiEventAdapter {
         const text = string(update?.delta);
         if (!text) return this.result([]);
         this.finalText += text;
-        return this.result([{ type: 'output.text', data: { text } }]);
+        this.outputId ??= createOutputId();
+        return this.result([
+            { type: 'output.text', data: { id: this.outputId, text } },
+        ]);
+    }
+
+    private messageStart(event: Record<string, unknown>): PiAdapterResult {
+        if (string(record(event.message)?.role) === 'assistant') {
+            this.outputId = createOutputId();
+        }
+        return this.result([]);
     }
 
     private messageEnd(event: Record<string, unknown>): PiAdapterResult {
@@ -89,9 +101,11 @@ export class PiEventAdapter {
             this.failureMessage ??=
                 reason === 'aborted' ? 'Pi turn was aborted' : 'Pi session failed';
         }
-        return this.result(
+        const result = this.result(
             Object.keys(data).length > 1 ? [{ type: 'usage.updated', data }] : []
         );
+        this.outputId = undefined;
+        return result;
     }
 
     private toolStart(event: Record<string, unknown>): PiAdapterResult {
@@ -157,6 +171,10 @@ export class PiEventAdapter {
     private result(events: WorkbenchEventDraft[]): PiAdapterResult {
         return { events, turnCompleted: this.turnCompleted };
     }
+}
+
+function createOutputId(): string {
+    return `output_${crypto.randomUUID()}`;
 }
 
 function usageData(usage: Record<string, unknown> | undefined) {

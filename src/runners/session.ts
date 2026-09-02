@@ -8,6 +8,7 @@ export const RUNNER_CAPABILITIES = [
     'file_events',
     'usage',
     'permissions',
+    'questions',
     'multi_turn',
     'steering',
     'image_input',
@@ -42,6 +43,10 @@ export interface RunnerTurnResult {
     reason?: string;
 }
 
+export interface RunnerInputDelivery {
+    delivered: Promise<void>;
+}
+
 export interface RunnerImageInput {
     data: string;
     mimeType: string;
@@ -70,10 +75,32 @@ export interface RunnerPermissionRequest {
     allowAlways: boolean;
 }
 
+export interface RunnerQuestionOption {
+    label: string;
+    description?: string;
+}
+
+export interface RunnerQuestionPrompt {
+    question: string;
+    header?: string;
+    options: RunnerQuestionOption[];
+    multiple: boolean;
+    custom: boolean;
+}
+
+export interface RunnerQuestionRequest {
+    id: string;
+    questions: RunnerQuestionPrompt[];
+}
+
+export type RunnerQuestionResponse =
+    | { outcome: 'answered'; answers: string[][] }
+    | { outcome: 'rejected' };
+
 export interface RunnerSession {
     readonly id: string | undefined;
     prompt(input: RunnerInput): Promise<RunnerTurnResult>;
-    steer?(input: RunnerInput): Promise<void>;
+    steer?(input: RunnerInput): Promise<RunnerInputDelivery>;
     followUp?(input: RunnerInput): Promise<void>;
     cancelTurn(): Promise<void>;
     close(): Promise<void>;
@@ -105,6 +132,7 @@ export interface RunnerSessionHost {
     requestPermission(
         request: RunnerPermissionRequest
     ): Promise<RunnerPermissionDecision>;
+    requestQuestion(request: RunnerQuestionRequest): Promise<RunnerQuestionResponse>;
 }
 
 export interface RunnerSessionStartOptions {

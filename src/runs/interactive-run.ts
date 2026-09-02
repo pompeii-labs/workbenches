@@ -6,8 +6,11 @@ import type { PreparedRunner } from '../runners/runner.js';
 import {
     normalizeRunnerInput,
     type RunnerInput,
+    type RunnerInputDelivery,
     type RunnerPermissionDecision,
     type RunnerPermissionRequest,
+    type RunnerQuestionRequest,
+    type RunnerQuestionResponse,
     type RunnerSession,
 } from '../runners/session.js';
 import { type PreparedRuntime, RuntimeRegistry } from '../runtimes/index.js';
@@ -22,11 +25,16 @@ import { RunStore } from './store.js';
 export interface InteractiveRunSession {
     readonly runId: string;
     readonly runnerSessionId: string | undefined;
+    readonly busy: boolean;
     send(task: RunnerInput): Promise<void>;
-    steer(task: RunnerInput): Promise<void>;
-    followUp(task: RunnerInput): Promise<void>;
+    steer(task: RunnerInput): Promise<RunnerInputDelivery>;
     cancelTurn(): Promise<void>;
+    recordInput(
+        type: 'input.accepted' | 'input.queued' | 'input.delivered' | 'input.rejected',
+        data: Record<string, unknown>
+    ): Promise<void>;
     close(): Promise<void>;
+    cancel(reason?: string): Promise<void>;
 }
 
 export interface InteractiveRunDependencies {
@@ -37,6 +45,7 @@ export interface InteractiveRunDependencies {
 }
 
 export interface InteractiveRunOptions {
+    runId?: string;
     resolved: ResolvedWorkbenchReference;
     reference?: string;
     home?: string;
@@ -44,6 +53,9 @@ export interface InteractiveRunOptions {
     onPermission?: (
         request: RunnerPermissionRequest
     ) => Promise<RunnerPermissionDecision> | RunnerPermissionDecision;
+    onQuestion?: (
+        request: RunnerQuestionRequest
+    ) => Promise<RunnerQuestionResponse> | RunnerQuestionResponse;
     dependencies?: InteractiveRunDependencies;
     workspaces?: WorkbenchWorkspaceBinding[];
 }
@@ -66,20 +78,20 @@ export class InteractiveRun {
             throw new Error('Interactive mode currently requires runtime: local');
         }
         const registry = this.dependencies.registry ?? RunnerRegistry.standard();
-        const preparedRunner = await registry.prepare(workbench, environment);
-        const { configuration, preflight } = await this.prepare(
-            preparedRunner,
-            environment
-        );
-        const adapter = registry.session(workbench.manifest.runner);
         const emitter = new RunEvents({
-            runId: RunStore.createId(),
+            runId: this.options.runId ?? RunStore.createId(),
             runner: workbench.manifest.runner,
             onEvent: this.options.onEvent,
             ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
         });
         let session: RunnerSession | undefined;
         try {
+            const preparedRunner = await registry.prepare(workbench, environment);
+            const { configuration, preflight } = await this.prepare(
+                preparedRunner,
+                environment
+            );
+            const adapter = registry.session(workbench.manifest.runner);
             await emitter.emit('run.started', {
                 workbench: workbench.manifest.name,
                 workbench_version: workbench.manifest.version,
@@ -111,6 +123,8 @@ export class InteractiveRun {
                     },
                     requestPermission: (request) =>
                         this.requestPermission(emitter, request),
+                    requestQuestion: (request) =>
+                        this.requestQuestion(emitter, request),
                 },
             });
             await emitter.emit('run.ready', {
@@ -200,6 +214,9 @@ export class InteractiveRun {
         emitter: RunEvents,
         request: RunnerPermissionRequest
     ): Promise<RunnerPermissionDecision> {
+        const decision = this.options.onPermission
+            ? this.options.onPermission(request)
+            : Promise.resolve('reject' as const);
         await emitter.emit('input.requested', {
             id: request.id,
             kind: 'permission',
@@ -212,9 +229,37 @@ export class InteractiveRun {
                 'reject',
             ],
         });
-        return this.options.onPermission
-            ? await this.options.onPermission(request)
-            : 'reject';
+        return decision;
+    }
+
+    private async requestQuestion(
+        emitter: RunEvents,
+        request: RunnerQuestionRequest
+    ): Promise<RunnerQuestionResponse> {
+        const response = this.options.onQuestion
+            ? this.options.onQuestion(request)
+            : Promise.resolve({ outcome: 'rejected' as const });
+        await emitter.emit('question.requested', {
+            id: request.id,
+            questions: request.questions.map((question) => ({
+                question: question.question,
+                ...(question.header ? { header: question.header } : {}),
+                options: question.options.map((option) => ({
+                    label: option.label,
+                    ...(option.description ? { description: option.description } : {}),
+                })),
+                multiple: question.multiple,
+                custom: question.custom,
+            })),
+        });
+        const resolved = await response;
+        await emitter.emit(
+            resolved.outcome === 'answered' ? 'question.answered' : 'question.rejected',
+            resolved.outcome === 'answered'
+                ? { id: request.id, answer_count: resolved.answers.length }
+                : { id: request.id }
+        );
+        return resolved;
     }
 
     private static errorMessage(error: unknown): string {
@@ -227,7 +272,7 @@ class HostedInteractiveSession implements InteractiveRunSession {
     private readonly runner: RunnerSession;
     private readonly emitter: RunEvents;
     private turn = 0;
-    private busy = false;
+    private working = false;
     private closed = false;
     private terminal = false;
     private cancellationRequested = false;
@@ -243,6 +288,10 @@ class HostedInteractiveSession implements InteractiveRunSession {
         return this.runner.id;
     }
 
+    get busy(): boolean {
+        return this.working;
+    }
+
     send(task: RunnerInput): Promise<void> {
         let normalized: ReturnType<typeof normalizeRunnerInput>;
         try {
@@ -253,10 +302,10 @@ class HostedInteractiveSession implements InteractiveRunSession {
         if (this.closed || this.terminal) {
             return Promise.reject(new Error('session is closed'));
         }
-        if (this.busy) {
+        if (this.working) {
             return Promise.reject(new Error('Workbench is still responding'));
         }
-        this.busy = true;
+        this.working = true;
         this.cancellationRequested = false;
         this.turn += 1;
         const turn = this.turn;
@@ -264,52 +313,40 @@ class HostedInteractiveSession implements InteractiveRunSession {
         this.activeTurn = active;
         return active.finally(() => {
             if (this.activeTurn === active) this.activeTurn = undefined;
-            this.busy = false;
+            this.working = false;
         });
     }
 
     async cancelTurn(): Promise<void> {
-        if (this.closed || !this.busy) return;
+        if (this.closed || !this.working) return;
         this.cancellationRequested = true;
         await this.runner.cancelTurn();
         await this.activeTurn?.catch(() => {});
     }
 
-    async steer(task: RunnerInput): Promise<void> {
+    async steer(task: RunnerInput): Promise<RunnerInputDelivery> {
         const normalized = normalizeRunnerInput(task);
         if (!this.busy || !this.runner.steer) {
             throw new Error('Runner does not accept steering for this turn');
         }
-        await this.runner.steer(normalized);
+        return this.runner.steer(normalized);
     }
 
-    async followUp(task: RunnerInput): Promise<void> {
-        const normalized = normalizeRunnerInput(task);
-        if (this.closed || this.terminal || !this.runner.followUp) {
-            throw new Error('Runner does not accept follow-up input');
-        }
-        await this.runner.followUp(normalized);
+    async recordInput(
+        type: 'input.accepted' | 'input.queued' | 'input.delivered' | 'input.rejected',
+        data: Record<string, unknown>
+    ): Promise<void> {
+        await this.emitter.emit(type, data);
     }
 
     async close(): Promise<void> {
-        if (this.closed) return;
-        if (this.busy) await this.cancelTurn();
-        this.closed = true;
-        try {
-            await this.runner.close();
-            if (!this.terminal) {
-                this.terminal = true;
-                await this.emitter.emit('run.completed', { interactive: true });
-            }
-        } catch (error) {
-            if (!this.terminal) {
-                this.terminal = true;
-                await this.emitter.emit('run.failed', {
-                    message: error instanceof Error ? error.message : String(error),
-                });
-            }
-            throw error;
-        }
+        await this.finish('run.completed', { interactive: true });
+    }
+
+    async cancel(reason?: string): Promise<void> {
+        await this.finish('run.cancelled', {
+            ...(reason?.trim() ? { reason: reason.trim() } : {}),
+        });
     }
 
     private async executeTurn(task: RunnerInput, turn: number): Promise<void> {
@@ -336,6 +373,30 @@ class HostedInteractiveSession implements InteractiveRunSession {
             await this.emitter.emit('run.failed', {
                 message: error instanceof Error ? error.message : String(error),
             });
+            throw error;
+        }
+    }
+
+    private async finish(
+        type: 'run.completed' | 'run.cancelled',
+        data: Record<string, unknown>
+    ): Promise<void> {
+        if (this.closed) return;
+        if (this.working) await this.cancelTurn();
+        this.closed = true;
+        try {
+            await this.runner.close();
+            if (!this.terminal) {
+                this.terminal = true;
+                await this.emitter.emit(type, data);
+            }
+        } catch (error) {
+            if (!this.terminal) {
+                this.terminal = true;
+                await this.emitter.emit('run.failed', {
+                    message: error instanceof Error ? error.message : String(error),
+                });
+            }
             throw error;
         }
     }

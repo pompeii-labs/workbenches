@@ -2,7 +2,9 @@ import { lstat } from 'node:fs/promises';
 import type {
     RunnerAdapterDeclaration,
     RunnerInput,
+    RunnerInputDelivery,
     RunnerPermissionDecision,
+    RunnerQuestionPrompt,
     RunnerSession,
     RunnerSessionAdapter,
     RunnerSessionStartOptions,
@@ -12,6 +14,7 @@ import { normalizeRunnerInput } from '../session.js';
 import { stageOpenCodeSkills } from './assets.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
+import { OpenCodeQuestion } from './question.js';
 import {
     type OpenCodeFetch,
     OpenCodeServer,
@@ -22,7 +25,10 @@ import {
 export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
     native: {
         command: 'opencode',
-        verified: [{ version: '1.18.22', surfaces: ['server'] }],
+        verified: [
+            { version: '1.18.22', surfaces: ['server'] },
+            { version: '1.18.26', surfaces: ['server'] },
+        ],
     },
     capabilities: {
         streaming_text: { status: 'supported' },
@@ -30,11 +36,9 @@ export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
         file_events: { status: 'supported' },
         usage: { status: 'supported' },
         permissions: { status: 'supported' },
+        questions: { status: 'supported' },
         multi_turn: { status: 'supported' },
-        steering: {
-            status: 'unsupported',
-            detail: 'OpenCode server mode does not expose a native mid-turn steering command.',
-        },
+        steering: { status: 'supported' },
         image_input: { status: 'supported' },
         image_generation: {
             status: 'unsupported',
@@ -102,9 +106,13 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
 
 interface ActiveTurn {
     adapter: OpenCodeEventAdapter;
+    inputMessageIds: Set<string>;
+    assistantOutputIds: Map<string, string>;
+    steeringDeliveries: Map<string, ReturnType<typeof deferred<void>>>;
     promise: Promise<RunnerTurnResult>;
     resolve: (result: RunnerTurnResult) => void;
     reject: (error: Error) => void;
+    cancelRequested: boolean;
     seenActivity: boolean;
     settled: boolean;
 }
@@ -126,8 +134,8 @@ class OpenCodeServerSession implements RunnerSession {
     private readonly server: OpenCodeServer;
     private readonly streamedTextParts = new Set<string>();
     private readonly assistantTextParts = new Set<string>();
-    private readonly assistantMessages = new Set<string>();
     private readonly alwaysPermissions: AlwaysPermission[] = [];
+    private readonly questions = new OpenCodeQuestion();
     private nativeSessionId: string | undefined;
     private active: ActiveTurn | undefined;
     private closed = false;
@@ -190,7 +198,8 @@ class OpenCodeServerSession implements RunnerSession {
         if (this.failure) throw this.failure;
         if (this.active) throw new Error('runner session is already processing a turn');
         const sessionId = this.requireSessionId();
-        const turn = createActiveTurn();
+        const messageId = createMessageId();
+        const turn = createActiveTurn(messageId);
         this.active = turn;
         const model = parseModel(this.options.configuration.model);
         const normalized = normalizeRunnerInput(input);
@@ -200,6 +209,7 @@ class OpenCodeServerSession implements RunnerSession {
                 {
                     method: 'POST',
                     body: JSON.stringify({
+                        messageID: messageId,
                         model,
                         parts: openCodeParts(normalized),
                     }),
@@ -213,13 +223,53 @@ class OpenCodeServerSession implements RunnerSession {
         });
     }
 
+    async steer(input: RunnerInput): Promise<RunnerInputDelivery> {
+        if (this.closed) throw new Error('runner session is closed');
+        if (this.failure) throw this.failure;
+        if (!this.active) {
+            throw new Error('runner session is not processing a turn');
+        }
+        const normalized = normalizeRunnerInput(input);
+        const messageId = createMessageId();
+        const delivery = deferred<void>();
+        void delivery.promise.catch(() => {});
+        this.active.inputMessageIds.add(messageId);
+        this.active.steeringDeliveries.set(messageId, delivery);
+        try {
+            await this.server.request(
+                `/session/${encodeURIComponent(this.requireSessionId())}/prompt_async`,
+                {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        messageID: messageId,
+                        model: parseModel(this.options.configuration.model),
+                        parts: openCodeParts(normalized),
+                    }),
+                }
+            );
+        } catch (error) {
+            this.active.inputMessageIds.delete(messageId);
+            this.active.steeringDeliveries.delete(messageId);
+            delivery.reject(asError(error));
+            throw error;
+        }
+        return { delivered: delivery.promise };
+    }
+
     async cancelTurn(): Promise<void> {
-        if (!this.active || this.closed) return;
-        await this.server.request(
-            `/session/${encodeURIComponent(this.requireSessionId())}/abort`,
-            { method: 'POST' }
-        );
-        this.finishActive('cancelled');
+        const active = this.active;
+        if (!active || this.closed) return;
+        active.cancelRequested = true;
+        try {
+            await this.server.request(
+                `/session/${encodeURIComponent(this.requireSessionId())}/abort`,
+                { method: 'POST' }
+            );
+            await active.promise;
+        } catch (error) {
+            if (!active.settled) active.cancelRequested = false;
+            throw error;
+        }
     }
 
     async close(): Promise<void> {
@@ -248,41 +298,70 @@ class OpenCodeServerSession implements RunnerSession {
             await this.answerPermission(properties);
             return;
         }
+        if (type === 'question.asked') {
+            await this.answerQuestion(properties);
+            return;
+        }
+        if (type === 'question.replied' || type === 'question.rejected') return;
 
         const sessionId = string(properties.sessionID);
         if (!sessionId || sessionId !== this.nativeSessionId) return;
         if (type === 'message.updated') {
             const info = record(properties.info);
             const messageId = string(info?.id);
-            if (messageId && info?.role === 'assistant') {
-                this.assistantMessages.add(messageId);
+            const parentId = string(info?.parentID);
+            if (
+                this.active &&
+                messageId &&
+                parentId &&
+                info?.role === 'assistant' &&
+                this.active.inputMessageIds.has(parentId)
+            ) {
+                if (!this.active.assistantOutputIds.has(messageId)) {
+                    this.active.assistantOutputIds.set(messageId, createOutputId());
+                }
+                const delivery = this.active.steeringDeliveries.get(parentId);
+                if (delivery) {
+                    this.active.steeringDeliveries.delete(parentId);
+                    delivery.resolve(undefined);
+                }
+                this.active.seenActivity = true;
             }
             return;
         }
         if (!this.active) return;
         if (type === 'session.error') {
+            const errorName = string(record(properties.error)?.name);
+            if (this.active.cancelRequested && errorName === 'MessageAbortedError') {
+                return;
+            }
             this.failActive(new Error('OpenCode session failed'));
             return;
         }
         if (type === 'session.status') {
             const status = string(record(properties.status)?.type);
-            if (status === 'busy') this.active.seenActivity = true;
-            if (status === 'idle' && this.active.seenActivity) {
-                this.finishActive(this.active.adapter.summary().completionReason);
+            if (
+                status === 'idle' &&
+                (this.active.seenActivity || this.active.cancelRequested)
+            ) {
+                this.finishActive(
+                    this.active.cancelRequested
+                        ? 'cancelled'
+                        : this.active.adapter.summary().completionReason
+                );
             }
             return;
         }
-        if (type === 'session.idle' && this.active.seenActivity) {
-            this.finishActive(this.active.adapter.summary().completionReason);
+        if (type === 'session.idle') {
+            // OpenCode emits this legacy event in addition to session.status=idle.
+            // Treating both as completion lets a delayed duplicate from a cancelled
+            // turn finish the next turn. The status event is the canonical boundary.
             return;
         }
         if (type === 'message.part.delta') {
             const partId = string(properties.partID);
-            if (
-                !this.isAssistantMessage(properties.messageID) ||
-                !partId ||
-                !this.assistantTextParts.has(partId)
-            ) {
+            const outputId = this.assistantOutputId(properties.messageID);
+            if (!outputId || !partId || !this.assistantTextParts.has(partId)) {
                 return;
             }
             if (properties.field !== 'text') return;
@@ -292,7 +371,7 @@ class OpenCodeServerSession implements RunnerSession {
             this.streamedTextParts.add(partId);
             await this.options.host.emit({
                 type: 'output.text',
-                data: { text: delta },
+                data: { id: outputId, text: delta },
             });
             return;
         }
@@ -306,7 +385,8 @@ class OpenCodeServerSession implements RunnerSession {
         const part = record(properties.part);
         const partType = string(part?.type);
         if (!part || !partType) return;
-        if (!this.isAssistantMessage(part.messageID)) return;
+        const outputId = this.assistantOutputId(part.messageID);
+        if (!outputId) return;
         this.active.seenActivity = true;
         if (partType === 'text') {
             const partId = string(part.id);
@@ -315,7 +395,7 @@ class OpenCodeServerSession implements RunnerSession {
             if (text && (!partId || !this.streamedTextParts.has(partId))) {
                 await this.options.host.emit({
                     type: 'output.text',
-                    data: { text },
+                    data: { id: outputId, text },
                 });
             }
             return;
@@ -361,6 +441,44 @@ class OpenCodeServerSession implements RunnerSession {
         }
     }
 
+    private async answerQuestion(properties: Record<string, unknown>) {
+        const id = string(properties.id);
+        const sessionId = string(properties.sessionID);
+        if (!id || !sessionId || sessionId !== this.nativeSessionId) return;
+        let questions: RunnerQuestionPrompt[];
+        try {
+            questions = this.questions.fromNative(properties.questions);
+        } catch (error) {
+            await this.server
+                .replyQuestion(`/question/${encodeURIComponent(id)}/reject`)
+                .catch(() => false);
+            throw error;
+        }
+        const response = await Promise.race([
+            this.options.host.requestQuestion({ id, questions }),
+            this.closing.promise.then(() => undefined),
+        ]);
+        if (!response || this.closed) return;
+        if (response.outcome === 'rejected') {
+            await this.server.replyQuestion(
+                `/question/${encodeURIComponent(id)}/reject`
+            );
+            return;
+        }
+        let answers: string[][];
+        try {
+            answers = this.questions.answers(questions, response);
+        } catch (error) {
+            await this.server
+                .replyQuestion(`/question/${encodeURIComponent(id)}/reject`)
+                .catch(() => false);
+            throw error;
+        }
+        await this.server.replyQuestion(`/question/${encodeURIComponent(id)}/reply`, {
+            answers,
+        });
+    }
+
     private async replyPermission(
         id: string,
         decision: RunnerPermissionDecision
@@ -383,6 +501,10 @@ class OpenCodeServerSession implements RunnerSession {
     private finishActive(reason = 'completed') {
         const active = this.active;
         if (!active || active.settled) return;
+        this.rejectUndeliveredSteering(
+            active,
+            new Error('OpenCode completed before consuming steering input')
+        );
         active.settled = true;
         active.resolve({ reason });
     }
@@ -390,8 +512,16 @@ class OpenCodeServerSession implements RunnerSession {
     private failActive(error: Error) {
         const active = this.active;
         if (!active || active.settled) return;
+        this.rejectUndeliveredSteering(active, error);
         active.settled = true;
         active.reject(error);
+    }
+
+    private rejectUndeliveredSteering(active: ActiveTurn, error: Error): void {
+        for (const delivery of active.steeringDeliveries.values()) {
+            delivery.reject(error);
+        }
+        active.steeringDeliveries.clear();
     }
 
     private fail(error: Error) {
@@ -404,9 +534,9 @@ class OpenCodeServerSession implements RunnerSession {
         return this.nativeSessionId;
     }
 
-    private isAssistantMessage(value: unknown): boolean {
+    private assistantOutputId(value: unknown): string | undefined {
         const messageId = string(value);
-        return messageId !== undefined && this.assistantMessages.has(messageId);
+        return messageId ? this.active?.assistantOutputIds.get(messageId) : undefined;
     }
 }
 
@@ -422,7 +552,7 @@ function openCodeParts(input: ReturnType<typeof normalizeRunnerInput>) {
     ];
 }
 
-function createActiveTurn(): ActiveTurn {
+function createActiveTurn(messageId: string): ActiveTurn {
     let resolve!: (result: RunnerTurnResult) => void;
     let reject!: (error: Error) => void;
     const promise = new Promise<RunnerTurnResult>((accepted, rejected) => {
@@ -431,12 +561,24 @@ function createActiveTurn(): ActiveTurn {
     });
     return {
         adapter: new OpenCodeEventAdapter(),
+        inputMessageIds: new Set([messageId]),
+        assistantOutputIds: new Map(),
+        steeringDeliveries: new Map(),
         promise,
         resolve,
         reject,
+        cancelRequested: false,
         seenActivity: false,
         settled: false,
     };
+}
+
+function createMessageId(): string {
+    return `msg_${crypto.randomUUID().replaceAll('-', '')}`;
+}
+
+function createOutputId(): string {
+    return `output_${crypto.randomUUID()}`;
 }
 
 function permissionReply(decision: RunnerPermissionDecision) {

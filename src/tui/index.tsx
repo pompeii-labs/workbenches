@@ -2,7 +2,7 @@ import { createCliRenderer } from '@opentui/core';
 import { render } from '@opentui/solid';
 
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
-import { InteractiveRun } from '../runs/index.js';
+import { RunDispatcher } from '../runs/index.js';
 import { workbenchHome } from '../storage.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import {
@@ -21,6 +21,7 @@ export async function renderWorkbenchTui(
 ): Promise<void> {
     const home = workbenchHome();
     const resolver = new WorkbenchResolver();
+    const dispatcher = new RunDispatcher(home);
     const entries = await new SavedWorkbenchCatalog(home).list();
     let finish: () => void = () => {};
     const shutdown = new Promise<void>((resolve) => {
@@ -44,18 +45,20 @@ export async function renderWorkbenchTui(
                         entries={entries}
                         {...(options.initial ? { initial: options.initial } : {})}
                         resolve={(alias) => resolver.resolve(alias, { home })}
-                        start={(sessionOptions) =>
-                            InteractiveRun.start({
-                                ...sessionOptions,
-                                home,
-                                ...(options.environment
-                                    ? { dependencies: { env: options.environment } }
-                                    : {}),
-                                ...(options.workspaces
-                                    ? { workspaces: options.workspaces }
-                                    : {}),
-                            })
-                        }
+                        start={async ({ resolved, reference }) => {
+                            const stored = await dispatcher.prepare({
+                                resolved,
+                                reference,
+                                mode: 'interactive',
+                                workspaces: options.workspaces ?? [],
+                            });
+                            await dispatcher.dispatch({
+                                id: stored.id,
+                                cwd: resolved.workspaceDirectory,
+                                environment: options.environment ?? process.env,
+                            });
+                            return dispatcher.handle(stored.id);
+                        }}
                     />
                 ),
                 renderer
