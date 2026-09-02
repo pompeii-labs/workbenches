@@ -13,14 +13,46 @@ describe('Pi JSON event normalization', () => {
             },
         });
         const text = adapter.consume({
+            type: 'message_start',
+            message: { role: 'assistant' },
+        });
+        const streamed = adapter.consume({
             type: 'message_update',
             assistantMessageEvent: { type: 'text_delta', delta: 'Hello' },
             message: { secret: 'MUST_NOT_RENDER_CREDENTIAL' },
         });
 
         expect(thinking.events).toEqual([]);
-        expect(text.events).toEqual([{ type: 'output.text', data: { text: 'Hello' } }]);
-        expect(JSON.stringify(text.events)).not.toContain('MUST_NOT_RENDER');
+        expect(text.events).toEqual([]);
+        expect(streamed.events).toEqual([
+            {
+                type: 'output.text',
+                data: {
+                    id: expect.stringMatching(/^output_/),
+                    text: 'Hello',
+                },
+            },
+        ]);
+        expect(JSON.stringify(streamed.events)).not.toContain('MUST_NOT_RENDER');
+    });
+
+    test('assigns a distinct output ID to each assistant message', () => {
+        const adapter = new PiEventAdapter();
+        adapter.consume({ type: 'message_start', message: { role: 'assistant' } });
+        const first = adapter.consume({
+            type: 'message_update',
+            assistantMessageEvent: { type: 'text_delta', delta: 'First' },
+        });
+        adapter.consume({ type: 'message_end', message: { role: 'assistant' } });
+        adapter.consume({ type: 'message_start', message: { role: 'assistant' } });
+        const second = adapter.consume({
+            type: 'message_update',
+            assistantMessageEvent: { type: 'text_delta', delta: 'Second' },
+        });
+
+        expect(first.events[0]?.data.id).toMatch(/^output_/);
+        expect(second.events[0]?.data.id).toMatch(/^output_/);
+        expect(first.events[0]?.data.id).not.toBe(second.events[0]?.data.id);
     });
 
     test('normalizes tools, file changes, usage, and completion', () => {

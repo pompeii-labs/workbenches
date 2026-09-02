@@ -75,11 +75,11 @@ export function runnerAdapterContract(options: {
                 await observed.session.prompt('stream text');
                 expect(observed.events).toContainEqual({
                     type: 'output.text',
-                    data: { text: 'Hello' },
+                    data: expect.objectContaining({ text: 'Hello' }),
                 });
                 expect(observed.events).toContainEqual({
                     type: 'output.text',
-                    data: { text: ' world' },
+                    data: expect.objectContaining({ text: ' world' }),
                 });
                 assertSafe(observed.events);
             } finally {

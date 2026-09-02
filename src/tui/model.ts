@@ -45,7 +45,11 @@ export class TranscriptEventBuffer {
         }
         const text = field(event.data, 'text');
         if (!text) return;
-        const previous = this.pendingText;
+        let previous = this.pendingText;
+        if (previous && field(previous.data, 'id') !== field(event.data, 'id')) {
+            this.flush();
+            previous = undefined;
+        }
         this.pendingText = previous
             ? {
                   ...event,
@@ -105,8 +109,10 @@ export function reduceTranscript(
     if (event.type === 'output.text') {
         const text = field(event.data, 'text');
         if (!text) return state;
+        const outputId = field(event.data, 'id');
+        const itemId = outputId || `assistant-${event.sequence}`;
         const last = state.items.at(-1);
-        if (last?.kind === 'assistant') {
+        if (last?.kind === 'assistant' && (!outputId || last.id === outputId)) {
             return {
                 ...state,
                 status: 'Responding',
@@ -122,7 +128,7 @@ export function reduceTranscript(
             items: [
                 ...state.items,
                 {
-                    id: `assistant-${event.sequence}`,
+                    id: itemId,
                     kind: 'assistant',
                     text,
                 },

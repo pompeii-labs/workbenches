@@ -54,7 +54,10 @@
                     "data": {
                         "type": "object",
                         "required": ["text"],
-                        "properties": { "text": { "type": "string" } }
+                        "properties": {
+                            "id": { "type": "string", "minLength": 1 },
+                            "text": { "type": "string" }
+                        }
                     }
                 }
             }

@@ -100,7 +100,7 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
 interface ActiveTurn {
     adapter: OpenCodeEventAdapter;
     inputMessageIds: Set<string>;
-    assistantMessageIds: Set<string>;
+    assistantOutputIds: Map<string, string>;
     promise: Promise<RunnerTurnResult>;
     resolve: (result: RunnerTurnResult) => void;
     reject: (error: Error) => void;
@@ -297,7 +297,9 @@ class OpenCodeServerSession implements RunnerSession {
                 info?.role === 'assistant' &&
                 this.active.inputMessageIds.has(parentId)
             ) {
-                this.active.assistantMessageIds.add(messageId);
+                if (!this.active.assistantOutputIds.has(messageId)) {
+                    this.active.assistantOutputIds.set(messageId, createOutputId());
+                }
                 this.active.seenActivity = true;
             }
             return;
@@ -333,11 +335,8 @@ class OpenCodeServerSession implements RunnerSession {
         }
         if (type === 'message.part.delta') {
             const partId = string(properties.partID);
-            if (
-                !this.isAssistantMessage(properties.messageID) ||
-                !partId ||
-                !this.assistantTextParts.has(partId)
-            ) {
+            const outputId = this.assistantOutputId(properties.messageID);
+            if (!outputId || !partId || !this.assistantTextParts.has(partId)) {
                 return;
             }
             if (properties.field !== 'text') return;
@@ -347,7 +346,7 @@ class OpenCodeServerSession implements RunnerSession {
             this.streamedTextParts.add(partId);
             await this.options.host.emit({
                 type: 'output.text',
-                data: { text: delta },
+                data: { id: outputId, text: delta },
             });
             return;
         }
@@ -361,7 +360,8 @@ class OpenCodeServerSession implements RunnerSession {
         const part = record(properties.part);
         const partType = string(part?.type);
         if (!part || !partType) return;
-        if (!this.isAssistantMessage(part.messageID)) return;
+        const outputId = this.assistantOutputId(part.messageID);
+        if (!outputId) return;
         this.active.seenActivity = true;
         if (partType === 'text') {
             const partId = string(part.id);
@@ -370,7 +370,7 @@ class OpenCodeServerSession implements RunnerSession {
             if (text && (!partId || !this.streamedTextParts.has(partId))) {
                 await this.options.host.emit({
                     type: 'output.text',
-                    data: { text },
+                    data: { id: outputId, text },
                 });
             }
             return;
@@ -459,12 +459,9 @@ class OpenCodeServerSession implements RunnerSession {
         return this.nativeSessionId;
     }
 
-    private isAssistantMessage(value: unknown): boolean {
+    private assistantOutputId(value: unknown): string | undefined {
         const messageId = string(value);
-        return (
-            messageId !== undefined &&
-            this.active?.assistantMessageIds.has(messageId) === true
-        );
+        return messageId ? this.active?.assistantOutputIds.get(messageId) : undefined;
     }
 }
 
@@ -490,7 +487,7 @@ function createActiveTurn(messageId: string): ActiveTurn {
     return {
         adapter: new OpenCodeEventAdapter(),
         inputMessageIds: new Set([messageId]),
-        assistantMessageIds: new Set(),
+        assistantOutputIds: new Map(),
         promise,
         resolve,
         reject,
@@ -502,6 +499,10 @@ function createActiveTurn(messageId: string): ActiveTurn {
 
 function createMessageId(): string {
     return `msg_${crypto.randomUUID().replaceAll('-', '')}`;
+}
+
+function createOutputId(): string {
+    return `output_${crypto.randomUUID()}`;
 }
 
 function permissionReply(decision: RunnerPermissionDecision) {

@@ -156,10 +156,11 @@ describe('OpenCode interactive server adapter', () => {
             'second prompt',
         ]);
         expect(server.createdSessions).toBe(1);
-        expect(events.filter((event) => event.type === 'output.text')).toEqual([
-            { type: 'output.text', data: { text: 'first' } },
-            { type: 'output.text', data: { text: 'second' } },
-        ]);
+        const output = events.filter((event) => event.type === 'output.text');
+        expect(output.map((event) => event.data.text)).toEqual(['first', 'second']);
+        expect(output[0]?.data.id).toMatch(/^output_/);
+        expect(output[1]?.data.id).toMatch(/^output_/);
+        expect(output[0]?.data.id).not.toBe(output[1]?.data.id);
         expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER');
         expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER_REASONING');
     });
@@ -211,6 +212,43 @@ describe('OpenCode interactive server adapter', () => {
                 },
             ],
         });
+    });
+
+    test('keeps responses to original and steered input as separate output messages', async () => {
+        const server = new FakeOpenCodeServer();
+        const events: WorkbenchEventDraft[] = [];
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async (event) => void events.push(event),
+                requestPermission: async () => 'reject',
+            },
+        });
+        server.onPrompt = () =>
+            server.emit('session.status', { status: { type: 'busy' } });
+
+        const turn = session.prompt('first input');
+        await server.prompted;
+        await session.steer?.('steered input');
+        const originalInput = String(server.promptBodies[0]?.messageID);
+        const steeredInput = String(server.promptBodies[1]?.messageID);
+
+        server.emitAssistantText('assistant_original', originalInput, 'First reply.');
+        server.emitAssistantText('assistant_steered', steeredInput, 'Steered reply.');
+        server.emit('session.status', { status: { type: 'idle' } });
+
+        await expect(turn).resolves.toEqual({ reason: 'completed' });
+        await session.close();
+
+        const output = events.filter((event) => event.type === 'output.text');
+        expect(output.map((event) => event.data.text)).toEqual([
+            'First reply.',
+            'Steered reply.',
+        ]);
+        expect(output[0]?.data.id).not.toBe(output[1]?.data.id);
     });
 
     test('pauses for a host permission decision and replies before continuing', async () => {
@@ -417,7 +455,13 @@ describe('OpenCode interactive server adapter', () => {
         await session.close();
 
         expect(events.filter((event) => event.type === 'output.text')).toEqual([
-            { type: 'output.text', data: { text: 'recovered' } },
+            {
+                type: 'output.text',
+                data: {
+                    id: expect.stringMatching(/^output_/),
+                    text: 'recovered',
+                },
+            },
         ]);
     });
 
@@ -732,6 +776,22 @@ class FakeOpenCodeServer {
                 role: 'assistant',
                 parentID: this.currentInputMessageId(),
             },
+        });
+    }
+
+    emitAssistantText(messageId: string, parentId: string, text: string) {
+        const partId = `part_${messageId}`;
+        this.emit('message.updated', {
+            info: { id: messageId, role: 'assistant', parentID: parentId },
+        });
+        this.emit('message.part.updated', {
+            part: { id: partId, messageID: messageId, type: 'text', text: '' },
+        });
+        this.emit('message.part.delta', {
+            messageID: messageId,
+            partID: partId,
+            field: 'text',
+            delta: text,
         });
     }
 

@@ -118,6 +118,31 @@ describe('TUI transcript model', () => {
         });
     });
 
+    test('keeps multiple assistant messages from one steered turn separate', () => {
+        let state = addUserMessage(emptyTranscript(), 'Start here', 'user-1');
+        state = reduceTranscript(
+            state,
+            event(1, 'output.text', { id: 'output-1', text: 'First reply.' })
+        );
+        state = addUserMessage(state, 'Change direction', 'user-2');
+        state = reduceTranscript(
+            state,
+            event(2, 'output.text', { id: 'output-1', text: ' Done.' })
+        );
+        state = reduceTranscript(
+            state,
+            event(3, 'output.text', { id: 'output-2', text: 'Steered reply.' })
+        );
+
+        expect(state.items).toEqual([
+            { id: 'user-1', kind: 'user', text: 'Start here' },
+            { id: 'output-1', kind: 'assistant', text: 'First reply.' },
+            { id: 'user-2', kind: 'user', text: 'Change direction' },
+            { id: 'output-1', kind: 'assistant', text: ' Done.' },
+            { id: 'output-2', kind: 'assistant', text: 'Steered reply.' },
+        ]);
+    });
+
     test('does not regress to thinking while cancellation is pending', () => {
         const cancelling = {
             ...addUserMessage(emptyTranscript(), 'Stop this turn'),
@@ -164,10 +189,17 @@ describe('TUI transcript model', () => {
         ]);
         expect(consumed[1]?.data).toEqual({ text: 'Before tool' });
 
-        buffer.push(event(5, 'output.text', { text: 'discard me' }));
+        buffer.push(event(5, 'output.text', { id: 'output-1', text: 'First' }));
+        buffer.push(event(6, 'output.text', { id: 'output-2', text: 'Second' }));
+        expect(consumed.at(-1)?.data).toEqual({
+            id: 'output-1',
+            text: 'First',
+        });
+
+        buffer.push(event(7, 'output.text', { text: 'discard me' }));
         buffer.dispose();
         callbacks.at(-1)?.();
-        expect(consumed).toHaveLength(3);
+        expect(consumed).toHaveLength(5);
     });
 });
 
