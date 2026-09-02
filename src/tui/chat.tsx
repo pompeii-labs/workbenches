@@ -12,6 +12,7 @@ import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import {
     addUserMessage,
     emptyTranscript,
+    queueUserMessage,
     reduceTranscript,
     reduceTranscriptDuringCancellation,
     TranscriptEventBuffer,
@@ -121,15 +122,31 @@ export function ChatScreen(props: ChatScreenProps) {
         const task = value.trim();
         if (!task || !session || permission()) return;
         const steering = state().busy;
+        const queuedId = steering ? crypto.randomUUID() : undefined;
         composer.value = '';
-        setState((current) => addUserMessage(current, task));
+        setState((current) =>
+            steering
+                ? queueUserMessage(current, task, queuedId)
+                : addUserMessage(current, task)
+        );
         try {
             if (steering) await session.steer(task);
             else await session.send(task);
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : String(cause);
             setError(message);
-            setState((current) => ({ ...current, busy: false, status: 'Failed' }));
+            setState((current) => ({
+                ...current,
+                ...(queuedId
+                    ? {
+                          queued: current.queued.filter(
+                              (input) => input.id !== queuedId
+                          ),
+                      }
+                    : {}),
+                busy: false,
+                status: 'Failed',
+            }));
         }
     };
 
@@ -246,6 +263,25 @@ export function ChatScreen(props: ChatScreenProps) {
                                 index() === state().items.length - 1
                             }
                         />
+                    )}
+                </For>
+                <For each={state().queued} fallback={<box height={0} />}>
+                    {(item) => (
+                        <box
+                            flexDirection="column"
+                            border={['left']}
+                            borderColor={theme.accent}
+                            paddingLeft={1}
+                            marginY={1}
+                        >
+                            <box flexDirection="row" justifyContent="space-between">
+                                <text fg={theme.accent}>YOU</text>
+                                <text fg={theme.faint}> QUEUED </text>
+                            </box>
+                            <text fg={theme.muted} wrapMode="word">
+                                {item.text}
+                            </text>
+                        </box>
                     )}
                 </For>
                 <Show when={error().length > 0} fallback={<box height={0} />}>

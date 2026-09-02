@@ -176,12 +176,23 @@ export class InteractiveRunWorker {
             return this.reject(request, 'turn_idle', 'No Workbench turn is active');
         }
         await this.accept(request);
-        await session.steer(request.input);
-        await session.recordInput('input.delivered', this.eventData(request));
+        const delivery = await session.steer(request.input);
+        await session.recordInput('input.queued', this.eventData(request));
         await this.control.resolve(request, {
             outcome: 'accepted',
-            disposition: 'delivered',
+            disposition: 'queued',
         });
+        void delivery.delivered
+            .then(
+                () => session.recordInput('input.delivered', this.eventData(request)),
+                (error) =>
+                    session.recordInput('input.rejected', {
+                        ...this.eventData(request),
+                        code: 'steering_not_delivered',
+                        message: errorMessage(error),
+                    })
+            )
+            .catch((error) => this.fail(error));
     }
 
     private async cancelTurn(request: RunControlRequest): Promise<void> {

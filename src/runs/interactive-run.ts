@@ -6,6 +6,7 @@ import type { PreparedRunner } from '../runners/runner.js';
 import {
     normalizeRunnerInput,
     type RunnerInput,
+    type RunnerInputDelivery,
     type RunnerPermissionDecision,
     type RunnerPermissionRequest,
     type RunnerSession,
@@ -24,7 +25,7 @@ export interface InteractiveRunSession {
     readonly runnerSessionId: string | undefined;
     readonly busy: boolean;
     send(task: RunnerInput): Promise<void>;
-    steer(task: RunnerInput): Promise<void>;
+    steer(task: RunnerInput): Promise<RunnerInputDelivery>;
     cancelTurn(): Promise<void>;
     recordInput(
         type: 'input.accepted' | 'input.queued' | 'input.delivered' | 'input.rejected',
@@ -285,12 +286,12 @@ class HostedInteractiveSession implements InteractiveRunSession {
         await this.activeTurn?.catch(() => {});
     }
 
-    async steer(task: RunnerInput): Promise<void> {
+    async steer(task: RunnerInput): Promise<RunnerInputDelivery> {
         const normalized = normalizeRunnerInput(task);
         if (!this.busy || !this.runner.steer) {
             throw new Error('Runner does not accept steering for this turn');
         }
-        await this.runner.steer(normalized);
+        return this.runner.steer(normalized);
     }
 
     async recordInput(

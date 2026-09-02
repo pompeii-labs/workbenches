@@ -226,6 +226,14 @@ data is translated into the runner's native input but never copied into
 normalized events. The manifest does not declare runner features. Adapter
 declarations and runtime negotiation determine what is possible.
 
+Input lifecycle events distinguish admission from consumption. `input.accepted`
+means the host accepted the control request. `input.queued` means the input is
+waiting inside the host or runner. `input.delivered` means it left that queue for
+the runner's active execution path. An adapter can delay delivery until it sees
+native evidence of consumption. OpenCode steering does this when the runner
+creates the assistant message parented by that input. A client can therefore
+keep steering visibly queued without adding it to the conversation early.
+
 Clients control a stored run through `RunHandle`. A handle follows the durable
 event stream, resolves the terminal result, sends idle-turn input, steers an
 active turn, queues follow-up input, cancels a turn, answers permission requests,

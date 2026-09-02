@@ -1,6 +1,7 @@
 import type {
     RunnerAdapterDeclaration,
     RunnerInput,
+    RunnerInputDelivery,
     RunnerSession,
     RunnerSessionAdapter,
     RunnerSessionStartOptions,
@@ -199,12 +200,13 @@ class PiRpcSession implements RunnerSession {
         });
     }
 
-    async steer(input: RunnerInput): Promise<void> {
+    async steer(input: RunnerInput): Promise<RunnerInputDelivery> {
         if (this.failure) throw this.failure;
         if (!this.active || this.closed) {
             throw new Error('runner session is not processing a turn');
         }
         await this.command('steer', piPrompt(normalizeRunnerInput(input)));
+        return { delivered: Promise.resolve() };
     }
 
     async followUp(input: RunnerInput): Promise<void> {

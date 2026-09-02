@@ -2,6 +2,7 @@ import { lstat } from 'node:fs/promises';
 import type {
     RunnerAdapterDeclaration,
     RunnerInput,
+    RunnerInputDelivery,
     RunnerPermissionDecision,
     RunnerSession,
     RunnerSessionAdapter,
@@ -101,6 +102,7 @@ interface ActiveTurn {
     adapter: OpenCodeEventAdapter;
     inputMessageIds: Set<string>;
     assistantOutputIds: Map<string, string>;
+    steeringDeliveries: Map<string, ReturnType<typeof deferred<void>>>;
     promise: Promise<RunnerTurnResult>;
     resolve: (result: RunnerTurnResult) => void;
     reject: (error: Error) => void;
@@ -214,7 +216,7 @@ class OpenCodeServerSession implements RunnerSession {
         });
     }
 
-    async steer(input: RunnerInput): Promise<void> {
+    async steer(input: RunnerInput): Promise<RunnerInputDelivery> {
         if (this.closed) throw new Error('runner session is closed');
         if (this.failure) throw this.failure;
         if (!this.active) {
@@ -222,7 +224,10 @@ class OpenCodeServerSession implements RunnerSession {
         }
         const normalized = normalizeRunnerInput(input);
         const messageId = createMessageId();
+        const delivery = deferred<void>();
+        void delivery.promise.catch(() => {});
         this.active.inputMessageIds.add(messageId);
+        this.active.steeringDeliveries.set(messageId, delivery);
         try {
             await this.server.request(
                 `/session/${encodeURIComponent(this.requireSessionId())}/prompt_async`,
@@ -237,8 +242,11 @@ class OpenCodeServerSession implements RunnerSession {
             );
         } catch (error) {
             this.active.inputMessageIds.delete(messageId);
+            this.active.steeringDeliveries.delete(messageId);
+            delivery.reject(asError(error));
             throw error;
         }
+        return { delivered: delivery.promise };
     }
 
     async cancelTurn(): Promise<void> {
@@ -299,6 +307,11 @@ class OpenCodeServerSession implements RunnerSession {
             ) {
                 if (!this.active.assistantOutputIds.has(messageId)) {
                     this.active.assistantOutputIds.set(messageId, createOutputId());
+                }
+                const delivery = this.active.steeringDeliveries.get(parentId);
+                if (delivery) {
+                    this.active.steeringDeliveries.delete(parentId);
+                    delivery.resolve(undefined);
                 }
                 this.active.seenActivity = true;
             }
@@ -438,6 +451,10 @@ class OpenCodeServerSession implements RunnerSession {
     private finishActive(reason = 'completed') {
         const active = this.active;
         if (!active || active.settled) return;
+        this.rejectUndeliveredSteering(
+            active,
+            new Error('OpenCode completed before consuming steering input')
+        );
         active.settled = true;
         active.resolve({ reason });
     }
@@ -445,8 +462,16 @@ class OpenCodeServerSession implements RunnerSession {
     private failActive(error: Error) {
         const active = this.active;
         if (!active || active.settled) return;
+        this.rejectUndeliveredSteering(active, error);
         active.settled = true;
         active.reject(error);
+    }
+
+    private rejectUndeliveredSteering(active: ActiveTurn, error: Error): void {
+        for (const delivery of active.steeringDeliveries.values()) {
+            delivery.reject(error);
+        }
+        active.steeringDeliveries.clear();
     }
 
     private fail(error: Error) {
@@ -488,6 +513,7 @@ function createActiveTurn(messageId: string): ActiveTurn {
         adapter: new OpenCodeEventAdapter(),
         inputMessageIds: new Set([messageId]),
         assistantOutputIds: new Map(),
+        steeringDeliveries: new Map(),
         promise,
         resolve,
         reject,

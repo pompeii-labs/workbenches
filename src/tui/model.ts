@@ -13,8 +13,15 @@ export type TranscriptItem =
       }
     | { id: string; kind: 'notice'; text: string; tone: 'muted' | 'error' };
 
+export interface QueuedTranscriptInput {
+    id: string;
+    text: string;
+    controlId?: string;
+}
+
 export interface TranscriptState {
     items: TranscriptItem[];
+    queued: QueuedTranscriptInput[];
     busy: boolean;
     status: string;
     totalTokens?: number;
@@ -53,7 +60,11 @@ export class TranscriptEventBuffer {
         this.pendingText = previous
             ? {
                   ...event,
-                  data: { text: field(previous.data, 'text') + text },
+                  data: {
+                      ...object(previous.data),
+                      ...object(event.data),
+                      text: field(previous.data, 'text') + text,
+                  },
               }
             : event;
         if (this.timer !== undefined) return;
@@ -82,7 +93,7 @@ export class TranscriptEventBuffer {
 }
 
 export function emptyTranscript(): TranscriptState {
-    return { items: [], busy: false, status: 'Connecting' };
+    return { items: [], queued: [], busy: false, status: 'Connecting' };
 }
 
 export function addUserMessage(
@@ -98,10 +109,65 @@ export function addUserMessage(
     };
 }
 
+export function queueUserMessage(
+    state: TranscriptState,
+    text: string,
+    id: string = crypto.randomUUID()
+): TranscriptState {
+    return {
+        ...state,
+        queued: [...state.queued, { id, text }],
+    };
+}
+
 export function reduceTranscript(
     state: TranscriptState,
     event: WorkbenchEvent
 ): TranscriptState {
+    if (event.type === 'input.queued' && field(event.data, 'kind') === 'steer') {
+        const controlId = field(event.data, 'id');
+        const index = state.queued.findIndex((input) => !input.controlId);
+        if (!controlId || index === -1) return state;
+        return {
+            ...state,
+            queued: state.queued.map((input, inputIndex) =>
+                inputIndex === index ? { ...input, controlId } : input
+            ),
+        };
+    }
+    if (event.type === 'input.delivered' && field(event.data, 'kind') === 'steer') {
+        const controlId = field(event.data, 'id');
+        const index = state.queued.findIndex((input) => input.controlId === controlId);
+        if (!controlId || index === -1) return state;
+        const delivered = state.queued[index];
+        if (!delivered) return state;
+        return {
+            ...state,
+            queued: state.queued.filter((_, inputIndex) => inputIndex !== index),
+            items: [
+                ...state.items,
+                { id: delivered.id, kind: 'user', text: delivered.text },
+            ],
+        };
+    }
+    if (event.type === 'input.rejected' && field(event.data, 'kind') === 'steer') {
+        const controlId = field(event.data, 'id');
+        const index = state.queued.findIndex((input) => input.controlId === controlId);
+        if (!controlId || index === -1) return state;
+        return {
+            ...state,
+            queued: state.queued.filter((_, inputIndex) => inputIndex !== index),
+            items: [
+                ...state.items,
+                {
+                    id: `rejected-${event.sequence}`,
+                    kind: 'notice',
+                    text: 'Queued steering input was not delivered',
+                    tone: 'error',
+                },
+            ],
+        };
+    }
     if (event.type === 'run.ready') return { ...state, status: 'Ready' };
     if (event.type === 'turn.started') {
         return { ...state, busy: true, status: 'Thinking' };

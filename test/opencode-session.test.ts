@@ -232,12 +232,16 @@ describe('OpenCode interactive server adapter', () => {
 
         const turn = session.prompt('first input');
         await server.prompted;
-        await session.steer?.('steered input');
+        const delivery = await session.steer?.('steered input');
+        if (!delivery) throw new Error('Expected tracked steering delivery');
         const originalInput = String(server.promptBodies[0]?.messageID);
         const steeredInput = String(server.promptBodies[1]?.messageID);
 
         server.emitAssistantText('assistant_original', originalInput, 'First reply.');
+        await Bun.sleep(0);
+        expect(await settled(delivery.delivered)).toBeFalse();
         server.emitAssistantText('assistant_steered', steeredInput, 'Steered reply.');
+        await expect(delivery.delivered).resolves.toBeUndefined();
         server.emit('session.status', { status: { type: 'idle' } });
 
         await expect(turn).resolves.toEqual({ reason: 'completed' });
@@ -934,6 +938,20 @@ function record(value: unknown): Record<string, unknown> | undefined {
 function firstPartText(body: Record<string, unknown>) {
     const parts = Array.isArray(body.parts) ? body.parts : [];
     return record(parts[0])?.text;
+}
+
+async function settled(promise: Promise<unknown>): Promise<boolean> {
+    let value = false;
+    void promise.then(
+        () => {
+            value = true;
+        },
+        () => {
+            value = true;
+        }
+    );
+    await Bun.sleep(0);
+    return value;
 }
 
 function workbench(): ResolvedWorkbench {

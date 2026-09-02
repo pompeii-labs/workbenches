@@ -56,7 +56,7 @@ describe('interactive run worker', () => {
 
         const recovered = new StoredRunHandle(home, stored.id);
         await expect(recovered.steer('change direction')).resolves.toMatchObject({
-            disposition: 'delivered',
+            disposition: 'queued',
         });
         await expect(recovered.cancelTurn()).resolves.toMatchObject({
             disposition: 'cancelled',
@@ -80,7 +80,27 @@ describe('interactive run worker', () => {
         expect(events.map((event) => event.sequence)).toEqual(
             events.map((_, index) => index + 1)
         );
-        expect(events.filter((event) => event.type === 'input.queued')).toHaveLength(2);
+        expect(
+            events.filter(
+                (event) =>
+                    event.type === 'input.queued' &&
+                    field(event.data, 'kind') === 'follow_up'
+            )
+        ).toHaveLength(2);
+        expect(
+            events.filter(
+                (event) =>
+                    event.type === 'input.queued' &&
+                    field(event.data, 'kind') === 'steer'
+            )
+        ).toHaveLength(1);
+        expect(
+            events.filter(
+                (event) =>
+                    event.type === 'input.delivered' &&
+                    field(event.data, 'kind') === 'steer'
+            )
+        ).toHaveLength(1);
         expect(
             events.filter(
                 (event) =>
@@ -127,6 +147,38 @@ describe('interactive run worker', () => {
                 }),
             })
         );
+    });
+
+    test('reports steering as queued until the runner consumes it', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const adapter = new ControlledAdapter({ deferSteeringDelivery: true });
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+
+        await handle.send('first turn');
+        await adapter.waitForPrompts(1);
+        await expect(handle.steer('change direction')).resolves.toMatchObject({
+            disposition: 'queued',
+        });
+
+        let events = await new RunStore(home).readEvents(stored.id);
+        expect(eventIndex(events, 'input.queued', 'steer')).toBeGreaterThan(-1);
+        expect(eventIndex(events, 'input.delivered', 'steer')).toBe(-1);
+
+        adapter.deliverSteering();
+        await waitForEvent(home, stored.id, 'input.delivered', 'steer');
+        events = await new RunStore(home).readEvents(stored.id);
+        expect(eventIndex(events, 'input.queued', 'steer')).toBeLessThan(
+            eventIndex(events, 'input.delivered', 'steer')
+        );
+
+        await handle.cancelTurn();
+        await handle.close();
+        await execution;
     });
 
     test('treats repeated turn cancellation as idempotent once idle', async () => {
@@ -336,12 +388,25 @@ class ControlledAdapter implements RunnerSessionAdapter {
     private readonly markPermissionRequested: () => void;
     readonly permissionRequested: Promise<void>;
 
-    constructor(private readonly options: { requestPermission?: boolean } = {}) {
+    private readonly steeringDelivery: Promise<void>;
+    private readonly resolveSteeringDelivery: () => void;
+
+    constructor(
+        private readonly options: {
+            requestPermission?: boolean;
+            deferSteeringDelivery?: boolean;
+        } = {}
+    ) {
         let markPermissionRequested!: () => void;
         this.permissionRequested = new Promise((resolve) => {
             markPermissionRequested = resolve;
         });
         this.markPermissionRequested = markPermissionRequested;
+        let resolveSteeringDelivery!: () => void;
+        this.steeringDelivery = new Promise((resolve) => {
+            resolveSteeringDelivery = resolve;
+        });
+        this.resolveSteeringDelivery = resolveSteeringDelivery;
     }
 
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
@@ -360,6 +425,10 @@ class ControlledAdapter implements RunnerSessionAdapter {
         while (this.prompts.length < count) {
             await new Promise<void>((resolve) => this.promptWaiters.push(resolve));
         }
+    }
+
+    deliverSteering(): void {
+        this.resolveSteeringDelivery();
     }
 
     private async prompt(input: RunnerInput) {
@@ -386,8 +455,13 @@ class ControlledAdapter implements RunnerSessionAdapter {
         return { reason: 'stop' };
     }
 
-    private async steer(input: RunnerInput): Promise<void> {
+    private async steer(input: RunnerInput) {
         this.steers.push(normalizeRunnerInput(input).text);
+        return {
+            delivered: this.options.deferSteeringDelivery
+                ? this.steeringDelivery
+                : Promise.resolve(),
+        };
     }
 
     private async cancelTurn(): Promise<void> {
@@ -483,6 +557,21 @@ async function waitForReady(home: string, runId: string): Promise<void> {
         await Bun.sleep(2);
     }
     throw new Error('Timed out waiting for interactive run');
+}
+
+async function waitForEvent(
+    home: string,
+    runId: string,
+    type: WorkbenchEvent['type'],
+    kind: string
+): Promise<void> {
+    const store = new RunStore(home);
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+        const events = await store.readEvents(runId);
+        if (eventIndex(events, type, kind) >= 0) return;
+        await Bun.sleep(2);
+    }
+    throw new Error(`Timed out waiting for ${type}:${kind}`);
 }
 
 async function collect(events: AsyncIterable<WorkbenchEvent>) {

@@ -42,6 +42,10 @@ export interface RunnerTurnResult {
     reason?: string;
 }
 
+export interface RunnerInputDelivery {
+    delivered: Promise<void>;
+}
+
 export interface RunnerImageInput {
     data: string;
     mimeType: string;
@@ -73,7 +77,7 @@ export interface RunnerPermissionRequest {
 export interface RunnerSession {
     readonly id: string | undefined;
     prompt(input: RunnerInput): Promise<RunnerTurnResult>;
-    steer?(input: RunnerInput): Promise<void>;
+    steer?(input: RunnerInput): Promise<RunnerInputDelivery>;
     followUp?(input: RunnerInput): Promise<void>;
     cancelTurn(): Promise<void>;
     close(): Promise<void>;

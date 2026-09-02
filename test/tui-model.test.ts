@@ -4,6 +4,7 @@ import type { WorkbenchEvent } from '../src/runs/index.js';
 import {
     addUserMessage,
     emptyTranscript,
+    queueUserMessage,
     reduceTranscript,
     reduceTranscriptDuringCancellation,
     TranscriptEventBuffer,
@@ -124,22 +125,99 @@ describe('TUI transcript model', () => {
             state,
             event(1, 'output.text', { id: 'output-1', text: 'First reply.' })
         );
-        state = addUserMessage(state, 'Change direction', 'user-2');
+        state = queueUserMessage(state, 'Change direction', 'user-2');
         state = reduceTranscript(
             state,
             event(2, 'output.text', { id: 'output-1', text: ' Done.' })
         );
         state = reduceTranscript(
             state,
-            event(3, 'output.text', { id: 'output-2', text: 'Steered reply.' })
+            event(3, 'input.queued', { id: 'control-1', kind: 'steer' })
+        );
+        state = reduceTranscript(
+            state,
+            event(4, 'input.delivered', { id: 'control-1', kind: 'steer' })
+        );
+        state = reduceTranscript(
+            state,
+            event(5, 'output.text', { id: 'output-2', text: 'Steered reply.' })
         );
 
         expect(state.items).toEqual([
             { id: 'user-1', kind: 'user', text: 'Start here' },
-            { id: 'output-1', kind: 'assistant', text: 'First reply.' },
+            { id: 'output-1', kind: 'assistant', text: 'First reply. Done.' },
             { id: 'user-2', kind: 'user', text: 'Change direction' },
-            { id: 'output-1', kind: 'assistant', text: ' Done.' },
             { id: 'output-2', kind: 'assistant', text: 'Steered reply.' },
+        ]);
+        expect(state.queued).toEqual([]);
+    });
+
+    test('keeps steering visibly queued until the runner consumes it', () => {
+        let state = addUserMessage(emptyTranscript(), 'hello', 'user-1');
+        state = queueUserMessage(state, 'testing', 'user-2');
+        state = reduceTranscript(
+            state,
+            event(1, 'output.text', { id: 'output-1', text: 'Hello.' })
+        );
+
+        expect(state.items).toEqual([
+            { id: 'user-1', kind: 'user', text: 'hello' },
+            { id: 'output-1', kind: 'assistant', text: 'Hello.' },
+        ]);
+        expect(state.queued).toEqual([{ id: 'user-2', text: 'testing' }]);
+
+        state = reduceTranscript(
+            state,
+            event(2, 'input.queued', { id: 'control-1', kind: 'steer' })
+        );
+        expect(state.queued).toEqual([
+            { id: 'user-2', text: 'testing', controlId: 'control-1' },
+        ]);
+        state = reduceTranscript(
+            state,
+            event(3, 'input.delivered', { id: 'control-1', kind: 'steer' })
+        );
+        state = reduceTranscript(
+            state,
+            event(4, 'output.text', {
+                id: 'output-2',
+                text: 'Testing received.',
+            })
+        );
+
+        expect(state.items).toEqual([
+            { id: 'user-1', kind: 'user', text: 'hello' },
+            { id: 'output-1', kind: 'assistant', text: 'Hello.' },
+            { id: 'user-2', kind: 'user', text: 'testing' },
+            { id: 'output-2', kind: 'assistant', text: 'Testing received.' },
+        ]);
+        expect(state.queued).toEqual([]);
+    });
+
+    test('matches queued steering lifecycle events by control ID', () => {
+        let state = addUserMessage(emptyTranscript(), 'first', 'user-1');
+        state = queueUserMessage(state, 'second', 'user-2');
+        state = queueUserMessage(state, 'third', 'user-3');
+        state = reduceTranscript(
+            state,
+            event(1, 'input.queued', { id: 'control-1', kind: 'steer' })
+        );
+        state = reduceTranscript(
+            state,
+            event(2, 'input.queued', { id: 'control-2', kind: 'steer' })
+        );
+        state = reduceTranscript(
+            state,
+            event(3, 'input.delivered', { id: 'control-2', kind: 'steer' })
+        );
+
+        expect(state.items.at(-1)).toEqual({
+            id: 'user-3',
+            kind: 'user',
+            text: 'third',
+        });
+        expect(state.queued).toEqual([
+            { id: 'user-2', text: 'second', controlId: 'control-1' },
         ]);
     });
 
@@ -190,16 +268,24 @@ describe('TUI transcript model', () => {
         expect(consumed[1]?.data).toEqual({ text: 'Before tool' });
 
         buffer.push(event(5, 'output.text', { id: 'output-1', text: 'First' }));
-        buffer.push(event(6, 'output.text', { id: 'output-2', text: 'Second' }));
+        buffer.push(event(6, 'output.text', { id: 'output-1', text: ' reply.' }));
+        callbacks.at(-1)?.();
+        expect(consumed.at(-1)?.data).toEqual({
+            id: 'output-1',
+            text: 'First reply.',
+        });
+
+        buffer.push(event(7, 'output.text', { id: 'output-1', text: 'First' }));
+        buffer.push(event(8, 'output.text', { id: 'output-2', text: 'Second' }));
         expect(consumed.at(-1)?.data).toEqual({
             id: 'output-1',
             text: 'First',
         });
 
-        buffer.push(event(7, 'output.text', { text: 'discard me' }));
+        buffer.push(event(9, 'output.text', { text: 'discard me' }));
         buffer.dispose();
         callbacks.at(-1)?.();
-        expect(consumed).toHaveLength(5);
+        expect(consumed).toHaveLength(6);
     });
 });
 
