@@ -1,17 +1,23 @@
 import type { WorkbenchEvent } from '../runs/index.js';
 
+export interface ToolTranscriptItem {
+    id: string;
+    kind: 'tool';
+    title: string;
+    target?: string;
+    detail?: string;
+    status: 'running' | 'completed' | 'failed';
+}
+
 export type TranscriptItem =
     | { id: string; kind: 'user'; text: string }
     | { id: string; kind: 'assistant'; text: string }
-    | {
-          id: string;
-          kind: 'tool';
-          title: string;
-          target?: string;
-          detail?: string;
-          status: 'running' | 'completed' | 'failed';
-      }
+    | ToolTranscriptItem
     | { id: string; kind: 'notice'; text: string; tone: 'muted' | 'error' };
+
+export type TranscriptDisplayItem =
+    | Exclude<TranscriptItem, ToolTranscriptItem>
+    | { id: string; kind: 'activity'; tools: ToolTranscriptItem[] };
 
 export interface QueuedTranscriptInput {
     id: string;
@@ -94,6 +100,23 @@ export class TranscriptEventBuffer {
 
 export function emptyTranscript(): TranscriptState {
     return { items: [], queued: [], busy: false, status: 'Connecting' };
+}
+
+export function groupTranscriptItems(items: TranscriptItem[]): TranscriptDisplayItem[] {
+    const groups: TranscriptDisplayItem[] = [];
+    for (const item of items) {
+        if (item.kind !== 'tool') {
+            groups.push(item);
+            continue;
+        }
+        const previous = groups.at(-1);
+        if (previous?.kind === 'activity') {
+            previous.tools.push(item);
+            continue;
+        }
+        groups.push({ id: `activity-${item.id}`, kind: 'activity', tools: [item] });
+    }
+    return groups;
 }
 
 export function addUserMessage(

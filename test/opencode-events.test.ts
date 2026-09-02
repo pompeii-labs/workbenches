@@ -157,6 +157,23 @@ describe('OpenCode event adapter', () => {
         expect(JSON.stringify([first, repeated])).not.toContain('SECRET_NATIVE_DETAIL');
     });
 
+    test('leaves native question tools to the normalized question lifecycle', () => {
+        const adapter = new OpenCodeEventAdapter();
+        const result = adapter.consume({
+            type: 'tool_use',
+            part: {
+                tool: 'question',
+                callID: 'question_1',
+                state: {
+                    status: 'error',
+                    error: 'Question was answered through the native question endpoint',
+                },
+            },
+        });
+
+        expect(result.events).toEqual([]);
+    });
+
     test('retains a safe provider failure without retaining response metadata', () => {
         const adapter = new OpenCodeEventAdapter();
         const result = adapter.consume({

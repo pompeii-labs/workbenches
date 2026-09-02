@@ -4,6 +4,7 @@ import type { WorkbenchEvent } from '../src/runs/index.js';
 import {
     addUserMessage,
     emptyTranscript,
+    groupTranscriptItems,
     queueUserMessage,
     reduceTranscript,
     reduceTranscriptDuringCancellation,
@@ -11,6 +12,50 @@ import {
 } from '../src/tui/model.js';
 
 describe('TUI transcript model', () => {
+    test('groups consecutive tool activity without hiding failures', () => {
+        const grouped = groupTranscriptItems([
+            { id: 'user-1', kind: 'user', text: 'Inspect this' },
+            {
+                id: 'tool-1',
+                kind: 'tool',
+                title: 'Read',
+                status: 'completed',
+            },
+            {
+                id: 'tool-2',
+                kind: 'tool',
+                title: 'Question',
+                detail: 'Tool failed in runner',
+                status: 'failed',
+            },
+            { id: 'assistant-1', kind: 'assistant', text: 'Done' },
+        ]);
+
+        expect(grouped).toEqual([
+            { id: 'user-1', kind: 'user', text: 'Inspect this' },
+            {
+                id: 'activity-tool-1',
+                kind: 'activity',
+                tools: [
+                    {
+                        id: 'tool-1',
+                        kind: 'tool',
+                        title: 'Read',
+                        status: 'completed',
+                    },
+                    {
+                        id: 'tool-2',
+                        kind: 'tool',
+                        title: 'Question',
+                        detail: 'Tool failed in runner',
+                        status: 'failed',
+                    },
+                ],
+            },
+            { id: 'assistant-1', kind: 'assistant', text: 'Done' },
+        ]);
+    });
+
     test('coalesces streamed text and updates tool state immutably', () => {
         let state = addUserMessage(emptyTranscript(), 'Inspect this', 'user-1');
         state = reduceTranscript(state, event(1, 'turn.started', { index: 1 }));

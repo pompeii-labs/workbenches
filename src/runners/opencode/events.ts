@@ -64,6 +64,7 @@ export class OpenCodeEventAdapter {
         const state = record(part?.state);
         const id = string(part?.callID) ?? string(part?.id) ?? 'unknown';
         const name = string(part?.tool) ?? 'tool';
+        if (name.toLowerCase() === 'question') return this.result([]);
         const status = string(state?.status) ?? 'unknown';
         const target = toolTarget(record(state?.input));
         const common = {

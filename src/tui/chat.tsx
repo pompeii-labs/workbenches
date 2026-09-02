@@ -1,5 +1,13 @@
 import { useKeyboard } from '@opentui/solid';
-import { type Accessor, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import {
+    type Accessor,
+    createMemo,
+    createSignal,
+    For,
+    onCleanup,
+    onMount,
+    Show,
+} from 'solid-js';
 
 import { modelLabel } from '../models/index.js';
 import type {
@@ -15,6 +23,7 @@ import { useDialog } from './dialog/index.js';
 import {
     addUserMessage,
     emptyTranscript,
+    groupTranscriptItems,
     queueUserMessage,
     reduceTranscript,
     reduceTranscriptDuringCancellation,
@@ -270,6 +279,7 @@ export function ChatScreen(props: ChatScreenProps) {
     });
 
     const manifest = props.resolved.workbench.manifest;
+    const transcript = createMemo(() => groupTranscriptItems(state().items));
     const commands = new SessionCommands({
         home: props.home,
         alias: props.alias,
@@ -323,14 +333,14 @@ export function ChatScreen(props: ChatScreenProps) {
                         </text>
                     </box>
                 </Show>
-                <For each={state().items} fallback={<box height={0} />}>
+                <For each={transcript()} fallback={<box height={0} />}>
                     {(item, index) => (
                         <Transcript
                             item={item}
                             streaming={
                                 item.kind === 'assistant' &&
                                 state().busy &&
-                                index() === state().items.length - 1
+                                index() === transcript().length - 1
                             }
                         />
                     )}

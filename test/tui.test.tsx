@@ -259,6 +259,47 @@ describe.serial('Workbench TUI', () => {
         expect(frame).not.toContain('```');
     });
 
+    test('collapses successful tool activity while keeping failure details visible', async () => {
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <box width="100%" height="100%">
+                        <Transcript
+                            item={{
+                                id: 'activity-1',
+                                kind: 'activity',
+                                tools: [
+                                    {
+                                        id: 'tool-1',
+                                        kind: 'tool',
+                                        title: 'Read manifest',
+                                        status: 'completed',
+                                    },
+                                    {
+                                        id: 'tool-2',
+                                        kind: 'tool',
+                                        title: 'Run tests',
+                                        detail: 'Process exited with status 1',
+                                        status: 'failed',
+                                    },
+                                ],
+                            }}
+                            streaming={false}
+                        />
+                    </box>
+                </ThemeProvider>
+            ),
+            { width: 90, height: 12 }
+        );
+        renderers.push(setup.renderer);
+        await setup.flush();
+
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain('2 actions · 1 failed');
+        expect(frame).toContain('Run tests: Process exited with status 1');
+        expect(frame).not.toContain('Read manifest');
+    });
+
     test('renders a normalized runner question with choices', async () => {
         const setup = await testRender(
             () => (

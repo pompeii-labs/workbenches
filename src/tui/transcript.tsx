@@ -1,10 +1,10 @@
-import { Match, Show, Switch } from 'solid-js';
+import { For, Match, Show, Switch } from 'solid-js';
 
 import { renderMarkdownPreview, sanitizeMarkdown } from '../rendering/index.js';
-import type { TranscriptItem } from './model.js';
+import type { TranscriptDisplayItem } from './model.js';
 import { useTheme } from './theme/index.js';
 
-export function Transcript(props: { item: TranscriptItem; streaming: boolean }) {
+export function Transcript(props: { item: TranscriptDisplayItem; streaming: boolean }) {
     const { syntax, theme } = useTheme();
     return (
         <Switch>
@@ -52,36 +52,51 @@ export function Transcript(props: { item: TranscriptItem; streaming: boolean }) 
                     </Show>
                 </box>
             </Match>
-            <Match when={props.item.kind === 'tool'}>
+            <Match when={props.item.kind === 'activity'}>
                 {(() => {
                     const item = props.item;
-                    if (item.kind !== 'tool') return null;
+                    if (item.kind !== 'activity') return null;
+                    const failed = item.tools.filter(
+                        (tool) => tool.status === 'failed'
+                    );
+                    const running = item.tools.findLast(
+                        (tool) => tool.status === 'running'
+                    );
+                    const status = running
+                        ? 'running'
+                        : failed.length > 0
+                          ? 'failed'
+                          : 'completed';
+                    const summary = running
+                        ? `${running.title}${running.target ? ` · ${running.target}` : ''}`
+                        : `${item.tools.length} ${item.tools.length === 1 ? 'action' : 'actions'}${failed.length > 0 ? ` · ${failed.length} failed` : ''}`;
                     return (
-                        <box flexDirection="column" marginLeft={1}>
+                        <box flexDirection="column" marginLeft={1} marginY={1}>
                             <box flexDirection="row">
                                 <text
                                     fg={
-                                        item.status === 'failed'
+                                        status === 'failed'
                                             ? theme.red
-                                            : item.status === 'completed'
+                                            : status === 'completed'
                                               ? theme.mint
                                               : theme.yellow
                                     }
                                 >
-                                    {item.status === 'completed'
+                                    {status === 'completed'
                                         ? '✓'
-                                        : item.status === 'failed'
+                                        : status === 'failed'
                                           ? '✗'
-                                          : '→'}{' '}
+                                          : '◌'}{' '}
                                 </text>
-                                <text fg={theme.muted}>{item.title}</text>
-                                <Show when={item.target}>
-                                    <text fg={theme.faint}> · {item.target}</text>
-                                </Show>
+                                <text fg={theme.muted}>{summary}</text>
                             </box>
-                            <Show when={item.detail}>
-                                <text fg={theme.red}> {item.detail}</text>
-                            </Show>
+                            <For each={failed}>
+                                {(tool) => (
+                                    <text fg={theme.red} marginLeft={2}>
+                                        {tool.title}: {tool.detail ?? 'Tool failed'}
+                                    </text>
+                                )}
+                            </For>
                         </box>
                     );
                 })()}
