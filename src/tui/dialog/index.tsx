@@ -30,13 +30,15 @@ export function DialogProvider(props: ParentProps) {
     const renderer = useRenderer();
     const [entry, setEntry] = createSignal<DialogEntry>();
     let previousFocus: Renderable | undefined;
+    let focusTimer: ReturnType<typeof setTimeout> | undefined;
 
     const close = () => {
         const current = entry();
         if (!current) return;
         current.onClose?.();
         setEntry(undefined);
-        setTimeout(() => {
+        if (focusTimer) clearTimeout(focusTimer);
+        focusTimer = setTimeout(() => {
             if (!previousFocus?.isDestroyed) previousFocus?.focus();
             previousFocus = undefined;
         }, 1);
@@ -44,6 +46,7 @@ export function DialogProvider(props: ParentProps) {
     const value: DialogContextValue = {
         active: () => entry() !== undefined,
         open: (element, onClose) => {
+            if (focusTimer) clearTimeout(focusTimer);
             entry()?.onClose?.();
             if (!entry()) {
                 previousFocus = renderer.currentFocusedRenderable ?? undefined;
@@ -61,7 +64,10 @@ export function DialogProvider(props: ParentProps) {
             close();
         }
     });
-    onCleanup(() => entry()?.onClose?.());
+    onCleanup(() => {
+        if (focusTimer) clearTimeout(focusTimer);
+        entry()?.onClose?.();
+    });
 
     return (
         <DialogContext.Provider value={value}>

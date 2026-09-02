@@ -1,6 +1,6 @@
 import type { InputRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/solid';
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { createMemo, createSignal, For, onCleanup, Show } from 'solid-js';
 import { useTheme } from '../theme/index.js';
 import { useDialog } from './index.js';
 
@@ -37,6 +37,11 @@ export function SelectDialog<T>(props: SelectDialogProps<T>) {
         });
     });
     let input: InputRenderable | undefined;
+    let focusTimer: ReturnType<typeof setTimeout> | undefined;
+
+    onCleanup(() => {
+        if (focusTimer) clearTimeout(focusTimer);
+    });
 
     const move = (direction: number) => {
         const list = options();
@@ -78,7 +83,9 @@ export function SelectDialog<T>(props: SelectDialogProps<T>) {
                 <input
                     ref={(value) => {
                         input = value;
-                        setTimeout(() => input?.focus(), 1);
+                        focusTimer = setTimeout(() => {
+                            if (input && !input.isDestroyed) input.focus();
+                        }, 1);
                     }}
                     placeholder={props.placeholder ?? 'Search'}
                     placeholderColor={theme.textMuted}

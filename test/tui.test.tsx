@@ -166,6 +166,12 @@ describe.serial('Workbench TUI', () => {
         expect(setup.captureCharFrame()).toContain('Themes');
         expect(setup.captureCharFrame()).toContain('Flexoki');
         expect(sent).toBe(0);
+
+        setup.mockInput.pressEnter();
+        await Bun.sleep(5);
+        await setup.flush();
+        expect(setup.captureCharFrame()).not.toContain('Themes');
+        expect(findPrompt(setup.renderer.root).isDestroyed).toBeFalse();
     });
 
     test('turns a dragged image path into a transient prompt attachment', async () => {

@@ -3,7 +3,7 @@ import {
     type PasteEvent,
     type TextareaRenderable,
 } from '@opentui/core';
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { createMemo, createSignal, For, onCleanup, Show } from 'solid-js';
 import type { TuiCommand, TuiCommandRegistry } from '../commands/registry.js';
 import type { QueuedTranscriptInput } from '../model.js';
 import { useTheme } from '../theme/index.js';
@@ -36,6 +36,11 @@ export function Composer(props: ComposerProps) {
     const [value, setValue] = createSignal('');
     const [selected, setSelected] = createSignal(0);
     let input: TextareaRenderable | undefined;
+    let focusTimer: ReturnType<typeof setTimeout> | undefined;
+
+    onCleanup(() => {
+        if (focusTimer) clearTimeout(focusTimer);
+    });
 
     const commandQuery = createMemo(() => {
         const current = value().trimStart();
@@ -187,7 +192,9 @@ export function Composer(props: ComposerProps) {
                     ref={(renderable) => {
                         input = renderable;
                         renderable.traits = { status: 'PROMPT' };
-                        setTimeout(() => renderable.focus(), 1);
+                        focusTimer = setTimeout(() => {
+                            if (!renderable.isDestroyed) renderable.focus();
+                        }, 1);
                     }}
                     width="100%"
                     minHeight={1}
