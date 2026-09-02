@@ -5,6 +5,7 @@ import { defineCommand } from 'citty';
 import { WorkbenchPackage } from '../catalog/index.js';
 import { RegistryAccountStore } from '../registry/index.js';
 import { WorkbenchSource } from '../workbench/index.js';
+import { CliPresenter } from './presenter.js';
 
 interface PublicationResponse {
     workbenches: Array<{
@@ -36,6 +37,7 @@ export const publishCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         const accounts = new RegistryAccountStore();
         const account = await accounts.require();
         const profile = await accounts.profile(account);
@@ -111,8 +113,16 @@ export const publishCommand = defineCommand({
         if (`sha256:${published.latest_version.digest}` !== digest) {
             throw new Error('The registry returned a different package digest');
         }
-        console.log(
-            `published\t${published.publisher.slug}/${published.slug}\t${published.latest_version.version}\t${digest}`
-        );
+        const publishedReference = `${published.publisher.slug}/${published.slug}`;
+        output.record({
+            machine: [
+                'published',
+                publishedReference,
+                published.latest_version.version,
+                digest,
+            ],
+            title: `Published ${publishedReference}`,
+            details: [published.latest_version.version, digest],
+        });
     },
 });

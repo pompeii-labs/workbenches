@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { defineCommand } from 'citty';
 
 import { ModelCatalog } from '../models/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const initCommand = defineCommand({
     meta: { name: 'init', description: 'Scaffold a repository-owned Workbench.' },
@@ -29,6 +30,7 @@ export const initCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(args.name)) {
             throw new Error(`Invalid Workbench name: ${args.name}`);
         }
@@ -75,6 +77,10 @@ export const initCommand = defineCommand({
                 '',
             ].join('\n')
         );
-        console.log(directory);
+        output.record({
+            machine: [directory],
+            title: `Created ${args.name}`,
+            details: [directory],
+        });
     },
 });

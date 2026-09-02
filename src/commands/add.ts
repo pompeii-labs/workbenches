@@ -5,6 +5,7 @@ import { RegistryClient, RegistryTelemetry } from '../registry/index.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
 import { WorkbenchSource } from '../workbench/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const addCommand = defineCommand({
     meta: { name: 'add', description: 'Save an immutable Workbench package snapshot.' },
@@ -20,6 +21,7 @@ export const addCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         const catalog = new SavedWorkbenchCatalog(workbenchHome());
         const github = new GitHubWorkbenchSource();
         const workbenchSource = new WorkbenchSource();
@@ -36,9 +38,11 @@ export const addCommand = defineCommand({
                 ...(source.revision ? { revision: source.revision } : {}),
                 workbench,
             });
-            console.log(
-                `saved\t${entry.alias}\t${entry.digest}${entry.revision ? `\t${entry.revision}` : ''}`
-            );
+            output.record({
+                machine: ['saved', entry.alias, entry.digest, entry.revision],
+                title: `Saved ${entry.alias}`,
+                details: [entry.digest, entry.revision],
+            });
             return;
         }
         const registryClient = new RegistryClient();
@@ -66,9 +70,11 @@ export const addCommand = defineCommand({
                     expectedDigest: registry.digest,
                     registry: catalogRegistry,
                 });
-                console.log(
-                    `saved\t${entry.alias}\t${entry.digest}\t${entry.revision ?? ''}`
-                );
+                output.record({
+                    machine: ['saved', entry.alias, entry.digest, entry.revision ?? ''],
+                    title: `Saved ${entry.alias}`,
+                    details: [entry.digest, entry.revision],
+                });
                 await telemetry.report({
                     registry: catalogRegistry,
                     kind: 'save',
@@ -82,6 +88,10 @@ export const addCommand = defineCommand({
             alias: args.as ?? workbench.manifest.name,
             workbench,
         });
-        console.log(`saved\t${entry.alias}\t${entry.digest}\t${entry.revision ?? ''}`);
+        output.record({
+            machine: ['saved', entry.alias, entry.digest, entry.revision ?? ''],
+            title: `Saved ${entry.alias}`,
+            details: [entry.digest, entry.revision],
+        });
     },
 });

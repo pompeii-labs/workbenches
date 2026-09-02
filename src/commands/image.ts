@@ -5,6 +5,7 @@ import {
     type RegistryImageProgress,
     RegistryImagePublisher,
 } from '../registry/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const loginCommand = defineCommand({
     meta: {
@@ -19,9 +20,14 @@ export const loginCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         const account = await new RegistryAccountStore().require();
         const host = await new RegistryImagePublisher({ account }).login(args.client);
-        console.log(`connected\t${host}\t${args.client}`);
+        output.record({
+            machine: ['connected', host, args.client],
+            title: `Connected ${args.client}`,
+            details: [host],
+        });
     },
 });
 
@@ -57,6 +63,7 @@ export const pushCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         const accounts = new RegistryAccountStore();
         const account = await accounts.require();
         const profile = await accounts.profile(account);
@@ -71,7 +78,11 @@ export const pushCommand = defineCommand({
             tag: args.tag,
             client: args.client,
         });
-        console.log(`pushed\t${target}`);
+        output.record({
+            machine: ['pushed', target],
+            title: 'Pushed image',
+            details: [target],
+        });
     },
 });
 

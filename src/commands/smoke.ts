@@ -13,6 +13,7 @@ import {
     WorkbenchSource,
     WorkbenchWorkspaces,
 } from '../workbench/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const smokeCommand = defineCommand({
     meta: {
@@ -159,9 +160,28 @@ async function printResult(name: string, pending: Promise<WorkbenchSmokeResult>)
     const authentication = result.authentication.ready
         ? `; auth: ready (${result.authentication.configuration?.provider ?? 'environment'})`
         : `; auth: required (${result.authentication.connectCommand})`;
-    console.log(
-        `${result.authentication.ready ? 'ready' : 'needs-auth'}\t${name}\trunner=${result.runner.path}\ttools=${result.tools.map((tool) => tool.path).join(',') || '-'}${authentication}${workspaces}${dockerEngine}${disabled}`
-    );
+    const status = result.authentication.ready ? 'ready' : 'needs-auth';
+    new CliPresenter().record({
+        machine: [
+            status,
+            name,
+            `runner=${result.runner.path}`,
+            `tools=${result.tools.map((tool) => tool.path).join(',') || '-'}${authentication}${workspaces}${dockerEngine}${disabled}`,
+        ],
+        title: result.authentication.ready
+            ? `${name} is ready`
+            : `${name} needs a connection`,
+        details: [
+            result.runner.path,
+            result.tools.length > 0
+                ? `${result.tools.length} ${result.tools.length === 1 ? 'tool' : 'tools'}`
+                : 'no required tools',
+            result.authentication.ready
+                ? `auth ${result.authentication.configuration?.provider ?? 'environment'}`
+                : result.authentication.connectCommand,
+        ],
+        tone: result.authentication.ready ? 'success' : 'warning',
+    });
     if (!result.authentication.ready) process.exitCode = 1;
 }
 

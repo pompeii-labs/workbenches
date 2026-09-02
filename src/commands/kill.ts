@@ -2,6 +2,7 @@ import { defineCommand } from 'citty';
 
 import { RunDispatcher, RunStore } from '../runs/index.js';
 import { workbenchHome } from '../storage.js';
+import { CliPresenter } from './presenter.js';
 
 export const killCommand = defineCommand({
     meta: {
@@ -32,6 +33,11 @@ export const killCommand = defineCommand({
                 `Workbench run finished as ${finished.status} before cancellation: ${run.id}`
             );
         }
-        console.log(`cancelled\t${run.id}`);
+        new CliPresenter().record({
+            machine: ['cancelled', run.id],
+            title: 'Cancelled run',
+            details: [run.id],
+            tone: 'warning',
+        });
     },
 });

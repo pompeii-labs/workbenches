@@ -3,6 +3,7 @@ import { hostname, platform } from 'node:os';
 import { defineCommand } from 'citty';
 
 import { RegistryAccountStore, RegistryClient } from '../registry/index.js';
+import { CliPresenter } from './presenter.js';
 
 interface LoginRequest {
     id: string;
@@ -32,14 +33,15 @@ export const loginCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         const client = new RegistryClient();
         const accounts = new RegistryAccountStore({ client });
         const login = await client.request<LoginRequest>('/v1/logins', {
             method: 'POST',
             body: { label: `${hostname()} (${platform()})` },
         });
-        console.log(`Open ${login.verification_url}`);
-        console.log(`Confirm code: ${login.code}`);
+        output.message(`Open ${login.verification_url}`, 'info');
+        output.message(`Confirm code: ${login.code}`, 'warning');
         if (args.browser) openBrowser(login.verification_url);
 
         while (new Date(login.expires_at) > new Date()) {
@@ -58,7 +60,7 @@ export const loginCommand = defineCommand({
             };
             const profile = await accounts.profile(account);
             await accounts.save({ ...account, email: profile.user.email });
-            console.log(`Signed in as ${profile.user.email}`);
+            output.message(`Signed in as ${profile.user.email}`, 'success');
             return;
         }
         throw new Error('The CLI login expired before it was approved');

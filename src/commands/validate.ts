@@ -4,6 +4,7 @@ import { SavedWorkbenchCatalog } from '../catalog/index.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
 import { WorkbenchResolver, WorkbenchSource } from '../workbench/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const validateCommand = defineCommand({
     meta: {
@@ -18,6 +19,7 @@ export const validateCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         const home = workbenchHome();
         const saved = !args.source.includes('/')
             ? await new SavedWorkbenchCatalog(home).find(args.source)
@@ -26,9 +28,13 @@ export const validateCommand = defineCommand({
             const resolved = await new WorkbenchResolver().resolve(args.source, {
                 home,
             });
-            console.log(
-                `valid\t${resolved.workbench.manifest.name}@${resolved.workbench.manifest.version}`
-            );
+            output.record({
+                machine: [
+                    'valid',
+                    `${resolved.workbench.manifest.name}@${resolved.workbench.manifest.version}`,
+                ],
+                title: `${resolved.workbench.manifest.name}@${resolved.workbench.manifest.version} is valid`,
+            });
             return;
         }
         const source = new WorkbenchSource();
@@ -46,9 +52,13 @@ export const validateCommand = defineCommand({
                 : workbenches;
             if (selected.length === 0) throw new Error('No matching Workbenches found');
             for (const workbench of selected) {
-                console.log(
-                    `valid\t${workbench.manifest.name}@${workbench.manifest.version}`
-                );
+                output.record({
+                    machine: [
+                        'valid',
+                        `${workbench.manifest.name}@${workbench.manifest.version}`,
+                    ],
+                    title: `${workbench.manifest.name}@${workbench.manifest.version} is valid`,
+                });
             }
             return;
         }
@@ -58,9 +68,13 @@ export const validateCommand = defineCommand({
         );
         if (workbenches.length === 0) throw new Error('No matching Workbenches found');
         for (const workbench of workbenches) {
-            console.log(
-                `valid\t${workbench.manifest.name}@${workbench.manifest.version}`
-            );
+            output.record({
+                machine: [
+                    'valid',
+                    `${workbench.manifest.name}@${workbench.manifest.version}`,
+                ],
+                title: `${workbench.manifest.name}@${workbench.manifest.version} is valid`,
+            });
         }
     },
 });

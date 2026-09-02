@@ -2,6 +2,7 @@ import { defineCommand } from 'citty';
 
 import { RuntimeRegistry } from '../runtimes/index.js';
 import { WorkbenchResolver } from '../workbench/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const buildCommand = defineCommand({
     meta: {
@@ -26,6 +27,7 @@ export const buildCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         const resolved = await new WorkbenchResolver().resolve(args.workbench, {
             ...(args.dir ? { workspaceDirectory: args.dir } : {}),
         });
@@ -36,8 +38,10 @@ export const buildCommand = defineCommand({
             );
         }
         if (!args.json) {
-            process.stderr.write(
-                `Preparing runtime image for ${workbench.manifest.name}...\n`
+            output.message(
+                `Preparing runtime image for ${workbench.manifest.name}...`,
+                'info',
+                'stderr'
             );
         }
         const runtime = await RuntimeRegistry.standard()
@@ -67,12 +71,22 @@ export const buildCommand = defineCommand({
                 process.stdout.write(`${JSON.stringify(preparation)}\n`);
                 return;
             }
-            const excluded = preparation.excludedPaths?.length
-                ? `\texcluded=${preparation.excludedPaths.length}`
-                : '';
-            console.log(
-                `prepared\t${workbench.manifest.name}\taction=${preparation.action}\timage=${preparation.immutableReference}${excluded}`
-            );
+            const excluded = preparation.excludedPaths?.length;
+            output.record({
+                machine: [
+                    'prepared',
+                    workbench.manifest.name,
+                    `action=${preparation.action}`,
+                    `image=${preparation.immutableReference}`,
+                    excluded ? `excluded=${excluded}` : undefined,
+                ],
+                title: `Prepared ${workbench.manifest.name}`,
+                details: [
+                    preparation.action,
+                    preparation.immutableReference,
+                    excluded ? `${excluded} excluded` : undefined,
+                ],
+            });
         } finally {
             await runtime.cleanup();
             await resolved.cleanup();
