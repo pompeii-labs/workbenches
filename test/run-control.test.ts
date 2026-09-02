@@ -192,6 +192,15 @@ describe('stored run handle', () => {
             disposition: 'cancelled',
         });
         await cancelled;
+        await new RunStore(home).update(run.id, {
+            status: 'completed',
+            finished_at: new Date().toISOString(),
+            exit_code: 0,
+        });
+        await expect(handle.result).resolves.toEqual({
+            runId: run.id,
+            status: 'completed',
+        });
     });
 });
 

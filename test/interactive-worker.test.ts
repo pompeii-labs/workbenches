@@ -72,6 +72,10 @@ describe('interactive run worker', () => {
             runId: stored.id,
             status: 'completed',
         });
+        await expect(recovered.result).resolves.toEqual({
+            runId: stored.id,
+            status: 'completed',
+        });
         expect(adapter.prompts).toEqual(['first turn', 'second turn', 'third turn']);
         expect(adapter.steers).toEqual(['change direction']);
         expect(adapter.cancellations).toBe(1);
@@ -180,6 +184,7 @@ describe('interactive run worker', () => {
         await handle.cancelTurn();
         await handle.close();
         await execution;
+        await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
     });
 
     test('treats repeated turn cancellation as idempotent once idle', async () => {
@@ -261,6 +266,7 @@ describe('interactive run worker', () => {
         await turn;
         await handle.close();
         await execution;
+        await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
 
         expect(adapter.questionResponses).toEqual([
             { outcome: 'answered', answers: [['private answer']] },
@@ -299,6 +305,7 @@ describe('interactive run worker', () => {
         await turn;
         await handle.close();
         await execution;
+        await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
 
         expect(adapter.questionResponses).toEqual([{ outcome: 'rejected' }]);
         const events = await collect(handle.events);
