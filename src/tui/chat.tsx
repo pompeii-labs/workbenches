@@ -330,6 +330,19 @@ export function ChatScreen(props: ChatScreenProps) {
 
     const manifest = props.resolved.workbench.manifest;
     const transcript = createMemo(() => groupTranscriptItems(state().items));
+    const activityStatus = createMemo(() => {
+        if (!state().busy || permission() || question()) return;
+        if (state().status === 'Responding') return;
+        const latest = transcript().at(-1);
+        if (
+            state().status === 'Working' &&
+            latest?.kind === 'activity' &&
+            latest.tools.some((tool) => tool.status === 'running')
+        ) {
+            return;
+        }
+        return state().status;
+    });
     const commands = new SessionCommands({
         home: props.home,
         alias: props.alias,
@@ -337,6 +350,7 @@ export function ChatScreen(props: ChatScreenProps) {
         dialog,
         themes,
         actions: {
+            currentRunId: () => session?.runId,
             clearTranscript: () => setState((current) => ({ ...current, items: [] })),
             cancelTurn,
             exit: () => close(false),
@@ -387,6 +401,7 @@ export function ChatScreen(props: ChatScreenProps) {
                     {(item, index) => (
                         <Transcript
                             item={item}
+                            assistantLabel={manifest.name}
                             streaming={
                                 item.kind === 'assistant' &&
                                 state().busy &&
@@ -395,6 +410,14 @@ export function ChatScreen(props: ChatScreenProps) {
                         />
                     )}
                 </For>
+                <Show when={activityStatus()}>
+                    {(status: () => string) => (
+                        <box flexDirection="row" gap={1} marginY={1}>
+                            <text fg={theme.mint}>✦</text>
+                            <text fg={theme.muted}>{status()}</text>
+                        </box>
+                    )}
+                </Show>
                 <Show when={error().length > 0} fallback={<box height={0} />}>
                     <box
                         border={['left']}
@@ -475,10 +498,7 @@ export function ChatScreen(props: ChatScreenProps) {
                     />
                 )}
             </Show>
-            <box flexDirection="row" justifyContent="space-between" marginTop={1}>
-                <text fg={state().status === 'Failed' ? theme.red : theme.mint}>
-                    {state().busy ? '◌' : '●'} {state().status}
-                </text>
+            <box flexDirection="row" justifyContent="flex-end" marginTop={1}>
                 <text fg={theme.faint}>
                     {usageLabel(state().totalTokens, state().costUsd)}
                     {question()

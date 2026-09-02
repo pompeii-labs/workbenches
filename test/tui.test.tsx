@@ -12,7 +12,9 @@ import type {
     RunControlKind,
     RunControlReceipt,
     RunHandle,
+    WorkbenchEvent,
 } from '../src/runs/index.js';
+import { RunStore } from '../src/runs/index.js';
 import { Transcript, WorkbenchApp } from '../src/tui/app.js';
 import { TurnCancellation } from '../src/tui/chat.js';
 import { holdRendererUntilShutdown } from '../src/tui/lifecycle.js';
@@ -174,6 +176,194 @@ describe.serial('Workbench TUI', () => {
         expect(findPrompt(setup.renderer.root).isDestroyed).toBeFalse();
     });
 
+    test('keeps slash command names and titles on one readable row', async () => {
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => fakeHandle(() => {})}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        findPrompt(setup.renderer.root).setText('/');
+        await setup.flush();
+        const lines = setup.captureCharFrame().split('\n');
+
+        expect(
+            lines.some(
+                (line) =>
+                    line.includes('/permissions') &&
+                    line.includes('Runner capabilities')
+            )
+        ).toBeTrue();
+        expect(
+            lines.some(
+                (line) => line.includes('/clear') && line.includes('Clear transcript')
+            )
+        ).toBeTrue();
+    });
+
+    test('previews themes while navigating and restores an unconfirmed choice', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-tui-theme-'));
+        temporaryDirectories.push(home);
+        const controller = new ThemeController(home);
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={controller}>
+                    <WorkbenchApp
+                        home={home}
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => fakeHandle(() => {})}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('/theme');
+        prompt.submit();
+        await setup.flush();
+        expect(controller.selected).toBe('flexoki');
+
+        setup.mockInput.pressArrow('down');
+        await setup.flush();
+        expect(controller.selected).toBe('github');
+
+        setup.mockInput.pressEscape();
+        await Bun.sleep(100);
+        await setup.flush();
+        expect(setup.captureCharFrame()).not.toContain('Themes');
+        expect(controller.selected).toBe('flexoki');
+
+        findPrompt(setup.renderer.root).setText('/theme');
+        findPrompt(setup.renderer.root).submit();
+        await setup.flush();
+        setup.mockInput.pressArrow('down');
+        setup.mockInput.pressEnter();
+        await Bun.sleep(5);
+        await setup.flush();
+        expect(controller.selected).toBe('github');
+    });
+
+    test('shows readable interactive sessions and reveals details on selection', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-tui-sessions-'));
+        temporaryDirectories.push(home);
+        const store = new RunStore(home);
+        const run = await store.create({
+            id: 'wb_sessionbrowser1234567890',
+            metadata: {
+                workbench: 'workbench-creator',
+                workbench_version: '0.1.3',
+                runner: 'opencode',
+                model: 'openai/gpt-5.6-terra',
+                workspace: '/workspace/project',
+                mode: 'interactive',
+                started_at: '2026-09-02T18:00:00.000Z',
+            },
+            request: {
+                workbench_path: '/repo/.workbenches/creator',
+                workspace: '/workspace/project',
+                task: '',
+            },
+        });
+        await store.update(run.id, { status: 'completed' });
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home={home}
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => fakeHandle(() => {})}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('/sessions');
+        prompt.submit();
+        await Bun.sleep(10);
+        await setup.flush();
+        let frame = setup.captureCharFrame();
+        expect(frame).toContain('workbench-creator@0.1.3');
+        expect(frame).toContain('Completed · opencode');
+        expect(frame).not.toContain(run.id);
+
+        setup.mockInput.pressEnter();
+        await Bun.sleep(5);
+        await setup.flush();
+        frame = setup.captureCharFrame();
+        expect(frame).toContain('RUN ID');
+        expect(frame).toContain(run.id);
+        expect(frame).toContain('/workspace/project');
+    });
+
+    test('renders active runner state inside the transcript', async () => {
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () =>
+                            fakeHandle(() => {}, event(1, 'turn.started', { index: 1 }))
+                        }
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(20);
+        await setup.flush();
+
+        expect(setup.captureCharFrame()).toContain('✦ Thinking');
+    });
+
     test('turns a dragged image path into a transient prompt attachment', async () => {
         const workspace = await mkdtemp(join(tmpdir(), 'workbench-tui-drop-'));
         temporaryDirectories.push(workspace);
@@ -262,6 +452,7 @@ describe.serial('Workbench TUI', () => {
                 <ThemeProvider controller={themes}>
                     <box width="100%" height="100%">
                         <Transcript
+                            assistantLabel="workbench-creator"
                             item={{
                                 id: 'assistant-1',
                                 kind: 'assistant',
@@ -286,6 +477,8 @@ describe.serial('Workbench TUI', () => {
             frame = setup.captureCharFrame();
         }
         expect(frame).toContain('Findings');
+        expect(frame).toContain('workbench-creator');
+        expect(frame).not.toContain('WORKBENCH');
         expect(frame).toContain('This is important.');
         expect(frame).toContain('Checked');
         expect(frame).toContain('Follow up');
@@ -306,6 +499,7 @@ describe.serial('Workbench TUI', () => {
                 <ThemeProvider controller={themes}>
                     <box width="100%" height="100%">
                         <Transcript
+                            assistantLabel="workbench-creator"
                             item={{
                                 id: 'assistant-streaming',
                                 kind: 'assistant',
@@ -341,6 +535,7 @@ describe.serial('Workbench TUI', () => {
                 <ThemeProvider controller={themes}>
                     <box width="100%" height="100%">
                         <Transcript
+                            assistantLabel="workbench-creator"
                             item={{
                                 id: 'activity-1',
                                 kind: 'activity',
@@ -486,20 +681,16 @@ function deferred<T>() {
     return { promise, resolve };
 }
 
-function fakeHandle(onSend: (input: RunnerInput) => void): RunHandle {
+function fakeHandle(
+    onSend: (input: RunnerInput) => void,
+    ...events: WorkbenchEvent[]
+): RunHandle {
     const control = async () => receipt('send', 'queued');
     return {
         runId: 'wb_tui_test',
         events: (async function* () {
-            yield {
-                protocol: 0,
-                run_id: 'wb_tui_test',
-                sequence: 1,
-                timestamp: '2026-09-02T00:00:00.000Z',
-                type: 'run.ready',
-                runner: 'opencode',
-                data: {},
-            };
+            yield event(0, 'run.ready', {});
+            for (const next of events) yield next;
         })(),
         result: new Promise(() => {}),
         send: async (input) => {
@@ -516,6 +707,22 @@ function fakeHandle(onSend: (input: RunnerInput) => void): RunHandle {
         respondToQuestion: () => control(),
         close: () => control(),
         cancel: () => control(),
+    };
+}
+
+function event(
+    sequence: number,
+    type: WorkbenchEvent['type'],
+    data: unknown
+): WorkbenchEvent {
+    return {
+        protocol: 0,
+        run_id: 'wb_tui_test',
+        sequence,
+        timestamp: '2026-09-02T00:00:00.000Z',
+        type,
+        runner: 'opencode',
+        data,
     };
 }
 

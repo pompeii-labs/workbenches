@@ -121,11 +121,15 @@ export class ThemeController {
         this.notify();
     }
 
-    async select(name: string): Promise<void> {
+    preview(name: string): void {
         if (!this.has(name)) throw new Error(`Unknown theme: ${name}`);
         if (this.active === name) return;
         this.active = name;
         this.notify();
+    }
+
+    async select(name: string): Promise<void> {
+        this.preview(name);
         await this.persist();
     }
 
@@ -161,6 +165,7 @@ interface ThemeContextValue {
     syntax: () => SyntaxStyle;
     selected: () => string;
     options: () => ThemeOption[];
+    preview: (name: string) => void;
     select: (name: string) => Promise<void>;
 }
 
@@ -195,6 +200,7 @@ export function ThemeProvider(props: ParentProps<{ controller: ThemeController }
             return props.controller.selected;
         },
         options: () => props.controller.list(),
+        preview: (name) => props.controller.preview(name),
         select: (name) => props.controller.select(name),
     };
     return (

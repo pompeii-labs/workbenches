@@ -4,7 +4,11 @@ import { renderMarkdownPreview, sanitizeMarkdown } from '../rendering/index.js';
 import type { TranscriptDisplayItem } from './model.js';
 import { useTheme } from './theme/index.js';
 
-export function Transcript(props: { item: TranscriptDisplayItem; streaming: boolean }) {
+export function Transcript(props: {
+    item: TranscriptDisplayItem;
+    streaming: boolean;
+    assistantLabel: string;
+}) {
     const { syntax, theme } = useTheme();
     return (
         <Switch>
@@ -33,7 +37,7 @@ export function Transcript(props: { item: TranscriptDisplayItem; streaming: bool
             </Match>
             <Match when={props.item.kind === 'assistant'}>
                 <box flexDirection="column" marginY={1}>
-                    <text fg={theme.mint}>WORKBENCH</text>
+                    <text fg={theme.mint}>{props.assistantLabel}</text>
                     <Show
                         when={!props.streaming}
                         fallback={

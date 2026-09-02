@@ -297,11 +297,22 @@ export function reduceTranscript(
         };
     }
     if (event.type === 'turn.completed') {
+        const interrupted = field(event.data, 'reason') === 'cancelled';
         return {
             ...state,
             busy: false,
-            status:
-                field(event.data, 'reason') === 'cancelled' ? 'Interrupted' : 'Ready',
+            status: interrupted ? 'Interrupted' : 'Ready',
+            items: interrupted
+                ? [
+                      ...state.items,
+                      {
+                          id: `interrupted-${event.sequence}`,
+                          kind: 'notice',
+                          text: 'Turn interrupted',
+                          tone: 'muted',
+                      },
+                  ]
+                : state.items,
         };
     }
     if (event.type === 'run.failed') {

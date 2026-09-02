@@ -49,8 +49,11 @@ export function Composer(props: ComposerProps) {
     });
     const suggestions = createMemo(() => {
         const query = commandQuery();
-        return query === undefined ? [] : props.commands.find(query).slice(0, 6);
+        return query === undefined ? [] : props.commands.find(query).slice(0, 8);
     });
+    const suggestionNameWidth = createMemo(() =>
+        Math.max(12, ...suggestions().map((command) => command.name.length + 3))
+    );
     const setText = (text: string) => {
         input?.setText(text);
         input?.gotoBufferEnd();
@@ -137,10 +140,8 @@ export function Composer(props: ComposerProps) {
             <Show when={suggestions().length > 0}>
                 <box
                     flexDirection="column"
-                    marginLeft={1}
                     marginBottom={1}
-                    width={56}
-                    maxWidth="90%"
+                    width="100%"
                     backgroundColor={theme.backgroundPanel}
                     border={['left']}
                     borderColor={theme.border}
@@ -149,7 +150,6 @@ export function Composer(props: ComposerProps) {
                         {(command, index) => (
                             <box
                                 flexDirection="row"
-                                justifyContent="space-between"
                                 paddingX={1}
                                 backgroundColor={
                                     index() === selected()
@@ -158,6 +158,9 @@ export function Composer(props: ComposerProps) {
                                 }
                             >
                                 <text
+                                    width={suggestionNameWidth()}
+                                    flexShrink={0}
+                                    wrapMode="none"
                                     fg={
                                         index() === selected()
                                             ? theme.background
@@ -167,13 +170,15 @@ export function Composer(props: ComposerProps) {
                                     /{command.name}
                                 </text>
                                 <text
+                                    flexGrow={1}
+                                    wrapMode="none"
                                     fg={
                                         index() === selected()
                                             ? theme.background
                                             : theme.textMuted
                                     }
                                 >
-                                    {command.description}
+                                    {command.title}
                                 </text>
                             </box>
                         )}

@@ -189,6 +189,12 @@ describe('TUI transcript model', () => {
             busy: false,
             status: 'Interrupted',
         });
+        expect(interrupted.items.at(-1)).toEqual({
+            id: 'interrupted-1',
+            kind: 'notice',
+            text: 'Turn interrupted',
+            tone: 'muted',
+        });
     });
 
     test('keeps multiple assistant messages from one steered turn separate', () => {

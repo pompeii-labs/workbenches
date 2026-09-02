@@ -1,6 +1,6 @@
 import { modelLabel } from '../../models/index.js';
 import { RunnerRegistry } from '../../runners/registry.js';
-import { RunStore } from '../../runs/index.js';
+import { RunStore, type StoredRun } from '../../runs/index.js';
 import type { ResolvedWorkbenchReference } from '../../workbench/index.js';
 import type { DialogContextValue } from '../dialog/index.js';
 import { InfoDialog } from '../dialog/info.js';
@@ -10,6 +10,7 @@ import { CommandPalette } from './palette.js';
 import { type TuiCommand, TuiCommandRegistry } from './registry.js';
 
 export interface SessionCommandActions {
+    currentRunId(): string | undefined;
     clearTranscript(): void;
     cancelTurn(): void | Promise<void>;
     exit(): void | Promise<void>;
@@ -19,6 +20,7 @@ export interface SessionCommandActions {
 export interface SessionThemeActions {
     selected(): string;
     options(): ThemeOption[];
+    preview(name: string): void;
     select(name: string): Promise<void>;
 }
 
@@ -205,33 +207,89 @@ export class SessionCommands {
     }
 
     async #showSessions(): Promise<void> {
-        const runs = (await new RunStore(this.options.home).list()).slice(0, 10);
+        const runs = (await new RunStore(this.options.home).list())
+            .filter((run) => run.mode === 'interactive')
+            .slice(0, 20);
+        if (runs.length === 0) {
+            this.options.dialog.open(() => (
+                <InfoDialog
+                    title="Sessions"
+                    description="No interactive Workbench sessions have been run locally."
+                />
+            ));
+            return;
+        }
+        const current = this.options.actions.currentRunId();
         this.options.dialog.open(() => (
-            <InfoDialog
-                title="Recent sessions"
-                lines={
-                    runs.length > 0
-                        ? runs.map(
-                              (run) =>
-                                  `${run.status.padEnd(10)} ${run.id} ${run.workbench}@${run.workbench_version}`
-                          )
-                        : ['No local runs yet.']
-                }
+            <SelectDialog
+                title="Sessions"
+                placeholder="Search sessions"
+                options={runs.map((run) => ({
+                    title: `${run.workbench}@${run.workbench_version}`,
+                    description: `${this.#status(run.status)} · ${run.runner} · ${this.#time(run)}`,
+                    value: run,
+                    current: run.id === current,
+                }))}
+                onSelect={(option) => this.#showSession(option.value)}
             />
         ));
     }
 
-    #showThemes(): void {
+    #showSession(run: StoredRun): void {
         this.options.dialog.open(() => (
-            <SelectDialog
-                title="Themes"
-                options={this.options.themes.options().map((theme) => ({
-                    title: theme.label,
-                    value: theme.name,
-                    current: theme.name === this.options.themes.selected(),
-                }))}
-                onSelect={(theme) => void this.options.themes.select(theme.value)}
+            <InfoDialog
+                title={run.workbench}
+                description={`${this.#status(run.status)} interactive session`}
+                sections={[
+                    {
+                        label: 'Workbench',
+                        value: `${run.workbench}@${run.workbench_version}`,
+                    },
+                    { label: 'Runner', value: `${run.runner} · ${run.model}` },
+                    { label: 'Started', value: this.#time(run) },
+                    { label: 'Workspace', value: run.workspace },
+                    { label: 'Run ID', value: run.id },
+                ]}
             />
         ));
+    }
+
+    #status(status: StoredRun['status']): string {
+        return status.charAt(0).toUpperCase() + status.slice(1);
+    }
+
+    #time(run: StoredRun): string {
+        const timestamp = run.started_at ?? run.dispatched_at;
+        const date = new Date(timestamp);
+        if (Number.isNaN(date.valueOf())) return timestamp;
+        return new Intl.DateTimeFormat(undefined, {
+            dateStyle: 'medium',
+            timeStyle: 'short',
+        }).format(date);
+    }
+
+    #showThemes(): void {
+        const initial = this.options.themes.selected();
+        let confirmed = false;
+        this.options.dialog.open(
+            () => (
+                <SelectDialog
+                    title="Themes"
+                    options={this.options.themes.options().map((theme) => ({
+                        title: theme.label,
+                        value: theme.name,
+                        current: theme.name === initial,
+                    }))}
+                    onMove={(theme) => this.options.themes.preview(theme.value)}
+                    onConfirm={() => {
+                        confirmed = true;
+                    }}
+                    onSelect={(theme) => void this.options.themes.select(theme.value)}
+                />
+            ),
+            () => {
+                if (!confirmed) this.options.themes.preview(initial);
+            }
+        );
     }
 }

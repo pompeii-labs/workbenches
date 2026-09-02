@@ -18,6 +18,7 @@ export interface SelectDialogProps<T> {
     placeholder?: string;
     options: SelectDialogOption<T>[];
     onMove?: (option: SelectDialogOption<T>) => void;
+    onConfirm?: (option: SelectDialogOption<T>) => void;
     onSelect: (option: SelectDialogOption<T>) => void;
 }
 
@@ -25,7 +26,10 @@ export function SelectDialog<T>(props: SelectDialogProps<T>) {
     const dialog = useDialog();
     const { theme } = useTheme();
     const [filter, setFilter] = createSignal('');
-    const [selected, setSelected] = createSignal(0);
+    const initial = props.options.findIndex(
+        (option) => option.current && !option.disabled
+    );
+    const [selected, setSelected] = createSignal(initial < 0 ? 0 : initial);
     const options = createMemo(() => {
         const needle = filter().trim().toLowerCase();
         return props.options.filter((option) => {
@@ -54,6 +58,7 @@ export function SelectDialog<T>(props: SelectDialogProps<T>) {
     const submit = () => {
         const option = options()[selected()];
         if (!option) return;
+        props.onConfirm?.(option);
         dialog.close();
         props.onSelect(option);
     };
@@ -68,6 +73,9 @@ export function SelectDialog<T>(props: SelectDialogProps<T>) {
         } else if (key.name === 'return') {
             key.preventDefault();
             submit();
+        } else if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
+            key.preventDefault();
+            dialog.close();
         }
     });
 
@@ -93,6 +101,12 @@ export function SelectDialog<T>(props: SelectDialogProps<T>) {
                     focusedTextColor={theme.text}
                     backgroundColor={theme.backgroundPanel}
                     focusedBackgroundColor={theme.backgroundPanel}
+                    onKeyDown={(key) => {
+                        if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
+                            key.preventDefault();
+                            dialog.close();
+                        }
+                    }}
                     onInput={(value) => {
                         setFilter(value);
                         setSelected(0);
