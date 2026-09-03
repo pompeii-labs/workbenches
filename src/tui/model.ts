@@ -222,6 +222,15 @@ export function reduceTranscript(
         const controlId = field(event.data, 'id');
         const index = state.queued.findIndex((input) => input.controlId === controlId);
         if (!controlId || index === -1) return state;
+        if (
+            state.interruptionPending &&
+            field(event.data, 'code') === 'steering_not_delivered'
+        ) {
+            return {
+                ...state,
+                queued: state.queued.filter((_, inputIndex) => inputIndex !== index),
+            };
+        }
         return {
             ...state,
             queued: state.queued.filter((_, inputIndex) => inputIndex !== index),
@@ -330,7 +339,7 @@ export function reduceTranscript(
     if (event.type === 'turn.completed') {
         const interrupted = field(event.data, 'reason') === 'cancelled';
         if (state.interruptionPending) {
-            return { ...state, interruptionPending: false };
+            return { ...state, queued: [], interruptionPending: false };
         }
         return {
             ...state,

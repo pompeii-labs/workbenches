@@ -314,7 +314,12 @@ describe('TUI transcript model', () => {
     });
 
     test('interrupts immediately and reconciles delayed runner completion', () => {
-        const active = addUserMessage(emptyTranscript(), 'Stop this turn');
+        let active = addUserMessage(emptyTranscript(), 'Stop this turn');
+        active = queueUserMessage(active, 'queued steer', 'queued-input');
+        active = reduceTranscript(
+            active,
+            event(1, 'input.queued', { id: 'control-1', kind: 'steer' })
+        );
         const interrupted = interruptTranscript(active, 'local-interruption');
 
         expect(interrupted).toMatchObject({
@@ -329,16 +334,27 @@ describe('TUI transcript model', () => {
             tone: 'muted',
         });
 
-        const lateOutput = reduceTranscriptDuringCancellation(
+        const rejectedSteer = reduceTranscript(
             interrupted,
-            event(1, 'output.text', { id: 'old-output', text: 'too late' })
+            event(2, 'input.rejected', {
+                id: 'control-1',
+                kind: 'steer',
+                code: 'steering_not_delivered',
+            })
         );
-        expect(lateOutput).toBe(interrupted);
+        expect(rejectedSteer.queued).toEqual([]);
+        expect(rejectedSteer.items).toEqual(interrupted.items);
+
+        const lateOutput = reduceTranscriptDuringCancellation(
+            rejectedSteer,
+            event(3, 'output.text', { id: 'old-output', text: 'too late' })
+        );
+        expect(lateOutput).toBe(rejectedSteer);
 
         const nextTurn = addUserMessage(interrupted, 'Start something else');
         const reconciled = reduceTranscriptDuringCancellation(
             nextTurn,
-            event(2, 'turn.completed', { reason: 'cancelled' })
+            event(4, 'turn.completed', { reason: 'cancelled' })
         );
         expect(reconciled).toMatchObject({
             busy: true,
@@ -350,6 +366,28 @@ describe('TUI transcript model', () => {
                 (item) => item.kind === 'notice' && item.text === 'Turn interrupted'
             )
         ).toHaveLength(1);
+    });
+
+    test('clears queued steering when cancellation completes before rejection arrives', () => {
+        let state = addUserMessage(emptyTranscript(), 'Stop this turn');
+        state = queueUserMessage(state, 'queued steer', 'queued-input');
+        state = interruptTranscript(state, 'local-interruption');
+        state = reduceTranscript(
+            state,
+            event(1, 'turn.completed', { reason: 'cancelled' })
+        );
+
+        expect(state.queued).toEqual([]);
+        expect(
+            reduceTranscript(
+                state,
+                event(2, 'input.rejected', {
+                    id: 'control-1',
+                    kind: 'steer',
+                    code: 'steering_not_delivered',
+                })
+            )
+        ).toBe(state);
     });
 
     test('batches text deltas but flushes before lifecycle events', () => {
