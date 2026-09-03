@@ -263,6 +263,56 @@ describe('OpenCode interactive server adapter', () => {
         expect(output[0]?.data.id).not.toBe(output[1]?.data.id);
     });
 
+    test('submits steering to OpenCode one at a time in FIFO order', async () => {
+        const server = new FakeOpenCodeServer();
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+        server.onPrompt = () =>
+            server.emit('session.status', { status: { type: 'busy' } });
+
+        const turn = session.prompt('original input');
+        await server.prompted;
+        const first = await session.steer?.('first steering input');
+        const second = await session.steer?.('second steering input');
+        if (!first || !second) throw new Error('Expected tracked steering delivery');
+        await Bun.sleep(0);
+
+        expect(server.promptBodies.map(firstPartText)).toEqual([
+            'original input',
+            'first steering input',
+        ]);
+        expect(await settled(first.delivered)).toBeFalse();
+        expect(await settled(second.delivered)).toBeFalse();
+
+        const firstInput = String(server.promptBodies[1]?.messageID);
+        server.emitAssistantText('assistant_first_steer', firstInput, 'First.');
+        await expect(first.delivered).resolves.toBeUndefined();
+        await Bun.sleep(0);
+
+        expect(server.promptBodies.map(firstPartText)).toEqual([
+            'original input',
+            'first steering input',
+            'second steering input',
+        ]);
+        expect(await settled(second.delivered)).toBeFalse();
+
+        const secondInput = String(server.promptBodies[2]?.messageID);
+        server.emitAssistantText('assistant_second_steer', secondInput, 'Second.');
+        await expect(second.delivered).resolves.toBeUndefined();
+        server.emit('session.status', { status: { type: 'idle' } });
+        await expect(turn).resolves.toEqual({ reason: 'completed' });
+        await session.close();
+    });
+
     test('pauses for a host permission decision and replies before continuing', async () => {
         const server = new FakeOpenCodeServer();
         const requests: RunnerPermissionRequest[] = [];
