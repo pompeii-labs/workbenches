@@ -95,7 +95,11 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
             cleanup: staged?.cleanup ?? (async () => {}),
         });
         try {
-            await session.start();
+            await withTimeout(
+                session.start(),
+                this.dependencies.startupTimeoutMs,
+                'OpenCode session did not become ready in time'
+            );
             return session;
         } catch (error) {
             await session.close().catch(() => {});
@@ -655,6 +659,20 @@ function deferred<T>() {
         reject = rejected;
     });
     return { promise, resolve, reject };
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<T>((_, reject) => {
+                timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+            }),
+        ]);
+    } finally {
+        if (timeout) clearTimeout(timeout);
+    }
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

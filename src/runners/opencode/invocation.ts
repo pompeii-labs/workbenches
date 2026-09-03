@@ -170,6 +170,7 @@ function buildOpenCodeEnvironment(
     return {
         ...baseEnv,
         PWD: workspaceDirectory,
+        OPENCODE_DB: ':memory:',
         OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
         ...(nativeConfigFile ? { OPENCODE_CONFIG: nativeConfigFile } : {}),
         ...(configDirectory ? { OPENCODE_CONFIG_DIR: configDirectory } : {}),

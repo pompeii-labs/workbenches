@@ -1,4 +1,4 @@
-import { cp, lstat, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -32,12 +32,16 @@ export async function stageOpenCodeSkills(
                 })
             )
         );
+        await chmod(directory, 0o555);
     } catch (error) {
         await rm(directory, { recursive: true, force: true });
         throw error;
     }
     return {
         directory,
-        cleanup: () => rm(directory, { recursive: true, force: true }),
+        cleanup: async () => {
+            await chmod(directory, 0o755).catch(() => {});
+            await rm(directory, { recursive: true, force: true });
+        },
     };
 }

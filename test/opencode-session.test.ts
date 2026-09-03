@@ -29,6 +29,26 @@ runnerAdapterContract({
 });
 
 describe('OpenCode interactive server adapter', () => {
+    test('bounds startup through native session creation', async () => {
+        const server = new FakeOpenCodeServer();
+        server.stallSessionCreation = true;
+
+        await expect(
+            server.adapter().start({
+                workbench: workbench(),
+                workspaceDirectory: '/workspace',
+                environment: {},
+                configuration: configuration(),
+                host: {
+                    emit: async () => {},
+                    requestPermission: async () => 'reject',
+                    requestQuestion: async () => ({ outcome: 'rejected' }),
+                },
+            })
+        ).rejects.toThrow('OpenCode session did not become ready in time');
+        expect(server.kills).toBe(1);
+    });
+
     test('stages a packaged config directory without treating it as a config file', async () => {
         const directory = await mkdtemp(join(tmpdir(), 'opencode-config-test-'));
         const config = join(directory, 'runner');
@@ -776,6 +796,7 @@ class FakeOpenCodeServer {
     kills = 0;
     permissionReplyStatus = 200;
     autoIdleOnAbort = true;
+    stallSessionCreation = false;
     spawnEnvironment: Record<string, string | undefined> = {};
     onPrompt?: (body: Record<string, unknown>) => void;
     onPermissionReply?: (body: Record<string, unknown>) => void;
@@ -1064,6 +1085,15 @@ class FakeOpenCodeServer {
         );
         if (url.pathname === '/session' && init.method === 'POST') {
             this.createdSessions += 1;
+            if (this.stallSessionCreation) {
+                await new Promise<void>((_, reject) => {
+                    init.signal?.addEventListener(
+                        'abort',
+                        () => reject(new DOMException('Aborted', 'AbortError')),
+                        { once: true }
+                    );
+                });
+            }
             return Response.json({ id: 'ses_native_1' });
         }
         if (url.pathname === '/event') {

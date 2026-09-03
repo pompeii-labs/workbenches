@@ -94,10 +94,13 @@ describe('OpenCode adapter translation', () => {
     });
 
     test('preserves project config while enforcing Workbench safety settings', () => {
-        const invocation = buildOpenCodeInvocation(workbench(), 'task', {});
+        const invocation = buildOpenCodeInvocation(workbench(), 'task', {
+            OPENCODE_DB: '/tmp/shared-opencode.db',
+        });
         const visible = publicInvocation(invocation);
 
         expect(invocation.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBeUndefined();
+        expect(invocation.env.OPENCODE_DB).toBe(':memory:');
         expect(visible.opencode_config).toMatchObject({
             autoupdate: false,
             share: 'disabled',
