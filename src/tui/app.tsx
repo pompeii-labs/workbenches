@@ -2,7 +2,7 @@ import { useRenderer } from '@opentui/solid';
 import { createSignal, Match, Switch } from 'solid-js';
 
 import type { CatalogEntry } from '../catalog/index.js';
-import type { RunHandle } from '../runs/index.js';
+import type { RunHandle, StoredRun } from '../runs/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import { ChatScreen } from './chat.js';
 import { DialogProvider } from './dialog/index.js';
@@ -14,6 +14,7 @@ export { Transcript } from './transcript.js';
 export interface TuiAppProps {
     home: string;
     entries: CatalogEntry[];
+    recentRuns?: StoredRun[];
     initial?: { alias: string; resolved: ResolvedWorkbenchReference };
     resolve: (alias: string) => Promise<ResolvedWorkbenchReference>;
     start: (options: {
@@ -52,6 +53,9 @@ export function WorkbenchApp(props: TuiAppProps) {
                     <Match when={screen().kind === 'home'}>
                         <HomeScreen
                             entries={props.entries}
+                            {...(props.recentRuns
+                                ? { recentRuns: props.recentRuns }
+                                : {})}
                             resolve={props.resolve}
                             onOpen={(alias, resolved) =>
                                 setScreen({ kind: 'chat', alias, resolved })

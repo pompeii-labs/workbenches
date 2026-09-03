@@ -2,7 +2,7 @@ import { createCliRenderer } from '@opentui/core';
 import { render } from '@opentui/solid';
 
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
-import { RunDispatcher } from '../runs/index.js';
+import { RunDispatcher, RunStore } from '../runs/index.js';
 import { workbenchHome } from '../storage.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import {
@@ -24,6 +24,9 @@ export async function renderWorkbenchTui(
     const resolver = new WorkbenchResolver();
     const dispatcher = new RunDispatcher(home);
     const entries = await new SavedWorkbenchCatalog(home).list();
+    const recentRuns = (await new RunStore(home).list())
+        .filter((run) => run.mode === 'interactive')
+        .slice(0, 3);
     const themes = new ThemeController(home);
     await themes.load();
     let finish: () => void = () => {};
@@ -51,6 +54,7 @@ export async function renderWorkbenchTui(
                         <WorkbenchApp
                             home={home}
                             entries={entries}
+                            recentRuns={recentRuns}
                             {...(options.initial ? { initial: options.initial } : {})}
                             resolve={(alias) => resolver.resolve(alias, { home })}
                             start={async ({ resolved, reference }) => {

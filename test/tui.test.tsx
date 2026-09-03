@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Renderable, TextareaRenderable } from '@opentui/core';
+import type { InputRenderable, Renderable, TextareaRenderable } from '@opentui/core';
 import { testRender } from '@opentui/solid';
 
 import type { CatalogEntry } from '../src/catalog/index.js';
@@ -12,6 +12,7 @@ import type {
     RunControlKind,
     RunControlReceipt,
     RunHandle,
+    StoredRun,
     WorkbenchEvent,
 } from '../src/runs/index.js';
 import { RunStore } from '../src/runs/index.js';
@@ -73,16 +74,15 @@ describe.serial('Workbench TUI', () => {
         expect(destroyed).toBe(true);
     });
 
-    test('renders the premium home with saved Workbench details', async () => {
+    test('renders the launchpad with recent activity and saved Workbench details', async () => {
         const setup = await testRender(
             () => (
                 <ThemeProvider controller={themes}>
                     <WorkbenchApp
                         home="/tmp/workbench-tui-tests"
                         entries={[entry('lux-core'), entry('lux-migrations')]}
-                        resolve={async () => {
-                            throw new Error('not opened in this test');
-                        }}
+                        recentRuns={[recentRun('lux-core')]}
+                        resolve={async (alias) => homeWorkbench(alias)}
                         start={async () => {
                             throw new Error('not started in this test');
                         }}
@@ -92,16 +92,111 @@ describe.serial('Workbench TUI', () => {
             { width: 100, height: 28 }
         );
         renderers.push(setup.renderer);
+        await Bun.sleep(10);
         await setup.flush();
 
         const initial = setup.captureCharFrame();
         expect(initial).toContain('◆ WORKBENCH');
-        expect(initial).toContain('Expert systems, ready to run.');
+        expect(initial).toContain('Your saved expert environments.');
+        expect(initial).toContain('RECENT ACTIVITY');
+        expect(initial).toContain('completed');
         expect(initial).toContain('lux-core');
         expect(initial).toContain('lux-migrations');
-
-        expect(initial).toContain('SAVED · 2');
+        expect(initial).toContain('Maintain Lux applications with trusted patterns.');
+        expect(initial).toContain('opencode · openai/gpt-5.4-mini');
+        expect(initial).toContain('1 skill · 1 tool · 1 MCP');
+        expect(initial).toContain('SAVED WORKBENCHES');
         expect(initial).toContain('↑↓ navigate · enter open · esc quit');
+    });
+
+    test('keeps the home launchpad useful in a narrow terminal', async () => {
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[entry('lux-core'), entry('lux-migrations')]}
+                        recentRuns={[recentRun('lux-core')]}
+                        resolve={async (alias) => homeWorkbench(alias)}
+                        start={async () => {
+                            throw new Error('not started in this test');
+                        }}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 72, height: 24 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain('◆ WORKBENCH');
+        expect(frame).toContain('RECENT ACTIVITY');
+        expect(frame).toContain('lux-migrations');
+        expect(frame).toContain('Maintain Lux applications with trusted patterns.');
+        expect(frame).toContain('local runtime');
+        expect(frame).not.toContain('PACKAGE');
+    });
+
+    test('filters saved Workbenches and opens the selected result', async () => {
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[entry('lux-core'), entry('lux-migrations')]}
+                        resolve={async (alias) => homeWorkbench(alias)}
+                        start={async () => fakeHandle(() => {})}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28 }
+        );
+        renderers.push(setup.renderer);
+        await setup.mockInput.typeText('migrations');
+        await Bun.sleep(10);
+        await setup.flush();
+
+        let frame = setup.captureCharFrame();
+        expect(frame).toContain('lux-migrations');
+        expect(frame).not.toContain('lux-db/lux#core');
+
+        findInput(setup.renderer.root, 'home-search').submit();
+        await Bun.sleep(10);
+        await setup.flush();
+        frame = setup.captureCharFrame();
+        expect(frame).toContain('lux-migrations · lux-migrations');
+        expect(frame).toContain('opencode · openai/gpt-5.4-mini · local');
+    });
+
+    test('keeps keyboard selection visible while scrolling the saved list', async () => {
+        const entries = ['one', 'two', 'three', 'four', 'five'].map(entry);
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={entries}
+                        resolve={async (alias) => homeWorkbench(alias)}
+                        start={async () => fakeHandle(() => {})}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 72, height: 24 }
+        );
+        renderers.push(setup.renderer);
+        await setup.flush();
+        for (let index = 0; index < 4; index += 1) {
+            setup.mockInput.pressArrow('down');
+            await setup.flush();
+        }
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain('◆ five');
+        expect(frame).toContain('lux-db/lux#five');
     });
 
     test('renders the canonical model label in an interactive session header', async () => {
@@ -659,6 +754,43 @@ function resolvedWorkbench(
     };
 }
 
+function homeWorkbench(alias: string): ResolvedWorkbenchReference {
+    const resolved = resolvedWorkbench(alias, 'opencode');
+    resolved.workbench.manifest.description =
+        'Maintain Lux applications with trusted patterns.';
+    resolved.workbench.manifest.tools = ['lux'];
+    resolved.workbench.manifest.mcps = [
+        {
+            name: 'lux-docs',
+            transport: 'http',
+            url: 'https://lux.dev/mcp',
+            headers: {},
+        },
+    ];
+    resolved.workbench.skills.push({
+        name: 'lux-core',
+        directory: '/tmp/lux-core',
+        manifestPath: '/tmp/lux-core/SKILL.md',
+    });
+    return resolved;
+}
+
+function recentRun(workbench: string): StoredRun {
+    return {
+        version: 1,
+        id: 'wb_homeactivity1234567890',
+        status: 'completed',
+        workbench,
+        workbench_version: '0.1.0',
+        runner: 'opencode',
+        model: 'openai/gpt-5.4-mini',
+        workspace: '/tmp/workspace',
+        mode: 'interactive',
+        dispatched_at: new Date(Date.now() - 60_000).toISOString(),
+        finished_at: new Date(Date.now() - 30_000).toISOString(),
+    };
+}
+
 function receipt(
     kind: RunControlKind,
     disposition: RunControlDisposition
@@ -730,6 +862,12 @@ function findPrompt(root: Renderable): TextareaRenderable {
     const prompt = findPromptOrUndefined(root);
     if (prompt) return prompt;
     throw new Error('Prompt textarea was not rendered');
+}
+
+function findInput(root: Renderable, id: string): InputRenderable {
+    const input = root.findDescendantById(id);
+    if (input) return input as InputRenderable;
+    throw new Error(`Input was not rendered: ${id}`);
 }
 
 function findPromptOrUndefined(root: Renderable): TextareaRenderable | undefined {
