@@ -205,9 +205,11 @@ export function Composer(props: ComposerProps) {
                     minHeight={1}
                     maxHeight={8}
                     placeholder={
-                        props.busy
-                            ? 'Steer the current turn...'
-                            : 'Ask anything, or type / for commands'
+                        props.disabled
+                            ? 'Connecting to Workbench...'
+                            : props.busy
+                              ? 'Steer the current turn...'
+                              : 'Ask anything, or type / for commands'
                     }
                     placeholderColor={theme.textMuted}
                     textColor={theme.text}

@@ -136,6 +136,7 @@ describe.serial('Workbench TUI', () => {
         expect(frame).toContain('lux-migrations');
         expect(frame).toContain('Maintain Lux applications with trusted patterns.');
         expect(frame).toContain('local runtime');
+        expect(frame).toContain('1 OF 2 · ↓ MORE');
         expect(frame).not.toContain('PACKAGE');
     });
 
@@ -197,6 +198,53 @@ describe.serial('Workbench TUI', () => {
         const frame = setup.captureCharFrame();
         expect(frame).toContain('◆ five');
         expect(frame).toContain('lux-db/lux#five');
+        expect(frame).toContain('5 OF 5 · ↑ MORE');
+    });
+
+    test('does not accept input until the runner reports ready', async () => {
+        const ready = deferred<void>();
+        let sent = 0;
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () =>
+                            handleAwaitingReady(ready.promise, () => sent++)
+                        }
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28 }
+        );
+        renderers.push(setup.renderer);
+        await setup.flush();
+
+        const prompt = findPrompt(setup.renderer.root);
+        expect(setup.captureCharFrame()).toContain('Connecting to Workbench...');
+        expect(setup.captureCharFrame()).toContain('Starting creator...');
+        expect(setup.captureCharFrame()).not.toContain('Ready when you are.');
+        prompt.setText('do not send yet');
+        prompt.submit();
+        await setup.flush();
+        expect(sent).toBe(0);
+
+        ready.resolve();
+        await Bun.sleep(10);
+        await setup.flush();
+        expect(setup.captureCharFrame()).not.toContain('Connecting to Workbench...');
+        expect(setup.captureCharFrame()).toContain('Ready when you are.');
+        prompt.submit();
+        await setup.flush();
+        expect(sent).toBe(1);
     });
 
     test('renders the canonical model label in an interactive session header', async () => {
@@ -901,6 +949,20 @@ function fakeHandle(
         respondToQuestion: () => control(),
         close: () => control(),
         cancel: () => control(),
+    };
+}
+
+function handleAwaitingReady(
+    ready: Promise<void>,
+    onSend: (input: RunnerInput) => void
+): RunHandle {
+    const handle = fakeHandle(onSend);
+    return {
+        ...handle,
+        events: (async function* () {
+            await ready;
+            yield event(0, 'run.ready', {});
+        })(),
     };
 }
 

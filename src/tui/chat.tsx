@@ -249,8 +249,17 @@ export function ChatScreen(props: ChatScreenProps) {
                 resolved: props.resolved,
                 reference: props.alias,
             });
-            setSessionReady(true);
             void consumeEvents(session, (event) => {
+                if (event.type === 'run.ready') {
+                    setSessionReady(true);
+                    composer?.focus();
+                } else if (
+                    event.type === 'run.failed' ||
+                    event.type === 'run.cancelled' ||
+                    event.type === 'run.completed'
+                ) {
+                    setSessionReady(false);
+                }
                 const requested = permissionFromEvent(event);
                 if (requested) setPermission({ request: requested });
                 const asked = questionFromEvent(event);
@@ -265,7 +274,6 @@ export function ChatScreen(props: ChatScreenProps) {
                 events.push(event);
             }).catch(fail);
             void session.result.catch(fail);
-            composer?.focus();
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : String(cause));
             setState((current) => ({ ...current, status: 'Failed' }));
@@ -389,10 +397,19 @@ export function ChatScreen(props: ChatScreenProps) {
                     fallback={<box height={0} />}
                 >
                     <box flexDirection="column" paddingTop={2}>
-                        <text fg={theme.muted}>Ready when you are.</text>
-                        <text fg={theme.faint}>
-                            This session keeps its context across every turn.
-                        </text>
+                        <Show
+                            when={sessionReady()}
+                            fallback={
+                                <text fg={theme.muted}>
+                                    Starting {manifest.name}...
+                                </text>
+                            }
+                        >
+                            <text fg={theme.muted}>Ready when you are.</text>
+                            <text fg={theme.faint}>
+                                This session keeps its context across every turn.
+                            </text>
+                        </Show>
                     </box>
                 </Show>
                 <For each={transcript()} fallback={<box height={0} />}>

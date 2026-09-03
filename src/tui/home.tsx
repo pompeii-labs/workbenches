@@ -326,7 +326,13 @@ function SavedWorkbenchList(props: {
         <box flexDirection="column" flexGrow={1}>
             <box flexDirection="row" justifyContent="space-between">
                 <text fg={props.theme.textMuted}>SAVED WORKBENCHES</text>
-                <text fg={props.theme.faint}>{props.entries.length}</text>
+                <text fg={props.theme.faint}>
+                    {selectionPosition(
+                        props.selected(),
+                        props.filtered().length,
+                        props.entries.length
+                    )}
+                </text>
             </box>
             <box
                 flexDirection="row"
@@ -425,6 +431,20 @@ function SavedWorkbenchList(props: {
             </Show>
         </box>
     );
+}
+
+function selectionPosition(selected: number, filtered: number, saved: number): string {
+    if (filtered === 0) return saved === 0 ? '0 SAVED' : `0 OF ${saved}`;
+    const position = Math.min(selected + 1, filtered);
+    const direction =
+        filtered === 1
+            ? ''
+            : position === 1
+              ? ' · ↓ MORE'
+              : position === filtered
+                ? ' · ↑ MORE'
+                : ' · ↑↓ MORE';
+    return `${position} OF ${filtered}${direction}`;
 }
 
 function WorkbenchDetails(props: {
