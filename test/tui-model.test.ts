@@ -5,6 +5,7 @@ import {
     addUserMessage,
     emptyTranscript,
     groupTranscriptItems,
+    interruptTranscript,
     queueUserMessage,
     reduceTranscript,
     reduceTranscriptDuringCancellation,
@@ -216,6 +217,7 @@ describe('TUI transcript model', () => {
             state,
             event(4, 'input.delivered', { id: 'control-1', kind: 'steer' })
         );
+        expect(state).toMatchObject({ busy: true, status: 'Thinking' });
         state = reduceTranscript(
             state,
             event(5, 'output.text', { id: 'output-2', text: 'Steered reply.' })
@@ -311,20 +313,43 @@ describe('TUI transcript model', () => {
         ]);
     });
 
-    test('does not regress to thinking while cancellation is pending', () => {
-        const cancelling = {
-            ...addUserMessage(emptyTranscript(), 'Stop this turn'),
-            status: 'Cancelling',
-        };
-        const delayedStart = reduceTranscriptDuringCancellation(
-            cancelling,
-            event(1, 'turn.started', { index: 1 })
-        );
+    test('interrupts immediately and reconciles delayed runner completion', () => {
+        const active = addUserMessage(emptyTranscript(), 'Stop this turn');
+        const interrupted = interruptTranscript(active, 'local-interruption');
 
-        expect(delayedStart).toMatchObject({
-            busy: true,
-            status: 'Cancelling',
+        expect(interrupted).toMatchObject({
+            busy: false,
+            status: 'Interrupted',
+            interruptionPending: true,
         });
+        expect(interrupted.items.at(-1)).toEqual({
+            id: 'local-interruption',
+            kind: 'notice',
+            text: 'Turn interrupted',
+            tone: 'muted',
+        });
+
+        const lateOutput = reduceTranscriptDuringCancellation(
+            interrupted,
+            event(1, 'output.text', { id: 'old-output', text: 'too late' })
+        );
+        expect(lateOutput).toBe(interrupted);
+
+        const nextTurn = addUserMessage(interrupted, 'Start something else');
+        const reconciled = reduceTranscriptDuringCancellation(
+            nextTurn,
+            event(2, 'turn.completed', { reason: 'cancelled' })
+        );
+        expect(reconciled).toMatchObject({
+            busy: true,
+            status: 'Thinking',
+            interruptionPending: false,
+        });
+        expect(
+            reconciled.items.filter(
+                (item) => item.kind === 'notice' && item.text === 'Turn interrupted'
+            )
+        ).toHaveLength(1);
     });
 
     test('batches text deltas but flushes before lifecycle events', () => {

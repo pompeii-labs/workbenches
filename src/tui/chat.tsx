@@ -19,12 +19,14 @@ import type {
 } from '../runners/session.js';
 import type { RunControlReceipt, RunHandle, WorkbenchEvent } from '../runs/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
+import { ActivityIndicator } from './activity.js';
 import { SessionCommands } from './commands/session.js';
 import { useDialog } from './dialog/index.js';
 import {
     addUserMessage,
     emptyTranscript,
     groupTranscriptItems,
+    interruptTranscript,
     queueUserMessage,
     reduceTranscript,
     reduceTranscriptDuringCancellation,
@@ -83,6 +85,7 @@ export function ChatScreen(props: ChatScreenProps) {
     }>();
     const [question, setQuestion] = createSignal<RunnerQuestionRequest>();
     const [questionResponsePending, setQuestionResponsePending] = createSignal(false);
+    const [cancellationPending, setCancellationPending] = createSignal(false);
     let session: RunHandle | undefined;
     const cancellation = new TurnCancellation();
     const history = new PromptHistory(props.home);
@@ -144,26 +147,21 @@ export function ChatScreen(props: ChatScreenProps) {
         const active = session;
         if (!active) return Promise.resolve();
         setError('');
-        setState((current) => ({ ...current, busy: true, status: 'Cancelling' }));
+        setCancellationPending(true);
+        setState((current) => interruptTranscript(current));
         return cancellation
             .request(active)
-            .then((receipt) => {
-                setState((current) => ({
-                    ...current,
-                    busy: false,
-                    status:
-                        receipt.disposition === 'already_idle'
-                            ? 'Ready'
-                            : 'Interrupted',
-                }));
-            })
+            .then(() => undefined)
             .catch((cause) => {
                 setError(cause instanceof Error ? cause.message : String(cause));
                 setState((current) => ({
                     ...current,
-                    busy: false,
+                    interruptionPending: false,
                     status: 'Cancellation failed',
                 }));
+            })
+            .finally(() => {
+                setCancellationPending(false);
             });
     };
     const fail = (cause: unknown) => {
@@ -320,7 +318,7 @@ export function ChatScreen(props: ChatScreenProps) {
         }
         if (key.ctrl && key.name === 'c') {
             key.preventDefault();
-            if (state().busy) void cancelTurn();
+            if (state().busy || cancellationPending()) void cancelTurn();
             else void close(false);
         } else if (key.name === 'escape' && props.homeAvailable && !state().busy) {
             key.preventDefault();
@@ -412,9 +410,8 @@ export function ChatScreen(props: ChatScreenProps) {
                 </For>
                 <Show when={activityStatus()}>
                     {(status: () => string) => (
-                        <box flexDirection="row" gap={1} marginY={1}>
-                            <text fg={theme.mint}>✦</text>
-                            <text fg={theme.muted}>{status()}</text>
+                        <box marginY={1}>
+                            <ActivityIndicator label={status()} />
                         </box>
                     )}
                 </Show>
@@ -503,7 +500,7 @@ export function ChatScreen(props: ChatScreenProps) {
                     {usageLabel(state().totalTokens, state().costUsd)}
                     {question()
                         ? 'answer required · ctrl+c cancel'
-                        : state().busy
+                        : state().busy || cancellationPending()
                           ? 'ctrl+c cancel'
                           : 'ctrl+c quit'}
                 </text>

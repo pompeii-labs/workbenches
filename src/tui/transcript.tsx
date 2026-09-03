@@ -1,6 +1,7 @@
 import { type Accessor, For, Match, Show, Switch } from 'solid-js';
 
 import { renderMarkdownPreview, sanitizeMarkdown } from '../rendering/index.js';
+import { ActivityIndicator } from './activity.js';
 import type { TranscriptDisplayItem } from './model.js';
 import { useTheme } from './theme/index.js';
 
@@ -91,24 +92,25 @@ export function Transcript(props: {
                         : `${item.tools.length} ${item.tools.length === 1 ? 'action' : 'actions'}${failed.length > 0 ? ` · ${failed.length} failed` : ''}`;
                     return (
                         <box flexDirection="column" marginLeft={1} marginY={1}>
-                            <box flexDirection="row">
-                                <text
-                                    fg={
-                                        status === 'failed'
-                                            ? theme.red
-                                            : status === 'completed'
-                                              ? theme.mint
-                                              : theme.yellow
-                                    }
-                                >
-                                    {status === 'completed'
-                                        ? '✓'
-                                        : status === 'failed'
-                                          ? '✗'
-                                          : '◌'}{' '}
-                                </text>
-                                <text fg={theme.muted}>{summary}</text>
-                            </box>
+                            <Show
+                                when={status === 'running'}
+                                fallback={
+                                    <box flexDirection="row">
+                                        <text
+                                            fg={
+                                                status === 'failed'
+                                                    ? theme.red
+                                                    : theme.mint
+                                            }
+                                        >
+                                            {status === 'failed' ? '✗' : '✓'}{' '}
+                                        </text>
+                                        <text fg={theme.muted}>{summary}</text>
+                                    </box>
+                                }
+                            >
+                                <ActivityIndicator label={summary} />
+                            </Show>
                             <For each={failed}>
                                 {(tool) => (
                                     <text fg={theme.red} marginLeft={2}>

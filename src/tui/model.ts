@@ -31,6 +31,7 @@ export interface TranscriptState {
     queued: QueuedTranscriptInput[];
     busy: boolean;
     status: string;
+    interruptionPending: boolean;
     totalTokens?: number;
     costUsd?: number;
 }
@@ -100,7 +101,13 @@ export class TranscriptEventBuffer {
 }
 
 export function emptyTranscript(): TranscriptState {
-    return { items: [], queued: [], busy: false, status: 'Connecting' };
+    return {
+        items: [],
+        queued: [],
+        busy: false,
+        status: 'Connecting',
+        interruptionPending: false,
+    };
 }
 
 export function groupTranscriptItems(items: TranscriptItem[]): TranscriptDisplayItem[] {
@@ -152,6 +159,28 @@ export function queueUserMessage(
     };
 }
 
+export function interruptTranscript(
+    state: TranscriptState,
+    id: string = crypto.randomUUID()
+): TranscriptState {
+    if (!state.busy || state.interruptionPending) return state;
+    return {
+        ...state,
+        busy: false,
+        status: 'Interrupted',
+        interruptionPending: true,
+        items: [
+            ...state.items,
+            {
+                id,
+                kind: 'notice',
+                text: 'Turn interrupted',
+                tone: 'muted',
+            },
+        ],
+    };
+}
+
 export function reduceTranscript(
     state: TranscriptState,
     event: WorkbenchEvent
@@ -175,6 +204,8 @@ export function reduceTranscript(
         if (!delivered) return state;
         return {
             ...state,
+            busy: true,
+            status: 'Thinking',
             queued: state.queued.filter((_, inputIndex) => inputIndex !== index),
             items: [
                 ...state.items,
@@ -298,6 +329,9 @@ export function reduceTranscript(
     }
     if (event.type === 'turn.completed') {
         const interrupted = field(event.data, 'reason') === 'cancelled';
+        if (state.interruptionPending) {
+            return { ...state, interruptionPending: false };
+        }
         return {
             ...state,
             busy: false,
@@ -354,15 +388,15 @@ export function reduceTranscriptDuringCancellation(
     state: TranscriptState,
     event: WorkbenchEvent
 ): TranscriptState {
-    const next = reduceTranscript(state, event);
     if (
         event.type === 'turn.completed' ||
         event.type === 'run.failed' ||
-        event.type === 'run.cancelled'
+        event.type === 'run.cancelled' ||
+        event.type === 'usage.updated'
     ) {
-        return next;
+        return reduceTranscript(state, event);
     }
-    return { ...next, busy: true, status: 'Cancelling' };
+    return state;
 }
 
 function field(value: unknown, key: string): string {
