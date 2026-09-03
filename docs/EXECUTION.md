@@ -303,6 +303,12 @@ material, credentials, provider metadata, or complete tool results. A future
 opt-in diagnostic stream can preserve native data behind a separate security
 contract.
 
+Tool lifecycle events include a stable call ID and native tool name. Adapters
+may also provide a safe display title, target, short description, duration, and
+normalized failure. These fields let clients show concrete activity such as a
+file read or search without persisting arbitrary commands, file contents, or
+tool output in the portable event log.
+
 Exactly one of `run.completed`, `run.failed`, or `run.cancelled` terminates the
 event stream. The `result` promise resolves to the matching status.
 

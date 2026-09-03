@@ -3,9 +3,12 @@ import type { WorkbenchEvent } from '../runs/index.js';
 export interface ToolTranscriptItem {
     id: string;
     kind: 'tool';
+    name: string;
     title: string;
     target?: string;
-    detail?: string;
+    description?: string;
+    error?: string;
+    durationMs?: number;
     status: 'running' | 'completed' | 'failed';
 }
 
@@ -279,6 +282,7 @@ export function reduceTranscript(
         };
     }
     if (event.type === 'tool.started') {
+        const name = field(event.data, 'name') || 'tool';
         return {
             ...state,
             status: 'Working',
@@ -287,11 +291,13 @@ export function reduceTranscript(
                 {
                     id: field(event.data, 'id') || `tool-${event.sequence}`,
                     kind: 'tool',
-                    title:
-                        field(event.data, 'title') ||
-                        humanize(field(event.data, 'name') || 'Tool'),
+                    name,
+                    title: field(event.data, 'title') || humanize(name),
                     ...(field(event.data, 'target')
                         ? { target: field(event.data, 'target') }
+                        : {}),
+                    ...(field(event.data, 'description')
+                        ? { description: field(event.data, 'description') }
                         : {}),
                     status: 'running',
                 },
@@ -304,16 +310,7 @@ export function reduceTranscript(
             ...state,
             items: state.items.map((item) =>
                 item.kind === 'tool' && item.id === id
-                    ? {
-                          ...item,
-                          status:
-                              field(event.data, 'status') === 'failed'
-                                  ? 'failed'
-                                  : 'completed',
-                          ...(field(event.data, 'message')
-                              ? { detail: field(event.data, 'message') }
-                              : {}),
-                      }
+                    ? completeTool(item, event)
                     : item
             ),
         };
@@ -391,6 +388,28 @@ export function reduceTranscript(
         };
     }
     return state;
+}
+
+function completeTool(
+    item: ToolTranscriptItem,
+    event: WorkbenchEvent
+): ToolTranscriptItem {
+    const name = field(event.data, 'name');
+    const title = field(event.data, 'title');
+    const target = field(event.data, 'target');
+    const description = field(event.data, 'description');
+    const error = field(event.data, 'message');
+    const durationMs = numeric(event.data, 'duration_ms');
+    return {
+        ...item,
+        ...(name ? { name } : {}),
+        ...(title ? { title } : {}),
+        ...(target ? { target } : {}),
+        ...(description ? { description } : {}),
+        ...(error ? { error } : {}),
+        ...(durationMs === undefined ? {} : { durationMs }),
+        status: field(event.data, 'status') === 'failed' ? 'failed' : 'completed',
+    };
 }
 
 export function reduceTranscriptDuringCancellation(

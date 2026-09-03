@@ -400,6 +400,7 @@ export function ChatScreen(props: ChatScreenProps) {
                         <Transcript
                             item={item}
                             assistantLabel={manifest.name}
+                            workspace={props.resolved.workspaceDirectory}
                             streaming={
                                 item.kind === 'assistant' &&
                                 state().busy &&

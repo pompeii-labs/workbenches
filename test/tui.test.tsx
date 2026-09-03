@@ -676,7 +676,7 @@ describe.serial('Workbench TUI', () => {
         expect(frame).not.toContain('```');
     });
 
-    test('collapses successful tool activity while keeping failure details visible', async () => {
+    test('renders every tool action and keeps failure details visible', async () => {
         const setup = await testRender(
             () => (
                 <ThemeProvider controller={themes}>
@@ -690,19 +690,25 @@ describe.serial('Workbench TUI', () => {
                                     {
                                         id: 'tool-1',
                                         kind: 'tool',
-                                        title: 'Read manifest',
+                                        name: 'read',
+                                        title: 'Read',
+                                        target: '/repo/src/manifest.ts',
+                                        description: 'lines 10-29',
+                                        durationMs: 24,
                                         status: 'completed',
                                     },
                                     {
                                         id: 'tool-2',
                                         kind: 'tool',
+                                        name: 'bash',
                                         title: 'Run tests',
-                                        detail: 'Process exited with status 1',
+                                        error: 'Process exited with status 1',
                                         status: 'failed',
                                     },
                                 ],
                             }}
                             streaming={false}
+                            workspace="/repo"
                         />
                     </box>
                 </ThemeProvider>
@@ -713,9 +719,13 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
 
         const frame = setup.captureCharFrame();
-        expect(frame).toContain('2 actions · 1 failed');
-        expect(frame).toContain('Run tests: Process exited with status 1');
-        expect(frame).not.toContain('Read manifest');
+        expect(frame).toContain('Read');
+        expect(frame).toContain('src/manifest.ts');
+        expect(frame).toContain('lines 10-29');
+        expect(frame).toContain('24ms');
+        expect(frame).toContain('Run tests');
+        expect(frame).toContain('Process exited with status 1');
+        expect(frame).not.toContain('2 actions');
     });
 
     test('renders a normalized runner question with choices', async () => {

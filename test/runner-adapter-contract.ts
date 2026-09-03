@@ -108,6 +108,7 @@ export function runnerAdapterContract(options: {
                         data: {
                             id: 'call_contract',
                             name: 'write',
+                            title: 'Write',
                             target: '/workspace/output.txt',
                         },
                     });
@@ -116,6 +117,7 @@ export function runnerAdapterContract(options: {
                         data: expect.objectContaining({
                             id: 'call_contract',
                             name: 'write',
+                            title: 'Write',
                             target: '/workspace/output.txt',
                             status: 'completed',
                         }),

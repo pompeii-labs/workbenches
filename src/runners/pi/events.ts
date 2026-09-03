@@ -1,4 +1,5 @@
 import type { WorkbenchEventDraft } from '../../runs/index.js';
+import { describeTool, type ToolDescription } from '../tool.js';
 
 export interface PiAdapterResult {
     events: WorkbenchEventDraft[];
@@ -10,7 +11,7 @@ export class PiEventAdapter {
     private readonly completedTools = new Set<string>();
     private readonly tools = new Map<
         string,
-        { name: string; target: string | undefined }
+        { name: string; description: ToolDescription }
     >();
     private turnCompleted = false;
     private finalText = '';
@@ -113,12 +114,12 @@ export class PiEventAdapter {
         if (this.startedTools.has(id)) return this.result([]);
         this.startedTools.add(id);
         const name = string(event.toolName) ?? 'tool';
-        const target = toolTarget(record(event.args));
-        this.tools.set(id, { name, target });
+        const description = describeTool(name, record(event.args), undefined);
+        this.tools.set(id, { name, description });
         return this.result([
             {
                 type: 'tool.started',
-                data: { id, name, ...(target ? { target } : {}) },
+                data: { id, name, ...description },
             },
         ]);
     }
@@ -127,13 +128,17 @@ export class PiEventAdapter {
         const id = string(event.toolCallId) ?? 'unknown';
         const started = this.tools.get(id);
         const name = string(event.toolName) ?? started?.name ?? 'tool';
-        const target = toolTarget(record(event.args)) ?? started?.target;
+        const input = record(event.args);
+        const description = input
+            ? describeTool(name, input, undefined)
+            : (started?.description ?? describeTool(name, undefined, undefined));
+        const target = description.target;
         const events: WorkbenchEventDraft[] = [];
         if (!this.startedTools.has(id)) {
             this.startedTools.add(id);
             events.push({
                 type: 'tool.started',
-                data: { id, name, ...(target ? { target } : {}) },
+                data: { id, name, ...description },
             });
         }
         if (!this.completedTools.has(id)) {
@@ -144,7 +149,7 @@ export class PiEventAdapter {
                 data: {
                     id,
                     name,
-                    ...(target ? { target } : {}),
+                    ...description,
                     status: failed ? 'failed' : 'completed',
                     ...(failed
                         ? {
@@ -192,15 +197,6 @@ function usageData(usage: Record<string, unknown> | undefined) {
 
 function messageReason(message: Record<string, unknown> | undefined) {
     return string(message?.stopReason) ?? string(message?.reason);
-}
-
-function toolTarget(input: Record<string, unknown> | undefined): string | undefined {
-    if (!input) return undefined;
-    for (const key of ['path', 'filePath']) {
-        const value = string(input[key]);
-        if (value) return value.length > 240 ? `${value.slice(0, 237)}...` : value;
-    }
-    return undefined;
 }
 
 function changedFile(name: string, target: string | undefined) {

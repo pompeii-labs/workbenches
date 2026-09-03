@@ -259,11 +259,16 @@ function styledToolLabel(data: unknown, workspace: string, colors: Colors): stri
     const name = text(data, 'name') || 'tool';
     const title = text(data, 'title');
     const target = text(data, 'target');
+    const description = text(data, 'description');
     const normalized = name.replaceAll('_', ' ');
     const action =
         title || `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`;
-    return target && target !== title
-        ? `${colors.bold(action)} ${colors.dim(`· ${displayTarget(target, workspace)}`)}`
+    const details = [
+        target && target !== title ? displayTarget(target, workspace) : '',
+        description,
+    ].filter(Boolean);
+    return details.length
+        ? `${colors.bold(action)} ${colors.dim(`· ${details.join(' · ')}`)}`
         : colors.bold(action);
 }
 

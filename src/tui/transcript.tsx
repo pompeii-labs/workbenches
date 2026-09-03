@@ -1,3 +1,5 @@
+import { isAbsolute, relative } from 'node:path';
+
 import { type Accessor, For, Match, Show, Switch } from 'solid-js';
 
 import { renderMarkdownPreview, sanitizeMarkdown } from '../rendering/index.js';
@@ -9,6 +11,7 @@ export function Transcript(props: {
     item: TranscriptDisplayItem;
     streaming: boolean;
     assistantLabel: string;
+    workspace?: string;
 }) {
     const { syntax, theme } = useTheme();
     return (
@@ -81,54 +84,12 @@ export function Transcript(props: {
                 </box>
             </Match>
             <Match when={props.item.kind === 'activity'}>
-                {(() => {
-                    const item = props.item;
-                    if (item.kind !== 'activity') return null;
-                    const failed = item.tools.filter(
-                        (tool) => tool.status === 'failed'
-                    );
-                    const running = item.tools.findLast(
-                        (tool) => tool.status === 'running'
-                    );
-                    const status = running
-                        ? 'running'
-                        : failed.length > 0
-                          ? 'failed'
-                          : 'completed';
-                    const summary = running
-                        ? `${running.title}${running.target ? ` · ${running.target}` : ''}`
-                        : `${item.tools.length} ${item.tools.length === 1 ? 'action' : 'actions'}${failed.length > 0 ? ` · ${failed.length} failed` : ''}`;
-                    return (
-                        <box flexDirection="column" marginLeft={1} marginTop={1}>
-                            <Show
-                                when={status === 'running'}
-                                fallback={
-                                    <box flexDirection="row">
-                                        <text
-                                            fg={
-                                                status === 'failed'
-                                                    ? theme.red
-                                                    : theme.mint
-                                            }
-                                        >
-                                            {status === 'failed' ? '✗' : '✓'}{' '}
-                                        </text>
-                                        <text fg={theme.muted}>{summary}</text>
-                                    </box>
-                                }
-                            >
-                                <ActivityIndicator label={summary} />
-                            </Show>
-                            <For each={failed}>
-                                {(tool) => (
-                                    <text fg={theme.red} marginLeft={2}>
-                                        {tool.title}: {tool.detail ?? 'Tool failed'}
-                                    </text>
-                                )}
-                            </For>
-                        </box>
-                    );
-                })()}
+                {props.item.kind === 'activity' ? (
+                    <ToolActivityList
+                        item={props.item}
+                        {...(props.workspace ? { workspace: props.workspace } : {})}
+                    />
+                ) : null}
             </Match>
             <Match when={props.item.kind === 'notice'}>
                 <box marginTop={1}>
@@ -145,6 +106,120 @@ export function Transcript(props: {
             </Match>
         </Switch>
     );
+}
+
+function ToolActivityList(props: {
+    item: Extract<TranscriptDisplayItem, { kind: 'activity' }>;
+    workspace?: string;
+}) {
+    return (
+        <box flexDirection="column" marginLeft={1} marginTop={1}>
+            <For each={props.item.tools}>
+                {(tool) => (
+                    <ToolActivity
+                        tool={tool}
+                        {...(props.workspace ? { workspace: props.workspace } : {})}
+                    />
+                )}
+            </For>
+        </box>
+    );
+}
+
+function ToolActivity(props: {
+    tool: Extract<TranscriptDisplayItem, { kind: 'activity' }>['tools'][number];
+    workspace?: string;
+}) {
+    const { theme } = useTheme();
+    const label = () => `${toolIcon(props.tool.name)} ${props.tool.title}`;
+    const detail = () =>
+        [
+            displayTarget(props.tool.target, props.workspace),
+            props.tool.description,
+            durationLabel(props.tool.durationMs),
+        ]
+            .filter(Boolean)
+            .join(' · ');
+
+    return (
+        <box flexDirection="column">
+            <Show
+                when={props.tool.status === 'running'}
+                fallback={
+                    <box flexDirection="row">
+                        <text
+                            width={2}
+                            flexShrink={0}
+                            fg={props.tool.status === 'failed' ? theme.red : theme.mint}
+                        >
+                            {props.tool.status === 'failed' ? '✗' : '✓'}
+                        </text>
+                        <text
+                            fg={
+                                props.tool.status === 'failed' ? theme.red : theme.muted
+                            }
+                            wrapMode="word"
+                        >
+                            {label()}
+                            <Show when={detail()}>
+                                {(value: Accessor<string>) => (
+                                    <span style={{ fg: theme.faint }}>
+                                        {' '}
+                                        · {value()}
+                                    </span>
+                                )}
+                            </Show>
+                        </text>
+                    </box>
+                }
+            >
+                <ActivityIndicator
+                    label={`${label()}${detail() ? ` · ${detail()}` : ''}`}
+                />
+            </Show>
+            <Show when={props.tool.error}>
+                {(error: Accessor<string>) => (
+                    <text fg={theme.red} marginLeft={2} wrapMode="word">
+                        {error()}
+                    </text>
+                )}
+            </Show>
+        </box>
+    );
+}
+
+function toolIcon(name: string): string {
+    const normalized = name.toLowerCase();
+    if (['bash', 'shell', 'shell_command'].includes(normalized)) return '$';
+    if (['glob', 'grep'].includes(normalized)) return '✱';
+    if (['write', 'edit'].includes(normalized)) return '←';
+    if (['apply_patch', 'patch'].includes(normalized)) return '%';
+    if (['webfetch', 'web_fetch'].includes(normalized)) return '%';
+    if (['websearch', 'web_search'].includes(normalized)) return '◈';
+    if (['todowrite', 'todo_write'].includes(normalized)) return '#';
+    if (['task', 'agent'].includes(normalized)) return '•';
+    if (['read', 'list', 'ls', 'skill'].includes(normalized)) return '→';
+    return '⚙';
+}
+
+function displayTarget(
+    target: string | undefined,
+    workspace: string | undefined
+): string | undefined {
+    if (!target || !workspace || !isAbsolute(target)) return target;
+    const local = relative(workspace, target);
+    return local && !local.startsWith('..') && !isAbsolute(local) ? local : target;
+}
+
+function durationLabel(milliseconds: number | undefined): string | undefined {
+    if (milliseconds === undefined || milliseconds < 0) return undefined;
+    if (milliseconds < 1000) return `${Math.round(milliseconds)}ms`;
+    if (milliseconds < 60_000) {
+        return `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
+    }
+    const minutes = Math.floor(milliseconds / 60_000);
+    const seconds = Math.round((milliseconds % 60_000) / 1000);
+    return `${minutes}m ${seconds}s`;
 }
 
 function normalizeTuiMarkdown(value: string): string {

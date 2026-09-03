@@ -19,14 +19,16 @@ describe('TUI transcript model', () => {
             {
                 id: 'tool-1',
                 kind: 'tool',
+                name: 'read',
                 title: 'Read',
                 status: 'completed',
             },
             {
                 id: 'tool-2',
                 kind: 'tool',
+                name: 'question',
                 title: 'Question',
-                detail: 'Tool failed in runner',
+                error: 'Tool failed in runner',
                 status: 'failed',
             },
             { id: 'assistant-1', kind: 'assistant', text: 'Done' },
@@ -41,14 +43,16 @@ describe('TUI transcript model', () => {
                     {
                         id: 'tool-1',
                         kind: 'tool',
+                        name: 'read',
                         title: 'Read',
                         status: 'completed',
                     },
                     {
                         id: 'tool-2',
                         kind: 'tool',
+                        name: 'question',
                         title: 'Question',
-                        detail: 'Tool failed in runner',
+                        error: 'Tool failed in runner',
                         status: 'failed',
                     },
                 ],
@@ -72,7 +76,15 @@ describe('TUI transcript model', () => {
         );
         state = reduceTranscript(
             state,
-            event(5, 'tool.completed', { id: 'tool-1', status: 'completed' })
+            event(5, 'tool.completed', {
+                id: 'tool-1',
+                name: 'read',
+                title: 'Read',
+                target: '/repo/src/manifest.ts',
+                description: 'lines 10-29',
+                duration_ms: 24,
+                status: 'completed',
+            })
         );
         state = reduceTranscript(
             state,
@@ -95,8 +107,11 @@ describe('TUI transcript model', () => {
             {
                 id: 'tool-1',
                 kind: 'tool',
-                title: 'Read manifest',
-                target: '/repo/workbench.yml',
+                name: 'read',
+                title: 'Read',
+                target: '/repo/src/manifest.ts',
+                description: 'lines 10-29',
+                durationMs: 24,
                 status: 'completed',
             },
         ]);
@@ -120,9 +135,10 @@ describe('TUI transcript model', () => {
         );
         expect(state.items.at(-1)).toMatchObject({
             kind: 'tool',
+            name: 'shell_command',
             title: 'Shell command',
             status: 'failed',
-            detail: 'Permission denied',
+            error: 'Permission denied',
         });
 
         state = reduceTranscript(

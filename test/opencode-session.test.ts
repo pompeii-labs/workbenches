@@ -367,6 +367,7 @@ describe('OpenCode interactive server adapter', () => {
             data: {
                 id: 'call_1',
                 name: 'read',
+                title: 'Read',
                 target: '/outside/file.ts',
                 status: 'completed',
             },
