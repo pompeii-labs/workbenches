@@ -204,7 +204,7 @@ describe('OpenCode interactive server adapter', () => {
         await session.close();
 
         expect(server.promptBodies[1]).toEqual({
-            messageID: expect.stringMatching(/^msg_[a-f0-9]{32}$/),
+            messageID: expect.stringMatching(/^msg_[a-f0-9]{26}$/),
             model: {
                 providerID: 'openai',
                 modelID: 'gpt-5.6-terra',
@@ -263,7 +263,7 @@ describe('OpenCode interactive server adapter', () => {
         expect(output[0]?.data.id).not.toBe(output[1]?.data.id);
     });
 
-    test('submits steering to OpenCode one at a time in FIFO order', async () => {
+    test('flushes queued steering as one ordered OpenCode batch', async () => {
         const server = new FakeOpenCodeServer();
         const session = await server.adapter().start({
             workbench: workbench(),
@@ -283,31 +283,29 @@ describe('OpenCode interactive server adapter', () => {
         await server.prompted;
         const first = await session.steer?.('first steering input');
         const second = await session.steer?.('second steering input');
-        if (!first || !second) throw new Error('Expected tracked steering delivery');
-        await Bun.sleep(0);
-
-        expect(server.promptBodies.map(firstPartText)).toEqual([
-            'original input',
-            'first steering input',
-        ]);
-        expect(await settled(first.delivered)).toBeFalse();
-        expect(await settled(second.delivered)).toBeFalse();
-
-        const firstInput = String(server.promptBodies[1]?.messageID);
-        server.emitAssistantText('assistant_first_steer', firstInput, 'First.');
-        await expect(first.delivered).resolves.toBeUndefined();
+        const third = await session.steer?.('third steering input');
+        if (!first || !second || !third) {
+            throw new Error('Expected tracked steering delivery');
+        }
         await Bun.sleep(0);
 
         expect(server.promptBodies.map(firstPartText)).toEqual([
             'original input',
             'first steering input',
             'second steering input',
+            'third steering input',
         ]);
+        const inputIds = server.promptBodies.map((body) => String(body.messageID));
+        expect(inputIds).toEqual([...inputIds].sort());
+        expect(await settled(first.delivered)).toBeFalse();
         expect(await settled(second.delivered)).toBeFalse();
+        expect(await settled(third.delivered)).toBeFalse();
 
-        const secondInput = String(server.promptBodies[2]?.messageID);
-        server.emitAssistantText('assistant_second_steer', secondInput, 'Second.');
-        await expect(second.delivered).resolves.toBeUndefined();
+        const batchBoundary = String(server.promptBodies[3]?.messageID);
+        server.emitAssistantText('assistant_steering_batch', batchBoundary, 'Done.');
+        await expect(
+            Promise.all([first.delivered, second.delivered, third.delivered])
+        ).resolves.toEqual([undefined, undefined, undefined]);
         server.emit('session.status', { status: { type: 'idle' } });
         await expect(turn).resolves.toEqual({ reason: 'completed' });
         await session.close();

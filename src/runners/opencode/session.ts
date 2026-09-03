@@ -109,19 +109,13 @@ interface ActiveTurn {
     inputMessageIds: Set<string>;
     assistantOutputIds: Map<string, string>;
     steeringDeliveries: Map<string, ReturnType<typeof deferred<void>>>;
-    steeringQueue: QueuedSteering[];
-    steeringInFlight: string | undefined;
+    steeringOrder: string[];
     promise: Promise<RunnerTurnResult>;
     resolve: (result: RunnerTurnResult) => void;
     reject: (error: Error) => void;
     cancelRequested: boolean;
     seenActivity: boolean;
     settled: boolean;
-}
-
-interface QueuedSteering {
-    messageId: string;
-    input: ReturnType<typeof normalizeRunnerInput>;
 }
 
 interface AlwaysPermission {
@@ -143,6 +137,7 @@ class OpenCodeServerSession implements RunnerSession {
     private readonly assistantTextParts = new Set<string>();
     private readonly alwaysPermissions: AlwaysPermission[] = [];
     private readonly questions = new OpenCodeQuestion();
+    private readonly messageIds = new OpenCodeMessageIds();
     private nativeSessionId: string | undefined;
     private active: ActiveTurn | undefined;
     private closed = false;
@@ -205,7 +200,7 @@ class OpenCodeServerSession implements RunnerSession {
         if (this.failure) throw this.failure;
         if (this.active) throw new Error('runner session is already processing a turn');
         const sessionId = this.requireSessionId();
-        const messageId = createMessageId();
+        const messageId = this.messageIds.next();
         const turn = createActiveTurn(messageId);
         this.active = turn;
         const model = parseModel(this.options.configuration.model);
@@ -237,13 +232,13 @@ class OpenCodeServerSession implements RunnerSession {
             throw new Error('runner session is not processing a turn');
         }
         const normalized = normalizeRunnerInput(input);
-        const messageId = createMessageId();
+        const messageId = this.messageIds.next();
         const delivery = deferred<void>();
         void delivery.promise.catch(() => {});
         this.active.inputMessageIds.add(messageId);
         this.active.steeringDeliveries.set(messageId, delivery);
-        this.active.steeringQueue.push({ messageId, input: normalized });
-        void this.dispatchNextSteering(this.active);
+        this.active.steeringOrder.push(messageId);
+        void this.dispatchSteering(this.active, messageId, normalized);
         return { delivered: delivery.promise };
     }
 
@@ -313,13 +308,7 @@ class OpenCodeServerSession implements RunnerSession {
                 }
                 const delivery = this.active.steeringDeliveries.get(parentId);
                 if (delivery) {
-                    this.active.steeringDeliveries.delete(parentId);
-                    delivery.resolve(undefined);
-                    if (this.active.steeringInFlight === parentId) {
-                        this.active.steeringInFlight = undefined;
-                        const active = this.active;
-                        queueMicrotask(() => void this.dispatchNextSteering(active));
-                    }
+                    this.deliverSteeringThrough(this.active, parentId);
                 }
                 this.active.seenActivity = true;
             }
@@ -518,43 +507,46 @@ class OpenCodeServerSession implements RunnerSession {
             delivery.reject(error);
         }
         active.steeringDeliveries.clear();
-        active.steeringQueue.length = 0;
-        active.steeringInFlight = undefined;
+        active.steeringOrder.length = 0;
     }
 
-    private async dispatchNextSteering(active: ActiveTurn): Promise<void> {
-        if (
-            this.active !== active ||
-            active.settled ||
-            active.steeringInFlight ||
-            active.steeringQueue.length === 0
-        ) {
-            return;
+    private deliverSteeringThrough(active: ActiveTurn, messageId: string): void {
+        const boundary = active.steeringOrder.indexOf(messageId);
+        if (boundary === -1) return;
+        const delivered = active.steeringOrder.splice(0, boundary + 1);
+        for (const deliveredId of delivered) {
+            const delivery = active.steeringDeliveries.get(deliveredId);
+            active.steeringDeliveries.delete(deliveredId);
+            delivery?.resolve(undefined);
         }
-        const next = active.steeringQueue.shift();
-        if (!next) return;
-        active.steeringInFlight = next.messageId;
+    }
+
+    private async dispatchSteering(
+        active: ActiveTurn,
+        messageId: string,
+        input: ReturnType<typeof normalizeRunnerInput>
+    ): Promise<void> {
+        if (this.active !== active || active.settled) return;
         try {
             await this.server.request(
                 `/session/${encodeURIComponent(this.requireSessionId())}/prompt_async`,
                 {
                     method: 'POST',
                     body: JSON.stringify({
-                        messageID: next.messageId,
+                        messageID: messageId,
                         model: parseModel(this.options.configuration.model),
-                        parts: openCodeParts(next.input),
+                        parts: openCodeParts(input),
                     }),
                 }
             );
         } catch (error) {
-            active.inputMessageIds.delete(next.messageId);
-            const delivery = active.steeringDeliveries.get(next.messageId);
-            active.steeringDeliveries.delete(next.messageId);
-            if (active.steeringInFlight === next.messageId) {
-                active.steeringInFlight = undefined;
-            }
+            active.inputMessageIds.delete(messageId);
+            active.steeringOrder = active.steeringOrder.filter(
+                (pendingId) => pendingId !== messageId
+            );
+            const delivery = active.steeringDeliveries.get(messageId);
+            active.steeringDeliveries.delete(messageId);
             delivery?.reject(asError(error));
-            void this.dispatchNextSteering(active);
         }
     }
 
@@ -598,8 +590,7 @@ function createActiveTurn(messageId: string): ActiveTurn {
         inputMessageIds: new Set([messageId]),
         assistantOutputIds: new Map(),
         steeringDeliveries: new Map(),
-        steeringQueue: [],
-        steeringInFlight: undefined,
+        steeringOrder: [],
         promise,
         resolve,
         reject,
@@ -609,8 +600,23 @@ function createActiveTurn(messageId: string): ActiveTurn {
     };
 }
 
-function createMessageId(): string {
-    return `msg_${crypto.randomUUID().replaceAll('-', '')}`;
+class OpenCodeMessageIds {
+    private timestamp = 0;
+    private sequence = 0;
+
+    next(): string {
+        const timestamp = Date.now();
+        if (timestamp !== this.timestamp) {
+            this.timestamp = timestamp;
+            this.sequence = 0;
+        }
+        this.sequence += 1;
+        const ordered =
+            (BigInt(timestamp) * 0x1000n + BigInt(this.sequence)) & 0xffffffffffffn;
+        const prefix = ordered.toString(16).padStart(12, '0');
+        const random = crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+        return `msg_${prefix}${random}`;
+    }
 }
 
 function createOutputId(): string {
