@@ -410,7 +410,7 @@ export function ChatScreen(props: ChatScreenProps) {
                 </For>
                 <Show when={activityStatus()}>
                     {(status: () => string) => (
-                        <box marginY={1}>
+                        <box marginTop={1}>
                             <ActivityIndicator label={status()} />
                         </box>
                     )}
@@ -420,7 +420,7 @@ export function ChatScreen(props: ChatScreenProps) {
                         border={['left']}
                         borderColor={theme.red}
                         paddingLeft={1}
-                        marginY={1}
+                        marginTop={1}
                     >
                         <text fg={theme.red}>{error()}</text>
                     </box>

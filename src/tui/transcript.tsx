@@ -14,30 +14,38 @@ export function Transcript(props: {
     return (
         <Switch>
             <Match when={props.item.kind === 'user'}>
-                <box flexDirection="column" marginY={1}>
-                    <text fg={theme.accent}>YOU</text>
-                    <text fg={theme.text} wrapMode="word">
-                        {props.item.kind === 'user' ? props.item.text : ''}
-                    </text>
-                    <Show
-                        when={
-                            props.item.kind === 'user' && props.item.images?.length
-                                ? props.item.images
-                                : undefined
-                        }
+                <box border={['left']} borderColor={theme.accent} marginTop={1}>
+                    <box
+                        flexDirection="column"
+                        backgroundColor={theme.backgroundPanel}
+                        paddingLeft={2}
+                        paddingRight={1}
+                        paddingTop={1}
+                        paddingBottom={1}
                     >
-                        {(images: Accessor<string[]>) => (
-                            <text fg={theme.textMuted}>
-                                {images()
-                                    .map((name) => `[image ${name}]`)
-                                    .join(' ')}
-                            </text>
-                        )}
-                    </Show>
+                        <text fg={theme.text} wrapMode="word">
+                            {props.item.kind === 'user' ? props.item.text : ''}
+                        </text>
+                        <Show
+                            when={
+                                props.item.kind === 'user' && props.item.images?.length
+                                    ? props.item.images
+                                    : undefined
+                            }
+                        >
+                            {(images: Accessor<string[]>) => (
+                                <text fg={theme.textMuted} marginTop={1}>
+                                    {images()
+                                        .map((name) => `[image ${name}]`)
+                                        .join(' ')}
+                                </text>
+                            )}
+                        </Show>
+                    </box>
                 </box>
             </Match>
             <Match when={props.item.kind === 'assistant'}>
-                <box flexDirection="column" marginY={1}>
+                <box flexDirection="column" marginTop={1}>
                     <text fg={theme.mint}>{props.assistantLabel}</text>
                     <Show
                         when={!props.streaming}
@@ -91,7 +99,7 @@ export function Transcript(props: {
                         ? `${running.title}${running.target ? ` · ${running.target}` : ''}`
                         : `${item.tools.length} ${item.tools.length === 1 ? 'action' : 'actions'}${failed.length > 0 ? ` · ${failed.length} failed` : ''}`;
                     return (
-                        <box flexDirection="column" marginLeft={1} marginY={1}>
+                        <box flexDirection="column" marginLeft={1} marginTop={1}>
                             <Show
                                 when={status === 'running'}
                                 fallback={
@@ -123,15 +131,17 @@ export function Transcript(props: {
                 })()}
             </Match>
             <Match when={props.item.kind === 'notice'}>
-                <text
-                    fg={
-                        props.item.kind === 'notice' && props.item.tone === 'error'
-                            ? theme.red
-                            : theme.muted
-                    }
-                >
-                    {props.item.kind === 'notice' ? props.item.text : ''}
-                </text>
+                <box marginTop={1}>
+                    <text
+                        fg={
+                            props.item.kind === 'notice' && props.item.tone === 'error'
+                                ? theme.red
+                                : theme.muted
+                        }
+                    >
+                        {props.item.kind === 'notice' ? props.item.text : ''}
+                    </text>
+                </box>
             </Match>
         </Switch>
     );
