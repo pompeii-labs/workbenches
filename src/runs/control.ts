@@ -219,7 +219,7 @@ export class RunControl {
             if (source) return this.parseReceipt(source, request);
             await this.delay(this.pollMilliseconds);
         }
-        throw new Error(`Timed out waiting for Workbench input receipt: ${request.id}`);
+        throw new Error(this.timeoutMessage(request.kind));
     }
 
     private async readRequest(path: string): Promise<RunControlRequest> {
@@ -248,9 +248,16 @@ export class RunControl {
             value.kind !== request.kind ||
             (value.outcome !== 'accepted' && value.outcome !== 'rejected')
         ) {
-            throw new Error(`Invalid Workbench input receipt: ${request.id}`);
+            throw new Error('The Workbench returned an invalid input acknowledgement');
         }
         return value as RunControlReceipt;
+    }
+
+    private timeoutMessage(kind: RunControlKind): string {
+        if (kind === 'cancel_turn') {
+            return `The Workbench did not acknowledge cancellation. Inspect the run with wb ps --all or stop it with wb kill ${this.runId}.`;
+        }
+        return 'The Workbench did not acknowledge the message. The run may still be active; inspect it with wb ps --all.';
     }
 
     private pendingDirectory(): string {
