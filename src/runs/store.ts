@@ -60,6 +60,11 @@ export interface StoredRunRequest {
 }
 
 const terminalStatuses = new Set<StoredRunStatus>(['completed', 'failed', 'cancelled']);
+const terminalEventTypes = new Set<WorkbenchEvent['type']>([
+    'run.completed',
+    'run.failed',
+    'run.cancelled',
+]);
 
 export interface CreateStoredRunOptions {
     metadata: Omit<StoredRun, 'version' | 'id' | 'status' | 'dispatched_at'>;
@@ -88,6 +93,32 @@ export class RunStore {
         if (run.pid && !this.processAlive(run.pid)) {
             throw new Error(`Workbench run worker exited unexpectedly: ${run.id}`);
         }
+    }
+
+    async reconcile(run: StoredRun, now = Date.now()): Promise<StoredRun> {
+        if (RunStore.isTerminal(run.status)) return run;
+        const dispatchedAt = Date.parse(run.dispatched_at);
+        const waitingForWorker =
+            !run.pid && Number.isFinite(dispatchedAt) && now - dispatchedAt < 30_000;
+        if (waitingForWorker || (run.pid && this.processAlive(run.pid))) return run;
+        const events = await this.readEvents(run.id);
+        const last = events.at(-1);
+        if (!last || !terminalEventTypes.has(last.type)) {
+            await this.appendEvent(run.id, {
+                protocol: 0,
+                run_id: run.id,
+                sequence: (last?.sequence ?? 0) + 1,
+                timestamp: new Date(now).toISOString(),
+                type: 'run.failed',
+                runner: run.runner,
+                data: { message: 'Workbench run worker exited unexpectedly' },
+            });
+        }
+        return this.update(run.id, {
+            status: 'failed',
+            exit_code: 1,
+            finished_at: new Date(now).toISOString(),
+        });
     }
 
     async create(options: CreateStoredRunOptions): Promise<StoredRun> {
@@ -148,7 +179,7 @@ export class RunStore {
         RunStore.validateId(id);
         const path = this.requestPath(id);
         const source = await readFile(path, 'utf8').catch(() => null);
-        if (!source) throw new Error(`Detached run request is unavailable: ${id}`);
+        if (!source) throw new Error(`Workbench run request is unavailable: ${id}`);
         const value = JSON.parse(source) as Partial<StoredRunRequest>;
         if (
             value.version !== 1 ||
@@ -156,7 +187,7 @@ export class RunStore {
             typeof value.workspace !== 'string' ||
             typeof value.task !== 'string'
         ) {
-            throw new Error(`Invalid detached run request: ${id}`);
+            throw new Error(`Invalid Workbench run request: ${id}`);
         }
         await rm(path, { force: true });
         return value as StoredRunRequest;
@@ -183,55 +214,6 @@ export class RunStore {
         const latest = (await this.list())[0];
         if (!latest) throw new Error('No Workbench runs have been dispatched');
         return latest;
-    }
-
-    async latestActiveDetached(): Promise<StoredRun> {
-        const latest = (await this.list({ detachedOnly: true, activeOnly: true }))[0];
-        if (!latest) throw new Error('No active detached Workbench runs');
-        return latest;
-    }
-
-    async requestCancellation(id: string): Promise<void> {
-        const run = await this.read(id);
-        if (run.mode !== 'detached') {
-            throw new Error(`Workbench run is not a detached run: ${id}`);
-        }
-        if (RunStore.isTerminal(run.status)) {
-            throw new Error(`Workbench run is already ${run.status}: ${id}`);
-        }
-        await writeFile(this.cancellationPath(id), 'cancel\n', { mode: 0o600 });
-    }
-
-    watchCancellation(
-        id: string,
-        cancel: () => void,
-        options: { pollMilliseconds?: number } = {}
-    ): () => void {
-        RunStore.validateId(id);
-        let stopped = false;
-        let checking = false;
-        const check = async () => {
-            if (stopped || checking) return;
-            checking = true;
-            try {
-                if (await stat(this.cancellationPath(id)).catch(() => null)) {
-                    cancel();
-                }
-            } finally {
-                checking = false;
-            }
-        };
-        void check();
-        const timer = setInterval(() => void check(), options.pollMilliseconds ?? 100);
-        return () => {
-            stopped = true;
-            clearInterval(timer);
-        };
-    }
-
-    async clearCancellation(id: string): Promise<void> {
-        RunStore.validateId(id);
-        await rm(this.cancellationPath(id), { force: true });
     }
 
     async *follow(
@@ -278,9 +260,7 @@ export class RunStore {
         }
     }
 
-    async list(
-        options: { detachedOnly?: boolean; activeOnly?: boolean } = {}
-    ): Promise<StoredRun[]> {
+    async list(): Promise<StoredRun[]> {
         const root = join(this.home, 'runs');
         const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
         const runs = await Promise.all(
@@ -290,8 +270,6 @@ export class RunStore {
         );
         return runs
             .filter((run): run is StoredRun => run !== null)
-            .filter((run) => !options.detachedOnly || run.mode === 'detached')
-            .filter((run) => !options.activeOnly || !RunStore.isTerminal(run.status))
             .toSorted((left, right) =>
                 right.dispatched_at.localeCompare(left.dispatched_at)
             );
@@ -311,10 +289,6 @@ export class RunStore {
 
     private eventsPath(id: string): string {
         return join(this.directory(id), 'events.ndjson');
-    }
-
-    private cancellationPath(id: string): string {
-        return join(this.directory(id), 'cancel');
     }
 
     private async writeJson(path: string, value: unknown): Promise<void> {

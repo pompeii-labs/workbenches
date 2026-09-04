@@ -255,9 +255,9 @@ export class RunControl {
 
     private timeoutMessage(kind: RunControlKind): string {
         if (kind === 'cancel_turn') {
-            return `The Workbench did not acknowledge cancellation. Inspect the run with wb ps --all or stop it with wb kill ${this.runId}.`;
+            return 'The Workbench did not acknowledge cancellation. Inspect the session with wb ps or stop it with wb kill <session-id>.';
         }
-        return 'The Workbench did not acknowledge the message. The run may still be active; inspect it with wb ps --all.';
+        return 'The Workbench did not acknowledge the message. The session may still be active; inspect it with wb ps.';
     }
 
     private pendingDirectory(): string {

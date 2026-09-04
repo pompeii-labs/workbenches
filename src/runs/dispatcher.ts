@@ -40,68 +40,62 @@ export class RunDispatcher {
         const workspaces = options.session?.workspaces ?? options.workspaces ?? [];
         if (options.session) this.assertCompatible(options, options.session);
         const session =
-            options.mode === 'interactive'
-                ? (options.session ??
-                  (await this.sessions.create({
-                      id,
-                      workbench: workbench.manifest.name,
-                      workbench_version: workbench.manifest.version,
-                      runner: workbench.manifest.runner,
-                      model: modelLabel(workbench.manifest.model),
-                      reference,
-                      workbench_path: workbench.packageDirectory,
-                      workspace: options.resolved.workspaceDirectory,
-                      workspaces,
-                      ...(options.resolved.registry
-                          ? { registry: options.resolved.registry }
-                          : {}),
-                      latest_run_id: id,
-                  })))
-                : undefined;
-        const stored = await this.store.create({
-            id,
-            metadata: {
+            options.session ??
+            (await this.sessions.create({
+                id,
                 workbench: workbench.manifest.name,
                 workbench_version: workbench.manifest.version,
                 runner: workbench.manifest.runner,
                 model: modelLabel(workbench.manifest.model),
-                workspace: options.resolved.workspaceDirectory,
-                mode: options.mode,
-                workspaces,
-                allow_host_docker: options.allowHostDocker ?? false,
-                ...(session
-                    ? {
-                          session_id: session.id,
-                          ...(options.session
-                              ? { resumed_from: session.latest_run_id }
-                              : {}),
-                      }
-                    : {}),
-                ...(options.resolved.registry
-                    ? {
-                          registry: options.resolved.registry,
-                          registry_event_id: crypto.randomUUID(),
-                      }
-                    : {}),
-            },
-            request: {
+                reference,
                 workbench_path: workbench.packageDirectory,
                 workspace: options.resolved.workspaceDirectory,
-                task: options.task ?? '',
                 workspaces,
-                allow_host_docker: options.allowHostDocker ?? false,
-                reference,
-                ...(session
-                    ? {
-                          session_id: session.id,
-                          ...(session.native_session_id
-                              ? { native_session_id: session.native_session_id }
-                              : {}),
-                      }
+                ...(options.resolved.registry
+                    ? { registry: options.resolved.registry }
                     : {}),
-            },
-        });
-        if (options.session && session) {
+                latest_run_id: id,
+            }));
+        let stored: StoredRun;
+        try {
+            stored = await this.store.create({
+                id,
+                metadata: {
+                    workbench: workbench.manifest.name,
+                    workbench_version: workbench.manifest.version,
+                    runner: workbench.manifest.runner,
+                    model: modelLabel(workbench.manifest.model),
+                    workspace: options.resolved.workspaceDirectory,
+                    mode: options.mode,
+                    workspaces,
+                    allow_host_docker: options.allowHostDocker ?? false,
+                    session_id: session.id,
+                    ...(options.session ? { resumed_from: session.latest_run_id } : {}),
+                    ...(options.resolved.registry
+                        ? {
+                              registry: options.resolved.registry,
+                              registry_event_id: crypto.randomUUID(),
+                          }
+                        : {}),
+                },
+                request: {
+                    workbench_path: workbench.packageDirectory,
+                    workspace: options.resolved.workspaceDirectory,
+                    task: options.task ?? '',
+                    workspaces,
+                    allow_host_docker: options.allowHostDocker ?? false,
+                    reference,
+                    session_id: session.id,
+                    ...(session.native_session_id
+                        ? { native_session_id: session.native_session_id }
+                        : {}),
+                },
+            });
+        } catch (error) {
+            if (!options.session) await this.sessions.remove(session.id);
+            throw error;
+        }
+        if (options.session) {
             await this.sessions.update(session.id, { latest_run_id: stored.id });
         }
         return stored;

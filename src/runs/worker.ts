@@ -61,9 +61,6 @@ export class RunWorker {
         if (!request) return 1;
         const controller = new AbortController();
         const stopExternalSignal = this.forwardAbort(options.signal, controller);
-        const stopWatching = this.store.watchCancellation(options.id, () =>
-            controller.abort()
-        );
         const controlAbort = new AbortController();
         const state = { terminal: false };
         const controls = this.processControls(
@@ -133,9 +130,7 @@ export class RunWorker {
                     'Workbench run is no longer accepting input'
                 )
                 .catch(() => {});
-            stopWatching();
             stopExternalSignal();
-            await this.store.clearCancellation(options.id);
         }
     }
 

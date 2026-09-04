@@ -46,6 +46,10 @@ describe('interactive session storage', () => {
         await expect(store.create({ ...session })).rejects.toThrow(
             'Session already exists'
         );
+        await store.remove(session.id);
+        await expect(store.read(session.id)).rejects.toThrow(
+            'Workbench session does not exist'
+        );
     });
 
     test('lists only sessions that reached a native resumable state', async () => {

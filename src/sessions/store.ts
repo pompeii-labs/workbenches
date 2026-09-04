@@ -1,4 +1,12 @@
-import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import {
+    mkdir,
+    readdir,
+    readFile,
+    rename,
+    rm,
+    stat,
+    writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { CatalogRegistryReference } from '../catalog/index.js';
@@ -108,6 +116,11 @@ export class SessionStore {
                     !options.resumableOnly || Boolean(session.native_session_id)
             )
             .toSorted((left, right) => right.updated_at.localeCompare(left.updated_at));
+    }
+
+    async remove(id: string): Promise<void> {
+        RunStore.validateId(id);
+        await rm(this.directory(id), { recursive: true, force: true });
     }
 
     nativeDirectory(id: string): string {

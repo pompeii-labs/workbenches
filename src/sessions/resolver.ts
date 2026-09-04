@@ -1,7 +1,7 @@
-import { RunStore } from '../runs/store.js';
 import type { ResolvedWorkbenchReference } from '../workbench/resolver.js';
 import { Workbench } from '../workbench/workbench.js';
-import { SessionStore, type StoredSession } from './store.js';
+import { SessionLifecycle } from './lifecycle.js';
+import type { StoredSession } from './store.js';
 
 export interface ResolvedSession {
     alias: string;
@@ -10,12 +10,10 @@ export interface ResolvedSession {
 }
 
 export class SessionResolver {
-    readonly #runs: RunStore;
-    readonly #sessions: SessionStore;
+    readonly #lifecycle: SessionLifecycle;
 
     constructor(home: string) {
-        this.#runs = new RunStore(home);
-        this.#sessions = new SessionStore(home);
+        this.#lifecycle = new SessionLifecycle(home);
     }
 
     async resolve(id: string): Promise<ResolvedSession> {
@@ -48,17 +46,11 @@ export class SessionResolver {
     }
 
     private async find(id: string): Promise<StoredSession> {
-        try {
-            return await this.#sessions.read(id);
-        } catch (error) {
-            const run = await this.#runs.read(id).catch(() => undefined);
-            if (!run) throw error;
-            if (!run.session_id) {
-                throw new Error(
-                    `Run ${id} predates resumable Workbench sessions and cannot be resumed`
-                );
-            }
-            return this.#sessions.read(run.session_id);
-        }
+        const session = await this.#lifecycle.session(id);
+        if (session) return session;
+        const activity = await this.#lifecycle.resolve(id);
+        throw new Error(
+            `Session ${activity.id} predates resumable Workbench sessions and cannot be resumed`
+        );
     }
 }

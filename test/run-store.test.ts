@@ -72,7 +72,27 @@ describe('durable Workbench runs', () => {
         expect(() => RunStore.validateId('../../escape')).toThrow('Invalid run ID');
     });
 
-    test('lists detached runs newest first with optional active filtering', async () => {
+    test('marks abandoned worker records as failed during reconciliation', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const run = await fixtureRun(home);
+        await store.update(run.id, {
+            status: 'running',
+            pid: 2_147_483_647,
+            started_at: '2026-08-18T00:00:00.000Z',
+        });
+
+        expect(await store.reconcile(await store.read(run.id))).toMatchObject({
+            status: 'failed',
+            exit_code: 1,
+        });
+        expect((await store.readEvents(run.id)).at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: { message: 'Workbench run worker exited unexpectedly' },
+        });
+    });
+
+    test('lists runs newest first across execution modes', async () => {
         const home = await temporaryHome();
         const store = new RunStore(home);
         const foreground = await fixtureRun(home, 'task', 'foreground');
@@ -82,48 +102,11 @@ describe('durable Workbench runs', () => {
         await new Promise((resolve) => setTimeout(resolve, 2));
         const active = await fixtureRun(home);
 
-        expect((await store.list({ detachedOnly: true })).map((run) => run.id)).toEqual(
-            [active.id, completed.id]
-        );
-        expect(
-            (
-                await store.list({
-                    detachedOnly: true,
-                    activeOnly: true,
-                })
-            ).map((run) => run.id)
-        ).toEqual([active.id]);
-        expect((await store.list()).map((run) => run.id)).toContain(foreground.id);
-    });
-
-    test('requests private cooperative cancellation for active detached runs', async () => {
-        const home = await temporaryHome();
-        const store = new RunStore(home);
-        const foreground = await fixtureRun(home, 'task', 'foreground');
-        await new Promise((resolve) => setTimeout(resolve, 2));
-        const detached = await fixtureRun(home, 'task', 'detached');
-        let cancelled = false;
-        const stop = store.watchCancellation(
-            detached.id,
-            () => {
-                cancelled = true;
-            },
-            { pollMilliseconds: 1 }
-        );
-
-        await store.requestCancellation(detached.id);
-        await waitFor(() => cancelled);
-        expect((await store.latestActiveDetached()).id).toBe(detached.id);
-        expect(
-            (await stat(join(home, 'runs', detached.id, 'cancel'))).mode & 0o777
-        ).toBe(0o600);
-        await expect(store.requestCancellation(foreground.id)).rejects.toThrow(
-            'is not a detached run'
-        );
-
-        stop();
-        await store.clearCancellation(detached.id);
-        await expect(stat(join(home, 'runs', detached.id, 'cancel'))).rejects.toThrow();
+        expect((await store.list()).map((run) => run.id)).toEqual([
+            active.id,
+            completed.id,
+            foreground.id,
+        ]);
     });
 
     test('stores the Workbench reference without derived routes or credentials', async () => {
@@ -247,14 +230,6 @@ function fixtureRun(
             task,
         },
     });
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-        if (predicate()) return;
-        await new Promise((resolve) => setTimeout(resolve, 2));
-    }
-    throw new Error('Timed out waiting for condition');
 }
 
 function event(

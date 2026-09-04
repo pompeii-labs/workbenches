@@ -7,12 +7,12 @@ import { launchWorkbenchTui } from '../tui.js';
 export const resumeCommand = defineCommand({
     meta: {
         name: 'resume',
-        description: 'Resume a local interactive Workbench session.',
+        description: 'Continue a resumable Workbench session.',
     },
     args: {
         session: {
             type: 'positional',
-            description: 'Workbench session or run ID',
+            description: 'Workbench session ID',
             required: true,
         },
     },

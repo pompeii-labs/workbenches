@@ -56,7 +56,7 @@ export const runCommand = defineCommand({
         detach: {
             type: 'boolean',
             alias: 'd',
-            description: 'Dispatch in the background and print only the run ID',
+            description: 'Continue in the background and print the session ID',
             default: false,
         },
         'dry-run': {
@@ -224,7 +224,7 @@ export const runCommand = defineCommand({
                     cwd: resolved.workspaceDirectory,
                     environment,
                 });
-                console.log(stored.id);
+                console.log(stored.session_id ?? stored.id);
                 return;
             }
 

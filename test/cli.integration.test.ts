@@ -437,7 +437,7 @@ describe('CLI integration', () => {
         );
     });
 
-    test('dispatches, prints only a run ID, and attaches to the latest run', async () => {
+    test('detaches, prints a session ID, and attaches to its latest run', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-detached-');
         const bin = await fakeBin([], { delay: true });
@@ -459,8 +459,10 @@ describe('CLI integration', () => {
         expect(active.stderr).toBe('');
         expect(JSON.parse(active.stdout)).toMatchObject({
             id: dispatched.stdout.trim(),
+            session_id: dispatched.stdout.trim(),
             mode: 'detached',
             workbench: 'fixture-core',
+            resumable: false,
         });
 
         const attached = await executeCli(['attach', '--json'], environment);
@@ -481,15 +483,26 @@ describe('CLI integration', () => {
         );
         expect(replayed.code).toBe(0);
         expect(replayed.stdout).toBe('fixture response\n');
+        expect(
+            JSON.parse(
+                await readFile(
+                    join(home, 'sessions', dispatched.stdout.trim(), 'session.json'),
+                    'utf8'
+                )
+            )
+        ).toMatchObject({
+            id: dispatched.stdout.trim(),
+            latest_run_id: dispatched.stdout.trim(),
+        });
 
         const finished = await executeCli(['ps'], environment);
-        expect(finished.stdout).toBe('No active detached runs.\n');
+        expect(finished.stdout).toBe('No active or resumable Workbench sessions.\n');
         const history = await executeCli(['ps', '--all'], environment);
         expect(history.stdout).toContain(dispatched.stdout.trim());
         expect(history.stdout).toContain('completed');
     });
 
-    test('cancels the latest active detached run and records a terminal event', async () => {
+    test('stops the active run in the latest session and records a terminal event', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-kill-');
         const bin = await fakeBin([], { block: true });
@@ -520,6 +533,7 @@ describe('CLI integration', () => {
             type: 'run.cancelled',
             data: { reason: 'requested' },
         });
+        expect(await stat(join(home, 'sessions', id, 'session.json'))).toBeTruthy();
 
         const repeated = await executeCli(['kill', id], environment);
         expect(repeated.code).toBe(1);

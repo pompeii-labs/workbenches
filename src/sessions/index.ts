@@ -1,4 +1,8 @@
 export {
+    type SessionActivity,
+    SessionLifecycle,
+} from './lifecycle.js';
+export {
     type ResolvedSession,
     SessionResolver,
 } from './resolver.js';
