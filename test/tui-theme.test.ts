@@ -17,15 +17,13 @@ describe('TUI themes', () => {
     test('starts with the Workbench default and exposes the built-in themes', async () => {
         const themes = new ThemeController(await home());
 
-        expect(themes.selected).toBe('flexoki');
-        expect(themes.current.background).toBe('#100F0F');
+        expect(themes.selected).toBe('workbench');
+        expect(themes.current.background).toBe('#101011');
         expect(themes.list().map((theme) => theme.name)).toEqual([
+            'workbench',
             'flexoki',
             'github',
             'catppuccin',
-            'dracula',
-            'tokyonight',
-            'rosepine',
         ]);
     });
 
@@ -50,7 +48,7 @@ describe('TUI themes', () => {
         const themes = new ThemeController(await home());
         themes.setMode('light');
 
-        expect(themes.current.background).toBe('#FFFCF0');
+        expect(themes.current.background).toBe('#FAF8F3');
         await expect(themes.select('missing')).rejects.toThrow(
             'Unknown theme: missing'
         );

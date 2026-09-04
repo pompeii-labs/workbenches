@@ -13,11 +13,8 @@ import {
 } from 'solid-js';
 
 import catppuccin from './assets/catppuccin.json' with { type: 'json' };
-import dracula from './assets/dracula.json' with { type: 'json' };
 import flexoki from './assets/flexoki.json' with { type: 'json' };
 import github from './assets/github.json' with { type: 'json' };
-import rosepine from './assets/rosepine.json' with { type: 'json' };
-import tokyonight from './assets/tokyonight.json' with { type: 'json' };
 
 export type ThemeMode = 'dark' | 'light';
 
@@ -52,6 +49,15 @@ export interface WorkbenchTheme {
     markdownEmph: string;
     markdownStrong: string;
     markdownListItem: string;
+    syntaxComment: string;
+    syntaxKeyword: string;
+    syntaxFunction: string;
+    syntaxVariable: string;
+    syntaxString: string;
+    syntaxNumber: string;
+    syntaxType: string;
+    syntaxOperator: string;
+    syntaxPunctuation: string;
     panel: string;
     panelRaised: string;
     muted: string;
@@ -67,14 +73,49 @@ export interface ThemeOption {
     label: string;
 }
 
-const defaultTheme = 'flexoki';
+const workbenchTheme: ThemeJson = {
+    theme: {
+        primary: { dark: '#A78BFA', light: '#6D3FD1' },
+        secondary: { dark: '#67D4C2', light: '#087F72' },
+        accent: { dark: '#A78BFA', light: '#6D3FD1' },
+        error: { dark: '#F07178', light: '#C9363E' },
+        warning: { dark: '#E6B450', light: '#9A6200' },
+        success: { dark: '#8CCF7E', light: '#3B7D2E' },
+        info: { dark: '#67D4C2', light: '#087F72' },
+        text: { dark: '#E7E4DC', light: '#242220' },
+        textMuted: { dark: '#96928B', light: '#6F6A63' },
+        background: { dark: '#101011', light: '#FAF8F3' },
+        backgroundPanel: { dark: '#181819', light: '#F1EEE7' },
+        backgroundElement: { dark: '#232325', light: '#E7E3DA' },
+        border: { dark: '#3A383B', light: '#CFC9BE' },
+        borderActive: { dark: '#A78BFA', light: '#6D3FD1' },
+        borderSubtle: { dark: '#29282A', light: '#DDD8CE' },
+        markdownText: { dark: '#E7E4DC', light: '#242220' },
+        markdownHeading: { dark: '#E7E4DC', light: '#242220' },
+        markdownLink: { dark: '#67D4C2', light: '#087F72' },
+        markdownCode: { dark: '#D7B7FF', light: '#6D3FD1' },
+        markdownBlockQuote: { dark: '#96928B', light: '#6F6A63' },
+        markdownEmph: { dark: '#E7E4DC', light: '#242220' },
+        markdownStrong: { dark: '#E7E4DC', light: '#242220' },
+        markdownListItem: { dark: '#A78BFA', light: '#6D3FD1' },
+        syntaxComment: { dark: '#77737C', light: '#77716A' },
+        syntaxKeyword: { dark: '#C9A0FF', light: '#7040B8' },
+        syntaxFunction: { dark: '#79CACA', light: '#087F72' },
+        syntaxVariable: { dark: '#E7E4DC', light: '#242220' },
+        syntaxString: { dark: '#A8D989', light: '#3B7D2E' },
+        syntaxNumber: { dark: '#E6B450', light: '#9A6200' },
+        syntaxType: { dark: '#7EB6FF', light: '#2864A5' },
+        syntaxOperator: { dark: '#B7B2AA', light: '#57524C' },
+        syntaxPunctuation: { dark: '#96928B', light: '#6F6A63' },
+    },
+};
+
+const defaultTheme = 'workbench';
 const definitions: Record<string, { label: string; value: ThemeJson }> = {
+    workbench: { label: 'Workbench', value: workbenchTheme },
     flexoki: { label: 'Flexoki', value: flexoki as ThemeJson },
     github: { label: 'GitHub', value: github as ThemeJson },
     catppuccin: { label: 'Catppuccin', value: catppuccin as ThemeJson },
-    dracula: { label: 'Dracula', value: dracula as ThemeJson },
-    tokyonight: { label: 'Tokyo Night', value: tokyonight as ThemeJson },
-    rosepine: { label: 'Rosé Pine', value: rosepine as ThemeJson },
 };
 
 type ThemeListener = () => void;
@@ -91,7 +132,10 @@ export class ThemeController {
     }
 
     get current(): WorkbenchTheme {
-        return resolveTheme(definitions[this.active]?.value ?? flexoki, this.mode);
+        return resolveTheme(
+            definitions[this.active]?.value ?? workbenchTheme,
+            this.mode
+        );
     }
 
     list(): ThemeOption[] {
@@ -241,6 +285,15 @@ function resolveTheme(definition: ThemeJson, mode: ThemeMode): WorkbenchTheme {
         markdownEmph: color('markdownEmph'),
         markdownStrong: color('markdownStrong'),
         markdownListItem: color('markdownListItem'),
+        syntaxComment: color('syntaxComment'),
+        syntaxKeyword: color('syntaxKeyword'),
+        syntaxFunction: color('syntaxFunction'),
+        syntaxVariable: color('syntaxVariable'),
+        syntaxString: color('syntaxString'),
+        syntaxNumber: color('syntaxNumber'),
+        syntaxType: color('syntaxType'),
+        syntaxOperator: color('syntaxOperator'),
+        syntaxPunctuation: color('syntaxPunctuation'),
     };
     return {
         ...resolved,
@@ -275,12 +328,46 @@ function markdownStyle(theme: WorkbenchTheme): SyntaxStyle {
     return SyntaxStyle.fromStyles({
         default: { fg: theme.markdownText },
         conceal: { fg: theme.textMuted, dim: true },
+        comment: { fg: theme.syntaxComment, italic: true },
+        'comment.documentation': { fg: theme.syntaxComment, italic: true },
+        string: { fg: theme.syntaxString },
+        symbol: { fg: theme.syntaxString },
+        number: { fg: theme.syntaxNumber },
+        boolean: { fg: theme.syntaxNumber },
+        keyword: { fg: theme.syntaxKeyword, italic: true },
+        'keyword.import': { fg: theme.syntaxKeyword },
+        'keyword.type': { fg: theme.syntaxType, bold: true },
+        'keyword.function': { fg: theme.syntaxFunction },
+        operator: { fg: theme.syntaxOperator },
+        'keyword.operator': { fg: theme.syntaxOperator },
+        variable: { fg: theme.syntaxVariable },
+        'variable.parameter': { fg: theme.syntaxVariable },
+        function: { fg: theme.syntaxFunction },
+        'function.call': { fg: theme.syntaxFunction },
+        'function.method': { fg: theme.syntaxFunction },
+        'function.method.call': { fg: theme.syntaxFunction },
+        constructor: { fg: theme.syntaxFunction },
+        type: { fg: theme.syntaxType },
+        module: { fg: theme.syntaxType },
+        class: { fg: theme.syntaxType },
+        constant: { fg: theme.syntaxNumber },
+        property: { fg: theme.syntaxVariable },
+        parameter: { fg: theme.syntaxVariable },
+        punctuation: { fg: theme.syntaxPunctuation },
+        'punctuation.bracket': { fg: theme.syntaxPunctuation },
+        'punctuation.delimiter': { fg: theme.syntaxOperator },
         'markup.heading': { fg: theme.markdownHeading, bold: true },
         'markup.heading.1': { fg: theme.markdownHeading, bold: true },
-        'markup.heading.2': { fg: theme.secondary, bold: true },
-        'markup.heading.3': { fg: theme.text, bold: true },
+        'markup.heading.2': { fg: theme.markdownHeading, bold: true },
+        'markup.heading.3': { fg: theme.markdownHeading, bold: true },
+        'markup.heading.4': { fg: theme.markdownHeading, bold: true },
+        'markup.heading.5': { fg: theme.markdownHeading, bold: true },
+        'markup.heading.6': { fg: theme.markdownHeading, bold: true },
         'markup.list': { fg: theme.markdownListItem },
         'markup.raw': { fg: theme.markdownCode },
+        'markup.raw.block': { fg: theme.markdownCode },
+        'markup.raw.inline': { fg: theme.markdownCode },
+        'markup.bold': { fg: theme.markdownStrong, bold: true },
         'markup.strong': { fg: theme.markdownStrong, bold: true },
         'markup.italic': { fg: theme.markdownEmph, italic: true },
         'markup.strikethrough': { fg: theme.textMuted, dim: true },

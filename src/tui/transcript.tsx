@@ -49,7 +49,7 @@ export function Transcript(props: {
             </Match>
             <Match when={props.item.kind === 'assistant'}>
                 <box flexDirection="column" marginTop={1}>
-                    <text fg={theme.mint}>{props.assistantLabel}</text>
+                    <text fg={theme.accent}>{props.assistantLabel}</text>
                     <Show
                         when={!props.streaming}
                         fallback={
