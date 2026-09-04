@@ -16,6 +16,7 @@ import { logoutCommand } from './commands/logout.js';
 import { psCommand } from './commands/ps.js';
 import { publishCommand } from './commands/publish.js';
 import { removeCommand } from './commands/remove.js';
+import { resumeCommand } from './commands/resume.js';
 import { runCommand } from './commands/run.js';
 import { smokeCommand } from './commands/smoke.js';
 import { telemetryCommand } from './commands/telemetry.js';
@@ -61,6 +62,7 @@ export const workbenchCommand = defineCommand({
         connect: connectCommand,
         add: addCommand,
         remove: removeCommand,
+        resume: resumeCommand,
         run: runCommand,
         attach: attachCommand,
         kill: killCommand,
@@ -97,7 +99,7 @@ if (import.meta.main) {
 
 function usesModelCatalog(args: string[], bare: boolean): boolean {
     if (bare) return true;
-    return new Set(['build', 'connect', 'init', 'run', 'smoke', 'view']).has(
+    return new Set(['build', 'connect', 'init', 'resume', 'run', 'smoke', 'view']).has(
         args[0] ?? ''
     );
 }

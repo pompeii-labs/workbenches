@@ -13,15 +13,16 @@ import {
 import packageMetadata from '../../package.json' with { type: 'json' };
 import type { CatalogEntry } from '../catalog/index.js';
 import { modelLabel } from '../models/index.js';
-import type { StoredRun } from '../runs/index.js';
+import type { StoredSession } from '../sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import { useTheme, type WorkbenchTheme } from './theme/index.js';
 
 export interface HomeScreenProps {
     entries: CatalogEntry[];
-    recentRuns?: StoredRun[];
+    recentSessions?: StoredSession[];
     resolve: (alias: string) => Promise<ResolvedWorkbenchReference>;
     onOpen: (alias: string, resolved: ResolvedWorkbenchReference) => void;
+    onResume: (session: StoredSession) => void | Promise<void>;
     onExit: () => void;
 }
 
@@ -98,7 +99,7 @@ export function HomeScreen(props: HomeScreenProps) {
     const current = createMemo(() => filtered()[selected()]);
     const wide = createMemo(() => dimensions().width >= 92);
     const showRecent = createMemo(
-        () => dimensions().height >= 22 && (props.recentRuns?.length ?? 0) > 0
+        () => dimensions().height >= 22 && (props.recentSessions?.length ?? 0) > 0
     );
     let detailRequest = 0;
 
@@ -146,11 +147,28 @@ export function HomeScreen(props: HomeScreenProps) {
             });
         }
     };
+    const resume = async (session: StoredSession | undefined) => {
+        if (!session) return;
+        setStatus({ text: `Resuming ${session.workbench}...`, error: false });
+        try {
+            await props.onResume(session);
+        } catch (error) {
+            setStatus({
+                text: error instanceof Error ? error.message : String(error),
+                error: true,
+            });
+        }
+    };
 
     useKeyboard((key) => {
         if (key.ctrl && key.name === 'c') {
             key.preventDefault();
             props.onExit();
+            return;
+        }
+        if (key.ctrl && key.name === 'r') {
+            key.preventDefault();
+            void resume(props.recentSessions?.[0]);
             return;
         }
         if (key.name === 'escape') {
@@ -198,9 +216,10 @@ export function HomeScreen(props: HomeScreenProps) {
 
             <Show when={showRecent()}>
                 <RecentActivity
-                    runs={(props.recentRuns ?? []).slice(0, wide() ? 3 : 1)}
+                    sessions={(props.recentSessions ?? []).slice(0, wide() ? 3 : 1)}
                     theme={theme}
                     compact={!wide()}
+                    onResume={(session) => void resume(session)}
                 />
             </Show>
 
@@ -266,34 +285,42 @@ export function HomeScreen(props: HomeScreenProps) {
                 <text fg={status()?.error ? theme.error : theme.textMuted}>
                     {status()?.text ?? ''}
                 </text>
-                <text fg={theme.faint}>↑↓ navigate · enter open · esc quit</text>
+                <text fg={theme.faint}>
+                    ↑↓ navigate · enter open · ctrl+r resume latest · esc quit
+                </text>
             </box>
         </box>
     );
 }
 
 function RecentActivity(props: {
-    runs: StoredRun[];
+    sessions: StoredSession[];
     theme: WorkbenchTheme;
     compact: boolean;
+    onResume: (session: StoredSession) => void;
 }) {
     return (
-        <box flexDirection="column" height={props.runs.length + 1} marginBottom={1}>
-            <text fg={props.theme.textMuted}>RECENT ACTIVITY</text>
-            <For each={props.runs}>
-                {(run) => (
-                    <box flexDirection="row" justifyContent="space-between">
+        <box flexDirection="column" height={props.sessions.length + 1} marginBottom={1}>
+            <text fg={props.theme.textMuted}>RECENT SESSIONS</text>
+            <For each={props.sessions}>
+                {(session) => (
+                    // biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes support mouse events but do not expose browser roles.
+                    <box
+                        flexDirection="row"
+                        justifyContent="space-between"
+                        onMouseUp={() => props.onResume(session)}
+                    >
                         <box flexDirection="row" gap={1}>
-                            <text fg={runStatusColor(run, props.theme)}>●</text>
-                            <text fg={props.theme.text}>{run.workbench}</text>
+                            <text fg={props.theme.accent}>◆</text>
+                            <text fg={props.theme.text}>{session.workbench}</text>
                             <Show when={!props.compact}>
                                 <text fg={props.theme.faint}>
-                                    {run.runner} · {run.model}
+                                    {session.runner} · {session.model}
                                 </text>
                             </Show>
                         </box>
                         <text fg={props.theme.textMuted}>
-                            {run.status} · {relativeTime(runTime(run))}
+                            resume · {relativeTime(session.updated_at)}
                         </text>
                     </box>
                 )}
@@ -606,10 +633,6 @@ function inputSummary(details: HomeWorkbenchDetails): string {
     ].join(' · ');
 }
 
-function runTime(run: StoredRun): string {
-    return run.finished_at ?? run.started_at ?? run.dispatched_at;
-}
-
 function relativeTime(timestamp: string): string {
     const milliseconds = Date.parse(timestamp) - Date.now();
     if (!Number.isFinite(milliseconds)) return 'unknown';
@@ -625,11 +648,4 @@ function relativeTime(timestamp: string): string {
         month: 'short',
         day: 'numeric',
     });
-}
-
-function runStatusColor(run: StoredRun, theme: WorkbenchTheme): string {
-    if (run.status === 'completed') return theme.success;
-    if (run.status === 'failed') return theme.error;
-    if (run.status === 'cancelled') return theme.textMuted;
-    return theme.warning;
 }

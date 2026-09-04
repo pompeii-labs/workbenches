@@ -30,8 +30,8 @@ Each registered runner adapter declares the native command it drives, the exact
 native versions and interfaces it has been verified against, and an exhaustive
 capability map. The initial capability catalog covers streamed assistant text,
 tool events, file changes, usage, permissions, questions, multiple turns,
-steering, image input, image generation, cancellation, failures, and unknown
-native events.
+steering, image input, image generation, native session resume, cancellation,
+failures, and unknown native events.
 
 Every capability has one of three outcomes:
 
@@ -249,6 +249,26 @@ requests to a private run-scoped control inbox. Persisted receipts and normalize
 input lifecycle events contain request IDs and dispositions, never prompt, image,
 or raw question-answer contents. Runner output can still reference an answer
 after receiving it.
+
+## Resumable interactive sessions
+
+Workbench gives an interactive conversation one stable session ID. The first
+interactive execution and every later resume are separate durable runs linked to
+that session. The session index records only the locked Workbench identity, runner,
+model, workspace bindings, native session identifier, and latest run. Native runner
+state remains authoritative and is stored under the session's private native-state
+directory.
+
+`wb resume <session-or-run-id>` reopens the exact Workbench package and workspace
+recorded by the session. The TUI exposes the same operation through `/sessions` and
+the recent-session area on the home screen. A resume is rejected if the package no
+longer matches the recorded Workbench name, version, runner, model, or workspace, or
+if the original runner never reached a resumable state.
+
+The TUI may keep a local transcript cache so a reopened screen has immediate visual
+history. That cache is not replayed into the model and is not the source of
+conversation context. Deleting it affects presentation only; OpenCode or Pi native
+session state remains the resume boundary.
 
 ## Interactive terminal client
 

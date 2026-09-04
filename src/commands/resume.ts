@@ -1,0 +1,23 @@
+import { defineCommand } from 'citty';
+
+import { SessionResolver } from '../sessions/index.js';
+import { workbenchHome } from '../storage.js';
+import { launchWorkbenchTui } from '../tui.js';
+
+export const resumeCommand = defineCommand({
+    meta: {
+        name: 'resume',
+        description: 'Resume a local interactive Workbench session.',
+    },
+    args: {
+        session: {
+            type: 'positional',
+            description: 'Workbench session or run ID',
+            required: true,
+        },
+    },
+    async run({ args }) {
+        const target = await new SessionResolver(workbenchHome()).resolve(args.session);
+        await launchWorkbenchTui({ initial: target });
+    },
+});

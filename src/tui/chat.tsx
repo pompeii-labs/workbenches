@@ -1,6 +1,7 @@
 import { useKeyboard } from '@opentui/solid';
 import {
     type Accessor,
+    createEffect,
     createMemo,
     createSignal,
     For,
@@ -18,6 +19,7 @@ import type {
     RunnerQuestionResponse,
 } from '../runners/session.js';
 import type { RunControlReceipt, RunHandle, WorkbenchEvent } from '../runs/index.js';
+import type { ResolvedSession, StoredSession } from '../sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import { ActivityIndicator } from './activity.js';
 import { SessionCommands } from './commands/session.js';
@@ -39,6 +41,7 @@ import {
 import { Composer, type ComposerRef } from './prompt/composer.js';
 import { PromptHistory } from './prompt/history.js';
 import { QuestionPrompt, questionFromEvent } from './question.js';
+import { SessionTranscript } from './session-transcript.js';
 import { useTheme } from './theme/index.js';
 import { Transcript } from './transcript.js';
 
@@ -49,7 +52,11 @@ export interface ChatScreenProps {
     start: (options: {
         resolved: ResolvedWorkbenchReference;
         reference: string;
+        session?: StoredSession;
     }) => Promise<RunHandle>;
+    session?: StoredSession;
+    resolveSession?: (id: string) => Promise<ResolvedSession>;
+    onResume: (session: ResolvedSession) => void;
     onBack: () => void;
     onExit: () => void;
     homeAvailable: boolean;
@@ -86,6 +93,7 @@ export function ChatScreen(props: ChatScreenProps) {
     const [question, setQuestion] = createSignal<RunnerQuestionRequest>();
     const [questionResponsePending, setQuestionResponsePending] = createSignal(false);
     const [cancellationPending, setCancellationPending] = createSignal(false);
+    const [storedTranscript, setStoredTranscript] = createSignal<SessionTranscript>();
     let session: RunHandle | undefined;
     const cancellation = new TurnCancellation();
     const history = new PromptHistory(props.home);
@@ -104,6 +112,12 @@ export function ChatScreen(props: ChatScreenProps) {
                 : reduceTranscript(current, event);
         })
     );
+
+    createEffect(() => {
+        const transcript = storedTranscript();
+        const items = state().items;
+        if (transcript) transcript.schedule(items);
+    });
 
     const decidePermission = async (decision: RunnerPermissionDecision) => {
         const pending = permission();
@@ -138,9 +152,38 @@ export function ChatScreen(props: ChatScreenProps) {
         await decidePermission('reject');
         await respondToQuestion({ outcome: 'rejected' });
         await session?.close().catch(() => {});
+        await storedTranscript()
+            ?.flush()
+            .catch(() => {});
         await props.resolved.cleanup();
         if (back) props.onBack();
         else props.onExit();
+    };
+    const resume = async (target: StoredSession) => {
+        if (leaving || state().busy) {
+            setError(
+                'Finish or cancel the active turn before resuming another session.'
+            );
+            return;
+        }
+        if (!props.resolveSession) {
+            setError('Session resume is unavailable.');
+            return;
+        }
+        let resolved: ResolvedSession;
+        try {
+            resolved = await props.resolveSession(target.id);
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+            return;
+        }
+        leaving = true;
+        await session?.close().catch(() => {});
+        await storedTranscript()
+            ?.flush()
+            .catch(() => {});
+        await props.resolved.cleanup();
+        props.onResume(resolved);
     };
     const cancelTurn = (): Promise<void> => {
         if (cancellation.pending) return Promise.resolve();
@@ -246,10 +289,22 @@ export function ChatScreen(props: ChatScreenProps) {
             );
         });
         try {
+            if (props.session) {
+                const transcript = new SessionTranscript(props.home, props.session.id);
+                setStoredTranscript(transcript);
+                const items = await transcript.load();
+                if (items.length > 0) {
+                    setState((current) => ({ ...current, items }));
+                }
+            }
             session = await props.start({
                 resolved: props.resolved,
                 reference: props.alias,
+                ...(props.session ? { session: props.session } : {}),
             });
+            if (!storedTranscript()) {
+                setStoredTranscript(new SessionTranscript(props.home, session.runId));
+            }
             void consumeEvents(session, (event) => {
                 if (event.type === 'run.ready') {
                     setSessionReady(true);
@@ -287,6 +342,9 @@ export function ChatScreen(props: ChatScreenProps) {
             void decidePermission('reject');
             void respondToQuestion({ outcome: 'rejected' });
             void session?.close().catch(() => {});
+            void storedTranscript()
+                ?.flush()
+                .catch(() => {});
             void props.resolved.cleanup();
         }
     });
@@ -357,7 +415,8 @@ export function ChatScreen(props: ChatScreenProps) {
         dialog,
         themes,
         actions: {
-            currentRunId: () => session?.runId,
+            currentSessionId: () => props.session?.id ?? session?.runId,
+            resumeSession: resume,
             clearTranscript: () => setState((current) => ({ ...current, items: [] })),
             cancelTurn,
             exit: () => close(false),

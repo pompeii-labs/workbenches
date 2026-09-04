@@ -455,15 +455,24 @@ Type `/` or press `Ctrl+K` to browse local terminal commands. The initial comman
 set covers Workbench, runtime, model, capability, and session details; transcript
 clearing; turn cancellation; themes; and clean exit.
 Commands are handled by Workbench and are never sent to the runner as prompts.
-`/theme` includes Flexoki, GitHub, Catppuccin, Dracula, Tokyo Night, and Rosé Pine
-themes adapted from OpenCode under the attribution in `NOTICE`.
+`/theme` includes the Workbench default, Flexoki, GitHub, and Catppuccin themes.
+The adapted themes are attributed in `NOTICE`.
 
 Interactive sessions run in a background worker and expose the same durable run
 handle used to follow one-shot execution. Normalized events survive a terminal
 client disconnect, and another handle can replay the stream and control the same
 live runner session. User prompts, permission decisions, and question answers are
-transient control messages, not durable run history. Docker Workbenches still
-require a one-shot task; interactive Docker sessions are not yet supported.
+transient control messages, not durable run history.
+
+Closed local sessions can be reopened with `wb resume <session-or-run-id>`, from
+`/sessions`, or from recent sessions on the home screen. Workbench keeps a small
+private session index and a disposable transcript presentation cache. The selected
+runner remains the source of truth for model context: OpenCode resumes from its
+session database and Pi resumes from its session file. Every resumed execution is a
+new durable Workbench run linked to the same stable session. A session remains locked
+to its original Workbench version, runner, model, workspace, and workspace bindings.
+Docker Workbenches still require a one-shot task; interactive Docker sessions are not
+yet supported.
 
 ## Source and authorization boundaries
 

@@ -1,6 +1,6 @@
 import { modelLabel } from '../../models/index.js';
 import { RunnerRegistry } from '../../runners/registry.js';
-import { RunStore, type StoredRun } from '../../runs/index.js';
+import { SessionStore, type StoredSession } from '../../sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../../workbench/index.js';
 import type { DialogContextValue } from '../dialog/index.js';
 import { InfoDialog } from '../dialog/info.js';
@@ -10,7 +10,8 @@ import { CommandPalette } from './palette.js';
 import { type TuiCommand, TuiCommandRegistry } from './registry.js';
 
 export interface SessionCommandActions {
-    currentRunId(): string | undefined;
+    currentSessionId(): string | undefined;
+    resumeSession(session: StoredSession): void | Promise<void>;
     clearTranscript(): void;
     cancelTurn(): void | Promise<void>;
     exit(): void | Promise<void>;
@@ -152,7 +153,7 @@ export class SessionCommands {
             this.#command(
                 'sessions',
                 'Recent sessions',
-                'Inspect recent local Workbench runs',
+                'Resume a local Workbench session',
                 'Session',
                 () => this.#showSessions()
             ),
@@ -207,10 +208,12 @@ export class SessionCommands {
     }
 
     async #showSessions(): Promise<void> {
-        const runs = (await new RunStore(this.options.home).list())
-            .filter((run) => run.mode === 'interactive')
-            .slice(0, 20);
-        if (runs.length === 0) {
+        const sessions = (
+            await new SessionStore(this.options.home).list({
+                resumableOnly: true,
+            })
+        ).slice(0, 20);
+        if (sessions.length === 0) {
             this.options.dialog.open(() => (
                 <InfoDialog
                     title="Sessions"
@@ -219,47 +222,26 @@ export class SessionCommands {
             ));
             return;
         }
-        const current = this.options.actions.currentRunId();
+        const current = this.options.actions.currentSessionId();
         this.options.dialog.open(() => (
             <SelectDialog
                 title="Sessions"
                 placeholder="Search sessions"
-                options={runs.map((run) => ({
-                    title: `${run.workbench}@${run.workbench_version}`,
-                    description: `${this.#status(run.status)} · ${run.runner} · ${this.#time(run)}`,
-                    value: run,
-                    current: run.id === current,
+                options={sessions.map((session) => ({
+                    title: `${session.workbench}@${session.workbench_version}`,
+                    description: `${session.runner} · ${this.#time(session.updated_at)} · ${session.id}`,
+                    value: session,
+                    current: session.id === current,
                 }))}
-                onSelect={(option) => this.#showSession(option.value)}
+                onSelect={(option) => {
+                    if (option.value.id === current) return;
+                    void this.options.actions.resumeSession(option.value);
+                }}
             />
         ));
     }
 
-    #showSession(run: StoredRun): void {
-        this.options.dialog.open(() => (
-            <InfoDialog
-                title={run.workbench}
-                description={`${this.#status(run.status)} interactive session`}
-                sections={[
-                    {
-                        label: 'Workbench',
-                        value: `${run.workbench}@${run.workbench_version}`,
-                    },
-                    { label: 'Runner', value: `${run.runner} · ${run.model}` },
-                    { label: 'Started', value: this.#time(run) },
-                    { label: 'Workspace', value: run.workspace },
-                    { label: 'Run ID', value: run.id },
-                ]}
-            />
-        ));
-    }
-
-    #status(status: StoredRun['status']): string {
-        return status.charAt(0).toUpperCase() + status.slice(1);
-    }
-
-    #time(run: StoredRun): string {
-        const timestamp = run.started_at ?? run.dispatched_at;
+    #time(timestamp: string): string {
         const date = new Date(timestamp);
         if (Number.isNaN(date.valueOf())) return timestamp;
         return new Intl.DateTimeFormat(undefined, {

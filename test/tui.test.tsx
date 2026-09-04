@@ -12,10 +12,9 @@ import type {
     RunControlKind,
     RunControlReceipt,
     RunHandle,
-    StoredRun,
     WorkbenchEvent,
 } from '../src/runs/index.js';
-import { RunStore } from '../src/runs/index.js';
+import { SessionStore, type StoredSession } from '../src/sessions/index.js';
 import { Transcript, WorkbenchApp } from '../src/tui/app.js';
 import { TurnCancellation } from '../src/tui/chat.js';
 import { holdRendererUntilShutdown } from '../src/tui/lifecycle.js';
@@ -26,6 +25,7 @@ import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 const renderers: Array<{ destroy(): void }> = [];
 const temporaryDirectories: string[] = [];
 const themes = new ThemeController('/tmp/workbench-tui-tests');
+let fakeHandleSequence = 0;
 
 afterEach(async () => {
     for (const renderer of renderers.splice(0)) renderer.destroy();
@@ -81,7 +81,7 @@ describe.serial('Workbench TUI', () => {
                     <WorkbenchApp
                         home="/tmp/workbench-tui-tests"
                         entries={[entry('lux-core'), entry('lux-migrations')]}
-                        recentRuns={[recentRun('lux-core')]}
+                        recentSessions={[recentSession('lux-core')]}
                         resolve={async (alias) => homeWorkbench(alias)}
                         start={async () => {
                             throw new Error('not started in this test');
@@ -98,15 +98,15 @@ describe.serial('Workbench TUI', () => {
         const initial = setup.captureCharFrame();
         expect(initial).toContain('◆ WORKBENCH');
         expect(initial).toContain('Your saved expert environments.');
-        expect(initial).toContain('RECENT ACTIVITY');
-        expect(initial).toContain('completed');
+        expect(initial).toContain('RECENT SESSIONS');
+        expect(initial).toContain('resume');
         expect(initial).toContain('lux-core');
         expect(initial).toContain('lux-migrations');
         expect(initial).toContain('Maintain Lux applications with trusted patterns.');
         expect(initial).toContain('opencode · openai/gpt-5.4-mini');
         expect(initial).toContain('1 skill · 1 tool · 1 MCP');
         expect(initial).toContain('SAVED WORKBENCHES');
-        expect(initial).toContain('↑↓ navigate · enter open · esc quit');
+        expect(initial).toContain('ctrl+r resume latest');
     });
 
     test('keeps the home launchpad useful in a narrow terminal', async () => {
@@ -116,7 +116,7 @@ describe.serial('Workbench TUI', () => {
                     <WorkbenchApp
                         home="/tmp/workbench-tui-tests"
                         entries={[entry('lux-core'), entry('lux-migrations')]}
-                        recentRuns={[recentRun('lux-core')]}
+                        recentSessions={[recentSession('lux-core')]}
                         resolve={async (alias) => homeWorkbench(alias)}
                         start={async () => {
                             throw new Error('not started in this test');
@@ -132,7 +132,7 @@ describe.serial('Workbench TUI', () => {
 
         const frame = setup.captureCharFrame();
         expect(frame).toContain('◆ WORKBENCH');
-        expect(frame).toContain('RECENT ACTIVITY');
+        expect(frame).toContain('RECENT SESSIONS');
         expect(frame).toContain('lux-migrations');
         expect(frame).toContain('Maintain Lux applications with trusted patterns.');
         expect(frame).toContain('local runtime');
@@ -392,17 +392,17 @@ describe.serial('Workbench TUI', () => {
         prompt.setText('/theme');
         prompt.submit();
         await setup.flush();
-        expect(controller.selected).toBe('flexoki');
+        expect(controller.selected).toBe('workbench');
 
         setup.mockInput.pressArrow('down');
         await setup.flush();
-        expect(controller.selected).toBe('github');
+        expect(controller.selected).toBe('flexoki');
 
         setup.mockInput.pressEscape();
         await Bun.sleep(100);
         await setup.flush();
         expect(setup.captureCharFrame()).not.toContain('Themes');
-        expect(controller.selected).toBe('flexoki');
+        expect(controller.selected).toBe('workbench');
 
         findPrompt(setup.renderer.root).setText('/theme');
         findPrompt(setup.renderer.root).submit();
@@ -411,31 +411,27 @@ describe.serial('Workbench TUI', () => {
         setup.mockInput.pressEnter();
         await Bun.sleep(5);
         await setup.flush();
-        expect(controller.selected).toBe('github');
+        expect(controller.selected).toBe('flexoki');
     });
 
-    test('shows readable interactive sessions and reveals details on selection', async () => {
+    test('lists and resumes a native interactive session', async () => {
         const home = await mkdtemp(join(tmpdir(), 'workbench-tui-sessions-'));
         temporaryDirectories.push(home);
-        const store = new RunStore(home);
-        const run = await store.create({
+        const store = new SessionStore(home);
+        const session = await store.create({
             id: 'wb_sessionbrowser1234567890',
-            metadata: {
-                workbench: 'workbench-creator',
-                workbench_version: '0.1.3',
-                runner: 'opencode',
-                model: 'openai/gpt-5.6-terra',
-                workspace: '/workspace/project',
-                mode: 'interactive',
-                started_at: '2026-09-02T18:00:00.000Z',
-            },
-            request: {
-                workbench_path: '/repo/.workbenches/creator',
-                workspace: '/workspace/project',
-                task: '',
-            },
+            workbench: 'workbench-creator',
+            workbench_version: '0.1.3',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            reference: 'creator',
+            workbench_path: '/repo/.workbenches/creator',
+            workspace: '/workspace/project',
+            workspaces: [],
+            native_session_id: 'ses_native_1',
+            latest_run_id: 'wb_sessionbrowser1234567890',
         });
-        await store.update(run.id, { status: 'completed' });
+        let resumed: StoredSession | undefined;
         const setup = await testRender(
             () => (
                 <ThemeProvider controller={themes}>
@@ -449,7 +445,18 @@ describe.serial('Workbench TUI', () => {
                         resolve={async () => {
                             throw new Error('not opened in this test');
                         }}
-                        start={async () => fakeHandle(() => {})}
+                        resolveSession={async () => ({
+                            alias: 'creator-resumed',
+                            session,
+                            resolved: resolvedWorkbench(
+                                'workbench-creator',
+                                'opencode'
+                            ),
+                        })}
+                        start={async ({ session: target }) => {
+                            if (target) resumed = target;
+                            return fakeHandle(() => {});
+                        }}
                     />
                 </ThemeProvider>
             ),
@@ -466,16 +473,15 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
         let frame = setup.captureCharFrame();
         expect(frame).toContain('workbench-creator@0.1.3');
-        expect(frame).toContain('Completed · opencode');
-        expect(frame).not.toContain(run.id);
+        expect(frame).toContain('opencode');
+        expect(frame).toContain(session.id);
 
         setup.mockInput.pressEnter();
-        await Bun.sleep(5);
+        await Bun.sleep(20);
         await setup.flush();
         frame = setup.captureCharFrame();
-        expect(frame).toContain('RUN ID');
-        expect(frame).toContain(run.id);
-        expect(frame).toContain('/workspace/project');
+        expect(resumed?.id).toBe(session.id);
+        expect(frame).toContain('creator-resumed · workbench-creator');
     });
 
     test('renders active runner state inside the transcript', async () => {
@@ -885,19 +891,22 @@ function homeWorkbench(alias: string): ResolvedWorkbenchReference {
     return resolved;
 }
 
-function recentRun(workbench: string): StoredRun {
+function recentSession(workbench: string): StoredSession {
     return {
         version: 1,
         id: 'wb_homeactivity1234567890',
-        status: 'completed',
         workbench,
         workbench_version: '0.1.0',
         runner: 'opencode',
         model: 'openai/gpt-5.4-mini',
+        reference: workbench,
+        workbench_path: `/tmp/${workbench}`,
         workspace: '/tmp/workspace',
-        mode: 'interactive',
-        dispatched_at: new Date(Date.now() - 60_000).toISOString(),
-        finished_at: new Date(Date.now() - 30_000).toISOString(),
+        workspaces: [],
+        native_session_id: 'ses_home_activity',
+        latest_run_id: 'wb_homeactivity1234567890',
+        created_at: new Date(Date.now() - 60_000).toISOString(),
+        updated_at: new Date(Date.now() - 30_000).toISOString(),
     };
 }
 
@@ -928,8 +937,9 @@ function fakeHandle(
     ...events: WorkbenchEvent[]
 ): RunHandle {
     const control = async () => receipt('send', 'queued');
+    fakeHandleSequence += 1;
     return {
-        runId: 'wb_tui_test',
+        runId: `wb_tuitest${String(fakeHandleSequence).padStart(20, '0')}`,
         events: (async function* () {
             yield event(0, 'run.ready', {});
             for (const next of events) yield next;
