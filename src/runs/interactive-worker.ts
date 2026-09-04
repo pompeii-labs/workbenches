@@ -4,6 +4,7 @@ import type {
     RunnerQuestionRequest,
     RunnerQuestionResponse,
 } from '../runners/session.js';
+import { SessionStore } from '../sessions/index.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { Workbench } from '../workbench/workbench.js';
 import { RunControl, type RunControlRequest } from './control.js';
@@ -25,6 +26,7 @@ export interface InteractiveRunWorkerDependencies extends InteractiveRunDependen
 
 export class InteractiveRunWorker {
     private readonly store: RunStore;
+    private readonly sessions: SessionStore;
     private readonly control: RunControl;
     private readonly receiveAbort = new AbortController();
     private readonly permissions = new Map<
@@ -49,6 +51,7 @@ export class InteractiveRunWorker {
         dependencies: InteractiveRunWorkerDependencies = {}
     ) {
         this.store = new RunStore(home);
+        this.sessions = new SessionStore(home);
         this.control = new RunControl(home, runId);
         this.dependencies = dependencies;
     }
@@ -76,6 +79,19 @@ export class InteractiveRunWorker {
                 reference: request.reference ?? metadata.workbench,
                 home: this.home,
                 workspaces: request.workspaces ?? [],
+                ...(request.session_id
+                    ? {
+                          session: {
+                              id: request.session_id,
+                              directory: this.sessions.nativeDirectory(
+                                  request.session_id
+                              ),
+                              ...(request.native_session_id
+                                  ? { nativeSessionId: request.native_session_id }
+                                  : {}),
+                          },
+                      }
+                    : {}),
                 onEvent: (event) => this.store.appendEvent(this.runId, event),
                 onPermission: (permission) => this.waitForPermission(permission),
                 onQuestion: (question) => this.waitForQuestion(question),
@@ -90,10 +106,21 @@ export class InteractiveRunWorker {
                     ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
                 },
             });
+            if (request.session_id && !this.session.runnerSessionId) {
+                throw new Error(
+                    `${metadata.runner} did not expose a resumable native session ID`
+                );
+            }
             if (this.session.runnerSessionId) {
                 await this.store.update(this.runId, {
                     runner_session_id: this.session.runnerSessionId,
                 });
+                if (request.session_id) {
+                    await this.sessions.update(request.session_id, {
+                        native_session_id: this.session.runnerSessionId,
+                        latest_run_id: this.runId,
+                    });
+                }
             }
             await this.controlLoop();
             return this.exitCode;

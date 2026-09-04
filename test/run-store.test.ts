@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkbenchEvent } from '../src/runs/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
+import { SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
 const temporaryDirectories: string[] = [];
@@ -144,6 +145,79 @@ describe('durable Workbench runs', () => {
         expect(request.reference).toBe('publisher/project#core');
         expect(JSON.stringify(request)).not.toContain('authenticated');
         expect(JSON.stringify(request)).not.toContain('provider');
+    });
+
+    test('links every interactive execution to one stable native session', async () => {
+        const home = await temporaryHome();
+        const dispatcher = new RunDispatcher(home);
+        const runs = new RunStore(home);
+        const sessions = new SessionStore(home);
+        const resolved = fixtureReference('opencode');
+        const first = await dispatcher.prepare({
+            resolved,
+            mode: 'interactive',
+            reference: 'creator',
+            workspaces: [
+                {
+                    name: 'application',
+                    path: '/workspace/application',
+                    access: 'read-write',
+                },
+            ],
+        });
+
+        expect(first.session_id).toBe(first.id);
+        const created = await sessions.read(first.id);
+        expect(created).toMatchObject({
+            id: first.id,
+            latest_run_id: first.id,
+            reference: 'creator',
+        });
+        expect(created.native_session_id).toBeUndefined();
+        const firstRequest = await runs.takeRequest(first.id);
+        expect(firstRequest.session_id).toBe(first.id);
+        expect(firstRequest.native_session_id).toBeUndefined();
+
+        const ready = await sessions.update(created.id, {
+            native_session_id: 'ses_native_1',
+        });
+        const second = await dispatcher.prepare({
+            resolved,
+            mode: 'interactive',
+            session: ready,
+        });
+        expect(second).toMatchObject({
+            session_id: first.id,
+            resumed_from: first.id,
+        });
+        expect(await runs.takeRequest(second.id)).toMatchObject({
+            session_id: first.id,
+            native_session_id: 'ses_native_1',
+            workspaces: ready.workspaces,
+        });
+        expect((await sessions.read(first.id)).latest_run_id).toBe(second.id);
+    });
+
+    test('rejects resuming a session with a different locked Workbench', async () => {
+        const home = await temporaryHome();
+        const dispatcher = new RunDispatcher(home);
+        const resolved = fixtureReference('opencode');
+        const first = await dispatcher.prepare({
+            resolved,
+            mode: 'interactive',
+        });
+        const session = await new SessionStore(home).update(first.id, {
+            native_session_id: 'ses_native_1',
+        });
+        const changed = fixtureReference('pi');
+
+        await expect(
+            dispatcher.prepare({
+                resolved: changed,
+                mode: 'interactive',
+                session,
+            })
+        ).rejects.toThrow('does not match the resolved Workbench package');
     });
 });
 

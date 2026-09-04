@@ -20,6 +20,7 @@ import {
     StoredRunHandle,
     type WorkbenchEvent,
 } from '../src/runs/index.js';
+import { SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { supportedRunnerDeclaration } from './runner-adapter-contract.js';
 
@@ -34,6 +35,63 @@ afterEach(async () => {
 });
 
 describe('interactive run worker', () => {
+    test('reopens native state from the stable Workbench session', async () => {
+        const home = await temporaryHome();
+        const sessionId = 'wb_workersession12345678901';
+        const sessions = new SessionStore(home);
+        await sessions.create({
+            id: sessionId,
+            workbench: 'fixture-core',
+            workbench_version: '0.1.0',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            reference: 'fixture-core',
+            workbench_path: '/repo/.workbenches/core',
+            workspace: '/workspace',
+            workspaces: [],
+            native_session_id: 'native-session-before',
+            latest_run_id: sessionId,
+        });
+        const stored = await new RunStore(home).create({
+            metadata: {
+                workbench: 'fixture-core',
+                workbench_version: '0.1.0',
+                runner: 'opencode',
+                model: 'openai/gpt-5.6-terra',
+                workspace: '/workspace',
+                mode: 'interactive',
+                session_id: sessionId,
+                resumed_from: sessionId,
+            },
+            request: {
+                workbench_path: '/repo/.workbenches/core',
+                workspace: '/workspace',
+                task: '',
+                session_id: sessionId,
+                native_session_id: 'native-session-before',
+            },
+        });
+        const adapter = new ControlledAdapter();
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+
+        await waitForReady(home, stored.id);
+        expect(adapter.session).toEqual({
+            id: sessionId,
+            directory: sessions.nativeDirectory(sessionId),
+            nativeSessionId: 'native-session-before',
+        });
+        expect(await sessions.read(sessionId)).toMatchObject({
+            native_session_id: 'native-session-1',
+            latest_run_id: stored.id,
+        });
+
+        await handle.close();
+        await expect(execution).resolves.toBe(0);
+    });
+
     test('preserves one session across steering, queued follow-ups, cancellation, and reconnect', async () => {
         const home = await temporaryHome();
         const stored = await fixtureRun(home);
@@ -461,6 +519,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
     readonly questionResponses: RunnerQuestionResponse[] = [];
     cancellations = 0;
     starts = 0;
+    session: RunnerSessionStartOptions['session'];
     private host?: RunnerSessionStartOptions['host'];
     private releaseFirst?: () => void;
     private readonly promptWaiters: Array<() => void> = [];
@@ -499,6 +558,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
         this.starts += 1;
         this.host = options.host;
+        this.session = options.session;
         return {
             id: 'native-session-1',
             prompt: (input) => this.prompt(input),

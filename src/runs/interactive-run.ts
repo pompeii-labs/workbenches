@@ -12,6 +12,7 @@ import {
     type RunnerQuestionRequest,
     type RunnerQuestionResponse,
     type RunnerSession,
+    type RunnerSessionContext,
 } from '../runners/session.js';
 import { type PreparedRuntime, RuntimeRegistry } from '../runtimes/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
@@ -58,6 +59,7 @@ export interface InteractiveRunOptions {
     ) => Promise<RunnerQuestionResponse> | RunnerQuestionResponse;
     dependencies?: InteractiveRunDependencies;
     workspaces?: WorkbenchWorkspaceBinding[];
+    session?: RunnerSessionContext;
 }
 
 export class InteractiveRun {
@@ -126,6 +128,7 @@ export class InteractiveRun {
                     requestQuestion: (request) =>
                         this.requestQuestion(emitter, request),
                 },
+                ...(this.options.session ? { session: this.options.session } : {}),
             });
             await emitter.emit('run.ready', {
                 runner: preflight.runner.name,

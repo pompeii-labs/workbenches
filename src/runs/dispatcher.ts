@@ -1,6 +1,7 @@
 import { basename } from 'node:path';
 
 import { modelLabel } from '../models/index.js';
+import { SessionStore, type StoredSession } from '../sessions/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import { type RunHandle, StoredRunHandle } from './handle.js';
@@ -13,6 +14,7 @@ export interface PrepareRunOptions {
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
     reference?: string;
+    session?: StoredSession;
 }
 
 export interface DispatchRunOptions {
@@ -23,14 +25,41 @@ export interface DispatchRunOptions {
 
 export class RunDispatcher {
     private readonly store: RunStore;
+    private readonly sessions: SessionStore;
 
     constructor(private readonly home: string) {
         this.store = new RunStore(home);
+        this.sessions = new SessionStore(home);
     }
 
-    prepare(options: PrepareRunOptions): Promise<StoredRun> {
+    async prepare(options: PrepareRunOptions): Promise<StoredRun> {
         const workbench = options.resolved.workbench;
-        return this.store.create({
+        const id = RunStore.createId();
+        const reference =
+            options.session?.reference ?? options.reference ?? workbench.manifest.name;
+        const workspaces = options.session?.workspaces ?? options.workspaces ?? [];
+        if (options.session) this.assertCompatible(options, options.session);
+        const session =
+            options.mode === 'interactive'
+                ? (options.session ??
+                  (await this.sessions.create({
+                      id,
+                      workbench: workbench.manifest.name,
+                      workbench_version: workbench.manifest.version,
+                      runner: workbench.manifest.runner,
+                      model: modelLabel(workbench.manifest.model),
+                      reference,
+                      workbench_path: workbench.packageDirectory,
+                      workspace: options.resolved.workspaceDirectory,
+                      workspaces,
+                      ...(options.resolved.registry
+                          ? { registry: options.resolved.registry }
+                          : {}),
+                      latest_run_id: id,
+                  })))
+                : undefined;
+        const stored = await this.store.create({
+            id,
             metadata: {
                 workbench: workbench.manifest.name,
                 workbench_version: workbench.manifest.version,
@@ -38,8 +67,16 @@ export class RunDispatcher {
                 model: modelLabel(workbench.manifest.model),
                 workspace: options.resolved.workspaceDirectory,
                 mode: options.mode,
-                workspaces: options.workspaces ?? [],
+                workspaces,
                 allow_host_docker: options.allowHostDocker ?? false,
+                ...(session
+                    ? {
+                          session_id: session.id,
+                          ...(options.session
+                              ? { resumed_from: session.latest_run_id }
+                              : {}),
+                      }
+                    : {}),
                 ...(options.resolved.registry
                     ? {
                           registry: options.resolved.registry,
@@ -51,11 +88,39 @@ export class RunDispatcher {
                 workbench_path: workbench.packageDirectory,
                 workspace: options.resolved.workspaceDirectory,
                 task: options.task ?? '',
-                workspaces: options.workspaces ?? [],
+                workspaces,
                 allow_host_docker: options.allowHostDocker ?? false,
-                reference: options.reference ?? workbench.manifest.name,
+                reference,
+                ...(session
+                    ? {
+                          session_id: session.id,
+                          ...(session.native_session_id
+                              ? { native_session_id: session.native_session_id }
+                              : {}),
+                      }
+                    : {}),
             },
         });
+        if (options.session && session) {
+            await this.sessions.update(session.id, { latest_run_id: stored.id });
+        }
+        return stored;
+    }
+
+    private assertCompatible(options: PrepareRunOptions, session: StoredSession): void {
+        const workbench = options.resolved.workbench;
+        const compatible =
+            session.workbench === workbench.manifest.name &&
+            session.workbench_version === workbench.manifest.version &&
+            session.runner === workbench.manifest.runner &&
+            session.model === modelLabel(workbench.manifest.model) &&
+            session.workbench_path === workbench.packageDirectory &&
+            session.workspace === options.resolved.workspaceDirectory;
+        if (!compatible) {
+            throw new Error(
+                `Session ${session.id} does not match the resolved Workbench package`
+            );
+        }
     }
 
     handle(id: string): RunHandle {

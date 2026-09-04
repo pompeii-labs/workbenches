@@ -191,6 +191,34 @@ describe('OpenCode interactive server adapter', () => {
         expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER_REASONING');
     });
 
+    test('reopens a persisted native session instead of creating another', async () => {
+        const server = new FakeOpenCodeServer();
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            session: {
+                id: 'wb_resumetest123456789012',
+                directory: '/private/workbench/session/native',
+                nativeSessionId: 'ses_native_1',
+            },
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+
+        expect(session.id).toBe('ses_native_1');
+        expect(server.createdSessions).toBe(0);
+        expect(server.resumedSessions).toBe(1);
+        expect(server.spawnEnvironment.OPENCODE_DB).toBe(
+            '/private/workbench/session/native/opencode.sqlite'
+        );
+        await session.close();
+    });
+
     test('delivers steering to the active turn through the current session API', async () => {
         const server = new FakeOpenCodeServer();
         const session = await server.adapter().start({
@@ -792,6 +820,7 @@ class FakeOpenCodeServer {
         body?: Record<string, unknown>;
     }> = [];
     createdSessions = 0;
+    resumedSessions = 0;
     aborts = 0;
     kills = 0;
     permissionReplyStatus = 200;
@@ -1094,6 +1123,10 @@ class FakeOpenCodeServer {
                     );
                 });
             }
+            return Response.json({ id: 'ses_native_1' });
+        }
+        if (url.pathname === '/session/ses_native_1' && init.method === 'GET') {
+            this.resumedSessions += 1;
             return Response.json({ id: 'ses_native_1' });
         }
         if (url.pathname === '/event') {

@@ -40,6 +40,7 @@ export const PI_SESSION_DECLARATION: RunnerAdapterDeclaration = {
             status: 'unsupported',
             detail: 'Workbench does not yet provide a normalized image-generation tool or image output event for Pi.',
         },
+        session_resume: { status: 'supported' },
         cancellation: { status: 'supported' },
         failures: { status: 'supported' },
         unknown_events: { status: 'supported' },
@@ -157,7 +158,8 @@ class PiRpcSession implements RunnerSession {
             this.options.environment,
             this.options.workspaceDirectory,
             this.options.configuration.model,
-            this.options.configDirectory
+            this.options.configDirectory,
+            this.options.session
         );
         const child = this.options.spawn(invocation.command, {
             cwd: invocation.cwd,

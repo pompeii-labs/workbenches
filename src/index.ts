@@ -84,6 +84,7 @@ export {
     RunnerRegistry,
     type RunnerSession,
     type RunnerSessionAdapter,
+    type RunnerSessionContext,
     type RunnerSessionHost,
     type RunnerSessionStartOptions,
     type RunnerSummary,
@@ -133,6 +134,13 @@ export {
     RuntimeRegistry,
     RuntimeSmoke,
 } from './runtimes/index.js';
+export {
+    type CreateStoredSessionOptions,
+    type ResolvedSession,
+    SessionResolver,
+    SessionStore,
+    type StoredSession,
+} from './sessions/index.js';
 export {
     type GitHubInspectionOptions,
     type GitHubRepository,

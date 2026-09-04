@@ -1,6 +1,6 @@
 import { lstat } from 'node:fs/promises';
+import { join } from 'node:path';
 import type {
-    RunnerAdapterDeclaration,
     RunnerInput,
     RunnerInputDelivery,
     RunnerPermissionDecision,
@@ -12,6 +12,7 @@ import type {
 } from '../session.js';
 import { normalizeRunnerInput } from '../session.js';
 import { stageOpenCodeSkills } from './assets.js';
+import { OPENCODE_SESSION_DECLARATION } from './capabilities.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
 import { OpenCodeQuestion } from './question.js';
@@ -21,34 +22,6 @@ import {
     type SpawnedOpenCodeServer,
     spawnOpenCodeServer,
 } from './server.js';
-
-export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
-    native: {
-        command: 'opencode',
-        verified: [
-            { version: '1.18.22', surfaces: ['server'] },
-            { version: '1.18.26', surfaces: ['server'] },
-        ],
-    },
-    capabilities: {
-        streaming_text: { status: 'supported' },
-        tool_events: { status: 'supported' },
-        file_events: { status: 'supported' },
-        usage: { status: 'supported' },
-        permissions: { status: 'supported' },
-        questions: { status: 'supported' },
-        multi_turn: { status: 'supported' },
-        steering: { status: 'supported' },
-        image_input: { status: 'supported' },
-        image_generation: {
-            status: 'unsupported',
-            detail: 'Workbench does not yet provide a normalized image-generation tool or image output event for OpenCode.',
-        },
-        cancellation: { status: 'supported' },
-        failures: { status: 'supported' },
-        unknown_events: { status: 'supported' },
-    },
-};
 
 export interface OpenCodeSessionDependencies {
     spawn?: (
@@ -180,11 +153,22 @@ class OpenCodeServerSession implements RunnerSession {
                     this.options.configDirectory,
                     this.options.workspaceDirectory,
                     this.options.configuration.model,
-                    this.options.nativeConfigFile
+                    this.options.nativeConfigFile,
+                    this.options.session
+                        ? join(this.options.session.directory, 'opencode.sqlite')
+                        : undefined
                 ),
             (error) => this.fail(error)
         );
 
+        const sessionId = this.options.session?.nativeSessionId
+            ? await this.resume(this.options.session.nativeSessionId)
+            : await this.create();
+        this.nativeSessionId = sessionId;
+        await this.subscribe();
+    }
+
+    private async create(): Promise<string> {
         const model = parseModel(this.options.configuration.model);
         const created = await this.server.requestJson('/session', {
             method: 'POST',
@@ -195,8 +179,18 @@ class OpenCodeServerSession implements RunnerSession {
         });
         const sessionId = string(record(created)?.id);
         if (!sessionId) throw new Error('OpenCode did not create a session');
-        this.nativeSessionId = sessionId;
-        await this.subscribe();
+        return sessionId;
+    }
+
+    private async resume(sessionId: string): Promise<string> {
+        const resumed = await this.server.requestJson(
+            `/session/${encodeURIComponent(sessionId)}`,
+            { method: 'GET' }
+        );
+        if (string(record(resumed)?.id) !== sessionId) {
+            throw new Error(`OpenCode session is unavailable: ${sessionId}`);
+        }
+        return sessionId;
     }
 
     async prompt(input: RunnerInput): Promise<RunnerTurnResult> {

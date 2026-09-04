@@ -42,6 +42,8 @@ export interface StoredRun {
     finished_at?: string;
     pid?: number;
     runner_session_id?: string;
+    session_id?: string;
+    resumed_from?: string;
     exit_code?: number;
 }
 
@@ -53,6 +55,8 @@ export interface StoredRunRequest {
     workspaces?: WorkbenchWorkspaceBinding[];
     allow_host_docker?: boolean;
     reference?: string;
+    session_id?: string;
+    native_session_id?: string;
 }
 
 const terminalStatuses = new Set<StoredRunStatus>(['completed', 'failed', 'cancelled']);
