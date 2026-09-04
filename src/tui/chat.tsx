@@ -99,7 +99,7 @@ export function ChatScreen(props: ChatScreenProps) {
     let leaving = false;
     const events = new TranscriptEventBuffer((event) =>
         setState((current) => {
-            return cancellation.pending
+            return current.interruptionPending
                 ? reduceTranscriptDuringCancellation(current, event)
                 : reduceTranscript(current, event);
         })
@@ -148,6 +148,7 @@ export function ChatScreen(props: ChatScreenProps) {
         if (!active) return Promise.resolve();
         setError('');
         setCancellationPending(true);
+        events.discardText();
         setState((current) => interruptTranscript(current));
         return cancellation
             .request(active)

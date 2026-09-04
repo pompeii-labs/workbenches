@@ -96,10 +96,16 @@ export class TranscriptEventBuffer {
         this.consume(event);
     }
 
-    dispose(): void {
-        if (this.timer !== undefined) this.cancel(this.timer);
-        this.timer = undefined;
+    discardText(): void {
+        if (this.timer !== undefined) {
+            this.cancel(this.timer);
+            this.timer = undefined;
+        }
         this.pendingText = undefined;
+    }
+
+    dispose(): void {
+        this.discardText();
     }
 }
 

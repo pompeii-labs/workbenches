@@ -456,6 +456,31 @@ describe('TUI transcript model', () => {
         callbacks.at(-1)?.();
         expect(consumed).toHaveLength(6);
     });
+
+    test('can discard buffered output when a turn is interrupted', () => {
+        const callbacks: Array<() => void> = [];
+        const consumed: WorkbenchEvent[] = [];
+        const buffer = new TranscriptEventBuffer(
+            (next) => consumed.push(next),
+            40,
+            (callback) => {
+                callbacks.push(callback);
+                return callbacks.length as unknown as ReturnType<typeof setTimeout>;
+            },
+            () => {}
+        );
+
+        buffer.push(
+            event(1, 'output.text', {
+                id: 'cancelled-output',
+                text: '/redis.ts',
+            })
+        );
+        buffer.discardText();
+        callbacks.shift()?.();
+
+        expect(consumed).toEqual([]);
+    });
 });
 
 function event(
