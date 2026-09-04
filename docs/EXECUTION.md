@@ -185,7 +185,12 @@ named workspaces to their resolved host paths and runs the adapter from the
 path-preserved primary workspace. This is the documented exception to ordinary
 Docker paths such as `/workspace` and `/workspaces/<name>`.
 
-## Session and turn boundaries
+## Session, run, and turn boundaries
+
+A Workbench session is the stable user-facing identity for work with one locked
+Workbench, runner, model, and workspace. A run is one execution attempt inside
+that session. The first run and session share an ID; resuming creates a new
+internal run while preserving the session ID.
 
 A run may contain multiple turns. `turn.completed` means the runner completed
 one response and may accept another input; it does not terminate the run.
@@ -252,12 +257,13 @@ after receiving it.
 
 ## Resumable interactive sessions
 
-Workbench gives an interactive conversation one stable session ID. The first
+Every execution has one stable Workbench session ID. Interactive sessions can
+become resumable when the native runner exposes durable context. The first
 interactive execution and every later resume are separate durable runs linked to
-that session. The session index records only the locked Workbench identity, runner,
-model, workspace bindings, native session identifier, and latest run. Native runner
-state remains authoritative and is stored under the session's private native-state
-directory.
+the same session. The session index records only the locked Workbench identity,
+runner, model, workspace bindings, native session identifier, and latest run.
+Native runner state remains authoritative and is stored under the session's
+private native-state directory.
 
 `wb resume <session-or-run-id>` reopens the exact Workbench package and workspace
 recorded by the session. The TUI exposes the same operation through `/sessions` and
@@ -397,23 +403,27 @@ Stdout is reserved for the selected output contract. Human and final-mode errors
 go to stderr. JSON mode represents failures as `run.failed` on stdout and also
 uses a non-zero process exit code.
 
-## Detached runs and attach
+## Background runs and session attachment
 
-`wb run <ref> --task <task> --detach` creates a durable run, launches a
-background worker, and prints only its `wb_...` ID. `wb attach <id>` replays its
-persisted event stream and follows new events. Without an ID, `wb attach` selects
-the most recently dispatched run in `WORKBENCH_HOME`.
+`wb run <ref> --task <task> --detach` creates a durable session and run, launches
+a background worker, and prints only the stable `wb_...` session ID. `wb attach
+<id>` resolves the session's latest run, replays its persisted event stream, and
+follows new events. Without an ID, `wb attach` selects the most recent session in
+`WORKBENCH_HOME`.
 
 Run metadata and `events.ndjson` live under
 `$WORKBENCH_HOME/runs/<id>/` (normally the Workbench data directory). The initial
 task is stored only until the worker consumes it, then removed. Direct foreground
 runs use the same stored handle and event stream, so their history can also be
 attached after completion.
-Attach is read-only. `wb ps` lists active detached runs; `wb ps --all` includes
-finished detached runs. `wb kill [id]` cooperatively cancels a detached run; without
-an ID it selects the latest active detached run. The worker observes a private
-cancellation request, terminates the runner child, emits `run.cancelled`, and
-then marks the durable record cancelled.
+
+Attach is read-only and never starts model work. `wb ps` lists active sessions
+and completed sessions with resumable native context; `wb ps --all` also includes
+terminal one-shot history. `wb kill [id]` cooperatively cancels the active run in
+a session; without an ID it selects the latest active session. The worker observes
+a private cancellation request, terminates the runner child, emits
+`run.cancelled`, and then marks the durable run cancelled. Session metadata and
+native resumable context remain available.
 
 ## Preflight boundary
 
