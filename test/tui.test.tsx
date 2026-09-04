@@ -625,6 +625,59 @@ describe.serial('Workbench TUI', () => {
         });
     });
 
+    test('inspects and clears staged image attachments with a local command', async () => {
+        const workspace = await mkdtemp(join(tmpdir(), 'workbench-tui-images-'));
+        temporaryDirectories.push(workspace);
+        const image = join(workspace, 'reference.png');
+        await writeFile(image, Uint8Array.from([1, 2, 3]));
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench(
+                                'creator',
+                                'opencode',
+                                workspace
+                            ),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => fakeHandle(() => {})}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        await setup.mockInput.pasteBracketedText(image);
+        await setup.flush();
+        let prompt = findPrompt(setup.renderer.root);
+        prompt.setText('/attachments');
+        prompt.submit();
+        await setup.flush();
+
+        let frame = setup.captureCharFrame();
+        expect(frame).toContain('Attachments');
+        expect(frame).toContain('reference.png');
+
+        setup.mockInput.pressEscape();
+        await setup.flush();
+        prompt = findPrompt(setup.renderer.root);
+        prompt.setText('/attachments clear');
+        prompt.submit();
+        await setup.flush();
+        frame = setup.captureCharFrame();
+        expect(frame).not.toContain('[image reference.png]');
+    });
+
     test('coalesces repeated cancellation requests while one is pending', async () => {
         let cancelCalls = 0;
         const cancellation = deferred<RunControlReceipt>();

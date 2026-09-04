@@ -418,6 +418,8 @@ export function ChatScreen(props: ChatScreenProps) {
             currentSessionId: () => props.session?.id ?? session?.runId,
             resumeSession: resume,
             clearTranscript: () => setState((current) => ({ ...current, items: [] })),
+            attachments,
+            clearAttachments: () => setAttachments([]),
             cancelTurn,
             exit: () => close(false),
             showError: setError,

@@ -13,6 +13,8 @@ export interface SessionCommandActions {
     currentSessionId(): string | undefined;
     resumeSession(session: StoredSession): void | Promise<void>;
     clearTranscript(): void;
+    attachments(): Array<{ name: string; path: string }>;
+    clearAttachments(): void;
     cancelTurn(): void | Promise<void>;
     exit(): void | Promise<void>;
     showError(message: string): void;
@@ -151,6 +153,15 @@ export class SessionCommands {
                     ))
             ),
             this.#command(
+                'attachments',
+                'Prompt attachments',
+                'Inspect or clear images staged for the next message',
+                'Session',
+                (argument) => this.#showAttachments(argument),
+                undefined,
+                '[clear]'
+            ),
+            this.#command(
                 'sessions',
                 'Recent sessions',
                 'Resume a local Workbench session',
@@ -195,7 +206,8 @@ export class SessionCommands {
         description: string,
         category: TuiCommand['category'],
         run: TuiCommand['run'],
-        aliases?: string[]
+        aliases?: string[],
+        usage?: string
     ): TuiCommand {
         return {
             name,
@@ -204,7 +216,34 @@ export class SessionCommands {
             category,
             run,
             ...(aliases ? { aliases } : {}),
+            ...(usage ? { usage } : {}),
         };
+    }
+
+    #showAttachments(argument: string): void {
+        const action = argument.trim().toLowerCase();
+        if (action && action !== 'clear') {
+            this.options.actions.showError('Usage: /attachments or /attachments clear');
+            return;
+        }
+        if (action === 'clear') {
+            this.options.actions.clearAttachments();
+            return;
+        }
+        const attachments = this.options.actions.attachments();
+        this.options.dialog.open(() => (
+            <InfoDialog
+                title="Attachments"
+                description={
+                    attachments.length === 0
+                        ? 'No images are staged. Drag an image file into the composer to attach it to the next message.'
+                        : `${attachments.length} image${attachments.length === 1 ? '' : 's'} staged for the next message.`
+                }
+                lines={attachments.map(
+                    (attachment) => `${attachment.name} · ${attachment.path}`
+                )}
+            />
+        ));
     }
 
     async #showSessions(): Promise<void> {

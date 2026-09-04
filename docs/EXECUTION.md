@@ -285,8 +285,9 @@ prompt text.
 
 Slash commands inspect or control the Workbench client. They are never passed to
 the runner as model input. Commands expose Workbench, runtime, locked model,
-native runner capability, and recent session details; select a persisted theme;
-clear the local transcript; cancel the active turn; or close the session. A
+native runner capability, recent session details, and images staged for the next
+message; select a persisted theme; clear staged attachments or the local
+transcript; cancel the active turn; or close the session. A
 command backed by an unsupported native capability is hidden or explains why it
 is unavailable. Workbench does not inject replacement tools into a runner to
 make unsupported capabilities appear present.
