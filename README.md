@@ -281,7 +281,8 @@ by Docker mounts. Local access declarations are preflight checks, not an
 operating-system sandbox.
 
 Use `--dry-run` to inspect the translated runner invocation without executing
-it:
+it. An interactive terminal shows a concise summary; `--json` or piped output
+returns the complete translation:
 
 ```sh
 wb run project-core --task "Review this migration" --dry-run
@@ -452,8 +453,9 @@ Attachment bytes remain transient and are not copied into normalized events.
 Image generation and normalized image output are not implemented yet.
 
 Type `/` or press `Ctrl+K` to browse local terminal commands. The initial command
-set covers Workbench, runtime, model, capability, and session details; transcript
-clearing; turn cancellation; themes; and clean exit.
+set covers Workbench, runtime, model, capability, session, and staged attachment
+details; attachment and transcript clearing; turn cancellation; themes; and clean
+exit.
 Commands are handled by Workbench and are never sent to the runner as prompts.
 `/theme` includes the Workbench default, Flexoki, GitHub, and Catppuccin themes.
 The adapted themes are attributed in `NOTICE`.

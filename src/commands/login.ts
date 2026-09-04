@@ -36,6 +36,7 @@ export const loginCommand = defineCommand({
         const output = new CliPresenter();
         const client = new RegistryClient();
         const accounts = new RegistryAccountStore({ client });
+        output.progress('Starting browser sign-in');
         const login = await client.request<LoginRequest>('/v1/logins', {
             method: 'POST',
             body: { label: `${hostname()} (${platform()})` },
@@ -43,6 +44,7 @@ export const loginCommand = defineCommand({
         output.message(`Open ${login.verification_url}`, 'info');
         output.message(`Confirm code: ${login.code}`, 'warning');
         if (args.browser) openBrowser(login.verification_url);
+        output.progress('Waiting for approval');
 
         while (new Date(login.expires_at) > new Date()) {
             await wait(login.interval * 1000);

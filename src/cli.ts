@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { defineCommand, runMain } from 'citty';
+import { defineCommand, renderUsage, runMain } from 'citty';
 import packageMetadata from '../package.json' with { type: 'json' };
 
 import { addCommand } from './commands/add.js';
@@ -48,7 +48,6 @@ export const workbenchCommand = defineCommand({
         list: listCommand,
         view: viewCommand,
         validate: validateCommand,
-        v: validateCommand,
         smoke: smokeCommand,
         telemetry: telemetryCommand,
         update: updateCommand,
@@ -83,6 +82,12 @@ if (import.meta.main) {
             process.stderr.write(`error: ${value.message}\n`);
             return;
         }
+        if (typeof value === 'string' && optional.length === 0) {
+            process.stderr.write(
+                `${value.startsWith('error: ') ? value : `error: ${value}`}\n`
+            );
+            return;
+        }
         defaultConsoleError(value, ...optional);
     };
     try {
@@ -91,7 +96,16 @@ if (import.meta.main) {
         if (usesModelCatalog(invocation.args, bareInvocation)) {
             await new ModelCatalog({ home: workbenchHome() }).refresh();
         }
-        await runMain(workbenchCommand, { rawArgs: invocation.args });
+        const explicitHelp = invocation.args.some(
+            (argument) => argument === '--help' || argument === '-h'
+        );
+        await runMain(workbenchCommand, {
+            rawArgs: invocation.args,
+            showUsage: async (command, parent) => {
+                if (!explicitHelp) return;
+                process.stdout.write(`${await renderUsage(command, parent)}\n\n`);
+            },
+        });
     } finally {
         console.error = defaultConsoleError;
     }

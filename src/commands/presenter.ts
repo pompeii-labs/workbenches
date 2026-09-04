@@ -35,6 +35,10 @@ export class CliPresenter {
         this.#stderr = options.stderr ?? ((value) => process.stderr.write(value));
     }
 
+    get interactive(): boolean {
+        return this.#interactive;
+    }
+
     record(record: CliRecord): void {
         const write = record.stream === 'stderr' ? this.#stderr : this.#stdout;
         if (!this.#interactive) {
@@ -66,6 +70,16 @@ export class CliPresenter {
             return;
         }
         write(`${this.#marker(tone)} ${this.#color(tone, message)}\n`);
+    }
+
+    progress(message: string): void {
+        if (!this.#interactive) return;
+        this.#stderr(`${this.#colors.cyan('…')} ${message}\n`);
+    }
+
+    empty(message: string): void {
+        if (!this.#interactive) return;
+        this.message(message);
     }
 
     detail(label: string, value: string): void {

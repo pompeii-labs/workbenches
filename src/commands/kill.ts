@@ -17,11 +17,13 @@ export const killCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         const home = workbenchHome();
         const store = new RunStore(home);
         const run = args.run
             ? await store.read(args.run)
             : await store.latestActiveDetached();
+        output.progress(`Cancelling ${run.id}`);
         await new RunDispatcher(home).handle(run.id).cancel('requested');
         for await (const _event of store.follow(run.id)) {
             // The worker owns the event stream; kill only waits for its acknowledgement.
@@ -33,7 +35,7 @@ export const killCommand = defineCommand({
                 `Workbench run finished as ${finished.status} before cancellation: ${run.id}`
             );
         }
-        new CliPresenter().record({
+        output.record({
             machine: ['cancelled', run.id],
             title: 'Cancelled run',
             details: [run.id],

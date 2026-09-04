@@ -147,6 +147,8 @@ export const smokeCommand = defineCommand({
 });
 
 async function printResult(name: string, pending: Promise<WorkbenchSmokeResult>) {
+    const output = new CliPresenter();
+    output.progress(`Checking ${name}`);
     const result = await pending;
     const disabled = result.disabledMcps.length
         ? `; optional MCPs disabled: ${result.disabledMcps.join(', ')}`
@@ -161,7 +163,7 @@ async function printResult(name: string, pending: Promise<WorkbenchSmokeResult>)
         ? `; auth: ready (${result.authentication.configuration?.provider ?? 'environment'})`
         : `; auth: required (${result.authentication.connectCommand})`;
     const status = result.authentication.ready ? 'ready' : 'needs-auth';
-    new CliPresenter().record({
+    output.record({
         machine: [
             status,
             name,

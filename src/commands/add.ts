@@ -45,6 +45,7 @@ export const addCommand = defineCommand({
             });
             return;
         }
+        output.progress(`Resolving ${args.source}`);
         const registryClient = new RegistryClient();
         const registryReference = reference.selector
             ? undefined
@@ -79,7 +80,8 @@ export const addCommand = defineCommand({
                     registry: catalogRegistry,
                     kind: 'save',
                 });
-                await telemetry.showNotice();
+                const notice = await telemetry.claimNotice();
+                if (notice) output.message(notice, 'warning', 'stderr');
                 return;
             }
         }

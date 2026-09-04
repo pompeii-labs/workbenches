@@ -1,5 +1,4 @@
 import { defineCommand } from 'citty';
-import pc from 'picocolors';
 import {
     RegistryAccountStore,
     type RegistryImageProgress,
@@ -21,6 +20,7 @@ export const loginCommand = defineCommand({
     },
     async run({ args }) {
         const output = new CliPresenter();
+        output.progress(`Connecting ${args.client} to the image registry`);
         const account = await new RegistryAccountStore().require();
         const host = await new RegistryImagePublisher({ account }).login(args.client);
         output.record({
@@ -70,7 +70,7 @@ export const pushCommand = defineCommand({
         const target = await new RegistryImagePublisher({
             account,
             profile,
-            progress: new ImageProgressRenderer().render,
+            progress: new ImageProgressRenderer(output).render,
         }).push({
             image: args.image,
             ...(args.publisher ? { publisher: args.publisher } : {}),
@@ -101,24 +101,28 @@ class ImageProgressRenderer {
     private activeBlob = 0;
     private reported = -1;
 
+    constructor(private readonly output: CliPresenter) {}
+
     readonly render = (event: RegistryImageProgress): void => {
         if (event.type === 'exporting') {
-            process.stderr.write(`${pc.cyan('→')} Exporting local image\n`);
+            this.output.message('Exporting local image', 'info', 'stderr');
             return;
         }
         if (event.type === 'inspecting') {
-            process.stderr.write(`${pc.cyan('→')} Inspecting OCI image\n`);
+            this.output.message('Inspecting OCI image', 'info', 'stderr');
             return;
         }
         if (event.type === 'planned') {
             const reused = event.blobs - event.missing;
-            process.stderr.write(
-                `${pc.cyan('→')} ${event.missing} blob${event.missing === 1 ? '' : 's'} to upload${reused ? pc.dim(` · ${reused} already stored`) : ''}\n`
+            this.output.message(
+                `${event.missing} blob${event.missing === 1 ? '' : 's'} to upload${reused ? ` · ${reused} already stored` : ''}`,
+                'info',
+                'stderr'
             );
             return;
         }
         if (event.type === 'manifest') {
-            process.stderr.write(`${pc.cyan('→')} Publishing image manifest\n`);
+            this.output.message('Publishing image manifest', 'info', 'stderr');
             return;
         }
         const percent =
@@ -135,8 +139,10 @@ class ImageProgressRenderer {
         this.activeBlob = event.blob;
         this.reported = percent;
         const kind = event.mediaType.includes('config') ? 'config' : 'layer';
-        process.stderr.write(
-            `  ${pc.cyan('•')} ${kind} ${event.blob}/${event.blobs} · ${Math.min(percent, 100)}% · ${formatBytes(event.uploaded)} / ${formatBytes(event.size)}\n`
+        this.output.message(
+            `${kind} ${event.blob}/${event.blobs} · ${Math.min(percent, 100)}% · ${formatBytes(event.uploaded)} / ${formatBytes(event.size)}`,
+            'muted',
+            'stderr'
         );
     };
 }

@@ -1,4 +1,3 @@
-import { log } from '@clack/prompts';
 import { defineCommand } from 'citty';
 import { ConnectionManager } from '../connections/manager.js';
 import { RunnerRegistry } from '../runners/registry.js';
@@ -7,6 +6,7 @@ import { runnerSetupError } from '../runners/setup.js';
 import { type PreparedRuntime, RuntimeRegistry } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import { WorkbenchEnvironment, WorkbenchResolver } from '../workbench/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const connectCommand = defineCommand({
     meta: {
@@ -36,6 +36,7 @@ export const connectCommand = defineCommand({
         },
     },
     async run({ args, rawArgs }) {
+        const output = new CliPresenter();
         const workbenchEnvironment = new WorkbenchEnvironment();
         const overrides = await workbenchEnvironment.load({
             ...(args['env-file'] ? { envFile: args['env-file'] } : {}),
@@ -51,6 +52,7 @@ export const connectCommand = defineCommand({
         let runtime: PreparedRuntime | undefined;
         let operationError: unknown;
         try {
+            output.progress('Checking available runner connections');
             runner = await RunnerRegistry.standard().prepare(
                 resolved.workbench,
                 environment
@@ -86,20 +88,30 @@ export const connectCommand = defineCommand({
                 runner,
                 reference: args.workbench,
                 home,
+                announce: (message) => output.message(message, 'info', 'stderr'),
             }).configure();
             const configuration = status.configuration;
             if (!configuration) {
                 throw new Error('The runner connection could not be resolved');
             }
-            log.success(
-                `${resolved.workbench.manifest.name} will use ${ConnectionManager.connectionLabel(
-                    {
-                        provider: configuration.provider,
-                        nativeProvider: configuration.nativeProvider,
-                        nativeModel: configuration.model,
-                    }
-                )} through ${ConnectionManager.runnerLabel(resolved.workbench.manifest.runner)}`
+            const connection = ConnectionManager.connectionLabel({
+                provider: configuration.provider,
+                nativeProvider: configuration.nativeProvider,
+                nativeModel: configuration.model,
+            });
+            const runnerName = ConnectionManager.runnerLabel(
+                resolved.workbench.manifest.runner
             );
+            output.record({
+                machine: [
+                    'connected',
+                    resolved.workbench.manifest.name,
+                    configuration.provider,
+                    resolved.workbench.manifest.runner,
+                ],
+                title: `Connected ${resolved.workbench.manifest.name}`,
+                details: [connection, runnerName],
+            });
         } catch (error) {
             operationError = error;
         }

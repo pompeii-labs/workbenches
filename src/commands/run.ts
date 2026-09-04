@@ -15,6 +15,7 @@ import {
     WorkbenchResolver,
     WorkbenchWorkspaces,
 } from '../workbench/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const runCommand = defineCommand({
     meta: {
@@ -156,6 +157,9 @@ export const runCommand = defineCommand({
                 ...workbenchEnvironment.bind(resolved.workbench, overrides),
             };
             if (args['dry-run']) {
+                const output = new CliPresenter();
+                let translation = '';
+                let failure: string | undefined;
                 const code = await WorkbenchRun.execute(
                     {
                         workbenchPath: resolved.workbench.packageDirectory,
@@ -166,10 +170,29 @@ export const runCommand = defineCommand({
                         allowHostDocker: args['allow-host-docker'],
                         reference: args.workbench,
                         home,
+                        onEvent: (event) => {
+                            if (event.type !== 'run.failed') return;
+                            failure = string(object(event.data)?.message);
+                        },
                     },
-                    { env: environment }
+                    {
+                        env: environment,
+                        write: (value) => {
+                            translation += value;
+                        },
+                    }
                 );
-                if (code !== 0) process.exitCode = code;
+                if (code !== 0) {
+                    throw new Error(failure ?? 'Workbench dry run failed');
+                }
+                if (!translation.trim()) {
+                    throw new Error('Workbench dry run returned no translation');
+                }
+                if (args.json || !output.interactive) {
+                    process.stdout.write(translation);
+                } else {
+                    renderDryRun(output, translation, resolved);
+                }
                 return;
             }
 
@@ -279,4 +302,47 @@ function validateHostDockerAuthorization(declared: boolean, authorized: boolean)
             '--allow-host-docker requires a Workbench that declares docker.engine'
         );
     }
+}
+
+function renderDryRun(
+    output: CliPresenter,
+    source: string,
+    resolved: Awaited<ReturnType<WorkbenchResolver['resolve']>>
+): void {
+    const value = JSON.parse(source) as Record<string, unknown>;
+    const command = Array.isArray(value.command)
+        ? value.command.filter((part): part is string => typeof part === 'string')
+        : [];
+    const route = object(value.model_route);
+    output.record({
+        machine: [],
+        title: `Dry run ready for ${resolved.workbench.manifest.name}`,
+        details: [
+            resolved.workbench.manifest.runner,
+            resolved.workbench.manifest.runtime,
+        ],
+        tone: 'info',
+    });
+    output.detail('Model', string(route?.canonical) ?? 'unknown');
+    output.detail('Provider', string(route?.provider) ?? 'unknown');
+    output.detail('Workspace', string(value.cwd) ?? resolved.workspaceDirectory);
+    output.detail('Command', command.join(' ') || 'unavailable');
+    output.detail(
+        'Skills',
+        Array.isArray(value.skills) ? String(value.skills.length) : 'unknown'
+    );
+    output.detail(
+        'Workspaces',
+        Array.isArray(value.workspaces) ? String(value.workspaces.length) : 'unknown'
+    );
+}
+
+function object(value: unknown): Record<string, unknown> | undefined {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : undefined;
+}
+
+function string(value: unknown): string | undefined {
+    return typeof value === 'string' ? value : undefined;
 }

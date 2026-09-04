@@ -39,6 +39,16 @@ describe('CLI integration', () => {
         expect(result.stdout).toContain('upgrade');
     });
 
+    test('reports argument errors without dumping command help', async () => {
+        for (const arguments_ of [['unknown-command'], ['run']]) {
+            const result = await executeCli(arguments_);
+            expect(result.code).toBe(1);
+            expect(result.stderr).toStartWith('error: ');
+            expect(result.stderr).not.toContain('USAGE');
+            expect(result.stdout).not.toContain('USAGE');
+        }
+    });
+
     test('preflights declared tools before spawning the runner', async () => {
         const fixture = await createFixture({ tools: ['missing-workbench-tool'] });
         const record = join(fixture.root, 'runner-was-called');
@@ -552,6 +562,21 @@ describe('CLI integration', () => {
             skills: [],
         });
         await expect(stat(record)).rejects.toThrow();
+    });
+
+    test('reports dry-run preflight failures instead of returning empty output', async () => {
+        const fixture = await createFixture({ tools: ['missing-workbench-tool'] });
+        const bin = await fakeBin();
+        const result = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--dry-run'],
+            { PATH: `${bin}:${process.env.PATH}` }
+        );
+
+        expect(result.code).toBe(1);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain(
+            'error: Required CLI tool is unavailable: missing-workbench-tool'
+        );
     });
 
     test('builds and reuses a Workbench-local Docker image', async () => {

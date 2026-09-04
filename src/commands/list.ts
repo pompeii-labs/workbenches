@@ -25,9 +25,12 @@ export const listCommand = defineCommand({
     async run({ args }) {
         const output = new CliPresenter();
         if (!args.source || args.saved) {
-            for (const entry of await new SavedWorkbenchCatalog(
-                workbenchHome()
-            ).list()) {
+            const entries = await new SavedWorkbenchCatalog(workbenchHome()).list();
+            if (entries.length === 0) {
+                output.empty('No saved Workbenches. Add one with wb add <source>.');
+                return;
+            }
+            for (const entry of entries) {
                 output.record({
                     machine: [
                         entry.alias,

@@ -9,6 +9,7 @@ import { CliPresenter } from './presenter.js';
 export const validateCommand = defineCommand({
     meta: {
         name: 'validate',
+        alias: 'v',
         description: 'Validate Workbench manifests and packages.',
     },
     args: {

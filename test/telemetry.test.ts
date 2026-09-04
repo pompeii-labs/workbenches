@@ -99,6 +99,16 @@ describe('anonymous registry counters', () => {
             }).enabled()
         ).toBeFalse();
     });
+
+    test('claims the anonymous counter notice only once', async () => {
+        const home = await temporaryHome();
+        const telemetry = new RegistryTelemetry({ home, environment: {} });
+
+        expect(await telemetry.claimNotice()).toContain(
+            'Workbench reports anonymous save and run counts'
+        );
+        expect(await telemetry.claimNotice()).toBeUndefined();
+    });
 });
 
 async function temporaryHome(): Promise<string> {

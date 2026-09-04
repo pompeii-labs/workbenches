@@ -74,6 +74,7 @@ export const publishCommand = defineCommand({
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
             throw new Error(`Invalid registry Workbench slug: ${slug}`);
         }
+        output.progress(`Preparing ${publisher.slug}/${slug}`);
         const files = await new WorkbenchPackage(workbench).files();
         const total = files.reduce((bytes, file) => bytes + file.bytes.byteLength, 0);
         if (files.length > 256) {
@@ -88,6 +89,7 @@ export const publishCommand = defineCommand({
         }
 
         const digest = WorkbenchPackage.digest(files);
+        output.progress(`Publishing ${publisher.slug}/${slug}`);
         const response = await accounts.client.request<PublicationResponse>(
             '/v1/publications',
             {

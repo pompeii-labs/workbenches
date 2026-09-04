@@ -17,6 +17,7 @@ export const updateCommand = defineCommand({
         const output = new CliPresenter();
         const current = packageMetadata.version;
         const updater = new CliUpdater();
+        output.progress('Checking for a Workbench CLI update');
         const release = await updater.available(current);
         if (!release) {
             output.record({
@@ -34,6 +35,7 @@ export const updateCommand = defineCommand({
             });
             return;
         }
+        output.progress(`Installing Workbench ${release.version}`);
         const path = await updater.install(release);
         output.record({
             machine: ['updated', current, release.version, path],

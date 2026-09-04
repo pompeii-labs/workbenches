@@ -30,6 +30,7 @@ export const upgradeCommand = defineCommand({
         const upgrade = new SavedWorkbenchUpgrade(home);
         for (const alias of aliases) {
             try {
+                output.progress(`Checking ${alias} for updates`);
                 const result = await upgrade.upgrade(alias);
                 if (!result.changed) {
                     output.record({

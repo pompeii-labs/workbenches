@@ -52,4 +52,45 @@ describe('CLI presenter', () => {
         expect(stdout).toBe('');
         expect(stderr).toBe('Preparing runtime image\n');
     });
+
+    test('keeps interactive-only progress and empty states out of piped output', () => {
+        let stdout = '';
+        let stderr = '';
+        const output = new CliPresenter({
+            interactive: false,
+            stdout: (value) => {
+                stdout += value;
+            },
+            stderr: (value) => {
+                stderr += value;
+            },
+        });
+
+        output.progress('Checking for updates');
+        output.empty('No saved Workbenches.');
+
+        expect(stdout).toBe('');
+        expect(stderr).toBe('');
+    });
+
+    test('renders progress and empty states for an interactive terminal', () => {
+        let stdout = '';
+        let stderr = '';
+        const output = new CliPresenter({
+            interactive: true,
+            color: false,
+            stdout: (value) => {
+                stdout += value;
+            },
+            stderr: (value) => {
+                stderr += value;
+            },
+        });
+
+        output.progress('Checking for updates');
+        output.empty('No saved Workbenches.');
+
+        expect(stdout).toBe('○ No saved Workbenches.\n');
+        expect(stderr).toBe('… Checking for updates\n');
+    });
 });
