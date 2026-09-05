@@ -1,11 +1,10 @@
-import type {
-    RunnerPermissionDecision,
-    RunnerPermissionRequest,
-    RunnerQuestionRequest,
-    RunnerQuestionResponse,
-} from '../runners/session.js';
+import type { CatalogRegistryReference } from '../catalog/index.js';
+import type { NormalizedRunnerInput } from '../runners/session.js';
+import { normalizeRunnerInput } from '../runners/session.js';
+import { SessionStore } from '../sessions/index.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { Workbench } from '../workbench/workbench.js';
+import { RunAudience } from './audience.js';
 import { RunControl, type RunControlRequest } from './control.js';
 import { RunEvents } from './events.js';
 import {
@@ -13,31 +12,33 @@ import {
     type InteractiveRunDependencies,
     type InteractiveRunSession,
 } from './interactive-run.js';
+import { NativeRequests } from './native-requests.js';
 import { RunStore } from './store.js';
 
 export interface ExecuteInteractiveRunOptions {
     environment?: Record<string, string | undefined>;
+    signal?: AbortSignal;
 }
 
 export interface InteractiveRunWorkerDependencies extends InteractiveRunDependencies {
     loadWorkbench?: (path: string) => Promise<ResolvedWorkbench>;
+    reportLaunch?: (
+        registry: CatalogRegistryReference,
+        idempotencyKey: string
+    ) => Promise<void>;
 }
 
 export class InteractiveRunWorker {
     private readonly store: RunStore;
+    private readonly sessions: SessionStore;
     private readonly control: RunControl;
     private readonly receiveAbort = new AbortController();
-    private readonly permissions = new Map<
-        string,
-        (decision: RunnerPermissionDecision) => void
-    >();
-    private readonly questions = new Map<
-        string,
-        (response: RunnerQuestionResponse) => void
-    >();
+    private readonly audience = new RunAudience();
+    private readonly nativeRequests = new NativeRequests();
     private readonly queued: RunControlRequest[] = [];
     private session: InteractiveRunSession | undefined;
     private activeTurn: Promise<void> | undefined;
+    private termination: Promise<void> | undefined;
     private drainPaused = false;
     private terminal = false;
     private exitCode = 0;
@@ -49,14 +50,28 @@ export class InteractiveRunWorker {
         dependencies: InteractiveRunWorkerDependencies = {}
     ) {
         this.store = new RunStore(home);
+        this.sessions = new SessionStore(home);
         this.control = new RunControl(home, runId);
         this.dependencies = dependencies;
     }
 
     async execute(options: ExecuteInteractiveRunOptions): Promise<number> {
         const metadata = await this.store.read(this.runId);
+        let launchReport = Promise.resolve();
+        let abortRequested = options.signal?.aborted ?? false;
+        const abort = () => {
+            abortRequested = true;
+            if (this.session) {
+                void this.finish(true, 'interrupted').catch(() => {});
+            }
+        };
+        options.signal?.addEventListener('abort', abort, { once: true });
         try {
             const request = await this.store.takeRequest(this.runId);
+            this.audience.initialize(
+                metadata.mode === 'interactive',
+                request.task.trim().length > 0
+            );
             await this.store.update(this.runId, {
                 status: 'running',
                 started_at: new Date().toISOString(),
@@ -76,9 +91,24 @@ export class InteractiveRunWorker {
                 reference: request.reference ?? metadata.workbench,
                 home: this.home,
                 workspaces: request.workspaces ?? [],
+                interactive: metadata.mode === 'interactive',
+                ...(request.session_id
+                    ? {
+                          session: {
+                              id: request.session_id,
+                              directory: this.sessions.nativeDirectory(
+                                  request.session_id
+                              ),
+                              ...(request.native_session_id
+                                  ? { nativeSessionId: request.native_session_id }
+                                  : {}),
+                          },
+                      }
+                    : {}),
                 onEvent: (event) => this.store.appendEvent(this.runId, event),
-                onPermission: (permission) => this.waitForPermission(permission),
-                onQuestion: (question) => this.waitForQuestion(question),
+                onPermission: (permission) =>
+                    this.nativeRequests.waitForPermission(permission),
+                onQuestion: (question) => this.nativeRequests.waitForQuestion(question),
                 dependencies: {
                     env: options.environment ?? process.env,
                     ...(this.dependencies.findExecutable
@@ -90,20 +120,47 @@ export class InteractiveRunWorker {
                     ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
                 },
             });
+            if (
+                metadata.registry &&
+                metadata.registry_event_id &&
+                this.dependencies.reportLaunch
+            ) {
+                launchReport = this.dependencies
+                    .reportLaunch(metadata.registry, metadata.registry_event_id)
+                    .catch(() => {});
+            }
+            if (request.session_id && !this.session.runnerSessionId) {
+                throw new Error(
+                    `${metadata.runner} did not expose a resumable native session ID`
+                );
+            }
             if (this.session.runnerSessionId) {
+                if (request.session_id) {
+                    await this.sessions.update(request.session_id, {
+                        native_session_id: this.session.runnerSessionId,
+                        latest_run_id: this.runId,
+                    });
+                }
                 await this.store.update(this.runId, {
                     runner_session_id: this.session.runnerSessionId,
                 });
             }
+            if (abortRequested) {
+                await this.finish(true, 'interrupted');
+            } else if (request.task.trim()) {
+                await this.deliverTurn(this.initialRequest(request.task));
+            }
             await this.controlLoop();
+            await this.termination;
             return this.exitCode;
         } catch (error) {
             await this.fail(error);
             return 1;
         } finally {
+            await launchReport;
+            options.signal?.removeEventListener('abort', abort);
             this.receiveAbort.abort();
-            this.rejectPermissions();
-            this.rejectQuestions();
+            this.nativeRequests.rejectAll();
             await this.control
                 .rejectPending(
                     'run_terminal',
@@ -123,6 +180,12 @@ export class InteractiveRunWorker {
 
     private async handle(request: RunControlRequest): Promise<void> {
         try {
+            if (request.kind === 'attach_client') {
+                return await this.updateClient(request, true);
+            }
+            if (request.kind === 'detach_client') {
+                return await this.updateClient(request, false);
+            }
             if (request.kind === 'send') return await this.send(request, false);
             if (request.kind === 'follow_up') return await this.send(request, true);
             if (request.kind === 'steer') return await this.steer(request);
@@ -140,6 +203,22 @@ export class InteractiveRunWorker {
         } catch (error) {
             await this.reject(request, 'control_failed', errorMessage(error));
         }
+    }
+
+    private async updateClient(
+        request: RunControlRequest,
+        attached: boolean
+    ): Promise<void> {
+        if (!request.client_id?.trim()) {
+            return this.reject(request, 'client_invalid', 'Client ID is missing');
+        }
+        if (attached) this.audience.attach(request.client_id);
+        else this.audience.detach(request.client_id);
+        await this.control.resolve(request, {
+            outcome: 'accepted',
+            disposition: attached ? 'attached' : 'detached',
+        });
+        if (!attached) await this.finishIfUnattended();
     }
 
     private async send(request: RunControlRequest, followUp: boolean): Promise<void> {
@@ -219,7 +298,7 @@ export class InteractiveRunWorker {
         await this.accept(request);
         this.drainPaused = true;
         try {
-            this.rejectQuestions();
+            this.nativeRequests.rejectQuestions();
             await session.cancelTurn();
             await session.recordInput('input.delivered', this.eventData(request));
             await this.control.resolve(request, {
@@ -234,37 +313,44 @@ export class InteractiveRunWorker {
 
     private async answerPermission(request: RunControlRequest): Promise<void> {
         const permission = request.permission;
-        const resolve = permission ? this.permissions.get(permission.id) : undefined;
-        if (!permission || !resolve) {
-            return this.reject(
-                request,
-                'permission_unavailable',
-                'Permission request is no longer active'
-            );
-        }
-        await this.accept(request);
-        this.permissions.delete(permission.id);
-        resolve(permission.decision);
-        await this.session?.recordInput('input.delivered', this.eventData(request));
-        await this.control.resolve(request, {
-            outcome: 'accepted',
-            disposition: 'delivered',
-        });
+        return this.answerNativeRequest(
+            request,
+            Boolean(
+                permission &&
+                    this.nativeRequests.answerPermission(
+                        permission.id,
+                        permission.decision
+                    )
+            ),
+            'permission'
+        );
     }
 
     private async answerQuestion(request: RunControlRequest): Promise<void> {
         const question = request.question;
-        const resolve = question ? this.questions.get(question.id) : undefined;
-        if (!question || !resolve) {
+        return this.answerNativeRequest(
+            request,
+            Boolean(
+                question &&
+                    this.nativeRequests.answerQuestion(question.id, question.response)
+            ),
+            'question'
+        );
+    }
+
+    private async answerNativeRequest(
+        request: RunControlRequest,
+        available: boolean,
+        kind: 'permission' | 'question'
+    ): Promise<void> {
+        if (!available) {
             return this.reject(
                 request,
-                'question_unavailable',
-                'Question request is no longer active'
+                `${kind}_unavailable`,
+                `${kind === 'permission' ? 'Permission' : 'Question'} request is no longer active`
             );
         }
         await this.accept(request);
-        this.questions.delete(question.id);
-        resolve(question.response);
         await this.session?.recordInput('input.delivered', this.eventData(request));
         await this.control.resolve(request, {
             outcome: 'accepted',
@@ -281,13 +367,68 @@ export class InteractiveRunWorker {
             );
         }
         await this.accept(request);
+        await this.finish(cancelled, request.reason);
+        await this.control.resolve(request, {
+            outcome: 'accepted',
+            disposition: cancelled ? 'cancelled' : 'closed',
+        });
+    }
+
+    private async deliverTurn(request: RunControlRequest): Promise<void> {
+        const session = this.requireSession();
+        if (!request.input) throw new Error('Workbench input is missing');
+        await session.recordInput('input.delivered', this.eventData(request));
+        const turn = session.send(request.input, request.id);
+        this.activeTurn = turn;
+        void turn
+            .then(
+                () => this.finishTurn(turn),
+                (error) => this.fail(error)
+            )
+            .catch((error) => this.fail(error));
+    }
+
+    private async finishTurn(turn: Promise<void>): Promise<void> {
+        if (this.activeTurn !== turn) return;
+        this.activeTurn = undefined;
+        if (this.terminal || this.drainPaused) return;
+        await this.deliverNext();
+        await this.finishIfUnattended();
+    }
+
+    private async deliverNext(): Promise<void> {
+        if (this.terminal || this.activeTurn) return;
+        const next = this.queued.shift();
+        if (next) await this.deliverTurn(next);
+    }
+
+    private async finishIfUnattended(): Promise<void> {
+        if (
+            this.terminal ||
+            this.audience.keepsRunOpen ||
+            this.activeTurn ||
+            this.queued.length > 0
+        ) {
+            return;
+        }
+        await this.finish(false);
+    }
+
+    private async finish(cancelled: boolean, reason?: string): Promise<void> {
+        if (this.termination) return this.termination;
+        if (this.terminal) return;
+        const termination = this.finishNow(cancelled, reason);
+        this.termination = termination;
+        return termination;
+    }
+
+    private async finishNow(cancelled: boolean, reason?: string): Promise<void> {
         this.terminal = true;
         this.receiveAbort.abort();
-        this.rejectPermissions();
-        this.rejectQuestions();
+        this.nativeRequests.rejectAll();
         await this.rejectQueued('run_terminal');
         try {
-            if (cancelled) await this.session?.cancel(request.reason);
+            if (cancelled) await this.session?.cancel(reason);
             else await this.session?.close();
         } catch (error) {
             this.exitCode = 1;
@@ -304,37 +445,16 @@ export class InteractiveRunWorker {
             exit_code: this.exitCode,
             finished_at: new Date().toISOString(),
         });
-        await this.control.resolve(request, {
-            outcome: 'accepted',
-            disposition: cancelled ? 'cancelled' : 'closed',
-        });
     }
 
-    private async deliverTurn(request: RunControlRequest): Promise<void> {
-        const session = this.requireSession();
-        if (!request.input) throw new Error('Workbench input is missing');
-        await session.recordInput('input.delivered', this.eventData(request));
-        const turn = session.send(request.input);
-        this.activeTurn = turn;
-        void turn
-            .then(
-                () => this.finishTurn(turn),
-                (error) => this.fail(error)
-            )
-            .catch((error) => this.fail(error));
-    }
-
-    private async finishTurn(turn: Promise<void>): Promise<void> {
-        if (this.activeTurn !== turn) return;
-        this.activeTurn = undefined;
-        if (this.terminal || this.drainPaused) return;
-        await this.deliverNext();
-    }
-
-    private async deliverNext(): Promise<void> {
-        if (this.terminal || this.activeTurn) return;
-        const next = this.queued.shift();
-        if (next) await this.deliverTurn(next);
+    private initialRequest(task: string): RunControlRequest {
+        return {
+            version: 1,
+            id: `input_${this.runId}`,
+            kind: 'send',
+            submitted_at_ns: '0',
+            input: normalizeRunnerInput(task) satisfies NormalizedRunnerInput,
+        };
     }
 
     private async accept(request: RunControlRequest): Promise<void> {
@@ -366,43 +486,12 @@ export class InteractiveRunWorker {
         }
     }
 
-    private waitForPermission(
-        request: RunnerPermissionRequest
-    ): Promise<RunnerPermissionDecision> {
-        return new Promise((resolve) => {
-            this.permissions.get(request.id)?.('reject');
-            this.permissions.set(request.id, resolve);
-        });
-    }
-
-    private rejectPermissions(): void {
-        for (const resolve of this.permissions.values()) resolve('reject');
-        this.permissions.clear();
-    }
-
-    private waitForQuestion(
-        request: RunnerQuestionRequest
-    ): Promise<RunnerQuestionResponse> {
-        return new Promise((resolve) => {
-            this.questions.get(request.id)?.({ outcome: 'rejected' });
-            this.questions.set(request.id, resolve);
-        });
-    }
-
-    private rejectQuestions(): void {
-        for (const resolve of this.questions.values()) {
-            resolve({ outcome: 'rejected' });
-        }
-        this.questions.clear();
-    }
-
     private async fail(error: unknown): Promise<void> {
         if (this.terminal) return;
         this.terminal = true;
         this.exitCode = 1;
         this.receiveAbort.abort();
-        this.rejectPermissions();
-        this.rejectQuestions();
+        this.nativeRequests.rejectAll();
         await this.rejectQueued('run_failed').catch(() => {});
         await this.session?.close().catch(() => {});
         await this.recordFailure(error).catch(() => {});

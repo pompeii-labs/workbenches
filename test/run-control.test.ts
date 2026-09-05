@@ -103,6 +103,28 @@ describe('durable run control', () => {
         });
         expect(JSON.stringify(receipt)).not.toContain('not now');
     });
+
+    test('reports control timeouts without exposing internal request IDs', async () => {
+        const home = await temporaryHome();
+        const run = await fixtureRun(home);
+        const control = new RunControl(home, run.id, {
+            pollMilliseconds: 1,
+            timeoutMilliseconds: 2,
+        });
+
+        let error: unknown;
+        try {
+            await control.submit({ kind: 'send', input: 'private prompt value' });
+        } catch (cause) {
+            error = cause;
+        }
+        if (!(error instanceof Error)) throw new Error('Expected a timeout error');
+
+        expect(error.message).toContain('did not acknowledge the message');
+        expect(error.message).toContain('wb ps');
+        expect(error.message).not.toContain('ctl_');
+        expect(error.message).not.toContain(run.id);
+    });
 });
 
 describe('stored run handle', () => {

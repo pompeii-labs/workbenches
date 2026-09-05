@@ -1,10 +1,10 @@
 import { defineCommand } from 'citty';
-import pc from 'picocolors';
 import {
     RegistryAccountStore,
     type RegistryImageProgress,
     RegistryImagePublisher,
 } from '../registry/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const loginCommand = defineCommand({
     meta: {
@@ -19,9 +19,15 @@ export const loginCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
+        output.progress(`Connecting ${args.client} to the image registry`);
         const account = await new RegistryAccountStore().require();
         const host = await new RegistryImagePublisher({ account }).login(args.client);
-        console.log(`connected\t${host}\t${args.client}`);
+        output.record({
+            machine: ['connected', host, args.client],
+            title: `Connected ${args.client}`,
+            details: [host],
+        });
     },
 });
 
@@ -57,13 +63,14 @@ export const pushCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         const accounts = new RegistryAccountStore();
         const account = await accounts.require();
         const profile = await accounts.profile(account);
         const target = await new RegistryImagePublisher({
             account,
             profile,
-            progress: new ImageProgressRenderer().render,
+            progress: new ImageProgressRenderer(output).render,
         }).push({
             image: args.image,
             ...(args.publisher ? { publisher: args.publisher } : {}),
@@ -71,7 +78,11 @@ export const pushCommand = defineCommand({
             tag: args.tag,
             client: args.client,
         });
-        console.log(`pushed\t${target}`);
+        output.record({
+            machine: ['pushed', target],
+            title: 'Pushed image',
+            details: [target],
+        });
     },
 });
 
@@ -90,24 +101,28 @@ class ImageProgressRenderer {
     private activeBlob = 0;
     private reported = -1;
 
+    constructor(private readonly output: CliPresenter) {}
+
     readonly render = (event: RegistryImageProgress): void => {
         if (event.type === 'exporting') {
-            process.stderr.write(`${pc.cyan('→')} Exporting local image\n`);
+            this.output.message('Exporting local image', 'info', 'stderr');
             return;
         }
         if (event.type === 'inspecting') {
-            process.stderr.write(`${pc.cyan('→')} Inspecting OCI image\n`);
+            this.output.message('Inspecting OCI image', 'info', 'stderr');
             return;
         }
         if (event.type === 'planned') {
             const reused = event.blobs - event.missing;
-            process.stderr.write(
-                `${pc.cyan('→')} ${event.missing} blob${event.missing === 1 ? '' : 's'} to upload${reused ? pc.dim(` · ${reused} already stored`) : ''}\n`
+            this.output.message(
+                `${event.missing} blob${event.missing === 1 ? '' : 's'} to upload${reused ? ` · ${reused} already stored` : ''}`,
+                'info',
+                'stderr'
             );
             return;
         }
         if (event.type === 'manifest') {
-            process.stderr.write(`${pc.cyan('→')} Publishing image manifest\n`);
+            this.output.message('Publishing image manifest', 'info', 'stderr');
             return;
         }
         const percent =
@@ -124,8 +139,10 @@ class ImageProgressRenderer {
         this.activeBlob = event.blob;
         this.reported = percent;
         const kind = event.mediaType.includes('config') ? 'config' : 'layer';
-        process.stderr.write(
-            `  ${pc.cyan('•')} ${kind} ${event.blob}/${event.blobs} · ${Math.min(percent, 100)}% · ${formatBytes(event.uploaded)} / ${formatBytes(event.size)}\n`
+        this.output.message(
+            `${kind} ${event.blob}/${event.blobs} · ${Math.min(percent, 100)}% · ${formatBytes(event.uploaded)} / ${formatBytes(event.size)}`,
+            'muted',
+            'stderr'
         );
     };
 }

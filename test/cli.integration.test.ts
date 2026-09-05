@@ -39,6 +39,16 @@ describe('CLI integration', () => {
         expect(result.stdout).toContain('upgrade');
     });
 
+    test('reports argument errors without dumping command help', async () => {
+        for (const arguments_ of [['unknown-command'], ['run']]) {
+            const result = await executeCli(arguments_);
+            expect(result.code).toBe(1);
+            expect(result.stderr).toStartWith('error: ');
+            expect(result.stderr).not.toContain('USAGE');
+            expect(result.stdout).not.toContain('USAGE');
+        }
+    });
+
     test('preflights declared tools before spawning the runner', async () => {
         const fixture = await createFixture({ tools: ['missing-workbench-tool'] });
         const record = join(fixture.root, 'runner-was-called');
@@ -395,6 +405,7 @@ describe('CLI integration', () => {
         expect(events.map((event) => event.type)).toEqual([
             'run.started',
             'run.ready',
+            'input.delivered',
             'turn.started',
             'output.text',
             'usage.updated',
@@ -427,7 +438,7 @@ describe('CLI integration', () => {
         );
     });
 
-    test('dispatches, prints only a run ID, and attaches to the latest run', async () => {
+    test('detaches, prints a session ID, and attaches to its latest run', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-detached-');
         const bin = await fakeBin([], { delay: true });
@@ -449,8 +460,10 @@ describe('CLI integration', () => {
         expect(active.stderr).toBe('');
         expect(JSON.parse(active.stdout)).toMatchObject({
             id: dispatched.stdout.trim(),
+            session_id: dispatched.stdout.trim(),
             mode: 'detached',
             workbench: 'fixture-core',
+            resumable: true,
         });
 
         const attached = await executeCli(['attach', '--json'], environment);
@@ -471,15 +484,252 @@ describe('CLI integration', () => {
         );
         expect(replayed.code).toBe(0);
         expect(replayed.stdout).toBe('fixture response\n');
+        expect(
+            JSON.parse(
+                await readFile(
+                    join(home, 'sessions', dispatched.stdout.trim(), 'session.json'),
+                    'utf8'
+                )
+            )
+        ).toMatchObject({
+            id: dispatched.stdout.trim(),
+            latest_run_id: dispatched.stdout.trim(),
+        });
 
         const finished = await executeCli(['ps'], environment);
-        expect(finished.stdout).toBe('No active detached runs.\n');
+        expect(finished.stdout).toContain(dispatched.stdout.trim());
+        expect(finished.stdout).toContain('completed');
         const history = await executeCli(['ps', '--all'], environment);
         expect(history.stdout).toContain(dispatched.stdout.trim());
         expect(history.stdout).toContain('completed');
     });
 
-    test('cancels the latest active detached run and records a terminal event', async () => {
+    test('detaches a foreground client without cancelling its active run', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-foreground-client-');
+        const bin = await fakeBin([], { block: true });
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+        const child = await launchCli(
+            ['run', fixture.packageDirectory, '--task', 'keep working'],
+            environment
+        );
+        const stdout = new Response(child.stdout).text();
+        const stderr = new Response(child.stderr).text();
+        const sessionId = await waitForActiveSession(home);
+        await Bun.sleep(100);
+        child.kill('SIGINT');
+
+        expect(await child.exited).toBe(130);
+        expect(await stderr).toBe('');
+        expect(await stdout).toContain('fixture-core');
+
+        const active = await executeCli(['ps', '--json'], environment);
+        expect(active.code).toBe(0);
+        expect(JSON.parse(active.stdout)).toMatchObject({
+            id: sessionId,
+            status: 'running',
+            resumable: true,
+        });
+
+        const stopped = await executeCli(['kill', sessionId], environment);
+        expect(stopped.code).toBe(0);
+    });
+
+    test('continues an active detached session from a foreground command', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-active-resume-');
+        const record = join(fixture.root, 'runner');
+        const bin = await fakeBin([], { delay: 250 });
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+            WB_TEST_RECORD: record,
+        };
+
+        const dispatched = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'first task', '-d'],
+            environment
+        );
+        const sessionId = dispatched.stdout.trim();
+        const continued = await executeCli(
+            ['resume', sessionId, 'second task', '--final'],
+            environment
+        );
+
+        expect(continued.code).toBe(0);
+        expect(continued.stderr).toBe('');
+        expect(continued.stdout).toBe('fixture response\n');
+        expect(await readFile(`${record}.args`, 'utf8')).toBe('second task\n');
+
+        const replayed = await executeCli(['attach', sessionId, '--json'], environment);
+        const events = replayed.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events.filter((event) => event.type === 'turn.started')).toHaveLength(2);
+        expect(events.filter((event) => event.type === 'turn.completed')).toHaveLength(
+            2
+        );
+        expect(new Set(events.map((event) => event.run_id))).toEqual(
+            new Set([sessionId])
+        );
+    });
+
+    test('queues a detached continuation onto the active native session', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-detached-resume-');
+        const bin = await fakeBin([], { delay: 250 });
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+
+        const dispatched = await executeCli(
+            ['run', fixture.packageDirectory, 'first task', '--detach'],
+            environment
+        );
+        const sessionId = dispatched.stdout.trim();
+        const continued = await executeCli(
+            ['resume', sessionId, 'second task', '--detach'],
+            environment
+        );
+
+        expect(continued.code).toBe(0);
+        expect(continued.stderr).toBe('');
+        expect(continued.stdout).toBe(`${sessionId}\n`);
+
+        const attached = await executeCli(['attach', sessionId, '--json'], environment);
+        const events = attached.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events.filter((event) => event.type === 'turn.completed')).toHaveLength(
+            2
+        );
+        expect(events.at(-1)).toMatchObject({
+            run_id: sessionId,
+            type: 'run.completed',
+        });
+    });
+
+    test('continues a completed session as a new linked native run', async () => {
+        const fixture = await createFixture({
+            env: { PROJECT_TOKEN: { required: true } },
+        });
+        const home = await temporaryDirectory('workbench-completed-resume-');
+        const record = join(fixture.root, 'runner');
+        const bin = await fakeBin();
+        const resumedSecret = 'resume-secret-not-for-storage';
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+            WB_TEST_RECORD: record,
+            PROJECT_TOKEN: 'initial-secret-not-for-storage',
+        };
+
+        const first = await executeCli(
+            ['run', fixture.packageDirectory, 'first task', '--final'],
+            environment
+        );
+        expect(first.code).toBe(0);
+        const listed = await executeCli(['ps', '--json'], environment);
+        const original = JSON.parse(listed.stdout.trim());
+        const sessionId = original.session_id as string;
+        const before = JSON.parse(
+            await readFile(join(home, 'sessions', sessionId, 'session.json'), 'utf8')
+        );
+
+        const resumed = await executeCli(
+            [
+                'resume',
+                sessionId,
+                '--task',
+                'second task',
+                '--env',
+                `PROJECT_TOKEN=${resumedSecret}`,
+                '--final',
+            ],
+            environment
+        );
+        expect(resumed.code).toBe(0);
+        expect(resumed.stderr).toBe('');
+        expect(resumed.stdout).toBe('fixture response\n');
+        expect(await readFile(`${record}.args`, 'utf8')).toBe('second task\n');
+        expect(await readFile(`${record}.project-token`, 'utf8')).toBe(
+            `${resumedSecret}\n`
+        );
+        expect(await readTextTree(join(home, 'runs'))).not.toContain(resumedSecret);
+
+        const after = JSON.parse(
+            await readFile(join(home, 'sessions', sessionId, 'session.json'), 'utf8')
+        );
+        expect(after.id).toBe(sessionId);
+        expect(after.native_session_id).toBe(before.native_session_id);
+        expect(after.latest_run_id).not.toBe(sessionId);
+        expect(
+            JSON.parse(
+                await readFile(
+                    join(home, 'runs', after.latest_run_id, 'run.json'),
+                    'utf8'
+                )
+            )
+        ).toMatchObject({
+            session_id: sessionId,
+            resumed_from: sessionId,
+            execution: 'session',
+            status: 'completed',
+        });
+    });
+
+    test('serializes concurrent continuations onto one native run', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-concurrent-resume-');
+        const bin = await fakeBin([], { delay: 500 });
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+        const initial = await executeCli(
+            ['run', fixture.packageDirectory, 'initial task', '--final'],
+            environment
+        );
+        expect(initial.code).toBe(0);
+        const sessionId = JSON.parse(
+            (await executeCli(['ps', '--json'], environment)).stdout
+        ).session_id as string;
+
+        const [first, second] = await Promise.all([
+            executeCli(
+                ['resume', sessionId, 'first continuation', '--final'],
+                environment
+            ),
+            executeCli(
+                ['resume', sessionId, 'second continuation', '--final'],
+                environment
+            ),
+        ]);
+        expect(first).toMatchObject({ code: 0, stdout: 'fixture response\n' });
+        expect(second).toMatchObject({ code: 0, stdout: 'fixture response\n' });
+
+        const runs = (await readdir(join(home, 'runs'))).filter((entry) =>
+            entry.startsWith('wb_')
+        );
+        expect(runs).toHaveLength(2);
+        const replayed = await executeCli(['attach', sessionId, '--json'], environment);
+        const events = replayed.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events.filter((event) => event.type === 'turn.completed')).toHaveLength(
+            2
+        );
+        expect(new Set(events.map((event) => event.run_id)).size).toBe(1);
+    });
+
+    test('stops the active run in the latest session and records a terminal event', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-kill-');
         const bin = await fakeBin([], { block: true });
@@ -510,6 +760,7 @@ describe('CLI integration', () => {
             type: 'run.cancelled',
             data: { reason: 'requested' },
         });
+        expect(await stat(join(home, 'sessions', id, 'session.json'))).toBeTruthy();
 
         const repeated = await executeCli(['kill', id], environment);
         expect(repeated.code).toBe(1);
@@ -552,6 +803,21 @@ describe('CLI integration', () => {
             skills: [],
         });
         await expect(stat(record)).rejects.toThrow();
+    });
+
+    test('reports dry-run preflight failures instead of returning empty output', async () => {
+        const fixture = await createFixture({ tools: ['missing-workbench-tool'] });
+        const bin = await fakeBin();
+        const result = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--dry-run'],
+            { PATH: `${bin}:${process.env.PATH}` }
+        );
+
+        expect(result.code).toBe(1);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain(
+            'error: Required CLI tool is unavailable: missing-workbench-tool'
+        );
     });
 
     test('builds and reuses a Workbench-local Docker image', async () => {
@@ -955,8 +1221,28 @@ async function executeCli(
 ) {
     const home =
         environment.WORKBENCH_HOME ?? (await temporaryDirectory('workbench-cli-home-'));
+    const child = await launchCli(
+        arguments_,
+        { ...environment, WORKBENCH_HOME: home },
+        cwd
+    );
+    const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+    ]);
+    return { stdout, stderr, code };
+}
+
+async function launchCli(
+    arguments_: string[],
+    environment: Record<string, string | undefined>,
+    cwd = projectDirectory
+) {
+    const home = environment.WORKBENCH_HOME;
+    if (!home) throw new Error('CLI integration requires a Workbench home');
     await seedModelCatalogFixture(home);
-    const child = Bun.spawn([process.execPath, cliPath, ...arguments_], {
+    return Bun.spawn([process.execPath, cliPath, ...arguments_], {
         cwd,
         env: {
             ...process.env,
@@ -967,12 +1253,38 @@ async function executeCli(
         stdout: 'pipe',
         stderr: 'pipe',
     });
-    const [stdout, stderr, code] = await Promise.all([
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-        child.exited,
-    ]);
-    return { stdout, stderr, code };
+}
+
+async function waitForActiveSession(home: string): Promise<string> {
+    const started = Date.now();
+    while (Date.now() - started < 5_000) {
+        const sessions = await readdir(join(home, 'sessions')).catch(() => []);
+        const sessionId = sessions.find((entry) => entry.startsWith('wb_'));
+        if (sessionId) {
+            const sessionSource = await readFile(
+                join(home, 'sessions', sessionId, 'session.json'),
+                'utf8'
+            ).catch(() => undefined);
+            if (sessionSource) {
+                const session = JSON.parse(sessionSource) as {
+                    latest_run_id: string;
+                    native_session_id?: string;
+                };
+                const runSource = await readFile(
+                    join(home, 'runs', session.latest_run_id, 'run.json'),
+                    'utf8'
+                ).catch(() => undefined);
+                const run = runSource
+                    ? (JSON.parse(runSource) as { status: string })
+                    : undefined;
+                if (run?.status === 'running' && session.native_session_id) {
+                    return sessionId;
+                }
+            }
+        }
+        await Bun.sleep(25);
+    }
+    throw new Error('Timed out waiting for an active Workbench session');
 }
 
 async function temporaryDirectory(prefix: string) {
@@ -1142,7 +1454,7 @@ async function fakeDocker() {
 
 async function fakeBin(
     tools: string[] = [],
-    options: { delay?: boolean; block?: boolean; response?: string } = {}
+    options: { delay?: boolean | number; block?: boolean; response?: string } = {}
 ) {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-bin-'));
     temporaryDirectories.push(directory);
@@ -1154,26 +1466,88 @@ async function fakeBin(
     await writeFile(
         runner,
         [
-            '#!/bin/sh',
-            ...(options.block ? ['exec sleep 30'] : []),
-            'if test -n "$WB_TEST_RECORD"; then',
-            '  printf "%s\\n" "$PWD" > "$WB_TEST_RECORD.cwd"',
-            '  printf "%s\\n" "$@" > "$WB_TEST_RECORD.args"',
-            '  printf "%s\\n" "$OPENCODE_CONFIG_CONTENT" > "$WB_TEST_RECORD.config"',
-            '  printf "%s\\n" "$OPENCODE_CONFIG_DIR" > "$WB_TEST_RECORD.config-dir"',
-            '  printf "%s\\n" "$OPENCODE_CONFIG" > "$WB_TEST_RECORD.native-config"',
-            '  printf "%s\\n" "$OPENAI_API_KEY" > "$WB_TEST_RECORD.openai-key"',
-            '  printf "%s\\n" "$BASE_URL" > "$WB_TEST_RECORD.base-url"',
-            '  printf "%s\\n" "$PROJECT_TOKEN" > "$WB_TEST_RECORD.project-token"',
-            '  printf "%s\\n" "$OPTIONAL_TOKEN" > "$WB_TEST_RECORD.optional-token"',
-            '  printf "%s\\n" "$UNDECLARED_TOKEN" > "$WB_TEST_RECORD.undeclared-token"',
-            '  printf "%s\\n" "$WORKBENCH_WORKSPACE_API" > "$WB_TEST_RECORD.workspace-api"',
-            '  printf "%s\\n" "$WORKBENCH_WORKSPACE_SCHEMAS" > "$WB_TEST_RECORD.workspace-schemas"',
-            'fi',
-            ...(options.delay ? ['sleep 0.1'] : []),
-            'printf \'%s\\n\' \'{"type":"step_start","part":{"type":"step-start"}}\'',
-            `printf '%s\\n' '${responseEvent}'`,
-            'printf \'%s\\n\' \'{"type":"step_finish","part":{"type":"step-finish","reason":"stop","tokens":{"total":9,"input":4,"output":5,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.0001}}\'',
+            '#!/usr/bin/env bun',
+            `const responseText = ${JSON.stringify(options.response ?? 'fixture response')};`,
+            `const responseEvent = ${JSON.stringify(responseEvent)};`,
+            `const delay = ${typeof options.delay === 'number' ? options.delay : options.delay ? 100 : 0};`,
+            `const block = ${options.block ? 'true' : 'false'};`,
+            'const record = process.env.WB_TEST_RECORD;',
+            'if (record) {',
+            '  const fields: Record<string, string | undefined> = {',
+            '    cwd: process.env.PWD ?? process.cwd(),',
+            '    args: Bun.argv.slice(2).join("\\n"),',
+            '    config: process.env.OPENCODE_CONFIG_CONTENT,',
+            '    "config-dir": process.env.OPENCODE_CONFIG_DIR,',
+            '    "native-config": process.env.OPENCODE_CONFIG,',
+            '    "openai-key": process.env.OPENAI_API_KEY,',
+            '    "base-url": process.env.BASE_URL,',
+            '    "project-token": process.env.PROJECT_TOKEN,',
+            '    "optional-token": process.env.OPTIONAL_TOKEN,',
+            '    "undeclared-token": process.env.UNDECLARED_TOKEN,',
+            '    "workspace-api": process.env.WORKBENCH_WORKSPACE_API,',
+            '    "workspace-schemas": process.env.WORKBENCH_WORKSPACE_SCHEMAS,',
+            '  };',
+            '  await Promise.all(Object.entries(fields).map(([name, value]) => Bun.write(record + "." + name, (value ?? "") + "\\n")));',
+            '}',
+            'if (Bun.argv[2] !== "serve") {',
+            '  if (block) await new Promise(() => {});',
+            '  if (delay) await Bun.sleep(delay);',
+            '  console.log(JSON.stringify({ type: "step_start", part: { type: "step-start" } }));',
+            '  console.log(responseEvent);',
+            '  console.log(JSON.stringify({ type: "step_finish", part: { type: "step-finish", reason: "stop", tokens: { total: 9, input: 4, output: 5, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0.0001 } }));',
+            '  process.exit(0);',
+            '}',
+            'const encoder = new TextEncoder();',
+            'const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();',
+            'const emit = (type: string, properties: Record<string, unknown>) => {',
+            '  const chunk = encoder.encode("data: " + JSON.stringify({ type, properties: { sessionID: "ses_fixture", ...properties } }) + "\\n\\n");',
+            '  for (const client of clients) client.enqueue(chunk);',
+            '};',
+            'const app = Bun.serve({',
+            '  hostname: "127.0.0.1",',
+            '  port: 0,',
+            '  async fetch(request) {',
+            '    const url = new URL(request.url);',
+            '    if (url.pathname === "/event") {',
+            '      let controller: ReadableStreamDefaultController<Uint8Array>;',
+            '      const body = new ReadableStream<Uint8Array>({',
+            '        start(value) { controller = value; clients.add(value); value.enqueue(encoder.encode(": connected\\n\\n")); },',
+            '        cancel() { clients.delete(controller); },',
+            '      });',
+            '      return new Response(body, { headers: { "content-type": "text/event-stream" } });',
+            '    }',
+            '    if (url.pathname === "/session" && request.method === "POST") return Response.json({ id: "ses_fixture" });',
+            '    if (url.pathname.startsWith("/session/") && request.method === "GET") return Response.json({ id: url.pathname.split("/").at(-1) });',
+            '    if (url.pathname.endsWith("/prompt_async")) {',
+            '      const input = await request.json() as { messageID: string; parts: Array<{ type: string; text?: string }> };',
+            '      const text = input.parts.find((part) => part.type === "text")?.text ?? "";',
+            '      if (record) await Bun.write(record + ".args", text + "\\n");',
+            '      setTimeout(() => {',
+            '        emit("session.status", { status: { type: "busy" } });',
+            '        if (block) return;',
+            '        emit("message.updated", { info: { id: "assistant_" + input.messageID, role: "assistant", parentID: input.messageID } });',
+            '        emit("message.part.updated", { part: { id: "part_" + input.messageID, messageID: "assistant_" + input.messageID, type: "text", text: "" } });',
+            '        emit("message.part.delta", { messageID: "assistant_" + input.messageID, partID: "part_" + input.messageID, field: "text", delta: responseText });',
+            '        emit("message.part.updated", { part: { id: "finish_" + input.messageID, messageID: "assistant_" + input.messageID, type: "step-finish", reason: "stop", tokens: { total: 9, input: 4, output: 5, reasoning: 0 }, cost: 0.0001 } });',
+            '        emit("session.status", { status: { type: "idle" } });',
+            '      }, delay);',
+            '      return new Response(null, { status: 204 });',
+            '    }',
+            '    if (url.pathname.endsWith("/abort")) {',
+            '      queueMicrotask(() => emit("session.status", { status: { type: "idle" } }));',
+            '      return Response.json(true);',
+            '    }',
+            '    return new Response(null, { status: 404 });',
+            '  },',
+            '});',
+            'process.stdout.write("opencode server listening on http://127.0.0.1:" + app.port + "\\n");',
+            'const shutdown = () => {',
+            '  for (const client of clients) client.close();',
+            '  app.stop(true);',
+            '  process.exit(0);',
+            '};',
+            'process.on("SIGTERM", shutdown);',
+            'process.on("SIGINT", shutdown);',
             '',
         ].join('\n')
     );

@@ -1,6 +1,6 @@
+export { OPENCODE_SESSION_DECLARATION } from './opencode/capabilities.js';
 export { OpenCodeRunner } from './opencode/runner.js';
 export {
-    OPENCODE_SESSION_DECLARATION,
     OpenCodeSessionAdapter,
     type OpenCodeSessionDependencies,
 } from './opencode/session.js';
@@ -36,6 +36,7 @@ export {
     type RunnerQuestionResponse,
     type RunnerSession,
     type RunnerSessionAdapter,
+    type RunnerSessionContext,
     type RunnerSessionHost,
     type RunnerSessionStartOptions,
     type RunnerTurnResult,

@@ -1,4 +1,4 @@
-import { autocomplete, log, select } from '@clack/prompts';
+import { autocomplete, select } from '@clack/prompts';
 import type { AuthenticatedModelRoute } from '../models/index.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import type { PreparedRuntime } from '../runtimes/contracts.js';
@@ -76,7 +76,7 @@ export class ConnectionManager {
         const choose = this.#options.choose ?? ConnectionManager.promptConnection;
         const chooseProvider =
             this.#options.chooseProvider ?? ConnectionManager.promptProvider;
-        const announce = this.#options.announce ?? log.info;
+        const announce = this.#options.announce ?? (() => {});
         let status = await this.#inspector.inspect({
             discoverConnections: true,
             ...(preferred ? { preferredConnection: preferred } : {}),

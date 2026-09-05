@@ -1,18 +1,20 @@
 import { defineCommand } from 'citty';
 
 import { RunStore } from '../runs/index.js';
+import { type SessionActivity, SessionLifecycle } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
+import { CliPresenter } from './presenter.js';
 
 export const psCommand = defineCommand({
     meta: {
         name: 'ps',
-        description: 'List detached Workbench runs.',
+        description: 'List Workbench sessions.',
     },
     args: {
         all: {
             type: 'boolean',
             alias: 'a',
-            description: 'Include finished detached runs',
+            description: 'Include terminal one-shot session history',
             default: false,
         },
         json: {
@@ -22,33 +24,63 @@ export const psCommand = defineCommand({
         },
     },
     async run({ args }) {
-        const runs = await new RunStore(workbenchHome()).list({
-            detachedOnly: true,
-            activeOnly: !args.all,
+        const output = new CliPresenter();
+        const activities = await new SessionLifecycle(workbenchHome()).list({
+            all: args.all,
         });
-        if (runs.length === 0) {
+        if (activities.length === 0) {
             if (!args.json) {
-                console.log(
-                    args.all ? 'No detached runs.' : 'No active detached runs.'
+                output.message(
+                    args.all
+                        ? 'No Workbench sessions.'
+                        : 'No active or resumable Workbench sessions.'
                 );
             }
             return;
         }
-        for (const run of runs) {
+        for (const activity of activities) {
+            const run = activity.run;
             if (args.json) {
-                process.stdout.write(`${JSON.stringify(run)}\n`);
+                process.stdout.write(
+                    `${JSON.stringify({
+                        ...run,
+                        session_id: activity.id,
+                        resumable: activity.resumable,
+                    })}\n`
+                );
                 continue;
             }
-            console.log(
-                [
+            const fields = [
+                run.status,
+                activity.id,
+                `${run.workbench}@${run.workbench_version}`,
+                run.runner,
+                String(run.pid ?? '-'),
+                run.dispatched_at,
+            ];
+            output.record({
+                machine: fields,
+                title: activity.id,
+                details: [
                     run.status,
-                    run.id,
                     `${run.workbench}@${run.workbench_version}`,
                     run.runner,
-                    run.pid ?? '-',
-                    run.dispatched_at,
-                ].join('\t')
-            );
+                    action(activity),
+                ],
+                tone:
+                    run.status === 'failed'
+                        ? 'error'
+                        : run.status === 'cancelled'
+                          ? 'warning'
+                          : run.status === 'completed'
+                            ? 'success'
+                            : 'info',
+            });
         }
     },
 });
+
+function action(activity: SessionActivity): string {
+    if (!RunStore.isTerminal(activity.run.status)) return 'attach';
+    return activity.resumable ? 'resume' : 'replay';
+}

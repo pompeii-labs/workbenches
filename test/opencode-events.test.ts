@@ -79,13 +79,19 @@ describe('OpenCode event adapter', () => {
         expect(result.events).toEqual([
             {
                 type: 'tool.started',
-                data: { id: 'call_1', name: 'write', target: '/repo/README.md' },
+                data: {
+                    id: 'call_1',
+                    name: 'write',
+                    title: 'Write',
+                    target: '/repo/README.md',
+                },
             },
             {
                 type: 'tool.completed',
                 data: {
                     id: 'call_1',
                     name: 'write',
+                    title: 'Write',
                     target: '/repo/README.md',
                     status: 'completed',
                     duration_ms: 25,
@@ -125,6 +131,52 @@ describe('OpenCode event adapter', () => {
         ]);
     });
 
+    test('enriches a started tool when the runner later provides its input', () => {
+        const adapter = new OpenCodeEventAdapter();
+        const started = adapter.consume({
+            type: 'tool_use',
+            part: {
+                tool: 'grep',
+                callID: 'call_3',
+                state: { status: 'pending' },
+            },
+        });
+        const completed = adapter.consume({
+            type: 'tool_use',
+            part: {
+                tool: 'grep',
+                callID: 'call_3',
+                state: {
+                    status: 'completed',
+                    input: { pattern: 'migration', path: '/repo/src' },
+                    metadata: { matches: 3 },
+                    time: { start: 100, end: 112 },
+                },
+            },
+        });
+
+        expect(started.events).toEqual([
+            {
+                type: 'tool.started',
+                data: { id: 'call_3', name: 'grep', title: 'Grep' },
+            },
+        ]);
+        expect(completed.events).toEqual([
+            {
+                type: 'tool.completed',
+                data: {
+                    id: 'call_3',
+                    name: 'grep',
+                    title: 'Grep "migration"',
+                    target: '/repo/src',
+                    description: '3 matches',
+                    status: 'completed',
+                    duration_ms: 12,
+                },
+            },
+        ]);
+    });
+
     test('reports safe permission failures once without exposing native errors', () => {
         const adapter = new OpenCodeEventAdapter();
         const native = {
@@ -147,6 +199,7 @@ describe('OpenCode event adapter', () => {
             data: {
                 id: 'call_denied',
                 name: 'read',
+                title: 'Read',
                 target: '/outside/file.ts',
                 status: 'failed',
                 error_code: 'permission_denied',
@@ -155,6 +208,23 @@ describe('OpenCode event adapter', () => {
         });
         expect(repeated.events).toEqual([]);
         expect(JSON.stringify([first, repeated])).not.toContain('SECRET_NATIVE_DETAIL');
+    });
+
+    test('leaves native question tools to the normalized question lifecycle', () => {
+        const adapter = new OpenCodeEventAdapter();
+        const result = adapter.consume({
+            type: 'tool_use',
+            part: {
+                tool: 'question',
+                callID: 'question_1',
+                state: {
+                    status: 'error',
+                    error: 'Question was answered through the native question endpoint',
+                },
+            },
+        });
+
+        expect(result.events).toEqual([]);
     });
 
     test('retains a safe provider failure without retaining response metadata', () => {

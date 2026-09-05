@@ -29,6 +29,26 @@ runnerAdapterContract({
 });
 
 describe('OpenCode interactive server adapter', () => {
+    test('bounds startup through native session creation', async () => {
+        const server = new FakeOpenCodeServer();
+        server.stallSessionCreation = true;
+
+        await expect(
+            server.adapter().start({
+                workbench: workbench(),
+                workspaceDirectory: '/workspace',
+                environment: {},
+                configuration: configuration(),
+                host: {
+                    emit: async () => {},
+                    requestPermission: async () => 'reject',
+                    requestQuestion: async () => ({ outcome: 'rejected' }),
+                },
+            })
+        ).rejects.toThrow('OpenCode session did not become ready in time');
+        expect(server.kills).toBe(1);
+    });
+
     test('stages a packaged config directory without treating it as a config file', async () => {
         const directory = await mkdtemp(join(tmpdir(), 'opencode-config-test-'));
         const config = join(directory, 'runner');
@@ -171,6 +191,34 @@ describe('OpenCode interactive server adapter', () => {
         expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER_REASONING');
     });
 
+    test('reopens a persisted native session instead of creating another', async () => {
+        const server = new FakeOpenCodeServer();
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            session: {
+                id: 'wb_resumetest123456789012',
+                directory: '/private/workbench/session/native',
+                nativeSessionId: 'ses_native_1',
+            },
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+
+        expect(session.id).toBe('ses_native_1');
+        expect(server.createdSessions).toBe(0);
+        expect(server.resumedSessions).toBe(1);
+        expect(server.spawnEnvironment.OPENCODE_DB).toBe(
+            '/private/workbench/session/native/opencode.sqlite'
+        );
+        await session.close();
+    });
+
     test('delivers steering to the active turn through the current session API', async () => {
         const server = new FakeOpenCodeServer();
         const session = await server.adapter().start({
@@ -204,7 +252,7 @@ describe('OpenCode interactive server adapter', () => {
         await session.close();
 
         expect(server.promptBodies[1]).toEqual({
-            messageID: expect.stringMatching(/^msg_[a-f0-9]{32}$/),
+            messageID: expect.stringMatching(/^msg_[a-f0-9]{26}$/),
             model: {
                 providerID: 'openai',
                 modelID: 'gpt-5.6-terra',
@@ -263,6 +311,54 @@ describe('OpenCode interactive server adapter', () => {
         expect(output[0]?.data.id).not.toBe(output[1]?.data.id);
     });
 
+    test('flushes queued steering as one ordered OpenCode batch', async () => {
+        const server = new FakeOpenCodeServer();
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+        server.onPrompt = () =>
+            server.emit('session.status', { status: { type: 'busy' } });
+
+        const turn = session.prompt('original input');
+        await server.prompted;
+        const first = await session.steer?.('first steering input');
+        const second = await session.steer?.('second steering input');
+        const third = await session.steer?.('third steering input');
+        if (!first || !second || !third) {
+            throw new Error('Expected tracked steering delivery');
+        }
+        await Bun.sleep(0);
+
+        expect(server.promptBodies.map(firstPartText)).toEqual([
+            'original input',
+            'first steering input',
+            'second steering input',
+            'third steering input',
+        ]);
+        const inputIds = server.promptBodies.map((body) => String(body.messageID));
+        expect(inputIds).toEqual([...inputIds].sort());
+        expect(await settled(first.delivered)).toBeFalse();
+        expect(await settled(second.delivered)).toBeFalse();
+        expect(await settled(third.delivered)).toBeFalse();
+
+        const batchBoundary = String(server.promptBodies[3]?.messageID);
+        server.emitAssistantText('assistant_steering_batch', batchBoundary, 'Done.');
+        await expect(
+            Promise.all([first.delivered, second.delivered, third.delivered])
+        ).resolves.toEqual([undefined, undefined, undefined]);
+        server.emit('session.status', { status: { type: 'idle' } });
+        await expect(turn).resolves.toEqual({ reason: 'completed' });
+        await session.close();
+    });
+
     test('pauses for a host permission decision and replies before continuing', async () => {
         const server = new FakeOpenCodeServer();
         const requests: RunnerPermissionRequest[] = [];
@@ -319,6 +415,7 @@ describe('OpenCode interactive server adapter', () => {
             data: {
                 id: 'call_1',
                 name: 'read',
+                title: 'Read',
                 target: '/outside/file.ts',
                 status: 'completed',
             },
@@ -723,10 +820,12 @@ class FakeOpenCodeServer {
         body?: Record<string, unknown>;
     }> = [];
     createdSessions = 0;
+    resumedSessions = 0;
     aborts = 0;
     kills = 0;
     permissionReplyStatus = 200;
     autoIdleOnAbort = true;
+    stallSessionCreation = false;
     spawnEnvironment: Record<string, string | undefined> = {};
     onPrompt?: (body: Record<string, unknown>) => void;
     onPermissionReply?: (body: Record<string, unknown>) => void;
@@ -1015,6 +1114,19 @@ class FakeOpenCodeServer {
         );
         if (url.pathname === '/session' && init.method === 'POST') {
             this.createdSessions += 1;
+            if (this.stallSessionCreation) {
+                await new Promise<void>((_, reject) => {
+                    init.signal?.addEventListener(
+                        'abort',
+                        () => reject(new DOMException('Aborted', 'AbortError')),
+                        { once: true }
+                    );
+                });
+            }
+            return Response.json({ id: 'ses_native_1' });
+        }
+        if (url.pathname === '/session/ses_native_1' && init.method === 'GET') {
+            this.resumedSessions += 1;
             return Response.json({ id: 'ses_native_1' });
         }
         if (url.pathname === '/event') {

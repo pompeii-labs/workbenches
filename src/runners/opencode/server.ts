@@ -171,7 +171,11 @@ export class OpenCodeServer {
         const headers = new Headers(init.headers);
         headers.set('Authorization', `Basic ${btoa(`opencode:${this.password}`)}`);
         if (init.body) headers.set('Content-Type', 'application/json');
-        return this.options.fetch(input, { ...init, headers });
+        return this.options.fetch(input, {
+            ...init,
+            headers,
+            signal: init.signal ?? this.abort.signal,
+        });
     }
 }
 

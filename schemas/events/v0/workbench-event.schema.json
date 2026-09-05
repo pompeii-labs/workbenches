@@ -79,9 +79,13 @@
                         "properties": {
                             "id": { "type": "string" },
                             "name": { "type": "string" },
+                            "title": { "type": "string" },
                             "target": { "type": "string" },
+                            "description": { "type": "string" },
                             "status": { "enum": ["completed", "failed"] },
-                            "duration_ms": { "type": "number", "minimum": 0 }
+                            "duration_ms": { "type": "number", "minimum": 0 },
+                            "error_code": { "type": "string" },
+                            "message": { "type": "string" }
                         }
                     }
                 }

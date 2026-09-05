@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkbenchEvent } from '../src/runs/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
+import { SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
 const temporaryDirectories: string[] = [];
@@ -59,6 +60,68 @@ describe('durable Workbench runs', () => {
         expect((await store.read(run.id)).status).toBe('completed');
     });
 
+    test('continues event observation after a persisted sequence cursor', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const run = await fixtureRun(home);
+        await store.appendEvent(run.id, event(run.id, 1, 'run.started'));
+        await store.appendEvent(run.id, event(run.id, 2, 'run.started'));
+        await store.appendEvent(run.id, event(run.id, 3, 'run.completed'));
+        await store.update(run.id, { status: 'completed' });
+
+        const events: WorkbenchEvent[] = [];
+        for await (const next of store.follow(run.id, {
+            afterSequence: 2,
+            pollMilliseconds: 1,
+        })) {
+            events.push(next);
+        }
+
+        expect(events.map((next) => next.sequence)).toEqual([3]);
+    });
+
+    test('drains events appended before terminal metadata becomes visible', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const run = await fixtureRun(home);
+        await store.appendEvent(run.id, event(run.id, 1, 'run.started'));
+        const iterator = store
+            .follow(run.id, { pollMilliseconds: 1 })
+            [Symbol.asyncIterator]();
+
+        expect(await iterator.next()).toMatchObject({
+            done: false,
+            value: { sequence: 1, type: 'run.started' },
+        });
+        await store.appendEvent(run.id, event(run.id, 2, 'run.completed'));
+        await store.update(run.id, { status: 'completed' });
+
+        expect(await iterator.next()).toMatchObject({
+            done: false,
+            value: { sequence: 2, type: 'run.completed' },
+        });
+        expect(await iterator.next()).toEqual({ done: true, value: undefined });
+    });
+
+    test('stops live event observation when its client detaches', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const run = await fixtureRun(home);
+        const controller = new AbortController();
+        const iterator = store
+            .follow(run.id, {
+                signal: controller.signal,
+                pollMilliseconds: 100,
+            })
+            [Symbol.asyncIterator]();
+        const pending = iterator.next();
+
+        await Bun.sleep(5);
+        controller.abort();
+
+        expect(await pending).toEqual({ done: true, value: undefined });
+    });
+
     test('selects the latest dispatched run and rejects malformed IDs', async () => {
         const home = await temporaryHome();
         const store = new RunStore(home);
@@ -71,7 +134,27 @@ describe('durable Workbench runs', () => {
         expect(() => RunStore.validateId('../../escape')).toThrow('Invalid run ID');
     });
 
-    test('lists detached runs newest first with optional active filtering', async () => {
+    test('marks abandoned worker records as failed during reconciliation', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const run = await fixtureRun(home);
+        await store.update(run.id, {
+            status: 'running',
+            pid: 2_147_483_647,
+            started_at: '2026-08-18T00:00:00.000Z',
+        });
+
+        expect(await store.reconcile(await store.read(run.id))).toMatchObject({
+            status: 'failed',
+            exit_code: 1,
+        });
+        expect((await store.readEvents(run.id)).at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: { message: 'Workbench run worker exited unexpectedly' },
+        });
+    });
+
+    test('lists runs newest first across execution modes', async () => {
         const home = await temporaryHome();
         const store = new RunStore(home);
         const foreground = await fixtureRun(home, 'task', 'foreground');
@@ -81,48 +164,11 @@ describe('durable Workbench runs', () => {
         await new Promise((resolve) => setTimeout(resolve, 2));
         const active = await fixtureRun(home);
 
-        expect((await store.list({ detachedOnly: true })).map((run) => run.id)).toEqual(
-            [active.id, completed.id]
-        );
-        expect(
-            (
-                await store.list({
-                    detachedOnly: true,
-                    activeOnly: true,
-                })
-            ).map((run) => run.id)
-        ).toEqual([active.id]);
-        expect((await store.list()).map((run) => run.id)).toContain(foreground.id);
-    });
-
-    test('requests private cooperative cancellation for active detached runs', async () => {
-        const home = await temporaryHome();
-        const store = new RunStore(home);
-        const foreground = await fixtureRun(home, 'task', 'foreground');
-        await new Promise((resolve) => setTimeout(resolve, 2));
-        const detached = await fixtureRun(home, 'task', 'detached');
-        let cancelled = false;
-        const stop = store.watchCancellation(
-            detached.id,
-            () => {
-                cancelled = true;
-            },
-            { pollMilliseconds: 1 }
-        );
-
-        await store.requestCancellation(detached.id);
-        await waitFor(() => cancelled);
-        expect((await store.latestActiveDetached()).id).toBe(detached.id);
-        expect(
-            (await stat(join(home, 'runs', detached.id, 'cancel'))).mode & 0o777
-        ).toBe(0o600);
-        await expect(store.requestCancellation(foreground.id)).rejects.toThrow(
-            'is not a detached run'
-        );
-
-        stop();
-        await store.clearCancellation(detached.id);
-        await expect(stat(join(home, 'runs', detached.id, 'cancel'))).rejects.toThrow();
+        expect((await store.list()).map((run) => run.id)).toEqual([
+            active.id,
+            completed.id,
+            foreground.id,
+        ]);
     });
 
     test('stores the Workbench reference without derived routes or credentials', async () => {
@@ -144,6 +190,79 @@ describe('durable Workbench runs', () => {
         expect(request.reference).toBe('publisher/project#core');
         expect(JSON.stringify(request)).not.toContain('authenticated');
         expect(JSON.stringify(request)).not.toContain('provider');
+    });
+
+    test('links every interactive execution to one stable native session', async () => {
+        const home = await temporaryHome();
+        const dispatcher = new RunDispatcher(home);
+        const runs = new RunStore(home);
+        const sessions = new SessionStore(home);
+        const resolved = fixtureReference('opencode');
+        const first = await dispatcher.prepare({
+            resolved,
+            mode: 'interactive',
+            reference: 'creator',
+            workspaces: [
+                {
+                    name: 'application',
+                    path: '/workspace/application',
+                    access: 'read-write',
+                },
+            ],
+        });
+
+        expect(first.session_id).toBe(first.id);
+        const created = await sessions.read(first.id);
+        expect(created).toMatchObject({
+            id: first.id,
+            latest_run_id: first.id,
+            reference: 'creator',
+        });
+        expect(created.native_session_id).toBeUndefined();
+        const firstRequest = await runs.takeRequest(first.id);
+        expect(firstRequest.session_id).toBe(first.id);
+        expect(firstRequest.native_session_id).toBeUndefined();
+
+        const ready = await sessions.update(created.id, {
+            native_session_id: 'ses_native_1',
+        });
+        const second = await dispatcher.prepare({
+            resolved,
+            mode: 'interactive',
+            session: ready,
+        });
+        expect(second).toMatchObject({
+            session_id: first.id,
+            resumed_from: first.id,
+        });
+        expect(await runs.takeRequest(second.id)).toMatchObject({
+            session_id: first.id,
+            native_session_id: 'ses_native_1',
+            workspaces: ready.workspaces,
+        });
+        expect((await sessions.read(first.id)).latest_run_id).toBe(second.id);
+    });
+
+    test('rejects resuming a session with a different locked Workbench', async () => {
+        const home = await temporaryHome();
+        const dispatcher = new RunDispatcher(home);
+        const resolved = fixtureReference('opencode');
+        const first = await dispatcher.prepare({
+            resolved,
+            mode: 'interactive',
+        });
+        const session = await new SessionStore(home).update(first.id, {
+            native_session_id: 'ses_native_1',
+        });
+        const changed = fixtureReference('pi');
+
+        await expect(
+            dispatcher.prepare({
+                resolved: changed,
+                mode: 'interactive',
+                session,
+            })
+        ).rejects.toThrow('does not match the resolved Workbench package');
     });
 });
 
@@ -173,14 +292,6 @@ function fixtureRun(
             task,
         },
     });
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-        if (predicate()) return;
-        await new Promise((resolve) => setTimeout(resolve, 2));
-    }
-    throw new Error('Timed out waiting for condition');
 }
 
 function event(

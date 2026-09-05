@@ -146,15 +146,16 @@ provider payloads.
 
 ## Run in the background
 
-Long-running tasks can be dispatched without keeping the caller attached:
+Every execution belongs to one stable Workbench session. Long-running work can
+continue without keeping the caller attached:
 
 ```sh
 wb run project-core --dir /path/to/project \
   --task "Review every migration" --detach
 ```
 
-The command prints a run ID such as `wb_...`. Use it to follow or cancel the
-run:
+The command prints a session ID such as `wb_...`. Use it to observe or stop the
+active run inside that session:
 
 ```sh
 wb attach wb_...
@@ -164,9 +165,12 @@ wb ps --all
 wb kill wb_...
 ```
 
-Without an ID, `wb attach` selects the latest dispatched run and `wb kill`
-selects the latest active detached run. Detached runs persist their normalized
-events for replay.
+`wb attach` observes or replays the session's latest run without starting new
+model work. `wb resume` starts a new run from saved native context when that
+session is resumable. Without an ID, `wb attach` selects the latest session and
+`wb kill` selects the latest active session. `wb ps` shows active and resumable
+sessions; `wb ps --all` also includes terminal one-shot history. Runs persist
+their normalized events for replay.
 
 ## Leave interactive work to the human
 

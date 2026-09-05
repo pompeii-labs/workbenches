@@ -99,6 +99,7 @@ describe('Pi JSON event normalization', () => {
             data: {
                 id: 'call_1',
                 name: 'write',
+                title: 'Write',
                 target: '/workspace/result.txt',
             },
         });
@@ -107,6 +108,7 @@ describe('Pi JSON event normalization', () => {
             data: {
                 id: 'call_1',
                 name: 'write',
+                title: 'Write',
                 target: '/workspace/result.txt',
                 status: 'completed',
             },

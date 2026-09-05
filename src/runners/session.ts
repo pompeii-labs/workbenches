@@ -13,6 +13,7 @@ export const RUNNER_CAPABILITIES = [
     'steering',
     'image_input',
     'image_generation',
+    'session_resume',
     'cancellation',
     'failures',
     'unknown_events',
@@ -135,12 +136,19 @@ export interface RunnerSessionHost {
     requestQuestion(request: RunnerQuestionRequest): Promise<RunnerQuestionResponse>;
 }
 
+export interface RunnerSessionContext {
+    id: string;
+    directory: string;
+    nativeSessionId?: string;
+}
+
 export interface RunnerSessionStartOptions {
     workbench: ResolvedWorkbench;
     workspaceDirectory: string;
     environment: Record<string, string | undefined>;
     configuration: ResolvedRunnerConfiguration;
     host: RunnerSessionHost;
+    session?: RunnerSessionContext;
 }
 
 export interface RunnerSessionAdapter {

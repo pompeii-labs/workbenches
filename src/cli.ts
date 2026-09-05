@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { defineCommand, runMain } from 'citty';
+import { defineCommand, renderUsage, runMain } from 'citty';
 import packageMetadata from '../package.json' with { type: 'json' };
 
 import { addCommand } from './commands/add.js';
@@ -16,6 +16,7 @@ import { logoutCommand } from './commands/logout.js';
 import { psCommand } from './commands/ps.js';
 import { publishCommand } from './commands/publish.js';
 import { removeCommand } from './commands/remove.js';
+import { resumeCommand } from './commands/resume.js';
 import { runCommand } from './commands/run.js';
 import { smokeCommand } from './commands/smoke.js';
 import { telemetryCommand } from './commands/telemetry.js';
@@ -47,7 +48,6 @@ export const workbenchCommand = defineCommand({
         list: listCommand,
         view: viewCommand,
         validate: validateCommand,
-        v: validateCommand,
         smoke: smokeCommand,
         telemetry: telemetryCommand,
         update: updateCommand,
@@ -61,6 +61,7 @@ export const workbenchCommand = defineCommand({
         connect: connectCommand,
         add: addCommand,
         remove: removeCommand,
+        resume: resumeCommand,
         run: runCommand,
         attach: attachCommand,
         kill: killCommand,
@@ -81,6 +82,12 @@ if (import.meta.main) {
             process.stderr.write(`error: ${value.message}\n`);
             return;
         }
+        if (typeof value === 'string' && optional.length === 0) {
+            process.stderr.write(
+                `${value.startsWith('error: ') ? value : `error: ${value}`}\n`
+            );
+            return;
+        }
         defaultConsoleError(value, ...optional);
     };
     try {
@@ -89,7 +96,16 @@ if (import.meta.main) {
         if (usesModelCatalog(invocation.args, bareInvocation)) {
             await new ModelCatalog({ home: workbenchHome() }).refresh();
         }
-        await runMain(workbenchCommand, { rawArgs: invocation.args });
+        const explicitHelp = invocation.args.some(
+            (argument) => argument === '--help' || argument === '-h'
+        );
+        await runMain(workbenchCommand, {
+            rawArgs: invocation.args,
+            showUsage: async (command, parent) => {
+                if (!explicitHelp) return;
+                process.stdout.write(`${await renderUsage(command, parent)}\n\n`);
+            },
+        });
     } finally {
         console.error = defaultConsoleError;
     }
@@ -97,7 +113,7 @@ if (import.meta.main) {
 
 function usesModelCatalog(args: string[], bare: boolean): boolean {
     if (bare) return true;
-    return new Set(['build', 'connect', 'init', 'run', 'smoke', 'view']).has(
+    return new Set(['build', 'connect', 'init', 'resume', 'run', 'smoke', 'view']).has(
         args[0] ?? ''
     );
 }

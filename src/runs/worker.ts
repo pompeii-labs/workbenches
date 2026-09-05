@@ -39,14 +39,20 @@ export class RunWorker {
 
     async executeDispatched(id: string): Promise<number> {
         const run = await this.store.read(id);
-        if (run.mode === 'interactive') {
-            return new InteractiveRunWorker(this.home, id).execute({});
+        if (run.execution === 'session' || run.mode === 'interactive') {
+            return this.interactiveWorker(id).execute({});
         }
         return this.executeDetached(id);
     }
 
     async execute(options: ExecuteStoredRunOptions): Promise<number> {
         const metadata = await this.store.read(options.id);
+        if (metadata.execution === 'session' || metadata.mode === 'interactive') {
+            return this.interactiveWorker(options.id).execute({
+                ...(options.environment ? { environment: options.environment } : {}),
+                ...(options.signal ? { signal: options.signal } : {}),
+            });
+        }
         const request = await this.store
             .takeRequest(options.id)
             .catch(async (error) => {
@@ -61,9 +67,6 @@ export class RunWorker {
         if (!request) return 1;
         const controller = new AbortController();
         const stopExternalSignal = this.forwardAbort(options.signal, controller);
-        const stopWatching = this.store.watchCancellation(options.id, () =>
-            controller.abort()
-        );
         const controlAbort = new AbortController();
         const state = { terminal: false };
         const controls = this.processControls(
@@ -133,14 +136,19 @@ export class RunWorker {
                     'Workbench run is no longer accepting input'
                 )
                 .catch(() => {});
-            stopWatching();
             stopExternalSignal();
-            await this.store.clearCancellation(options.id);
         }
     }
 
     async executeDetached(id: string): Promise<number> {
         return this.execute({ id });
+    }
+
+    private interactiveWorker(id: string): InteractiveRunWorker {
+        return new InteractiveRunWorker(this.home, id, {
+            reportLaunch: (registry, idempotencyKey) =>
+                this.reportLaunch(registry, idempotencyKey),
+        });
     }
 
     private async reportLaunch(

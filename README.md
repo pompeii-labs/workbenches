@@ -281,7 +281,8 @@ by Docker mounts. Local access declarations are preflight checks, not an
 operating-system sandbox.
 
 Use `--dry-run` to inspect the translated runner invocation without executing
-it:
+it. An interactive terminal shows a concise summary; `--json` or piped output
+returns the complete translation:
 
 ```sh
 wb run project-core --task "Review this migration" --dry-run
@@ -399,29 +400,44 @@ Host-engine runs preserve host workspace paths inside the Workbench container
 so nested Docker and Compose bind mounts resolve correctly. Other Docker engine
 modes and non-Unix contexts are rejected rather than silently substituted.
 
-### Detach, attach, and cancel
+### Sessions and background work
 
 ```sh
 wb run project-core --task "Perform the migration" --detach
 # wb_...
 
 wb attach wb_...
-wb attach              # latest dispatched run
+wb attach              # latest session
 wb attach wb_... --json
-wb ps                  # active detached runs
-wb ps --all            # detached run history
+wb ps                  # active and resumable sessions
+wb ps --all            # all session history
 wb kill wb_...
-wb kill                # latest active detached run
+wb kill                # latest active session
+wb resume wb_...       # open or attach the terminal client
+wb resume wb_... "Review the latest change"
+wb resume wb_... --task "Run the checks" --detach
 ```
 
-Detached runs persist their normalized events. Attaching replays existing
-events before following new ones. Cancellation cooperatively terminates the
-runner and records a terminal `run.cancelled` event.
+Every execution belongs to one stable Workbench session. The first run shares
+its `wb_...` ID with the session; later resumes create internal runs while the
+session ID stays fixed. Detachment only controls whether the current terminal is
+watching the active run.
+
+Attaching observes or replays the latest run without taking control or starting
+model work. Resuming without a task opens the terminal client. If the latest run
+is active, the terminal attaches to that exact runner process. If it is closed,
+Workbench starts a new internal run from the runner's saved native context.
+
+Resuming with a task sends one non-interactive continuation through the same
+session. It joins an active run's follow-up queue or starts a linked internal run
+when the previous one is closed. `--detach` returns the stable session ID while
+that continuation runs in the background. Killing cooperatively terminates the
+active run without deleting the session or its resumable context.
 
 ### Interactive client
 
 Running `wb`, `workbench`, or `wb run <name>` without a task opens the
-experimental terminal client:
+terminal client:
 
 ```sh
 wb
@@ -445,15 +461,39 @@ event data. A runner can still reference the answer in later assistant output.
 OpenCode can submit a batch of prompts and multi-select choices.
 
 While a response is active, submitting another message steers the current turn.
-The terminal client does not yet expose image attachment. Image generation and
-normalized image output are not implemented yet.
+The message stays visibly queued until the runner confirms delivery. `Ctrl+C`
+cancels an active turn without closing the session. For image-capable runners,
+drag a PNG, JPEG, GIF, or WebP file into the composer, or paste its local path.
+Attachment bytes remain transient and are not copied into normalized events.
+Image generation and normalized image output are not implemented yet.
 
-Interactive sessions run in a background worker and expose the same durable run
-handle used to follow one-shot execution. Normalized events survive a terminal
-client disconnect, and another handle can replay the stream and control the same
-live runner session. User prompts, permission decisions, and question answers are
-transient control messages, not durable run history. Docker Workbenches still
-require a one-shot task; interactive Docker sessions are not yet supported.
+Type `/` or press `Ctrl+K` to browse local terminal commands. The initial command
+set covers Workbench, runtime, model, capability, session, and staged attachment
+details; attachment and transcript clearing; turn cancellation; themes; and clean
+exit.
+Commands are handled by Workbench and are never sent to the runner as prompts.
+`/theme` includes the Workbench default, Flexoki, GitHub, and Catppuccin themes.
+The adapted themes are attributed in `NOTICE`.
+
+Local session-capable runs use one background session worker whether they begin
+in the terminal client, foreground CLI output, or detached mode. Normalized
+events survive a client disconnect. Another terminal client can take control of
+the same live runner, while `wb attach` can observe it without taking control.
+Exiting the terminal client detaches it; an active turn and queued follow-ups
+continue, then the unattended worker closes while its native context remains
+resumable. User prompts, permission decisions, and question answers are transient
+control messages, not durable run history.
+
+Local sessions can be reopened with `wb resume <session-or-run-id>`, from
+`/sessions`, or from recent sessions on the home screen. An active session is
+reattached instead of duplicated. A closed session creates a new durable run
+linked to the same stable session. Workbench keeps a small private session index
+and a disposable transcript presentation cache. The selected runner remains the
+source of truth for model context: OpenCode resumes from its session database and
+Pi resumes from its session file. A session remains locked to its original
+Workbench version, runner, model, workspace, and workspace bindings. Docker
+Workbenches support detached execution and replay through `wb attach`, but do not
+support live terminal control or native session resume yet.
 
 ## Source and authorization boundaries
 

@@ -60,7 +60,7 @@ describe('Workbench image commands', () => {
         const previousHome = process.env.WORKBENCH_HOME;
         process.env.WORKBENCH_HOME = fixture.home;
         RegistryClient.configureApiUrl(fixture.apiUrl);
-        const output = spyOn(console, 'log').mockImplementation(() => undefined);
+        const output = spyOn(process.stdout, 'write').mockImplementation(() => true);
         try {
             await runDefinedCommand(loginCommand, { client: fixture.client });
             await runDefinedCommand(pushCommand, {
@@ -71,10 +71,10 @@ describe('Workbench image commands', () => {
                 client: fixture.client,
             });
             expect(output).toHaveBeenCalledWith(
-                `connected\t127.0.0.1:${fixture.server.port}\t${fixture.client}`
+                `connected\t127.0.0.1:${fixture.server.port}\t${fixture.client}\n`
             );
             expect(output).toHaveBeenCalledWith(
-                `pushed\t127.0.0.1:${fixture.server.port}/pompeii-labs/creator:0.2.0`
+                `pushed\t127.0.0.1:${fixture.server.port}/pompeii-labs/creator:0.2.0\n`
             );
             expect(await clientInvocations(fixture.log)).toHaveLength(2);
             expect(fixture.patchSizes.some((size) => size === 16 * 1024 * 1024)).toBe(

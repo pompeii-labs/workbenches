@@ -20,6 +20,7 @@ import {
     StoredRunHandle,
     type WorkbenchEvent,
 } from '../src/runs/index.js';
+import { SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { supportedRunnerDeclaration } from './runner-adapter-contract.js';
 
@@ -34,6 +35,196 @@ afterEach(async () => {
 });
 
 describe('interactive run worker', () => {
+    test('executes an initial detached task as a resumable native session', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home, {
+            mode: 'detached',
+            task: 'initial task',
+        });
+        const adapter = new ControlledAdapter({ autoComplete: true });
+
+        await expect(
+            workerFor(home, stored.id, adapter).execute({
+                environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+            })
+        ).resolves.toBe(0);
+
+        const run = await new RunStore(home).read(stored.id);
+        expect(run).toMatchObject({ status: 'completed', exit_code: 0 });
+        expect(adapter.prompts).toEqual(['initial task']);
+        expect(adapter.starts).toBe(1);
+        expect(run.runner_session_id).toBe('native-session-1');
+        const events = await new RunStore(home).readEvents(stored.id);
+        const started = events.find((event) => event.type === 'turn.started');
+        const completed = events.find((event) => event.type === 'turn.completed');
+        expect(started?.data).toMatchObject({
+            input_id: `input_${stored.id}`,
+        });
+        expect(completed?.data).toMatchObject({
+            input_id: `input_${stored.id}`,
+        });
+        expect(events.at(-1)?.type).toBe('run.completed');
+    });
+
+    test('does not deliver an initial task after its client already cancelled', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home, {
+            mode: 'foreground',
+            task: 'must not run',
+        });
+        const adapter = new ControlledAdapter({ autoComplete: true });
+        const controller = new AbortController();
+        controller.abort();
+
+        await expect(
+            workerFor(home, stored.id, adapter).execute({
+                environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+                signal: controller.signal,
+            })
+        ).resolves.toBe(130);
+
+        expect(adapter.prompts).toEqual([]);
+        expect(await new RunStore(home).read(stored.id)).toMatchObject({
+            status: 'cancelled',
+            exit_code: 130,
+        });
+        expect((await new RunStore(home).readEvents(stored.id)).at(-1)).toMatchObject({
+            type: 'run.cancelled',
+            data: { reason: 'interrupted' },
+        });
+    });
+
+    test('reports a registry launch after the native session starts', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home, {
+            mode: 'detached',
+            task: 'reported task',
+            registry: true,
+        });
+        const adapter = new ControlledAdapter({ autoComplete: true });
+        const reports: Array<{ url: string; idempotencyKey: string }> = [];
+
+        await workerFor(home, stored.id, adapter, async (registry, idempotencyKey) => {
+            reports.push({ url: registry.url, idempotencyKey });
+        }).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+
+        expect(reports).toEqual([
+            {
+                url: 'https://api.workbenches.dev',
+                idempotencyKey: 'event_fixture_launch',
+            },
+        ]);
+    });
+
+    test('keeps an attached session alive and completes it after detachment', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const adapter = new ControlledAdapter({ autoComplete: true });
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+
+        await expect(handle.attach()).resolves.toMatchObject({
+            disposition: 'attached',
+        });
+        const receipt = await handle.send('attached turn');
+        await waitForEventType(home, stored.id, 'turn.completed');
+        expect((await new RunStore(home).read(stored.id)).status).toBe('running');
+        expect(
+            (await new RunStore(home).readEvents(stored.id)).find(
+                (event) => event.type === 'turn.completed'
+            )?.data
+        ).toMatchObject({ input_id: receipt.id });
+
+        await expect(handle.detach()).resolves.toMatchObject({
+            disposition: 'detached',
+        });
+        await expect(execution).resolves.toBe(0);
+        await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
+    });
+
+    test('lets an active turn finish after its controlling client detaches', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const adapter = new ControlledAdapter();
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+        await handle.attach();
+        await handle.send('finish in background');
+        await adapter.waitForPrompts(1);
+
+        await handle.detach();
+        expect((await new RunStore(home).read(stored.id)).status).toBe('running');
+        adapter.completeFirst();
+        await expect(execution).resolves.toBe(0);
+        expect(adapter.cancellations).toBe(0);
+        await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
+    });
+
+    test('reopens native state from the stable Workbench session', async () => {
+        const home = await temporaryHome();
+        const sessionId = 'wb_workersession12345678901';
+        const sessions = new SessionStore(home);
+        await sessions.create({
+            id: sessionId,
+            workbench: 'fixture-core',
+            workbench_version: '0.1.0',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            reference: 'fixture-core',
+            workbench_path: '/repo/.workbenches/core',
+            workspace: '/workspace',
+            workspaces: [],
+            native_session_id: 'native-session-before',
+            latest_run_id: sessionId,
+        });
+        const stored = await new RunStore(home).create({
+            metadata: {
+                workbench: 'fixture-core',
+                workbench_version: '0.1.0',
+                runner: 'opencode',
+                model: 'openai/gpt-5.6-terra',
+                workspace: '/workspace',
+                mode: 'interactive',
+                session_id: sessionId,
+                resumed_from: sessionId,
+            },
+            request: {
+                workbench_path: '/repo/.workbenches/core',
+                workspace: '/workspace',
+                task: '',
+                session_id: sessionId,
+                native_session_id: 'native-session-before',
+            },
+        });
+        const adapter = new ControlledAdapter();
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+
+        await waitForReady(home, stored.id);
+        expect(adapter.session).toEqual({
+            id: sessionId,
+            directory: sessions.nativeDirectory(sessionId),
+            nativeSessionId: 'native-session-before',
+        });
+        expect(await sessions.read(sessionId)).toMatchObject({
+            native_session_id: 'native-session-1',
+            latest_run_id: stored.id,
+        });
+
+        await handle.close();
+        await expect(execution).resolves.toBe(0);
+    });
+
     test('preserves one session across steering, queued follow-ups, cancellation, and reconnect', async () => {
         const home = await temporaryHome();
         const stored = await fixtureRun(home);
@@ -461,6 +652,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
     readonly questionResponses: RunnerQuestionResponse[] = [];
     cancellations = 0;
     starts = 0;
+    session: RunnerSessionStartOptions['session'];
     private host?: RunnerSessionStartOptions['host'];
     private releaseFirst?: () => void;
     private readonly promptWaiters: Array<() => void> = [];
@@ -477,6 +669,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
             requestPermission?: boolean;
             requestQuestion?: boolean;
             deferSteeringDelivery?: boolean;
+            autoComplete?: boolean;
         } = {}
     ) {
         let markPermissionRequested!: () => void;
@@ -499,6 +692,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
         this.starts += 1;
         this.host = options.host;
+        this.session = options.session;
         return {
             id: 'native-session-1',
             prompt: (input) => this.prompt(input),
@@ -516,6 +710,10 @@ class ControlledAdapter implements RunnerSessionAdapter {
 
     deliverSteering(): void {
         this.resolveSteeringDelivery();
+    }
+
+    completeFirst(): void {
+        this.releaseFirst?.();
     }
 
     private async prompt(input: RunnerInput) {
@@ -546,7 +744,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
                     ],
                 });
                 if (response) this.questionResponses.push(response);
-            } else {
+            } else if (!this.options.autoComplete) {
                 await new Promise<void>((resolve) => {
                     this.releaseFirst = resolve;
                 });
@@ -588,12 +786,20 @@ class InteractiveWorkerTestRunner extends Runner {
     }
 }
 
-function workerFor(home: string, runId: string, adapter: RunnerSessionAdapter) {
+function workerFor(
+    home: string,
+    runId: string,
+    adapter: RunnerSessionAdapter,
+    reportLaunch?: NonNullable<
+        ConstructorParameters<typeof InteractiveRunWorker>[2]
+    >['reportLaunch']
+) {
     return new InteractiveRunWorker(home, runId, {
         loadWorkbench: async () => workbench(),
         findExecutable: (name) => `/bin/${name}`,
         registry: new RunnerRegistry([new InteractiveWorkerTestRunner(adapter)]),
         now: () => new Date('2026-09-01T12:00:00.000Z'),
+        ...(reportLaunch ? { reportLaunch } : {}),
     });
 }
 
@@ -603,7 +809,14 @@ async function temporaryHome(): Promise<string> {
     return directory;
 }
 
-function fixtureRun(home: string): Promise<StoredRun> {
+function fixtureRun(
+    home: string,
+    options: {
+        mode?: 'foreground' | 'detached' | 'interactive';
+        task?: string;
+        registry?: boolean;
+    } = {}
+): Promise<StoredRun> {
     return new RunStore(home).create({
         metadata: {
             workbench: 'fixture-core',
@@ -611,12 +824,24 @@ function fixtureRun(home: string): Promise<StoredRun> {
             runner: 'opencode',
             model: 'openai/gpt-5.6-terra',
             workspace: '/workspace',
-            mode: 'interactive',
+            mode: options.mode ?? 'interactive',
+            execution: 'session',
+            ...(options.registry
+                ? {
+                      registry: {
+                          url: 'https://api.workbenches.dev',
+                          publisher: 'fixture',
+                          workbench: 'core',
+                          version_id: 'version_fixture',
+                      },
+                      registry_event_id: 'event_fixture_launch',
+                  }
+                : {}),
         },
         request: {
             workbench_path: '/repo/.workbenches/core',
             workspace: '/workspace',
-            task: '',
+            task: options.task ?? '',
         },
     });
 }
@@ -673,6 +898,20 @@ async function waitForEvent(
         await Bun.sleep(2);
     }
     throw new Error(`Timed out waiting for ${type}:${kind}`);
+}
+
+async function waitForEventType(
+    home: string,
+    runId: string,
+    type: WorkbenchEvent['type']
+): Promise<void> {
+    const store = new RunStore(home);
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+        if ((await store.readEvents(runId)).some((event) => event.type === type))
+            return;
+        await Bun.sleep(2);
+    }
+    throw new Error(`Timed out waiting for ${type}`);
 }
 
 async function collect(events: AsyncIterable<WorkbenchEvent>) {

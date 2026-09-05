@@ -1,8 +1,17 @@
-import type { InputRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/solid';
-import { type Accessor, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import {
+    type Accessor,
+    createEffect,
+    createMemo,
+    createSignal,
+    For,
+    onCleanup,
+    onMount,
+    Show,
+} from 'solid-js';
 
 import { modelLabel } from '../models/index.js';
+import { RunnerRegistry } from '../runners/registry.js';
 import type {
     RunnerPermissionDecision,
     RunnerPermissionRequest,
@@ -10,26 +19,45 @@ import type {
     RunnerQuestionResponse,
 } from '../runners/session.js';
 import type { RunControlReceipt, RunHandle, WorkbenchEvent } from '../runs/index.js';
+import type { ResolvedSession, StoredSession } from '../sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
+import { ActivityIndicator } from './activity.js';
+import { SessionCommands } from './commands/session.js';
+import { useDialog } from './dialog/index.js';
 import {
     addUserMessage,
     emptyTranscript,
+    groupTranscriptItems,
+    interruptTranscript,
     queueUserMessage,
     reduceTranscript,
     reduceTranscriptDuringCancellation,
     TranscriptEventBuffer,
 } from './model.js';
+import {
+    PromptAttachmentReader,
+    type PromptImageAttachment,
+} from './prompt/attachments.js';
+import { Composer, type ComposerRef } from './prompt/composer.js';
+import { PromptHistory } from './prompt/history.js';
 import { QuestionPrompt, questionFromEvent } from './question.js';
-import { theme } from './theme.js';
+import type { TranscriptCursor } from './session-transcript.js';
+import { SessionTranscript } from './session-transcript.js';
+import { useTheme } from './theme/index.js';
 import { Transcript } from './transcript.js';
 
 export interface ChatScreenProps {
+    home: string;
     alias: string;
     resolved: ResolvedWorkbenchReference;
     start: (options: {
         resolved: ResolvedWorkbenchReference;
         reference: string;
+        session?: StoredSession;
     }) => Promise<RunHandle>;
+    session?: StoredSession;
+    resolveSession?: (id: string) => Promise<ResolvedSession>;
+    onResume: (session: ResolvedSession) => void;
     onBack: () => void;
     onExit: () => void;
     homeAvailable: boolean;
@@ -53,24 +81,46 @@ export class TurnCancellation {
 }
 
 export function ChatScreen(props: ChatScreenProps) {
+    const themes = useTheme();
+    const { theme } = themes;
+    const dialog = useDialog();
     const [state, setState] = createSignal(emptyTranscript());
+    const [sessionReady, setSessionReady] = createSignal(false);
+    const [attachments, setAttachments] = createSignal<PromptImageAttachment[]>([]);
     const [error, setError] = createSignal('');
     const [permission, setPermission] = createSignal<{
         request: RunnerPermissionRequest;
     }>();
     const [question, setQuestion] = createSignal<RunnerQuestionRequest>();
     const [questionResponsePending, setQuestionResponsePending] = createSignal(false);
+    const [cancellationPending, setCancellationPending] = createSignal(false);
+    const [storedTranscript, setStoredTranscript] = createSignal<SessionTranscript>();
+    const [eventCursor, setEventCursor] = createSignal<TranscriptCursor>();
     let session: RunHandle | undefined;
+    const observation = new AbortController();
     const cancellation = new TurnCancellation();
-    let composer!: InputRenderable;
+    const history = new PromptHistory(props.home);
+    const attachmentReader = new PromptAttachmentReader(
+        props.resolved.workspaceDirectory
+    );
+    const imageInput = RunnerRegistry.standard().session(
+        props.resolved.workbench.manifest.runner
+    ).declaration.capabilities.image_input;
+    let composer: ComposerRef | undefined;
     let leaving = false;
     const events = new TranscriptEventBuffer((event) =>
         setState((current) => {
-            return cancellation.pending
+            return current.interruptionPending
                 ? reduceTranscriptDuringCancellation(current, event)
                 : reduceTranscript(current, event);
         })
     );
+
+    createEffect(() => {
+        const transcript = storedTranscript();
+        const items = state().items;
+        if (transcript) transcript.schedule(items, eventCursor());
+    });
 
     const decidePermission = async (decision: RunnerPermissionDecision) => {
         const pending = permission();
@@ -104,36 +154,63 @@ export function ChatScreen(props: ChatScreenProps) {
         leaving = true;
         await decidePermission('reject');
         await respondToQuestion({ outcome: 'rejected' });
-        await session?.close().catch(() => {});
+        observation.abort();
+        await session?.detach().catch(() => {});
+        await storedTranscript()
+            ?.flush()
+            .catch(() => {});
         await props.resolved.cleanup();
         if (back) props.onBack();
         else props.onExit();
+    };
+    const resume = async (target: StoredSession) => {
+        if (leaving || state().busy) {
+            setError(
+                'Finish or cancel the active turn before resuming another session.'
+            );
+            return;
+        }
+        if (!props.resolveSession) {
+            setError('Session resume is unavailable.');
+            return;
+        }
+        let resolved: ResolvedSession;
+        try {
+            resolved = await props.resolveSession(target.id);
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+            return;
+        }
+        leaving = true;
+        observation.abort();
+        await session?.detach().catch(() => {});
+        await storedTranscript()
+            ?.flush()
+            .catch(() => {});
+        await props.resolved.cleanup();
+        props.onResume(resolved);
     };
     const cancelTurn = (): Promise<void> => {
         if (cancellation.pending) return Promise.resolve();
         const active = session;
         if (!active) return Promise.resolve();
         setError('');
-        setState((current) => ({ ...current, busy: true, status: 'Cancelling' }));
+        setCancellationPending(true);
+        events.discardText();
+        setState((current) => interruptTranscript(current));
         return cancellation
             .request(active)
-            .then((receipt) => {
-                setState((current) => ({
-                    ...current,
-                    busy: false,
-                    status:
-                        receipt.disposition === 'already_idle'
-                            ? 'Ready'
-                            : 'Interrupted',
-                }));
-            })
+            .then(() => undefined)
             .catch((cause) => {
                 setError(cause instanceof Error ? cause.message : String(cause));
                 setState((current) => ({
                     ...current,
-                    busy: false,
+                    interruptionPending: false,
                     status: 'Cancellation failed',
                 }));
+            })
+            .finally(() => {
+                setCancellationPending(false);
             });
     };
     const fail = (cause: unknown) => {
@@ -145,18 +222,33 @@ export function ChatScreen(props: ChatScreenProps) {
         if (!task || !session || permission() || question()) return;
         const steering = state().busy;
         const queuedId = steering ? crypto.randomUUID() : undefined;
-        composer.value = '';
+        const images = attachments();
+        const imageNames = images.map((image) => image.name);
+        const input =
+            images.length > 0
+                ? {
+                      text: task,
+                      images: images.map(({ data, mimeType, name }) => ({
+                          data,
+                          mimeType,
+                          name,
+                      })),
+                  }
+                : task;
+        setError('');
+        setAttachments([]);
         setState((current) =>
             steering
-                ? queueUserMessage(current, task, queuedId)
-                : addUserMessage(current, task)
+                ? queueUserMessage(current, task, queuedId, imageNames)
+                : addUserMessage(current, task, crypto.randomUUID(), imageNames)
         );
         try {
-            if (steering) await session.steer(task);
-            else await session.send(task);
+            if (steering) await session.steer(input);
+            else await session.send(input);
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : String(cause);
             setError(message);
+            setAttachments((current) => [...images, ...current]);
             setState((current) => ({
                 ...current,
                 ...(queuedId
@@ -171,14 +263,75 @@ export function ChatScreen(props: ChatScreenProps) {
             }));
         }
     };
+    const paste = async (value: string): Promise<boolean> => {
+        try {
+            const image = await attachmentReader.readPasted(value);
+            if (!image) return false;
+            if (imageInput.status === 'unsupported') {
+                setError(
+                    imageInput.detail ??
+                        `${props.resolved.workbench.manifest.runner} does not support image input`
+                );
+                return true;
+            }
+            setAttachments((current) =>
+                current.some((attachment) => attachment.path === image.path)
+                    ? current
+                    : [...current, image]
+            );
+            setError('');
+            return true;
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+            return true;
+        }
+    };
 
     onMount(async () => {
+        void history.load().catch((cause) => {
+            setError(
+                `Prompt history could not be loaded: ${cause instanceof Error ? cause.message : String(cause)}`
+            );
+        });
         try {
+            if (props.session) {
+                const transcript = new SessionTranscript(props.home, props.session.id);
+                setStoredTranscript(transcript);
+                const [items, cursor] = await Promise.all([
+                    transcript.load(),
+                    transcript.cursor(),
+                ]);
+                if (items.length > 0) {
+                    setState((current) => ({ ...current, items }));
+                }
+                if (cursor) setEventCursor(cursor);
+            }
             session = await props.start({
                 resolved: props.resolved,
                 reference: props.alias,
+                ...(props.session ? { session: props.session } : {}),
             });
-            void consumeEvents(session, (event) => {
+            if (!storedTranscript()) {
+                setStoredTranscript(new SessionTranscript(props.home, session.runId));
+            }
+            const cursor = eventCursor();
+            const resumingObservedRun = cursor?.runId === session.runId;
+            const afterSequence = resumingObservedRun ? cursor.sequence : undefined;
+            if (resumingObservedRun) {
+                setSessionReady(true);
+                composer?.focus();
+            }
+            void consumeEvents(session, observation.signal, afterSequence, (event) => {
+                if (event.type === 'run.ready') {
+                    setSessionReady(true);
+                    composer?.focus();
+                } else if (
+                    event.type === 'run.failed' ||
+                    event.type === 'run.cancelled' ||
+                    event.type === 'run.completed'
+                ) {
+                    setSessionReady(false);
+                }
                 const requested = permissionFromEvent(event);
                 if (requested) setPermission({ request: requested });
                 const asked = questionFromEvent(event);
@@ -191,9 +344,8 @@ export function ChatScreen(props: ChatScreenProps) {
                     setQuestion(undefined);
                 }
                 events.push(event);
+                setEventCursor({ runId: event.run_id, sequence: event.sequence });
             }).catch(fail);
-            void session.result.catch(fail);
-            composer?.focus();
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : String(cause));
             setState((current) => ({ ...current, status: 'Failed' }));
@@ -203,13 +355,18 @@ export function ChatScreen(props: ChatScreenProps) {
         events.dispose();
         if (!leaving) {
             leaving = true;
+            observation.abort();
             void decidePermission('reject');
             void respondToQuestion({ outcome: 'rejected' });
-            void session?.close().catch(() => {});
+            void session?.detach().catch(() => {});
+            void storedTranscript()
+                ?.flush()
+                .catch(() => {});
             void props.resolved.cleanup();
         }
     });
     useKeyboard((key) => {
+        if (dialog.active()) return;
         const pendingQuestion = question();
         if (pendingQuestion) {
             if (key.ctrl && key.name === 'c') {
@@ -245,7 +402,7 @@ export function ChatScreen(props: ChatScreenProps) {
         }
         if (key.ctrl && key.name === 'c') {
             key.preventDefault();
-            if (state().busy) void cancelTurn();
+            if (state().busy || cancellationPending()) void cancelTurn();
             else void close(false);
         } else if (key.name === 'escape' && props.homeAvailable && !state().busy) {
             key.preventDefault();
@@ -254,6 +411,37 @@ export function ChatScreen(props: ChatScreenProps) {
     });
 
     const manifest = props.resolved.workbench.manifest;
+    const transcript = createMemo(() => groupTranscriptItems(state().items));
+    const activityStatus = createMemo(() => {
+        if (!state().busy || permission() || question()) return;
+        if (state().status === 'Responding') return;
+        const latest = transcript().at(-1);
+        if (
+            state().status === 'Working' &&
+            latest?.kind === 'activity' &&
+            latest.tools.some((tool) => tool.status === 'running')
+        ) {
+            return;
+        }
+        return state().status;
+    });
+    const commands = new SessionCommands({
+        home: props.home,
+        alias: props.alias,
+        resolved: props.resolved,
+        dialog,
+        themes,
+        actions: {
+            currentSessionId: () => props.session?.id ?? session?.runId,
+            resumeSession: resume,
+            clearTranscript: () => setState((current) => ({ ...current, items: [] })),
+            attachments,
+            clearAttachments: () => setAttachments([]),
+            cancelTurn,
+            exit: () => close(false),
+            showError: setError,
+        },
+    });
     return (
         <box flexDirection="column" flexGrow={1} paddingX={3} paddingY={1}>
             <box
@@ -288,49 +476,48 @@ export function ChatScreen(props: ChatScreenProps) {
                     fallback={<box height={0} />}
                 >
                     <box flexDirection="column" paddingTop={2}>
-                        <text fg={theme.muted}>Ready when you are.</text>
-                        <text fg={theme.faint}>
-                            This session keeps its context across every turn.
-                        </text>
+                        <Show
+                            when={sessionReady()}
+                            fallback={
+                                <text fg={theme.muted}>
+                                    Starting {manifest.name}...
+                                </text>
+                            }
+                        >
+                            <text fg={theme.muted}>Ready when you are.</text>
+                            <text fg={theme.faint}>
+                                This session keeps its context across every turn.
+                            </text>
+                        </Show>
                     </box>
                 </Show>
-                <For each={state().items} fallback={<box height={0} />}>
+                <For each={transcript()} fallback={<box height={0} />}>
                     {(item, index) => (
                         <Transcript
                             item={item}
+                            assistantLabel={manifest.name}
+                            workspace={props.resolved.workspaceDirectory}
                             streaming={
                                 item.kind === 'assistant' &&
                                 state().busy &&
-                                index() === state().items.length - 1
+                                index() === transcript().length - 1
                             }
                         />
                     )}
                 </For>
-                <For each={state().queued} fallback={<box height={0} />}>
-                    {(item) => (
-                        <box
-                            flexDirection="column"
-                            border={['left']}
-                            borderColor={theme.accent}
-                            paddingLeft={1}
-                            marginY={1}
-                        >
-                            <box flexDirection="row" justifyContent="space-between">
-                                <text fg={theme.accent}>YOU</text>
-                                <text fg={theme.faint}> QUEUED </text>
-                            </box>
-                            <text fg={theme.muted} wrapMode="word">
-                                {item.text}
-                            </text>
+                <Show when={activityStatus()}>
+                    {(status: () => string) => (
+                        <box marginTop={1}>
+                            <ActivityIndicator label={status()} />
                         </box>
                     )}
-                </For>
+                </Show>
                 <Show when={error().length > 0} fallback={<box height={0} />}>
                     <box
                         border={['left']}
                         borderColor={theme.red}
                         paddingLeft={1}
-                        marginY={1}
+                        marginTop={1}
                     >
                         <text fg={theme.red}>{error()}</text>
                     </box>
@@ -343,36 +530,29 @@ export function ChatScreen(props: ChatScreenProps) {
                     <Show
                         when={permission()}
                         fallback={
-                            <box
-                                border={true}
-                                borderStyle="rounded"
-                                borderColor={state().busy ? theme.faint : theme.accent}
-                                backgroundColor={theme.panelRaised}
-                                paddingX={1}
-                                flexDirection="row"
-                            >
-                                <text fg={state().busy ? theme.faint : theme.accent}>
-                                    ›{' '}
-                                </text>
-                                <input
-                                    ref={(value) => {
-                                        composer = value;
-                                        value.focus();
-                                    }}
-                                    placeholder={
-                                        state().busy
-                                            ? 'Steer the current turn…'
-                                            : 'Ask anything'
-                                    }
-                                    placeholderColor={theme.faint}
-                                    textColor={theme.text}
-                                    focusedTextColor={theme.text}
-                                    backgroundColor={theme.panelRaised}
-                                    focusedBackgroundColor={theme.panelRaised}
-                                    flexGrow={1}
-                                    on:enter={(value: string) => void submit(value)}
-                                />
-                            </box>
+                            <Composer
+                                ref={(value) => {
+                                    composer = value;
+                                }}
+                                busy={state().busy}
+                                disabled={!sessionReady()}
+                                acceptsImages={imageInput.status !== 'unsupported'}
+                                queued={state().queued}
+                                attachments={attachments()}
+                                history={history}
+                                commands={commands.registry}
+                                onSubmit={submit}
+                                onPaste={paste}
+                                onCommand={(command, argument) =>
+                                    commands.run(command, argument)
+                                }
+                                onUnknownCommand={(name) =>
+                                    setError(
+                                        `Unknown command: ${name}. Type /help to browse commands.`
+                                    )
+                                }
+                                onOpenPalette={() => commands.openPalette()}
+                            />
                         }
                     >
                         {(
@@ -412,17 +592,14 @@ export function ChatScreen(props: ChatScreenProps) {
                     />
                 )}
             </Show>
-            <box flexDirection="row" justifyContent="space-between" marginTop={1}>
-                <text fg={state().status === 'Failed' ? theme.red : theme.mint}>
-                    {state().busy ? '◌' : '●'} {state().status}
-                </text>
+            <box flexDirection="row" justifyContent="flex-end" marginTop={1}>
                 <text fg={theme.faint}>
                     {usageLabel(state().totalTokens, state().costUsd)}
                     {question()
                         ? 'answer required · ctrl+c cancel'
-                        : state().busy
-                          ? 'enter steer · ctrl+c cancel'
-                          : 'enter send · ctrl+c quit'}
+                        : state().busy || cancellationPending()
+                          ? 'ctrl+c cancel'
+                          : 'ctrl+c quit'}
                 </text>
             </box>
         </box>
@@ -431,9 +608,16 @@ export function ChatScreen(props: ChatScreenProps) {
 
 async function consumeEvents(
     session: RunHandle,
+    signal: AbortSignal,
+    afterSequence: number | undefined,
     consume: (event: WorkbenchEvent) => void
 ): Promise<void> {
-    for await (const event of session.events) consume(event);
+    for await (const event of session.observe({
+        signal,
+        ...(afterSequence === undefined ? {} : { afterSequence }),
+    })) {
+        consume(event);
+    }
 }
 
 function permissionFromEvent(

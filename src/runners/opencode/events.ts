@@ -1,4 +1,5 @@
 import type { WorkbenchEventDraft } from '../../runs/index.js';
+import { describeTool } from '../tool.js';
 
 export interface OpenCodeAdapterResult {
     events: WorkbenchEventDraft[];
@@ -64,12 +65,17 @@ export class OpenCodeEventAdapter {
         const state = record(part?.state);
         const id = string(part?.callID) ?? string(part?.id) ?? 'unknown';
         const name = string(part?.tool) ?? 'tool';
+        if (name.toLowerCase() === 'question') return this.result([]);
         const status = string(state?.status) ?? 'unknown';
-        const target = toolTarget(record(state?.input));
+        const description = describeTool(
+            name,
+            record(state?.input),
+            record(state?.metadata)
+        );
         const common = {
             id,
             name,
-            ...(target ? { target } : {}),
+            ...description,
         };
         const events: WorkbenchEventDraft[] = [];
         if (!this.startedTools.has(id)) {
@@ -91,7 +97,7 @@ export class OpenCodeEventAdapter {
                     ...duration(state),
                 },
             });
-            const changed = changedFile(name, target);
+            const changed = changedFile(name, description.target);
             if (changed) events.push({ type: 'file.changed', data: changed });
         }
         return this.result(events);
@@ -192,15 +198,6 @@ function duration(state: Record<string, unknown> | undefined) {
     return start !== undefined && end !== undefined && end >= start
         ? { duration_ms: end - start }
         : {};
-}
-
-function toolTarget(input: Record<string, unknown> | undefined): string | undefined {
-    if (!input) return undefined;
-    for (const key of ['filePath', 'path']) {
-        const value = string(input[key]);
-        if (value) return value.length > 240 ? `${value.slice(0, 237)}...` : value;
-    }
-    return undefined;
 }
 
 function changedFile(name: string, target: string | undefined) {

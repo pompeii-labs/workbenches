@@ -9,6 +9,8 @@ import {
 } from '../runners/session.js';
 
 export type RunControlKind =
+    | 'attach_client'
+    | 'detach_client'
     | 'send'
     | 'steer'
     | 'follow_up'
@@ -33,9 +35,12 @@ export interface RunControlRequest {
         response: RunnerQuestionResponse;
     };
     reason?: string;
+    client_id?: string;
 }
 
 export type RunControlDisposition =
+    | 'attached'
+    | 'detached'
     | 'delivered'
     | 'queued'
     | 'cancelled'
@@ -57,6 +62,7 @@ export interface RunControlReceipt {
 }
 
 export type RunControlSubmission =
+    | { kind: 'attach_client' | 'detach_client'; clientId: string }
     | { kind: 'send' | 'steer' | 'follow_up'; input: RunnerInput }
     | { kind: 'cancel_turn' | 'close' }
     | { kind: 'cancel'; reason?: string }
@@ -161,6 +167,9 @@ export class RunControl {
             ...('reason' in submission && submission.reason?.trim()
                 ? { reason: submission.reason.trim() }
                 : {}),
+            ...('clientId' in submission
+                ? { client_id: submission.clientId.trim() }
+                : {}),
         };
     }
 
@@ -219,7 +228,7 @@ export class RunControl {
             if (source) return this.parseReceipt(source, request);
             await this.delay(this.pollMilliseconds);
         }
-        throw new Error(`Timed out waiting for Workbench input receipt: ${request.id}`);
+        throw new Error(this.timeoutMessage(request.kind));
     }
 
     private async readRequest(path: string): Promise<RunControlRequest> {
@@ -248,9 +257,16 @@ export class RunControl {
             value.kind !== request.kind ||
             (value.outcome !== 'accepted' && value.outcome !== 'rejected')
         ) {
-            throw new Error(`Invalid Workbench input receipt: ${request.id}`);
+            throw new Error('The Workbench returned an invalid input acknowledgement');
         }
         return value as RunControlReceipt;
+    }
+
+    private timeoutMessage(kind: RunControlKind): string {
+        if (kind === 'cancel_turn') {
+            return 'The Workbench did not acknowledge cancellation. Inspect the session with wb ps or stop it with wb kill <session-id>.';
+        }
+        return 'The Workbench did not acknowledge the message. The session may still be active; inspect it with wb ps.';
     }
 
     private pendingDirectory(): string {
@@ -286,20 +302,20 @@ export class RunControl {
     private async delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
         if (signal?.aborted) return;
         await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, milliseconds);
-            signal?.addEventListener(
-                'abort',
-                () => {
-                    clearTimeout(timer);
-                    resolve();
-                },
-                { once: true }
-            );
+            const finish = () => {
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', finish);
+                resolve();
+            };
+            const timer = setTimeout(finish, milliseconds);
+            signal?.addEventListener('abort', finish, { once: true });
         });
     }
 }
 
 const runControlKinds = new Set<RunControlKind>([
+    'attach_client',
+    'detach_client',
     'send',
     'steer',
     'follow_up',

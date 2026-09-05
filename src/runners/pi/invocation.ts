@@ -2,6 +2,7 @@ import { join } from 'node:path';
 
 import { modelLabel } from '../../models/index.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
+import type { RunnerSessionContext } from '../session.js';
 
 export function buildPiInvocation(
     workbench: ResolvedWorkbench,
@@ -43,7 +44,8 @@ export function buildPiRpcInvocation(
     baseEnv: Record<string, string | undefined> = process.env,
     workspaceDirectory = workbench.repositoryDirectory,
     model = modelLabel(workbench.manifest.model),
-    configDirectory?: string
+    configDirectory?: string,
+    session?: RunnerSessionContext
 ): RunnerInvocation {
     validatePiWorkbench(workbench);
     const route = splitModelRoute(model);
@@ -51,7 +53,15 @@ export function buildPiRpcInvocation(
         'pi',
         '--mode',
         'rpc',
-        '--no-session',
+        ...(session
+            ? [
+                  '--session-dir',
+                  session.directory,
+                  ...(session.nativeSessionId
+                      ? ['--session', session.nativeSessionId]
+                      : []),
+              ]
+            : ['--no-session']),
         '--no-context-files',
         '--provider',
         route.provider,

@@ -1,6 +1,8 @@
 import { basename } from 'node:path';
 
 import { modelLabel } from '../models/index.js';
+import { RunnerRegistry } from '../runners/index.js';
+import { SessionStore, type StoredSession } from '../sessions/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import { type RunHandle, StoredRunHandle } from './handle.js';
@@ -13,6 +15,7 @@ export interface PrepareRunOptions {
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
     reference?: string;
+    session?: StoredSession;
 }
 
 export interface DispatchRunOptions {
@@ -23,39 +26,109 @@ export interface DispatchRunOptions {
 
 export class RunDispatcher {
     private readonly store: RunStore;
+    private readonly sessions: SessionStore;
 
     constructor(private readonly home: string) {
         this.store = new RunStore(home);
+        this.sessions = new SessionStore(home);
     }
 
-    prepare(options: PrepareRunOptions): Promise<StoredRun> {
+    async prepare(options: PrepareRunOptions): Promise<StoredRun> {
         const workbench = options.resolved.workbench;
-        return this.store.create({
-            metadata: {
+        const id = RunStore.createId();
+        const execution = this.executionFor(
+            workbench.manifest.runtime,
+            workbench.manifest.runner
+        );
+        const reference =
+            options.session?.reference ?? options.reference ?? workbench.manifest.name;
+        const workspaces = options.session?.workspaces ?? options.workspaces ?? [];
+        if (options.session) this.assertCompatible(options, options.session);
+        const session =
+            options.session ??
+            (await this.sessions.create({
+                id,
                 workbench: workbench.manifest.name,
                 workbench_version: workbench.manifest.version,
                 runner: workbench.manifest.runner,
                 model: modelLabel(workbench.manifest.model),
-                workspace: options.resolved.workspaceDirectory,
-                mode: options.mode,
-                workspaces: options.workspaces ?? [],
-                allow_host_docker: options.allowHostDocker ?? false,
-                ...(options.resolved.registry
-                    ? {
-                          registry: options.resolved.registry,
-                          registry_event_id: crypto.randomUUID(),
-                      }
-                    : {}),
-            },
-            request: {
+                reference,
                 workbench_path: workbench.packageDirectory,
                 workspace: options.resolved.workspaceDirectory,
-                task: options.task ?? '',
-                workspaces: options.workspaces ?? [],
-                allow_host_docker: options.allowHostDocker ?? false,
-                reference: options.reference ?? workbench.manifest.name,
-            },
-        });
+                workspaces,
+                ...(options.resolved.registry
+                    ? { registry: options.resolved.registry }
+                    : {}),
+                latest_run_id: id,
+            }));
+        let stored: StoredRun;
+        try {
+            stored = await this.store.create({
+                id,
+                metadata: {
+                    workbench: workbench.manifest.name,
+                    workbench_version: workbench.manifest.version,
+                    runner: workbench.manifest.runner,
+                    model: modelLabel(workbench.manifest.model),
+                    workspace: options.resolved.workspaceDirectory,
+                    mode: options.mode,
+                    execution,
+                    workspaces,
+                    allow_host_docker: options.allowHostDocker ?? false,
+                    session_id: session.id,
+                    ...(options.session ? { resumed_from: session.latest_run_id } : {}),
+                    ...(options.resolved.registry
+                        ? {
+                              registry: options.resolved.registry,
+                              registry_event_id: crypto.randomUUID(),
+                          }
+                        : {}),
+                },
+                request: {
+                    workbench_path: workbench.packageDirectory,
+                    workspace: options.resolved.workspaceDirectory,
+                    task: options.task ?? '',
+                    workspaces,
+                    allow_host_docker: options.allowHostDocker ?? false,
+                    reference,
+                    session_id: session.id,
+                    ...(session.native_session_id
+                        ? { native_session_id: session.native_session_id }
+                        : {}),
+                },
+            });
+        } catch (error) {
+            if (!options.session) await this.sessions.remove(session.id);
+            throw error;
+        }
+        if (options.session) {
+            await this.sessions.update(session.id, { latest_run_id: stored.id });
+        }
+        return stored;
+    }
+
+    private executionFor(runtime: string, runner: string): 'one_shot' | 'session' {
+        if (runtime !== 'local') return 'one_shot';
+        const resume =
+            RunnerRegistry.standard().session(runner).declaration.capabilities
+                .session_resume;
+        return resume.status === 'unsupported' ? 'one_shot' : 'session';
+    }
+
+    private assertCompatible(options: PrepareRunOptions, session: StoredSession): void {
+        const workbench = options.resolved.workbench;
+        const compatible =
+            session.workbench === workbench.manifest.name &&
+            session.workbench_version === workbench.manifest.version &&
+            session.runner === workbench.manifest.runner &&
+            session.model === modelLabel(workbench.manifest.model) &&
+            session.workbench_path === workbench.packageDirectory &&
+            session.workspace === options.resolved.workspaceDirectory;
+        if (!compatible) {
+            throw new Error(
+                `Session ${session.id} does not match the resolved Workbench package`
+            );
+        }
     }
 
     handle(id: string): RunHandle {
@@ -63,6 +136,7 @@ export class RunDispatcher {
     }
 
     async dispatch(options: DispatchRunOptions): Promise<number> {
+        let pid: number;
         try {
             const child = Bun.spawn(this.workerCommand(options.id), {
                 cwd: options.cwd,
@@ -77,8 +151,8 @@ export class RunDispatcher {
                 detached: true,
             });
             child.unref();
-            await this.store.update(options.id, { pid: child.pid });
-            return child.pid;
+            pid = child.pid;
+            await this.store.update(options.id, { pid });
         } catch (error) {
             await this.store
                 .update(options.id, {
@@ -89,6 +163,46 @@ export class RunDispatcher {
                 .catch(() => {});
             throw error;
         }
+        try {
+            await this.waitUntilStarted(options.id);
+            return pid;
+        } catch (error) {
+            await this.store
+                .read(options.id)
+                .then((run) => this.store.reconcile(run))
+                .catch(() => {});
+            throw error;
+        }
+    }
+
+    private async waitUntilStarted(id: string): Promise<void> {
+        const started = Date.now();
+        while (Date.now() - started < 15_000) {
+            const run = await this.store.read(id);
+            if (RunStore.isTerminal(run.status)) {
+                if (run.status === 'completed') return;
+                const events = await this.store.readEvents(id);
+                const message = events
+                    .toReversed()
+                    .find((event) => event.type === 'run.failed')?.data;
+                throw new Error(
+                    typeof message === 'object' &&
+                        message !== null &&
+                        typeof Reflect.get(message, 'message') === 'string'
+                        ? String(Reflect.get(message, 'message'))
+                        : `Workbench session failed to start: ${id}`
+                );
+            }
+            if (
+                run.status === 'running' &&
+                (run.execution !== 'session' || Boolean(run.runner_session_id))
+            ) {
+                return;
+            }
+            this.store.assertWorkerAlive(run);
+            await Bun.sleep(25);
+        }
+        throw new Error(`Workbench session did not start in time: ${id}`);
     }
 
     private workerCommand(id: string): string[] {

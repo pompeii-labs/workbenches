@@ -1,6 +1,6 @@
 import { lstat } from 'node:fs/promises';
+import { join } from 'node:path';
 import type {
-    RunnerAdapterDeclaration,
     RunnerInput,
     RunnerInputDelivery,
     RunnerPermissionDecision,
@@ -12,6 +12,7 @@ import type {
 } from '../session.js';
 import { normalizeRunnerInput } from '../session.js';
 import { stageOpenCodeSkills } from './assets.js';
+import { OPENCODE_SESSION_DECLARATION } from './capabilities.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
 import { OpenCodeQuestion } from './question.js';
@@ -21,34 +22,6 @@ import {
     type SpawnedOpenCodeServer,
     spawnOpenCodeServer,
 } from './server.js';
-
-export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
-    native: {
-        command: 'opencode',
-        verified: [
-            { version: '1.18.22', surfaces: ['server'] },
-            { version: '1.18.26', surfaces: ['server'] },
-        ],
-    },
-    capabilities: {
-        streaming_text: { status: 'supported' },
-        tool_events: { status: 'supported' },
-        file_events: { status: 'supported' },
-        usage: { status: 'supported' },
-        permissions: { status: 'supported' },
-        questions: { status: 'supported' },
-        multi_turn: { status: 'supported' },
-        steering: { status: 'supported' },
-        image_input: { status: 'supported' },
-        image_generation: {
-            status: 'unsupported',
-            detail: 'Workbench does not yet provide a normalized image-generation tool or image output event for OpenCode.',
-        },
-        cancellation: { status: 'supported' },
-        failures: { status: 'supported' },
-        unknown_events: { status: 'supported' },
-    },
-};
 
 export interface OpenCodeSessionDependencies {
     spawn?: (
@@ -95,7 +68,11 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
             cleanup: staged?.cleanup ?? (async () => {}),
         });
         try {
-            await session.start();
+            await withTimeout(
+                session.start(),
+                this.dependencies.startupTimeoutMs,
+                'OpenCode session did not become ready in time'
+            );
             return session;
         } catch (error) {
             await session.close().catch(() => {});
@@ -109,6 +86,7 @@ interface ActiveTurn {
     inputMessageIds: Set<string>;
     assistantOutputIds: Map<string, string>;
     steeringDeliveries: Map<string, ReturnType<typeof deferred<void>>>;
+    steeringOrder: string[];
     promise: Promise<RunnerTurnResult>;
     resolve: (result: RunnerTurnResult) => void;
     reject: (error: Error) => void;
@@ -136,6 +114,7 @@ class OpenCodeServerSession implements RunnerSession {
     private readonly assistantTextParts = new Set<string>();
     private readonly alwaysPermissions: AlwaysPermission[] = [];
     private readonly questions = new OpenCodeQuestion();
+    private readonly messageIds = new OpenCodeMessageIds();
     private nativeSessionId: string | undefined;
     private active: ActiveTurn | undefined;
     private closed = false;
@@ -174,11 +153,22 @@ class OpenCodeServerSession implements RunnerSession {
                     this.options.configDirectory,
                     this.options.workspaceDirectory,
                     this.options.configuration.model,
-                    this.options.nativeConfigFile
+                    this.options.nativeConfigFile,
+                    this.options.session
+                        ? join(this.options.session.directory, 'opencode.sqlite')
+                        : undefined
                 ),
             (error) => this.fail(error)
         );
 
+        const sessionId = this.options.session?.nativeSessionId
+            ? await this.resume(this.options.session.nativeSessionId)
+            : await this.create();
+        this.nativeSessionId = sessionId;
+        await this.subscribe();
+    }
+
+    private async create(): Promise<string> {
         const model = parseModel(this.options.configuration.model);
         const created = await this.server.requestJson('/session', {
             method: 'POST',
@@ -189,8 +179,18 @@ class OpenCodeServerSession implements RunnerSession {
         });
         const sessionId = string(record(created)?.id);
         if (!sessionId) throw new Error('OpenCode did not create a session');
-        this.nativeSessionId = sessionId;
-        await this.subscribe();
+        return sessionId;
+    }
+
+    private async resume(sessionId: string): Promise<string> {
+        const resumed = await this.server.requestJson(
+            `/session/${encodeURIComponent(sessionId)}`,
+            { method: 'GET' }
+        );
+        if (string(record(resumed)?.id) !== sessionId) {
+            throw new Error(`OpenCode session is unavailable: ${sessionId}`);
+        }
+        return sessionId;
     }
 
     async prompt(input: RunnerInput): Promise<RunnerTurnResult> {
@@ -198,7 +198,7 @@ class OpenCodeServerSession implements RunnerSession {
         if (this.failure) throw this.failure;
         if (this.active) throw new Error('runner session is already processing a turn');
         const sessionId = this.requireSessionId();
-        const messageId = createMessageId();
+        const messageId = this.messageIds.next();
         const turn = createActiveTurn(messageId);
         this.active = turn;
         const model = parseModel(this.options.configuration.model);
@@ -230,29 +230,13 @@ class OpenCodeServerSession implements RunnerSession {
             throw new Error('runner session is not processing a turn');
         }
         const normalized = normalizeRunnerInput(input);
-        const messageId = createMessageId();
+        const messageId = this.messageIds.next();
         const delivery = deferred<void>();
         void delivery.promise.catch(() => {});
         this.active.inputMessageIds.add(messageId);
         this.active.steeringDeliveries.set(messageId, delivery);
-        try {
-            await this.server.request(
-                `/session/${encodeURIComponent(this.requireSessionId())}/prompt_async`,
-                {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        messageID: messageId,
-                        model: parseModel(this.options.configuration.model),
-                        parts: openCodeParts(normalized),
-                    }),
-                }
-            );
-        } catch (error) {
-            this.active.inputMessageIds.delete(messageId);
-            this.active.steeringDeliveries.delete(messageId);
-            delivery.reject(asError(error));
-            throw error;
-        }
+        this.active.steeringOrder.push(messageId);
+        void this.dispatchSteering(this.active, messageId, normalized);
         return { delivered: delivery.promise };
     }
 
@@ -322,8 +306,7 @@ class OpenCodeServerSession implements RunnerSession {
                 }
                 const delivery = this.active.steeringDeliveries.get(parentId);
                 if (delivery) {
-                    this.active.steeringDeliveries.delete(parentId);
-                    delivery.resolve(undefined);
+                    this.deliverSteeringThrough(this.active, parentId);
                 }
                 this.active.seenActivity = true;
             }
@@ -522,6 +505,47 @@ class OpenCodeServerSession implements RunnerSession {
             delivery.reject(error);
         }
         active.steeringDeliveries.clear();
+        active.steeringOrder.length = 0;
+    }
+
+    private deliverSteeringThrough(active: ActiveTurn, messageId: string): void {
+        const boundary = active.steeringOrder.indexOf(messageId);
+        if (boundary === -1) return;
+        const delivered = active.steeringOrder.splice(0, boundary + 1);
+        for (const deliveredId of delivered) {
+            const delivery = active.steeringDeliveries.get(deliveredId);
+            active.steeringDeliveries.delete(deliveredId);
+            delivery?.resolve(undefined);
+        }
+    }
+
+    private async dispatchSteering(
+        active: ActiveTurn,
+        messageId: string,
+        input: ReturnType<typeof normalizeRunnerInput>
+    ): Promise<void> {
+        if (this.active !== active || active.settled) return;
+        try {
+            await this.server.request(
+                `/session/${encodeURIComponent(this.requireSessionId())}/prompt_async`,
+                {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        messageID: messageId,
+                        model: parseModel(this.options.configuration.model),
+                        parts: openCodeParts(input),
+                    }),
+                }
+            );
+        } catch (error) {
+            active.inputMessageIds.delete(messageId);
+            active.steeringOrder = active.steeringOrder.filter(
+                (pendingId) => pendingId !== messageId
+            );
+            const delivery = active.steeringDeliveries.get(messageId);
+            active.steeringDeliveries.delete(messageId);
+            delivery?.reject(asError(error));
+        }
     }
 
     private fail(error: Error) {
@@ -564,6 +588,7 @@ function createActiveTurn(messageId: string): ActiveTurn {
         inputMessageIds: new Set([messageId]),
         assistantOutputIds: new Map(),
         steeringDeliveries: new Map(),
+        steeringOrder: [],
         promise,
         resolve,
         reject,
@@ -573,8 +598,23 @@ function createActiveTurn(messageId: string): ActiveTurn {
     };
 }
 
-function createMessageId(): string {
-    return `msg_${crypto.randomUUID().replaceAll('-', '')}`;
+class OpenCodeMessageIds {
+    private timestamp = 0;
+    private sequence = 0;
+
+    next(): string {
+        const timestamp = Date.now();
+        if (timestamp !== this.timestamp) {
+            this.timestamp = timestamp;
+            this.sequence = 0;
+        }
+        this.sequence += 1;
+        const ordered =
+            (BigInt(timestamp) * 0x1000n + BigInt(this.sequence)) & 0xffffffffffffn;
+        const prefix = ordered.toString(16).padStart(12, '0');
+        const random = crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+        return `msg_${prefix}${random}`;
+    }
 }
 
 function createOutputId(): string {
@@ -613,6 +653,20 @@ function deferred<T>() {
         reject = rejected;
     });
     return { promise, resolve, reject };
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<T>((_, reject) => {
+                timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+            }),
+        ]);
+    } finally {
+        if (timeout) clearTimeout(timeout);
+    }
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

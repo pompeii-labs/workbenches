@@ -12,6 +12,7 @@ import {
     type RunnerQuestionRequest,
     type RunnerQuestionResponse,
     type RunnerSession,
+    type RunnerSessionContext,
 } from '../runners/session.js';
 import { type PreparedRuntime, RuntimeRegistry } from '../runtimes/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
@@ -26,7 +27,7 @@ export interface InteractiveRunSession {
     readonly runId: string;
     readonly runnerSessionId: string | undefined;
     readonly busy: boolean;
-    send(task: RunnerInput): Promise<void>;
+    send(task: RunnerInput, inputId?: string): Promise<void>;
     steer(task: RunnerInput): Promise<RunnerInputDelivery>;
     cancelTurn(): Promise<void>;
     recordInput(
@@ -58,6 +59,8 @@ export interface InteractiveRunOptions {
     ) => Promise<RunnerQuestionResponse> | RunnerQuestionResponse;
     dependencies?: InteractiveRunDependencies;
     workspaces?: WorkbenchWorkspaceBinding[];
+    session?: RunnerSessionContext;
+    interactive?: boolean;
 }
 
 export class InteractiveRun {
@@ -87,10 +90,11 @@ export class InteractiveRun {
         let session: RunnerSession | undefined;
         try {
             const preparedRunner = await registry.prepare(workbench, environment);
-            const { configuration, preflight } = await this.prepare(
-                preparedRunner,
-                environment
-            );
+            const {
+                configuration,
+                preflight,
+                environment: runtimeEnvironment,
+            } = await this.prepare(preparedRunner, environment);
             const adapter = registry.session(workbench.manifest.runner);
             await emitter.emit('run.started', {
                 workbench: workbench.manifest.name,
@@ -105,7 +109,7 @@ export class InteractiveRun {
                 },
                 runtime: workbench.manifest.runtime,
                 workspace: this.options.resolved.workspaceDirectory,
-                interactive: true,
+                ...(this.options.interactive ? { interactive: true } : {}),
                 workspaces: this.options.workspaces ?? [],
             });
             session = await adapter.start({
@@ -114,7 +118,7 @@ export class InteractiveRun {
                 environment: new ModelRouter().environmentForRoute(
                     workbench,
                     configuration,
-                    environment
+                    runtimeEnvironment
                 ),
                 configuration,
                 host: {
@@ -126,6 +130,7 @@ export class InteractiveRun {
                     requestQuestion: (request) =>
                         this.requestQuestion(emitter, request),
                 },
+                ...(this.options.session ? { session: this.options.session } : {}),
             });
             await emitter.emit('run.ready', {
                 runner: preflight.runner.name,
@@ -134,7 +139,11 @@ export class InteractiveRun {
                 disabled_mcps: preflight.disabledMcps,
                 workspaces: this.options.workspaces ?? [],
             });
-            return new HostedInteractiveSession(session, emitter);
+            return new HostedInteractiveSession(
+                session,
+                emitter,
+                this.options.interactive ?? false
+            );
         } catch (error) {
             await session?.close().catch(() => undefined);
             await emitter
@@ -150,6 +159,7 @@ export class InteractiveRun {
     ): Promise<{
         configuration: ResolvedRunnerConfiguration;
         preflight: PreflightResult;
+        environment: Record<string, string | undefined>;
     }> {
         const { workbench } = this.options.resolved;
         let preparedRuntime: PreparedRuntime | undefined;
@@ -204,10 +214,14 @@ export class InteractiveRun {
             (result): result is PromiseRejectedResult => result.status === 'rejected'
         );
         if (cleanupFailure) throw cleanupFailure.reason;
-        if (!configuration || !preflight) {
+        if (!preparedRuntime || !configuration || !preflight) {
             throw new Error('Interactive Workbench preparation did not complete');
         }
-        return { configuration, preflight };
+        return {
+            configuration,
+            preflight,
+            environment: preparedRuntime.environment,
+        };
     }
 
     private async requestPermission(
@@ -278,7 +292,11 @@ class HostedInteractiveSession implements InteractiveRunSession {
     private cancellationRequested = false;
     private activeTurn: Promise<void> | undefined;
 
-    constructor(runner: RunnerSession, emitter: RunEvents) {
+    constructor(
+        runner: RunnerSession,
+        emitter: RunEvents,
+        private readonly interactive: boolean
+    ) {
         this.runner = runner;
         this.emitter = emitter;
         this.runId = emitter.runId;
@@ -292,7 +310,7 @@ class HostedInteractiveSession implements InteractiveRunSession {
         return this.working;
     }
 
-    send(task: RunnerInput): Promise<void> {
+    send(task: RunnerInput, inputId?: string): Promise<void> {
         let normalized: ReturnType<typeof normalizeRunnerInput>;
         try {
             normalized = normalizeRunnerInput(task);
@@ -309,7 +327,7 @@ class HostedInteractiveSession implements InteractiveRunSession {
         this.cancellationRequested = false;
         this.turn += 1;
         const turn = this.turn;
-        const active = this.executeTurn(normalized, turn);
+        const active = this.executeTurn(normalized, turn, inputId);
         this.activeTurn = active;
         return active.finally(() => {
             if (this.activeTurn === active) this.activeTurn = undefined;
@@ -340,7 +358,9 @@ class HostedInteractiveSession implements InteractiveRunSession {
     }
 
     async close(): Promise<void> {
-        await this.finish('run.completed', { interactive: true });
+        await this.finish('run.completed', {
+            ...(this.interactive ? { interactive: true } : {}),
+        });
     }
 
     async cancel(reason?: string): Promise<void> {
@@ -349,8 +369,15 @@ class HostedInteractiveSession implements InteractiveRunSession {
         });
     }
 
-    private async executeTurn(task: RunnerInput, turn: number): Promise<void> {
-        await this.emitter.emit('turn.started', { index: turn });
+    private async executeTurn(
+        task: RunnerInput,
+        turn: number,
+        inputId?: string
+    ): Promise<void> {
+        await this.emitter.emit('turn.started', {
+            index: turn,
+            ...(inputId ? { input_id: inputId } : {}),
+        });
         try {
             const result = await this.runner.prompt(task);
             await this.emitter.emit('turn.completed', {
@@ -358,12 +385,14 @@ class HostedInteractiveSession implements InteractiveRunSession {
                 reason: this.cancellationRequested
                     ? 'cancelled'
                     : (result.reason ?? 'completed'),
+                ...(inputId ? { input_id: inputId } : {}),
             });
         } catch (error) {
             if (this.cancellationRequested) {
                 await this.emitter.emit('turn.completed', {
                     index: turn,
                     reason: 'cancelled',
+                    ...(inputId ? { input_id: inputId } : {}),
                 });
                 return;
             }

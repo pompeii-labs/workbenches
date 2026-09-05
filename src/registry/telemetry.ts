@@ -46,13 +46,11 @@ export class RegistryTelemetry {
         await this.writePreferences({ ...current, runTelemetry: enabled });
     }
 
-    async showNotice(): Promise<void> {
+    async claimNotice(): Promise<string | undefined> {
         const preferences = await this.readPreferences();
         if (preferences.noticeShown || !preferences.runTelemetry) return;
-        process.stderr.write(
-            'Workbench reports anonymous save and run counts. Disable run reporting with `wb telemetry off`.\n'
-        );
         await this.writePreferences({ ...preferences, noticeShown: true });
+        return 'Workbench reports anonymous save and run counts. Disable run reporting with `wb telemetry off`.';
     }
 
     async report(options: {

@@ -4,6 +4,8 @@ import type { WorkbenchEvent } from '../src/runs/index.js';
 import {
     addUserMessage,
     emptyTranscript,
+    groupTranscriptItems,
+    interruptTranscript,
     queueUserMessage,
     reduceTranscript,
     reduceTranscriptDuringCancellation,
@@ -11,6 +13,54 @@ import {
 } from '../src/tui/model.js';
 
 describe('TUI transcript model', () => {
+    test('groups consecutive tool activity without hiding failures', () => {
+        const grouped = groupTranscriptItems([
+            { id: 'user-1', kind: 'user', text: 'Inspect this' },
+            {
+                id: 'tool-1',
+                kind: 'tool',
+                name: 'read',
+                title: 'Read',
+                status: 'completed',
+            },
+            {
+                id: 'tool-2',
+                kind: 'tool',
+                name: 'question',
+                title: 'Question',
+                error: 'Tool failed in runner',
+                status: 'failed',
+            },
+            { id: 'assistant-1', kind: 'assistant', text: 'Done' },
+        ]);
+
+        expect(grouped).toEqual([
+            { id: 'user-1', kind: 'user', text: 'Inspect this' },
+            {
+                id: 'activity-tool-1',
+                kind: 'activity',
+                tools: [
+                    {
+                        id: 'tool-1',
+                        kind: 'tool',
+                        name: 'read',
+                        title: 'Read',
+                        status: 'completed',
+                    },
+                    {
+                        id: 'tool-2',
+                        kind: 'tool',
+                        name: 'question',
+                        title: 'Question',
+                        error: 'Tool failed in runner',
+                        status: 'failed',
+                    },
+                ],
+            },
+            { id: 'assistant-1', kind: 'assistant', text: 'Done' },
+        ]);
+    });
+
     test('coalesces streamed text and updates tool state immutably', () => {
         let state = addUserMessage(emptyTranscript(), 'Inspect this', 'user-1');
         state = reduceTranscript(state, event(1, 'turn.started', { index: 1 }));
@@ -26,7 +76,15 @@ describe('TUI transcript model', () => {
         );
         state = reduceTranscript(
             state,
-            event(5, 'tool.completed', { id: 'tool-1', status: 'completed' })
+            event(5, 'tool.completed', {
+                id: 'tool-1',
+                name: 'read',
+                title: 'Read',
+                target: '/repo/src/manifest.ts',
+                description: 'lines 10-29',
+                duration_ms: 24,
+                status: 'completed',
+            })
         );
         state = reduceTranscript(
             state,
@@ -49,8 +107,11 @@ describe('TUI transcript model', () => {
             {
                 id: 'tool-1',
                 kind: 'tool',
-                title: 'Read manifest',
-                target: '/repo/workbench.yml',
+                name: 'read',
+                title: 'Read',
+                target: '/repo/src/manifest.ts',
+                description: 'lines 10-29',
+                durationMs: 24,
                 status: 'completed',
             },
         ]);
@@ -74,9 +135,10 @@ describe('TUI transcript model', () => {
         );
         expect(state.items.at(-1)).toMatchObject({
             kind: 'tool',
+            name: 'shell_command',
             title: 'Shell command',
             status: 'failed',
-            detail: 'Permission denied',
+            error: 'Permission denied',
         });
 
         state = reduceTranscript(
@@ -144,6 +206,12 @@ describe('TUI transcript model', () => {
             busy: false,
             status: 'Interrupted',
         });
+        expect(interrupted.items.at(-1)).toEqual({
+            id: 'interrupted-1',
+            kind: 'notice',
+            text: 'Turn interrupted',
+            tone: 'muted',
+        });
     });
 
     test('keeps multiple assistant messages from one steered turn separate', () => {
@@ -165,6 +233,7 @@ describe('TUI transcript model', () => {
             state,
             event(4, 'input.delivered', { id: 'control-1', kind: 'steer' })
         );
+        expect(state).toMatchObject({ busy: true, status: 'Thinking' });
         state = reduceTranscript(
             state,
             event(5, 'output.text', { id: 'output-2', text: 'Steered reply.' })
@@ -181,7 +250,7 @@ describe('TUI transcript model', () => {
 
     test('keeps steering visibly queued until the runner consumes it', () => {
         let state = addUserMessage(emptyTranscript(), 'hello', 'user-1');
-        state = queueUserMessage(state, 'testing', 'user-2');
+        state = queueUserMessage(state, 'testing', 'user-2', ['reference.png']);
         state = reduceTranscript(
             state,
             event(1, 'output.text', { id: 'output-1', text: 'Hello.' })
@@ -191,14 +260,21 @@ describe('TUI transcript model', () => {
             { id: 'user-1', kind: 'user', text: 'hello' },
             { id: 'output-1', kind: 'assistant', text: 'Hello.' },
         ]);
-        expect(state.queued).toEqual([{ id: 'user-2', text: 'testing' }]);
+        expect(state.queued).toEqual([
+            { id: 'user-2', text: 'testing', images: ['reference.png'] },
+        ]);
 
         state = reduceTranscript(
             state,
             event(2, 'input.queued', { id: 'control-1', kind: 'steer' })
         );
         expect(state.queued).toEqual([
-            { id: 'user-2', text: 'testing', controlId: 'control-1' },
+            {
+                id: 'user-2',
+                text: 'testing',
+                images: ['reference.png'],
+                controlId: 'control-1',
+            },
         ]);
         state = reduceTranscript(
             state,
@@ -215,7 +291,12 @@ describe('TUI transcript model', () => {
         expect(state.items).toEqual([
             { id: 'user-1', kind: 'user', text: 'hello' },
             { id: 'output-1', kind: 'assistant', text: 'Hello.' },
-            { id: 'user-2', kind: 'user', text: 'testing' },
+            {
+                id: 'user-2',
+                kind: 'user',
+                text: 'testing',
+                images: ['reference.png'],
+            },
             { id: 'output-2', kind: 'assistant', text: 'Testing received.' },
         ]);
         expect(state.queued).toEqual([]);
@@ -248,20 +329,81 @@ describe('TUI transcript model', () => {
         ]);
     });
 
-    test('does not regress to thinking while cancellation is pending', () => {
-        const cancelling = {
-            ...addUserMessage(emptyTranscript(), 'Stop this turn'),
-            status: 'Cancelling',
-        };
-        const delayedStart = reduceTranscriptDuringCancellation(
-            cancelling,
-            event(1, 'turn.started', { index: 1 })
+    test('interrupts immediately and reconciles delayed runner completion', () => {
+        let active = addUserMessage(emptyTranscript(), 'Stop this turn');
+        active = queueUserMessage(active, 'queued steer', 'queued-input');
+        active = reduceTranscript(
+            active,
+            event(1, 'input.queued', { id: 'control-1', kind: 'steer' })
+        );
+        const interrupted = interruptTranscript(active, 'local-interruption');
+
+        expect(interrupted).toMatchObject({
+            busy: false,
+            status: 'Interrupted',
+            interruptionPending: true,
+        });
+        expect(interrupted.items.at(-1)).toEqual({
+            id: 'local-interruption',
+            kind: 'notice',
+            text: 'Turn interrupted',
+            tone: 'muted',
+        });
+
+        const rejectedSteer = reduceTranscript(
+            interrupted,
+            event(2, 'input.rejected', {
+                id: 'control-1',
+                kind: 'steer',
+                code: 'steering_not_delivered',
+            })
+        );
+        expect(rejectedSteer.queued).toEqual([]);
+        expect(rejectedSteer.items).toEqual(interrupted.items);
+
+        const lateOutput = reduceTranscriptDuringCancellation(
+            rejectedSteer,
+            event(3, 'output.text', { id: 'old-output', text: 'too late' })
+        );
+        expect(lateOutput).toBe(rejectedSteer);
+
+        const nextTurn = addUserMessage(interrupted, 'Start something else');
+        const reconciled = reduceTranscriptDuringCancellation(
+            nextTurn,
+            event(4, 'turn.completed', { reason: 'cancelled' })
+        );
+        expect(reconciled).toMatchObject({
+            busy: true,
+            status: 'Thinking',
+            interruptionPending: false,
+        });
+        expect(
+            reconciled.items.filter(
+                (item) => item.kind === 'notice' && item.text === 'Turn interrupted'
+            )
+        ).toHaveLength(1);
+    });
+
+    test('clears queued steering when cancellation completes before rejection arrives', () => {
+        let state = addUserMessage(emptyTranscript(), 'Stop this turn');
+        state = queueUserMessage(state, 'queued steer', 'queued-input');
+        state = interruptTranscript(state, 'local-interruption');
+        state = reduceTranscript(
+            state,
+            event(1, 'turn.completed', { reason: 'cancelled' })
         );
 
-        expect(delayedStart).toMatchObject({
-            busy: true,
-            status: 'Cancelling',
-        });
+        expect(state.queued).toEqual([]);
+        expect(
+            reduceTranscript(
+                state,
+                event(2, 'input.rejected', {
+                    id: 'control-1',
+                    kind: 'steer',
+                    code: 'steering_not_delivered',
+                })
+            )
+        ).toBe(state);
     });
 
     test('batches text deltas but flushes before lifecycle events', () => {
@@ -313,6 +455,31 @@ describe('TUI transcript model', () => {
         buffer.dispose();
         callbacks.at(-1)?.();
         expect(consumed).toHaveLength(6);
+    });
+
+    test('can discard buffered output when a turn is interrupted', () => {
+        const callbacks: Array<() => void> = [];
+        const consumed: WorkbenchEvent[] = [];
+        const buffer = new TranscriptEventBuffer(
+            (next) => consumed.push(next),
+            40,
+            (callback) => {
+                callbacks.push(callback);
+                return callbacks.length as unknown as ReturnType<typeof setTimeout>;
+            },
+            () => {}
+        );
+
+        buffer.push(
+            event(1, 'output.text', {
+                id: 'cancelled-output',
+                text: '/redis.ts',
+            })
+        );
+        buffer.discardText();
+        callbacks.shift()?.();
+
+        expect(consumed).toEqual([]);
     });
 });
 

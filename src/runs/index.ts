@@ -1,4 +1,10 @@
 export {
+    type ContinuedRun,
+    type ContinueRunOptions,
+    type OpenInteractiveRunOptions,
+    RunContinuation,
+} from './continuation.js';
+export {
     RunControl,
     type RunControlDisposition,
     type RunControlKind,

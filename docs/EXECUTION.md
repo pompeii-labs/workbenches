@@ -30,8 +30,8 @@ Each registered runner adapter declares the native command it drives, the exact
 native versions and interfaces it has been verified against, and an exhaustive
 capability map. The initial capability catalog covers streamed assistant text,
 tool events, file changes, usage, permissions, questions, multiple turns,
-steering, image input, image generation, cancellation, failures, and unknown
-native events.
+steering, image input, image generation, native session resume, cancellation,
+failures, and unknown native events.
 
 Every capability has one of three outcomes:
 
@@ -185,7 +185,12 @@ named workspaces to their resolved host paths and runs the adapter from the
 path-preserved primary workspace. This is the documented exception to ordinary
 Docker paths such as `/workspace` and `/workspaces/<name>`.
 
-## Session and turn boundaries
+## Session, run, and turn boundaries
+
+A Workbench session is the stable user-facing identity for work with one locked
+Workbench, runner, model, and workspace. A run is one execution attempt inside
+that session. The first run and session share an ID; resuming creates a new
+internal run while preserving the session ID.
 
 A run may contain multiple turns. `turn.completed` means the runner completed
 one response and may accept another input; it does not terminate the run.
@@ -250,6 +255,63 @@ input lifecycle events contain request IDs and dispositions, never prompt, image
 or raw question-answer contents. Runner output can still reference an answer
 after receiving it.
 
+## Resumable interactive sessions
+
+Every execution has one stable Workbench session ID. Local runners with native
+session support use the same background session engine for foreground commands,
+detached commands, and the terminal client. The first execution owns the stable
+ID. A later continuation either joins its active run or creates a new internal
+run linked to the same session after the previous run closes. The session index
+records only the locked Workbench identity, runner, model, workspace bindings,
+native session identifier, and latest run. Native runner state remains
+authoritative and is stored under the session's private native-state directory.
+
+`wb resume <session-or-run-id>` opens the exact Workbench package and workspace
+recorded by the session. It attaches to an active run or starts a linked run from
+saved native context. Adding a task performs the same continuation without
+opening the terminal client; `--detach` leaves it in the background. The TUI
+exposes the same operation through `/sessions` and the recent-session area on the
+home screen. A resume is rejected if the package no longer matches the recorded
+Workbench name, version, runner, model, or workspace, or if the original runner
+never reached a resumable state.
+
+`wb attach` is observation only. It follows the latest normalized event stream
+without keeping the runner alive or becoming a controlling client. Exiting the
+terminal client detaches that client rather than cancelling work. If a turn is
+active, it and all accepted follow-ups finish before the unattended worker
+closes. The stable session and native runner context remain available afterward.
+
+The TUI may keep a local transcript cache so a reopened screen has immediate visual
+history. That cache is not replayed into the model and is not the source of
+conversation context. Deleting it affects presentation only; OpenCode or Pi native
+session state remains the resume boundary.
+
+## Interactive terminal client
+
+Running `wb run <ref>` without a task opens a runner-neutral terminal session.
+The composer supports multiple lines, persistent local prompt history, command
+discovery with `/` or `Ctrl+K`, queued steering, turn cancellation, and supported
+image attachments. Follow-up input remains beside the composer as queued until
+the normalized input lifecycle confirms delivery.
+
+For a runner with native image input, dragging a supported image file into the
+composer, or pasting its local path, attaches it to the next message. The
+terminal-provided path is replaced by an attachment marker and is never sent as
+prompt text.
+
+Slash commands inspect or control the Workbench client. They are never passed to
+the runner as model input. Commands expose Workbench, runtime, locked model,
+native runner capability, recent session details, and images staged for the next
+message; select a persisted theme; clear staged attachments or the local
+transcript; cancel the active turn; or close the session. A
+command backed by an unsupported native capability is hidden or explains why it
+is unavailable. Workbench does not inject replacement tools into a runner to
+make unsupported capabilities appear present.
+
+The built-in terminal themes are adapted from OpenCode under the repository's
+MIT attribution. Theme choice is local CLI state under `WORKBENCH_HOME`; it does
+not modify a Workbench package or affect execution.
+
 ## Canonical events
 
 Events are ordered by a monotonically increasing `sequence` within one run and
@@ -277,6 +339,12 @@ events do not copy arbitrary native payloads: those can contain reasoning
 material, credentials, provider metadata, or complete tool results. A future
 opt-in diagnostic stream can preserve native data behind a separate security
 contract.
+
+Tool lifecycle events include a stable call ID and native tool name. Adapters
+may also provide a safe display title, target, short description, duration, and
+normalized failure. These fields let clients show concrete activity such as a
+file read or search without persisting arbitrary commands, file contents, or
+tool output in the portable event log.
 
 Exactly one of `run.completed`, `run.failed`, or `run.cancelled` terminates the
 event stream. The `result` promise resolves to the matching status.
@@ -345,23 +413,27 @@ Stdout is reserved for the selected output contract. Human and final-mode errors
 go to stderr. JSON mode represents failures as `run.failed` on stdout and also
 uses a non-zero process exit code.
 
-## Detached runs and attach
+## Background runs and session attachment
 
-`wb run <ref> --task <task> --detach` creates a durable run, launches a
-background worker, and prints only its `wb_...` ID. `wb attach <id>` replays its
-persisted event stream and follows new events. Without an ID, `wb attach` selects
-the most recently dispatched run in `WORKBENCH_HOME`.
+`wb run <ref> --task <task> --detach` creates a durable session and run, launches
+a background worker, and prints only the stable `wb_...` session ID. `wb attach
+<id>` resolves the session's latest run, replays its persisted event stream, and
+follows new events. Without an ID, `wb attach` selects the most recent session in
+`WORKBENCH_HOME`.
 
 Run metadata and `events.ndjson` live under
 `$WORKBENCH_HOME/runs/<id>/` (normally the Workbench data directory). The initial
 task is stored only until the worker consumes it, then removed. Direct foreground
 runs use the same stored handle and event stream, so their history can also be
 attached after completion.
-Attach is read-only. `wb ps` lists active detached runs; `wb ps --all` includes
-finished detached runs. `wb kill [id]` cooperatively cancels a detached run; without
-an ID it selects the latest active detached run. The worker observes a private
-cancellation request, terminates the runner child, emits `run.cancelled`, and
-then marks the durable record cancelled.
+
+Attach is read-only and never starts model work. `wb ps` lists active sessions
+and completed sessions with resumable native context; `wb ps --all` also includes
+terminal one-shot history. `wb kill [id]` cooperatively cancels the active run in
+a session; without an ID it selects the latest active session. The worker observes
+a private cancellation request, terminates the runner child, emits
+`run.cancelled`, and then marks the durable run cancelled. Session metadata and
+native resumable context remain available.
 
 ## Preflight boundary
 
