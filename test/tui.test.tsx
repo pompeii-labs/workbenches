@@ -19,6 +19,7 @@ import { Transcript, WorkbenchApp } from '../src/tui/app.js';
 import { TurnCancellation } from '../src/tui/chat.js';
 import { holdRendererUntilShutdown } from '../src/tui/lifecycle.js';
 import { QuestionPrompt } from '../src/tui/question.js';
+import { SessionTranscript } from '../src/tui/session-transcript.js';
 import { ThemeController, ThemeProvider } from '../src/tui/theme/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
@@ -230,7 +231,6 @@ describe.serial('Workbench TUI', () => {
 
         const prompt = findPrompt(setup.renderer.root);
         expect(setup.captureCharFrame()).toContain('Connecting to Workbench...');
-        expect(setup.captureCharFrame()).toContain('Starting creator...');
         expect(setup.captureCharFrame()).not.toContain('Ready when you are.');
         prompt.setText('do not send yet');
         prompt.submit();
@@ -245,6 +245,61 @@ describe.serial('Workbench TUI', () => {
         prompt.submit();
         await setup.flush();
         expect(sent).toBe(1);
+    });
+
+    test('restores input readiness after reattaching beyond the ready event', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-tui-reattach-'));
+        temporaryDirectories.push(home);
+        const id = 'wb_reattachcursor1234567890';
+        const handle = fakeHandle(() => {});
+        const session = await new SessionStore(home).create({
+            id,
+            workbench: 'workbench-creator',
+            workbench_version: '0.1.3',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            reference: 'creator',
+            workbench_path: '/repo/.workbenches/creator',
+            workspace: '/workspace/project',
+            workspaces: [],
+            native_session_id: 'ses_native_reattach',
+            latest_run_id: handle.runId,
+        });
+        const transcript = new SessionTranscript(home, id);
+        transcript.schedule([], { runId: handle.runId, sequence: 2 });
+        await transcript.flush();
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home={home}
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            session,
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => ({
+                            ...handle,
+                            observe: () =>
+                                (async function* () {
+                                    await new Promise<never>(() => {});
+                                })(),
+                        })}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        expect(setup.captureCharFrame()).toContain('Ready when you are.');
+        expect(setup.captureCharFrame()).not.toContain('Connecting to Workbench...');
     });
 
     test('renders the canonical model label in an interactive session header', async () => {
@@ -563,6 +618,48 @@ describe.serial('Workbench TUI', () => {
         expect(interrupted).not.toContain('Thinking');
 
         cancellation.resolve(receipt('cancel_turn', 'cancelled'));
+    });
+
+    test('detaches the terminal client without closing the durable session', async () => {
+        const handle = fakeHandle(() => {});
+        let detaches = 0;
+        let closes = 0;
+        handle.detach = async () => {
+            detaches += 1;
+            return receipt('detach_client', 'detached');
+        };
+        handle.close = async () => {
+            closes += 1;
+            return receipt('close', 'closed');
+        };
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => handle}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32, exitOnCtrlC: false }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(20);
+        await setup.flush();
+
+        setup.mockInput.pressCtrlC();
+        await Bun.sleep(20);
+
+        expect(detaches).toBe(1);
+        expect(closes).toBe(0);
     });
 
     test('turns a dragged image path into a transient prompt attachment', async () => {

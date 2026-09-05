@@ -413,7 +413,9 @@ wb ps                  # active and resumable sessions
 wb ps --all            # all session history
 wb kill wb_...
 wb kill                # latest active session
-wb resume wb_...       # continue saved native context
+wb resume wb_...       # open or attach the terminal client
+wb resume wb_... "Review the latest change"
+wb resume wb_... --task "Run the checks" --detach
 ```
 
 Every execution belongs to one stable Workbench session. The first run shares
@@ -421,10 +423,16 @@ its `wb_...` ID with the session; later resumes create internal runs while the
 session ID stays fixed. Detachment only controls whether the current terminal is
 watching the active run.
 
-Attaching observes or replays the latest run without starting model work.
-Resuming starts another run from native runner context when the session supports
-it. Killing cooperatively terminates the active run without deleting the
-session or its resumable context.
+Attaching observes or replays the latest run without taking control or starting
+model work. Resuming without a task opens the terminal client. If the latest run
+is active, the terminal attaches to that exact runner process. If it is closed,
+Workbench starts a new internal run from the runner's saved native context.
+
+Resuming with a task sends one non-interactive continuation through the same
+session. It joins an active run's follow-up queue or starts a linked internal run
+when the previous one is closed. `--detach` returns the stable session ID while
+that continuation runs in the background. Killing cooperatively terminates the
+active run without deleting the session or its resumable context.
 
 ### Interactive client
 
@@ -467,21 +475,25 @@ Commands are handled by Workbench and are never sent to the runner as prompts.
 `/theme` includes the Workbench default, Flexoki, GitHub, and Catppuccin themes.
 The adapted themes are attributed in `NOTICE`.
 
-Interactive sessions run in a background worker and expose the same durable run
-handle used to follow one-shot execution. Normalized events survive a terminal
-client disconnect, and another handle can replay the stream and control the same
-live runner session. User prompts, permission decisions, and question answers are
-transient control messages, not durable run history.
+Local session-capable runs use one background session worker whether they begin
+in the terminal client, foreground CLI output, or detached mode. Normalized
+events survive a client disconnect. Another terminal client can take control of
+the same live runner, while `wb attach` can observe it without taking control.
+Exiting the terminal client detaches it; an active turn and queued follow-ups
+continue, then the unattended worker closes while its native context remains
+resumable. User prompts, permission decisions, and question answers are transient
+control messages, not durable run history.
 
-Closed local sessions can be reopened with `wb resume <session-or-run-id>`, from
-`/sessions`, or from recent sessions on the home screen. Workbench keeps a small
-private session index and a disposable transcript presentation cache. The selected
-runner remains the source of truth for model context: OpenCode resumes from its
-session database and Pi resumes from its session file. Every resumed execution is a
-new durable Workbench run linked to the same stable session. A session remains locked
-to its original Workbench version, runner, model, workspace, and workspace bindings.
-Docker Workbenches still require a one-shot task; interactive Docker sessions are not
-yet supported.
+Local sessions can be reopened with `wb resume <session-or-run-id>`, from
+`/sessions`, or from recent sessions on the home screen. An active session is
+reattached instead of duplicated. A closed session creates a new durable run
+linked to the same stable session. Workbench keeps a small private session index
+and a disposable transcript presentation cache. The selected runner remains the
+source of truth for model context: OpenCode resumes from its session database and
+Pi resumes from its session file. A session remains locked to its original
+Workbench version, runner, model, workspace, and workspace bindings. Docker
+Workbenches support detached execution and replay through `wb attach`, but do not
+support live terminal control or native session resume yet.
 
 ## Source and authorization boundaries
 

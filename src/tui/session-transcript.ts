@@ -7,11 +7,18 @@ import type { TranscriptItem } from './model.js';
 interface StoredTranscript {
     version: 1;
     items: TranscriptItem[];
+    cursor?: TranscriptCursor;
+}
+
+export interface TranscriptCursor {
+    runId: string;
+    sequence: number;
 }
 
 export class SessionTranscript {
     readonly #path: string;
     private pending: TranscriptItem[] | undefined;
+    private pendingCursor: TranscriptCursor | undefined;
     private timer: ReturnType<typeof setTimeout> | undefined;
     private writing: Promise<void> = Promise.resolve();
 
@@ -24,20 +31,28 @@ export class SessionTranscript {
     }
 
     async load(): Promise<TranscriptItem[]> {
+        return (await this.read())?.items ?? [];
+    }
+
+    async cursor(): Promise<TranscriptCursor | undefined> {
+        return (await this.read())?.cursor;
+    }
+
+    private async read(): Promise<StoredTranscript | undefined> {
         const source = await readFile(this.#path, 'utf8').catch(() => null);
-        if (!source) return [];
+        if (!source) return undefined;
         let value: unknown;
         try {
             value = JSON.parse(source);
         } catch {
-            return [];
+            return undefined;
         }
-        if (!isStoredTranscript(value)) return [];
-        return value.items;
+        return isStoredTranscript(value) ? value : undefined;
     }
 
-    schedule(items: TranscriptItem[]): void {
+    schedule(items: TranscriptItem[], cursor?: TranscriptCursor): void {
         this.pending = structuredClone(items);
+        this.pendingCursor = cursor ? { ...cursor } : undefined;
         if (this.timer !== undefined) return;
         this.timer = setTimeout(() => {
             this.timer = undefined;
@@ -52,18 +67,31 @@ export class SessionTranscript {
         }
         const items = this.pending;
         if (!items) return;
+        const cursor = this.pendingCursor;
         this.pending = undefined;
-        const write = this.writing.then(() => this.write(items));
+        this.pendingCursor = undefined;
+        const write = this.writing.then(() => this.write(items, cursor));
         this.writing = write.catch(() => {});
         await write;
     }
 
-    private async write(items: TranscriptItem[]): Promise<void> {
+    private async write(
+        items: TranscriptItem[],
+        cursor?: TranscriptCursor
+    ): Promise<void> {
         await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
         const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`;
         await writeFile(
             temporary,
-            `${JSON.stringify({ version: 1, items } satisfies StoredTranscript, null, 2)}\n`,
+            `${JSON.stringify(
+                {
+                    version: 1,
+                    items,
+                    ...(cursor ? { cursor } : {}),
+                } satisfies StoredTranscript,
+                null,
+                2
+            )}\n`,
             { mode: 0o600 }
         );
         await rename(temporary, this.#path);
@@ -74,7 +102,23 @@ function isStoredTranscript(value: unknown): value is StoredTranscript {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
     const version = Reflect.get(value, 'version');
     const items = Reflect.get(value, 'items');
-    return version === 1 && Array.isArray(items) && items.every(isTranscriptItem);
+    const cursor = Reflect.get(value, 'cursor');
+    return (
+        version === 1 &&
+        Array.isArray(items) &&
+        items.every(isTranscriptItem) &&
+        (cursor === undefined || isTranscriptCursor(cursor))
+    );
+}
+
+function isTranscriptCursor(value: unknown): value is TranscriptCursor {
+    return (
+        value !== null &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        typeof Reflect.get(value, 'runId') === 'string' &&
+        typeof Reflect.get(value, 'sequence') === 'number'
+    );
 }
 
 function isTranscriptItem(value: unknown): value is TranscriptItem {

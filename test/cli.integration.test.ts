@@ -504,6 +504,231 @@ describe('CLI integration', () => {
         expect(history.stdout).toContain('completed');
     });
 
+    test('detaches a foreground client without cancelling its active run', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-foreground-client-');
+        const bin = await fakeBin([], { block: true });
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+        const child = await launchCli(
+            ['run', fixture.packageDirectory, '--task', 'keep working'],
+            environment
+        );
+        const stdout = new Response(child.stdout).text();
+        const stderr = new Response(child.stderr).text();
+        const sessionId = await waitForActiveSession(home);
+        await Bun.sleep(100);
+        child.kill('SIGINT');
+
+        expect(await child.exited).toBe(130);
+        expect(await stderr).toBe('');
+        expect(await stdout).toContain('fixture-core');
+
+        const active = await executeCli(['ps', '--json'], environment);
+        expect(active.code).toBe(0);
+        expect(JSON.parse(active.stdout)).toMatchObject({
+            id: sessionId,
+            status: 'running',
+            resumable: true,
+        });
+
+        const stopped = await executeCli(['kill', sessionId], environment);
+        expect(stopped.code).toBe(0);
+    });
+
+    test('continues an active detached session from a foreground command', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-active-resume-');
+        const record = join(fixture.root, 'runner');
+        const bin = await fakeBin([], { delay: 250 });
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+            WB_TEST_RECORD: record,
+        };
+
+        const dispatched = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'first task', '-d'],
+            environment
+        );
+        const sessionId = dispatched.stdout.trim();
+        const continued = await executeCli(
+            ['resume', sessionId, 'second task', '--final'],
+            environment
+        );
+
+        expect(continued.code).toBe(0);
+        expect(continued.stderr).toBe('');
+        expect(continued.stdout).toBe('fixture response\n');
+        expect(await readFile(`${record}.args`, 'utf8')).toBe('second task\n');
+
+        const replayed = await executeCli(['attach', sessionId, '--json'], environment);
+        const events = replayed.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events.filter((event) => event.type === 'turn.started')).toHaveLength(2);
+        expect(events.filter((event) => event.type === 'turn.completed')).toHaveLength(
+            2
+        );
+        expect(new Set(events.map((event) => event.run_id))).toEqual(
+            new Set([sessionId])
+        );
+    });
+
+    test('queues a detached continuation onto the active native session', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-detached-resume-');
+        const bin = await fakeBin([], { delay: 250 });
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+
+        const dispatched = await executeCli(
+            ['run', fixture.packageDirectory, 'first task', '--detach'],
+            environment
+        );
+        const sessionId = dispatched.stdout.trim();
+        const continued = await executeCli(
+            ['resume', sessionId, 'second task', '--detach'],
+            environment
+        );
+
+        expect(continued.code).toBe(0);
+        expect(continued.stderr).toBe('');
+        expect(continued.stdout).toBe(`${sessionId}\n`);
+
+        const attached = await executeCli(['attach', sessionId, '--json'], environment);
+        const events = attached.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events.filter((event) => event.type === 'turn.completed')).toHaveLength(
+            2
+        );
+        expect(events.at(-1)).toMatchObject({
+            run_id: sessionId,
+            type: 'run.completed',
+        });
+    });
+
+    test('continues a completed session as a new linked native run', async () => {
+        const fixture = await createFixture({
+            env: { PROJECT_TOKEN: { required: true } },
+        });
+        const home = await temporaryDirectory('workbench-completed-resume-');
+        const record = join(fixture.root, 'runner');
+        const bin = await fakeBin();
+        const resumedSecret = 'resume-secret-not-for-storage';
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+            WB_TEST_RECORD: record,
+            PROJECT_TOKEN: 'initial-secret-not-for-storage',
+        };
+
+        const first = await executeCli(
+            ['run', fixture.packageDirectory, 'first task', '--final'],
+            environment
+        );
+        expect(first.code).toBe(0);
+        const listed = await executeCli(['ps', '--json'], environment);
+        const original = JSON.parse(listed.stdout.trim());
+        const sessionId = original.session_id as string;
+        const before = JSON.parse(
+            await readFile(join(home, 'sessions', sessionId, 'session.json'), 'utf8')
+        );
+
+        const resumed = await executeCli(
+            [
+                'resume',
+                sessionId,
+                '--task',
+                'second task',
+                '--env',
+                `PROJECT_TOKEN=${resumedSecret}`,
+                '--final',
+            ],
+            environment
+        );
+        expect(resumed.code).toBe(0);
+        expect(resumed.stderr).toBe('');
+        expect(resumed.stdout).toBe('fixture response\n');
+        expect(await readFile(`${record}.args`, 'utf8')).toBe('second task\n');
+        expect(await readFile(`${record}.project-token`, 'utf8')).toBe(
+            `${resumedSecret}\n`
+        );
+        expect(await readTextTree(join(home, 'runs'))).not.toContain(resumedSecret);
+
+        const after = JSON.parse(
+            await readFile(join(home, 'sessions', sessionId, 'session.json'), 'utf8')
+        );
+        expect(after.id).toBe(sessionId);
+        expect(after.native_session_id).toBe(before.native_session_id);
+        expect(after.latest_run_id).not.toBe(sessionId);
+        expect(
+            JSON.parse(
+                await readFile(
+                    join(home, 'runs', after.latest_run_id, 'run.json'),
+                    'utf8'
+                )
+            )
+        ).toMatchObject({
+            session_id: sessionId,
+            resumed_from: sessionId,
+            execution: 'session',
+            status: 'completed',
+        });
+    });
+
+    test('serializes concurrent continuations onto one native run', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-concurrent-resume-');
+        const bin = await fakeBin([], { delay: 500 });
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+        const initial = await executeCli(
+            ['run', fixture.packageDirectory, 'initial task', '--final'],
+            environment
+        );
+        expect(initial.code).toBe(0);
+        const sessionId = JSON.parse(
+            (await executeCli(['ps', '--json'], environment)).stdout
+        ).session_id as string;
+
+        const [first, second] = await Promise.all([
+            executeCli(
+                ['resume', sessionId, 'first continuation', '--final'],
+                environment
+            ),
+            executeCli(
+                ['resume', sessionId, 'second continuation', '--final'],
+                environment
+            ),
+        ]);
+        expect(first).toMatchObject({ code: 0, stdout: 'fixture response\n' });
+        expect(second).toMatchObject({ code: 0, stdout: 'fixture response\n' });
+
+        const runs = (await readdir(join(home, 'runs'))).filter((entry) =>
+            entry.startsWith('wb_')
+        );
+        expect(runs).toHaveLength(2);
+        const replayed = await executeCli(['attach', sessionId, '--json'], environment);
+        const events = replayed.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events.filter((event) => event.type === 'turn.completed')).toHaveLength(
+            2
+        );
+        expect(new Set(events.map((event) => event.run_id)).size).toBe(1);
+    });
+
     test('stops the active run in the latest session and records a terminal event', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-kill-');

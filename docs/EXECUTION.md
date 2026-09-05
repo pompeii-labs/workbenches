@@ -257,19 +257,29 @@ after receiving it.
 
 ## Resumable interactive sessions
 
-Every execution has one stable Workbench session ID. Interactive sessions can
-become resumable when the native runner exposes durable context. The first
-interactive execution and every later resume are separate durable runs linked to
-the same session. The session index records only the locked Workbench identity,
-runner, model, workspace bindings, native session identifier, and latest run.
-Native runner state remains authoritative and is stored under the session's
-private native-state directory.
+Every execution has one stable Workbench session ID. Local runners with native
+session support use the same background session engine for foreground commands,
+detached commands, and the terminal client. The first execution owns the stable
+ID. A later continuation either joins its active run or creates a new internal
+run linked to the same session after the previous run closes. The session index
+records only the locked Workbench identity, runner, model, workspace bindings,
+native session identifier, and latest run. Native runner state remains
+authoritative and is stored under the session's private native-state directory.
 
-`wb resume <session-or-run-id>` reopens the exact Workbench package and workspace
-recorded by the session. The TUI exposes the same operation through `/sessions` and
-the recent-session area on the home screen. A resume is rejected if the package no
-longer matches the recorded Workbench name, version, runner, model, or workspace, or
-if the original runner never reached a resumable state.
+`wb resume <session-or-run-id>` opens the exact Workbench package and workspace
+recorded by the session. It attaches to an active run or starts a linked run from
+saved native context. Adding a task performs the same continuation without
+opening the terminal client; `--detach` leaves it in the background. The TUI
+exposes the same operation through `/sessions` and the recent-session area on the
+home screen. A resume is rejected if the package no longer matches the recorded
+Workbench name, version, runner, model, or workspace, or if the original runner
+never reached a resumable state.
+
+`wb attach` is observation only. It follows the latest normalized event stream
+without keeping the runner alive or becoming a controlling client. Exiting the
+terminal client detaches that client rather than cancelling work. If a turn is
+active, it and all accepted follow-ups finish before the unattended worker
+closes. The stable session and native runner context remain available afterward.
 
 The TUI may keep a local transcript cache so a reopened screen has immediate visual
 history. That cache is not replayed into the model and is not the source of

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +16,46 @@ afterEach(async () => {
 });
 
 describe('interactive session storage', () => {
+    test('serializes operations that can advance one stable session', async () => {
+        const home = await temporaryHome();
+        const store = new SessionStore(home);
+        const session = await store.create({
+            id: 'wb_sessionlease1234567890123',
+            workbench: 'creator',
+            workbench_version: '0.1.0',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            reference: 'creator',
+            workbench_path: '/repo/.workbenches/creator',
+            workspace: '/repo',
+            workspaces: [],
+            latest_run_id: 'wb_sessionlease1234567890123',
+        });
+        const entered = deferred<void>();
+        const release = deferred<void>();
+        const order: string[] = [];
+        const first = store.exclusive(session.id, async () => {
+            order.push('first');
+            entered.resolve();
+            await release.promise;
+        });
+        await entered.promise;
+        const second = store.exclusive(session.id, async () => {
+            order.push('second');
+        });
+
+        await Bun.sleep(50);
+        expect(order).toEqual(['first']);
+        release.resolve();
+        await Promise.all([first, second]);
+        expect(order).toEqual(['first', 'second']);
+        expect(
+            await stat(join(home, 'sessions', session.id, '.lease')).catch(
+                () => undefined
+            )
+        ).toBeUndefined();
+    });
+
     test('stores resumable metadata separately from native runner state', async () => {
         const home = await temporaryHome();
         const store = new SessionStore(home);
@@ -93,19 +133,30 @@ describe('interactive session storage', () => {
             latest_run_id: sessionId,
         });
         const transcript = new SessionTranscript(home, sessionId, 1);
-        transcript.schedule([{ id: 'first', kind: 'user', text: 'first' }]);
+        transcript.schedule([{ id: 'first', kind: 'user', text: 'first' }], {
+            runId: sessionId,
+            sequence: 3,
+        });
         const firstWrite = transcript.flush();
-        transcript.schedule([{ id: 'second', kind: 'assistant', text: 'second' }]);
+        transcript.schedule([{ id: 'second', kind: 'assistant', text: 'second' }], {
+            runId: sessionId,
+            sequence: 8,
+        });
         const secondWrite = transcript.flush();
         await Promise.all([firstWrite, secondWrite]);
 
         expect(await transcript.load()).toEqual([
             { id: 'second', kind: 'assistant', text: 'second' },
         ]);
+        expect(await transcript.cursor()).toEqual({
+            runId: sessionId,
+            sequence: 8,
+        });
         await writeFile(store.transcriptPath(sessionId), '{broken', {
             mode: 0o600,
         });
         expect(await transcript.load()).toEqual([]);
+        expect(await transcript.cursor()).toBeUndefined();
     });
 
     test('refuses to present old interactive runs as resumable sessions', async () => {
@@ -194,4 +245,12 @@ async function temporaryHome(): Promise<string> {
     const home = await mkdtemp(join(tmpdir(), 'workbench-session-store-'));
     homes.push(home);
     return home;
+}
+
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((accepted) => {
+        resolve = accepted;
+    });
+    return { promise, resolve };
 }

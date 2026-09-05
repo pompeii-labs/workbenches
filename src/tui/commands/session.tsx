@@ -192,7 +192,7 @@ export class SessionCommands {
             this.#command(
                 'quit',
                 'Quit',
-                'Close the session and exit',
+                'Detach this terminal and exit',
                 'Session',
                 () => this.options.actions.exit(),
                 ['exit']

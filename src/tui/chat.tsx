@@ -41,6 +41,7 @@ import {
 import { Composer, type ComposerRef } from './prompt/composer.js';
 import { PromptHistory } from './prompt/history.js';
 import { QuestionPrompt, questionFromEvent } from './question.js';
+import type { TranscriptCursor } from './session-transcript.js';
 import { SessionTranscript } from './session-transcript.js';
 import { useTheme } from './theme/index.js';
 import { Transcript } from './transcript.js';
@@ -94,7 +95,9 @@ export function ChatScreen(props: ChatScreenProps) {
     const [questionResponsePending, setQuestionResponsePending] = createSignal(false);
     const [cancellationPending, setCancellationPending] = createSignal(false);
     const [storedTranscript, setStoredTranscript] = createSignal<SessionTranscript>();
+    const [eventCursor, setEventCursor] = createSignal<TranscriptCursor>();
     let session: RunHandle | undefined;
+    const observation = new AbortController();
     const cancellation = new TurnCancellation();
     const history = new PromptHistory(props.home);
     const attachmentReader = new PromptAttachmentReader(
@@ -116,7 +119,7 @@ export function ChatScreen(props: ChatScreenProps) {
     createEffect(() => {
         const transcript = storedTranscript();
         const items = state().items;
-        if (transcript) transcript.schedule(items);
+        if (transcript) transcript.schedule(items, eventCursor());
     });
 
     const decidePermission = async (decision: RunnerPermissionDecision) => {
@@ -151,7 +154,8 @@ export function ChatScreen(props: ChatScreenProps) {
         leaving = true;
         await decidePermission('reject');
         await respondToQuestion({ outcome: 'rejected' });
-        await session?.close().catch(() => {});
+        observation.abort();
+        await session?.detach().catch(() => {});
         await storedTranscript()
             ?.flush()
             .catch(() => {});
@@ -178,7 +182,8 @@ export function ChatScreen(props: ChatScreenProps) {
             return;
         }
         leaving = true;
-        await session?.close().catch(() => {});
+        observation.abort();
+        await session?.detach().catch(() => {});
         await storedTranscript()
             ?.flush()
             .catch(() => {});
@@ -292,10 +297,14 @@ export function ChatScreen(props: ChatScreenProps) {
             if (props.session) {
                 const transcript = new SessionTranscript(props.home, props.session.id);
                 setStoredTranscript(transcript);
-                const items = await transcript.load();
+                const [items, cursor] = await Promise.all([
+                    transcript.load(),
+                    transcript.cursor(),
+                ]);
                 if (items.length > 0) {
                     setState((current) => ({ ...current, items }));
                 }
+                if (cursor) setEventCursor(cursor);
             }
             session = await props.start({
                 resolved: props.resolved,
@@ -305,7 +314,14 @@ export function ChatScreen(props: ChatScreenProps) {
             if (!storedTranscript()) {
                 setStoredTranscript(new SessionTranscript(props.home, session.runId));
             }
-            void consumeEvents(session, (event) => {
+            const cursor = eventCursor();
+            const resumingObservedRun = cursor?.runId === session.runId;
+            const afterSequence = resumingObservedRun ? cursor.sequence : undefined;
+            if (resumingObservedRun) {
+                setSessionReady(true);
+                composer?.focus();
+            }
+            void consumeEvents(session, observation.signal, afterSequence, (event) => {
                 if (event.type === 'run.ready') {
                     setSessionReady(true);
                     composer?.focus();
@@ -328,8 +344,8 @@ export function ChatScreen(props: ChatScreenProps) {
                     setQuestion(undefined);
                 }
                 events.push(event);
+                setEventCursor({ runId: event.run_id, sequence: event.sequence });
             }).catch(fail);
-            void session.result.catch(fail);
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : String(cause));
             setState((current) => ({ ...current, status: 'Failed' }));
@@ -339,9 +355,10 @@ export function ChatScreen(props: ChatScreenProps) {
         events.dispose();
         if (!leaving) {
             leaving = true;
+            observation.abort();
             void decidePermission('reject');
             void respondToQuestion({ outcome: 'rejected' });
-            void session?.close().catch(() => {});
+            void session?.detach().catch(() => {});
             void storedTranscript()
                 ?.flush()
                 .catch(() => {});
@@ -591,9 +608,16 @@ export function ChatScreen(props: ChatScreenProps) {
 
 async function consumeEvents(
     session: RunHandle,
+    signal: AbortSignal,
+    afterSequence: number | undefined,
     consume: (event: WorkbenchEvent) => void
 ): Promise<void> {
-    for await (const event of session.events) consume(event);
+    for await (const event of session.observe({
+        signal,
+        ...(afterSequence === undefined ? {} : { afterSequence }),
+    })) {
+        consume(event);
+    }
 }
 
 function permissionFromEvent(

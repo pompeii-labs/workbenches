@@ -2,7 +2,7 @@ import { createCliRenderer } from '@opentui/core';
 import { render } from '@opentui/solid';
 
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
-import { RunDispatcher } from '../runs/index.js';
+import { RunContinuation } from '../runs/index.js';
 import {
     SessionResolver,
     SessionStore,
@@ -31,8 +31,8 @@ export async function renderWorkbenchTui(
 ): Promise<void> {
     const home = workbenchHome();
     const resolver = new WorkbenchResolver();
-    const dispatcher = new RunDispatcher(home);
     const sessionResolver = new SessionResolver(home);
+    const continuation = new RunContinuation(home);
     const entries = await new SavedWorkbenchCatalog(home).list();
     const recentSessions = (
         await new SessionStore(home).list({ resumableOnly: true })
@@ -68,21 +68,13 @@ export async function renderWorkbenchTui(
                             {...(options.initial ? { initial: options.initial } : {})}
                             resolve={(alias) => resolver.resolve(alias, { home })}
                             resolveSession={(id) => sessionResolver.resolve(id)}
-                            start={async ({ resolved, reference, session }) => {
-                                const stored = await dispatcher.prepare({
-                                    resolved,
-                                    reference,
-                                    mode: 'interactive',
-                                    workspaces: options.workspaces ?? [],
-                                    ...(session ? { session } : {}),
-                                });
-                                await dispatcher.dispatch({
-                                    id: stored.id,
-                                    cwd: resolved.workspaceDirectory,
+                            start={(launch) =>
+                                continuation.open({
+                                    ...launch,
                                     environment: options.environment ?? process.env,
-                                });
-                                return dispatcher.handle(stored.id);
-                            }}
+                                    workspaces: options.workspaces ?? [],
+                                })
+                            }
                         />
                     </ThemeProvider>
                 ),

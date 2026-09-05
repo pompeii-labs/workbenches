@@ -39,6 +39,17 @@ export type CreateStoredSessionOptions = Omit<
 export class SessionStore {
     constructor(private readonly home: string) {}
 
+    async exclusive<T>(id: string, operation: () => Promise<T>): Promise<T> {
+        RunStore.validateId(id);
+        const token = crypto.randomUUID();
+        await this.acquire(id, token);
+        try {
+            return await operation();
+        } finally {
+            await this.release(id, token);
+        }
+    }
+
     async create(options: CreateStoredSessionOptions): Promise<StoredSession> {
         RunStore.validateId(options.id);
         if (await stat(this.directory(options.id)).catch(() => null)) {
@@ -145,6 +156,78 @@ export class SessionStore {
         return join(this.directory(id), 'session.json');
     }
 
+    private leaseDirectory(id: string): string {
+        return join(this.directory(id), '.lease');
+    }
+
+    private leaseOwnerPath(id: string): string {
+        return join(this.leaseDirectory(id), 'owner.json');
+    }
+
+    private async acquire(id: string, token: string): Promise<void> {
+        const started = Date.now();
+        while (Date.now() - started < 30_000) {
+            try {
+                await mkdir(this.leaseDirectory(id), { mode: 0o700 });
+                try {
+                    await writeFile(
+                        this.leaseOwnerPath(id),
+                        `${JSON.stringify({ version: 1, token, pid: process.pid })}\n`,
+                        { mode: 0o600 }
+                    );
+                } catch (error) {
+                    await rm(this.leaseDirectory(id), {
+                        recursive: true,
+                        force: true,
+                    });
+                    throw error;
+                }
+                return;
+            } catch (error) {
+                if (!isAlreadyExists(error)) throw error;
+                if (await this.recoverAbandonedLease(id)) continue;
+                await Bun.sleep(25);
+            }
+        }
+        throw new Error(`Timed out waiting to continue Workbench session: ${id}`);
+    }
+
+    private async recoverAbandonedLease(id: string): Promise<boolean> {
+        const source = await readFile(this.leaseOwnerPath(id), 'utf8').catch(
+            () => undefined
+        );
+        if (source) {
+            try {
+                const owner = JSON.parse(source) as { pid?: unknown };
+                if (typeof owner.pid === 'number' && processIsAlive(owner.pid)) {
+                    return false;
+                }
+                await rm(this.leaseDirectory(id), { recursive: true, force: true });
+                return true;
+            } catch {
+                // A partially written owner is handled by the age check below.
+            }
+        }
+        const details = await stat(this.leaseDirectory(id)).catch(() => undefined);
+        if (!details || Date.now() - details.mtimeMs < 5_000) return false;
+        await rm(this.leaseDirectory(id), { recursive: true, force: true });
+        return true;
+    }
+
+    private async release(id: string, token: string): Promise<void> {
+        const source = await readFile(this.leaseOwnerPath(id), 'utf8').catch(
+            () => undefined
+        );
+        if (!source) return;
+        try {
+            const owner = JSON.parse(source) as { token?: unknown };
+            if (owner.token !== token) return;
+        } catch {
+            return;
+        }
+        await rm(this.leaseDirectory(id), { recursive: true, force: true });
+    }
+
     private async write(session: StoredSession): Promise<void> {
         const path = this.metadataPath(session.id);
         await mkdir(this.directory(session.id), { recursive: true, mode: 0o700 });
@@ -154,4 +237,21 @@ export class SessionStore {
         });
         await rename(temporary, path);
     }
+}
+
+function processIsAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function isAlreadyExists(error: unknown): boolean {
+    return (
+        error instanceof Error &&
+        'code' in error &&
+        (error as NodeJS.ErrnoException).code === 'EEXIST'
+    );
 }
