@@ -234,31 +234,34 @@ export class RunStore {
         const pollMilliseconds = options.pollMilliseconds ?? 100;
         const afterSequence = options.afterSequence ?? 0;
 
-        while (!options.signal?.aborted) {
+        const readAvailable = async (): Promise<WorkbenchEvent[]> => {
             const details = await stat(path).catch(() => null);
-            if (details && details.size > offset) {
-                const handle = await open(path, 'r');
-                try {
-                    const bytes = new Uint8Array(details.size - offset);
-                    const result = await handle.read(bytes, 0, bytes.length, offset);
-                    offset += result.bytesRead;
-                    pending += decoder.decode(bytes.subarray(0, result.bytesRead), {
-                        stream: true,
-                    });
-                } finally {
-                    await handle.close();
-                }
-                const lines = pending.split('\n');
-                pending = lines.pop() ?? '';
-                for (const line of lines) {
-                    if (!line) continue;
-                    const event = this.parseEvent(line, id);
-                    if (event.sequence > afterSequence) yield event;
-                }
+            if (!details || details.size <= offset) return [];
+            const handle = await open(path, 'r');
+            try {
+                const bytes = new Uint8Array(details.size - offset);
+                const result = await handle.read(bytes, 0, bytes.length, offset);
+                offset += result.bytesRead;
+                pending += decoder.decode(bytes.subarray(0, result.bytesRead), {
+                    stream: true,
+                });
+            } finally {
+                await handle.close();
             }
+            const lines = pending.split('\n');
+            pending = lines.pop() ?? '';
+            return lines
+                .filter(Boolean)
+                .map((line) => this.parseEvent(line, id))
+                .filter((event) => event.sequence > afterSequence);
+        };
+
+        while (!options.signal?.aborted) {
+            for (const event of await readAvailable()) yield event;
 
             const run = await this.read(id);
             if (RunStore.isTerminal(run.status)) {
+                for (const event of await readAvailable()) yield event;
                 if (pending.trim()) {
                     const event = this.parseEvent(pending, id);
                     if (event.sequence > afterSequence) yield event;

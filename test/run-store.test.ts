@@ -80,6 +80,29 @@ describe('durable Workbench runs', () => {
         expect(events.map((next) => next.sequence)).toEqual([3]);
     });
 
+    test('drains events appended before terminal metadata becomes visible', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const run = await fixtureRun(home);
+        await store.appendEvent(run.id, event(run.id, 1, 'run.started'));
+        const iterator = store
+            .follow(run.id, { pollMilliseconds: 1 })
+            [Symbol.asyncIterator]();
+
+        expect(await iterator.next()).toMatchObject({
+            done: false,
+            value: { sequence: 1, type: 'run.started' },
+        });
+        await store.appendEvent(run.id, event(run.id, 2, 'run.completed'));
+        await store.update(run.id, { status: 'completed' });
+
+        expect(await iterator.next()).toMatchObject({
+            done: false,
+            value: { sequence: 2, type: 'run.completed' },
+        });
+        expect(await iterator.next()).toEqual({ done: true, value: undefined });
+    });
+
     test('stops live event observation when its client detaches', async () => {
         const home = await temporaryHome();
         const store = new RunStore(home);
