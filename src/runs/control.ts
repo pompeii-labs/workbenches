@@ -9,6 +9,8 @@ import {
 } from '../runners/session.js';
 
 export type RunControlKind =
+    | 'attach_client'
+    | 'detach_client'
     | 'send'
     | 'steer'
     | 'follow_up'
@@ -33,9 +35,12 @@ export interface RunControlRequest {
         response: RunnerQuestionResponse;
     };
     reason?: string;
+    client_id?: string;
 }
 
 export type RunControlDisposition =
+    | 'attached'
+    | 'detached'
     | 'delivered'
     | 'queued'
     | 'cancelled'
@@ -57,6 +62,7 @@ export interface RunControlReceipt {
 }
 
 export type RunControlSubmission =
+    | { kind: 'attach_client' | 'detach_client'; clientId: string }
     | { kind: 'send' | 'steer' | 'follow_up'; input: RunnerInput }
     | { kind: 'cancel_turn' | 'close' }
     | { kind: 'cancel'; reason?: string }
@@ -160,6 +166,9 @@ export class RunControl {
             ...('question' in submission ? { question: submission.question } : {}),
             ...('reason' in submission && submission.reason?.trim()
                 ? { reason: submission.reason.trim() }
+                : {}),
+            ...('clientId' in submission
+                ? { client_id: submission.clientId.trim() }
                 : {}),
         };
     }
@@ -293,20 +302,20 @@ export class RunControl {
     private async delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
         if (signal?.aborted) return;
         await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, milliseconds);
-            signal?.addEventListener(
-                'abort',
-                () => {
-                    clearTimeout(timer);
-                    resolve();
-                },
-                { once: true }
-            );
+            const finish = () => {
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', finish);
+                resolve();
+            };
+            const timer = setTimeout(finish, milliseconds);
+            signal?.addEventListener('abort', finish, { once: true });
         });
     }
 }
 
 const runControlKinds = new Set<RunControlKind>([
+    'attach_client',
+    'detach_client',
     'send',
     'steer',
     'follow_up',

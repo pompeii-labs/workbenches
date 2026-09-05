@@ -60,6 +60,45 @@ describe('durable Workbench runs', () => {
         expect((await store.read(run.id)).status).toBe('completed');
     });
 
+    test('continues event observation after a persisted sequence cursor', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const run = await fixtureRun(home);
+        await store.appendEvent(run.id, event(run.id, 1, 'run.started'));
+        await store.appendEvent(run.id, event(run.id, 2, 'run.started'));
+        await store.appendEvent(run.id, event(run.id, 3, 'run.completed'));
+        await store.update(run.id, { status: 'completed' });
+
+        const events: WorkbenchEvent[] = [];
+        for await (const next of store.follow(run.id, {
+            afterSequence: 2,
+            pollMilliseconds: 1,
+        })) {
+            events.push(next);
+        }
+
+        expect(events.map((next) => next.sequence)).toEqual([3]);
+    });
+
+    test('stops live event observation when its client detaches', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const run = await fixtureRun(home);
+        const controller = new AbortController();
+        const iterator = store
+            .follow(run.id, {
+                signal: controller.signal,
+                pollMilliseconds: 100,
+            })
+            [Symbol.asyncIterator]();
+        const pending = iterator.next();
+
+        await Bun.sleep(5);
+        controller.abort();
+
+        expect(await pending).toEqual({ done: true, value: undefined });
+    });
+
     test('selects the latest dispatched run and rejects malformed IDs', async () => {
         const home = await temporaryHome();
         const store = new RunStore(home);

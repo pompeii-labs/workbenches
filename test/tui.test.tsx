@@ -997,7 +997,14 @@ function fakeHandle(
             yield event(0, 'run.ready', {});
             for (const next of events) yield next;
         })(),
-        result: new Promise(() => {}),
+        observe: () =>
+            (async function* () {
+                yield event(0, 'run.ready', {});
+                for (const next of events) yield next;
+            })(),
+        result: new Promise<never>(() => {}),
+        attach: async () => receipt('attach_client', 'attached'),
+        detach: async () => receipt('detach_client', 'detached'),
         send: async (input) => {
             onSend(input);
             return control();
@@ -1026,6 +1033,11 @@ function handleAwaitingReady(
             await ready;
             yield event(0, 'run.ready', {});
         })(),
+        observe: () =>
+            (async function* () {
+                await ready;
+                yield event(0, 'run.ready', {});
+            })(),
     };
 }
 

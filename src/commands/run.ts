@@ -1,12 +1,7 @@
 import { defineCommand } from 'citty';
 
 import { createEventRenderer } from '../rendering/index.js';
-import {
-    RunDispatcher,
-    RunWorker,
-    type WorkbenchEvent,
-    WorkbenchRun,
-} from '../runs/index.js';
+import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import { launchWorkbenchTui } from '../tui.js';
@@ -16,6 +11,7 @@ import {
     WorkbenchWorkspaces,
 } from '../workbench/index.js';
 import { CliPresenter } from './presenter.js';
+import { CliRunClient } from './run-client.js';
 
 export const runCommand = defineCommand({
     meta: {
@@ -106,7 +102,6 @@ export const runCommand = defineCommand({
         });
         const home = workbenchHome();
         const dispatcher = new RunDispatcher(home);
-        const worker = new RunWorker(home);
         const task = (args.task ?? args.prompt ?? '').trim();
         if (!task) {
             if (args.detach || args.json || args.final || args['dry-run']) {
@@ -241,32 +236,30 @@ export const runCommand = defineCommand({
                 ...(args.color === undefined ? {} : { color: args.color }),
             });
             const handle = dispatcher.handle(stored.id);
-            const rendering = renderEvents(handle.events, (event) =>
-                renderer.render(event)
-            );
-            let code = 1;
             try {
-                code = await worker.execute({
+                await dispatcher.dispatch({
                     id: stored.id,
+                    cwd: resolved.workspaceDirectory,
                     environment,
                 });
-                await rendering;
+                const client = new CliRunClient();
+                const followed = await client.follow(handle, (event) =>
+                    renderer.render(event)
+                );
+                if (followed.interrupted) {
+                    process.exitCode = 130;
+                    return;
+                }
+                if (followed.terminalStatus === 'failed') process.exitCode = 1;
+                if (followed.terminalStatus === 'cancelled') process.exitCode = 130;
             } finally {
                 renderer.finish();
             }
-            if (code !== 0) process.exitCode = code;
         } finally {
             await resolved.cleanup();
         }
     },
 });
-
-async function renderEvents(
-    events: AsyncIterable<WorkbenchEvent>,
-    render: (event: WorkbenchEvent) => void
-): Promise<void> {
-    for await (const event of events) render(event);
-}
 
 const runOptions = new Set([
     '--task',

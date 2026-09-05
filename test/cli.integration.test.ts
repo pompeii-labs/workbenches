@@ -405,6 +405,7 @@ describe('CLI integration', () => {
         expect(events.map((event) => event.type)).toEqual([
             'run.started',
             'run.ready',
+            'input.delivered',
             'turn.started',
             'output.text',
             'usage.updated',
@@ -462,7 +463,7 @@ describe('CLI integration', () => {
             session_id: dispatched.stdout.trim(),
             mode: 'detached',
             workbench: 'fixture-core',
-            resumable: false,
+            resumable: true,
         });
 
         const attached = await executeCli(['attach', '--json'], environment);
@@ -496,7 +497,8 @@ describe('CLI integration', () => {
         });
 
         const finished = await executeCli(['ps'], environment);
-        expect(finished.stdout).toBe('No active or resumable Workbench sessions.\n');
+        expect(finished.stdout).toContain(dispatched.stdout.trim());
+        expect(finished.stdout).toContain('completed');
         const history = await executeCli(['ps', '--all'], environment);
         expect(history.stdout).toContain(dispatched.stdout.trim());
         expect(history.stdout).toContain('completed');
@@ -994,8 +996,28 @@ async function executeCli(
 ) {
     const home =
         environment.WORKBENCH_HOME ?? (await temporaryDirectory('workbench-cli-home-'));
+    const child = await launchCli(
+        arguments_,
+        { ...environment, WORKBENCH_HOME: home },
+        cwd
+    );
+    const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+    ]);
+    return { stdout, stderr, code };
+}
+
+async function launchCli(
+    arguments_: string[],
+    environment: Record<string, string | undefined>,
+    cwd = projectDirectory
+) {
+    const home = environment.WORKBENCH_HOME;
+    if (!home) throw new Error('CLI integration requires a Workbench home');
     await seedModelCatalogFixture(home);
-    const child = Bun.spawn([process.execPath, cliPath, ...arguments_], {
+    return Bun.spawn([process.execPath, cliPath, ...arguments_], {
         cwd,
         env: {
             ...process.env,
@@ -1006,12 +1028,38 @@ async function executeCli(
         stdout: 'pipe',
         stderr: 'pipe',
     });
-    const [stdout, stderr, code] = await Promise.all([
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-        child.exited,
-    ]);
-    return { stdout, stderr, code };
+}
+
+async function waitForActiveSession(home: string): Promise<string> {
+    const started = Date.now();
+    while (Date.now() - started < 5_000) {
+        const sessions = await readdir(join(home, 'sessions')).catch(() => []);
+        const sessionId = sessions.find((entry) => entry.startsWith('wb_'));
+        if (sessionId) {
+            const sessionSource = await readFile(
+                join(home, 'sessions', sessionId, 'session.json'),
+                'utf8'
+            ).catch(() => undefined);
+            if (sessionSource) {
+                const session = JSON.parse(sessionSource) as {
+                    latest_run_id: string;
+                    native_session_id?: string;
+                };
+                const runSource = await readFile(
+                    join(home, 'runs', session.latest_run_id, 'run.json'),
+                    'utf8'
+                ).catch(() => undefined);
+                const run = runSource
+                    ? (JSON.parse(runSource) as { status: string })
+                    : undefined;
+                if (run?.status === 'running' && session.native_session_id) {
+                    return sessionId;
+                }
+            }
+        }
+        await Bun.sleep(25);
+    }
+    throw new Error('Timed out waiting for an active Workbench session');
 }
 
 async function temporaryDirectory(prefix: string) {
@@ -1181,7 +1229,7 @@ async function fakeDocker() {
 
 async function fakeBin(
     tools: string[] = [],
-    options: { delay?: boolean; block?: boolean; response?: string } = {}
+    options: { delay?: boolean | number; block?: boolean; response?: string } = {}
 ) {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-bin-'));
     temporaryDirectories.push(directory);
@@ -1193,26 +1241,88 @@ async function fakeBin(
     await writeFile(
         runner,
         [
-            '#!/bin/sh',
-            ...(options.block ? ['exec sleep 30'] : []),
-            'if test -n "$WB_TEST_RECORD"; then',
-            '  printf "%s\\n" "$PWD" > "$WB_TEST_RECORD.cwd"',
-            '  printf "%s\\n" "$@" > "$WB_TEST_RECORD.args"',
-            '  printf "%s\\n" "$OPENCODE_CONFIG_CONTENT" > "$WB_TEST_RECORD.config"',
-            '  printf "%s\\n" "$OPENCODE_CONFIG_DIR" > "$WB_TEST_RECORD.config-dir"',
-            '  printf "%s\\n" "$OPENCODE_CONFIG" > "$WB_TEST_RECORD.native-config"',
-            '  printf "%s\\n" "$OPENAI_API_KEY" > "$WB_TEST_RECORD.openai-key"',
-            '  printf "%s\\n" "$BASE_URL" > "$WB_TEST_RECORD.base-url"',
-            '  printf "%s\\n" "$PROJECT_TOKEN" > "$WB_TEST_RECORD.project-token"',
-            '  printf "%s\\n" "$OPTIONAL_TOKEN" > "$WB_TEST_RECORD.optional-token"',
-            '  printf "%s\\n" "$UNDECLARED_TOKEN" > "$WB_TEST_RECORD.undeclared-token"',
-            '  printf "%s\\n" "$WORKBENCH_WORKSPACE_API" > "$WB_TEST_RECORD.workspace-api"',
-            '  printf "%s\\n" "$WORKBENCH_WORKSPACE_SCHEMAS" > "$WB_TEST_RECORD.workspace-schemas"',
-            'fi',
-            ...(options.delay ? ['sleep 0.1'] : []),
-            'printf \'%s\\n\' \'{"type":"step_start","part":{"type":"step-start"}}\'',
-            `printf '%s\\n' '${responseEvent}'`,
-            'printf \'%s\\n\' \'{"type":"step_finish","part":{"type":"step-finish","reason":"stop","tokens":{"total":9,"input":4,"output":5,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.0001}}\'',
+            '#!/usr/bin/env bun',
+            `const responseText = ${JSON.stringify(options.response ?? 'fixture response')};`,
+            `const responseEvent = ${JSON.stringify(responseEvent)};`,
+            `const delay = ${typeof options.delay === 'number' ? options.delay : options.delay ? 100 : 0};`,
+            `const block = ${options.block ? 'true' : 'false'};`,
+            'const record = process.env.WB_TEST_RECORD;',
+            'if (record) {',
+            '  const fields: Record<string, string | undefined> = {',
+            '    cwd: process.env.PWD ?? process.cwd(),',
+            '    args: Bun.argv.slice(2).join("\\n"),',
+            '    config: process.env.OPENCODE_CONFIG_CONTENT,',
+            '    "config-dir": process.env.OPENCODE_CONFIG_DIR,',
+            '    "native-config": process.env.OPENCODE_CONFIG,',
+            '    "openai-key": process.env.OPENAI_API_KEY,',
+            '    "base-url": process.env.BASE_URL,',
+            '    "project-token": process.env.PROJECT_TOKEN,',
+            '    "optional-token": process.env.OPTIONAL_TOKEN,',
+            '    "undeclared-token": process.env.UNDECLARED_TOKEN,',
+            '    "workspace-api": process.env.WORKBENCH_WORKSPACE_API,',
+            '    "workspace-schemas": process.env.WORKBENCH_WORKSPACE_SCHEMAS,',
+            '  };',
+            '  await Promise.all(Object.entries(fields).map(([name, value]) => Bun.write(record + "." + name, (value ?? "") + "\\n")));',
+            '}',
+            'if (Bun.argv[2] !== "serve") {',
+            '  if (block) await new Promise(() => {});',
+            '  if (delay) await Bun.sleep(delay);',
+            '  console.log(JSON.stringify({ type: "step_start", part: { type: "step-start" } }));',
+            '  console.log(responseEvent);',
+            '  console.log(JSON.stringify({ type: "step_finish", part: { type: "step-finish", reason: "stop", tokens: { total: 9, input: 4, output: 5, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0.0001 } }));',
+            '  process.exit(0);',
+            '}',
+            'const encoder = new TextEncoder();',
+            'const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();',
+            'const emit = (type: string, properties: Record<string, unknown>) => {',
+            '  const chunk = encoder.encode("data: " + JSON.stringify({ type, properties: { sessionID: "ses_fixture", ...properties } }) + "\\n\\n");',
+            '  for (const client of clients) client.enqueue(chunk);',
+            '};',
+            'const app = Bun.serve({',
+            '  hostname: "127.0.0.1",',
+            '  port: 0,',
+            '  async fetch(request) {',
+            '    const url = new URL(request.url);',
+            '    if (url.pathname === "/event") {',
+            '      let controller: ReadableStreamDefaultController<Uint8Array>;',
+            '      const body = new ReadableStream<Uint8Array>({',
+            '        start(value) { controller = value; clients.add(value); value.enqueue(encoder.encode(": connected\\n\\n")); },',
+            '        cancel() { clients.delete(controller); },',
+            '      });',
+            '      return new Response(body, { headers: { "content-type": "text/event-stream" } });',
+            '    }',
+            '    if (url.pathname === "/session" && request.method === "POST") return Response.json({ id: "ses_fixture" });',
+            '    if (url.pathname.startsWith("/session/") && request.method === "GET") return Response.json({ id: url.pathname.split("/").at(-1) });',
+            '    if (url.pathname.endsWith("/prompt_async")) {',
+            '      const input = await request.json() as { messageID: string; parts: Array<{ type: string; text?: string }> };',
+            '      const text = input.parts.find((part) => part.type === "text")?.text ?? "";',
+            '      if (record) await Bun.write(record + ".args", text + "\\n");',
+            '      setTimeout(() => {',
+            '        emit("session.status", { status: { type: "busy" } });',
+            '        if (block) return;',
+            '        emit("message.updated", { info: { id: "assistant_" + input.messageID, role: "assistant", parentID: input.messageID } });',
+            '        emit("message.part.updated", { part: { id: "part_" + input.messageID, messageID: "assistant_" + input.messageID, type: "text", text: "" } });',
+            '        emit("message.part.delta", { messageID: "assistant_" + input.messageID, partID: "part_" + input.messageID, field: "text", delta: responseText });',
+            '        emit("message.part.updated", { part: { id: "finish_" + input.messageID, messageID: "assistant_" + input.messageID, type: "step-finish", reason: "stop", tokens: { total: 9, input: 4, output: 5, reasoning: 0 }, cost: 0.0001 } });',
+            '        emit("session.status", { status: { type: "idle" } });',
+            '      }, delay);',
+            '      return new Response(null, { status: 204 });',
+            '    }',
+            '    if (url.pathname.endsWith("/abort")) {',
+            '      queueMicrotask(() => emit("session.status", { status: { type: "idle" } }));',
+            '      return Response.json(true);',
+            '    }',
+            '    return new Response(null, { status: 404 });',
+            '  },',
+            '});',
+            'process.stdout.write("opencode server listening on http://127.0.0.1:" + app.port + "\\n");',
+            'const shutdown = () => {',
+            '  for (const client of clients) client.close();',
+            '  app.stop(true);',
+            '  process.exit(0);',
+            '};',
+            'process.on("SIGTERM", shutdown);',
+            'process.on("SIGINT", shutdown);',
             '',
         ].join('\n')
     );

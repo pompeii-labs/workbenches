@@ -22,6 +22,12 @@ export interface RunHandle {
     readonly runId: string;
     readonly events: AsyncIterable<WorkbenchEvent>;
     readonly result: Promise<RunResult>;
+    observe(options?: {
+        afterSequence?: number;
+        signal?: AbortSignal;
+    }): AsyncIterable<WorkbenchEvent>;
+    attach(): Promise<RunControlReceipt>;
+    detach(): Promise<RunControlReceipt>;
     send(input: RunnerInput): Promise<RunControlReceipt>;
     steer(input: RunnerInput): Promise<RunControlReceipt>;
     followUp(input: RunnerInput): Promise<RunControlReceipt>;
@@ -40,9 +46,9 @@ export interface RunHandle {
 
 export class StoredRunHandle implements RunHandle {
     readonly events: AsyncIterable<WorkbenchEvent>;
-    readonly result: Promise<RunResult>;
     private readonly store: RunStore;
     private readonly control: RunControl;
+    private readonly clientId = `client_${crypto.randomUUID()}`;
     private submissions: Promise<void> = Promise.resolve();
 
     constructor(
@@ -52,7 +58,24 @@ export class StoredRunHandle implements RunHandle {
         this.store = new RunStore(home);
         this.control = new RunControl(home, runId);
         this.events = this.store.follow(runId);
-        this.result = this.waitForResult();
+    }
+
+    get result(): Promise<RunResult> {
+        return this.waitForResult();
+    }
+
+    observe(
+        options: { afterSequence?: number; signal?: AbortSignal } = {}
+    ): AsyncIterable<WorkbenchEvent> {
+        return this.store.follow(this.runId, options);
+    }
+
+    attach(): Promise<RunControlReceipt> {
+        return this.submit({ kind: 'attach_client', clientId: this.clientId });
+    }
+
+    detach(): Promise<RunControlReceipt> {
+        return this.submit({ kind: 'detach_client', clientId: this.clientId });
     }
 
     send(input: RunnerInput): Promise<RunControlReceipt> {

@@ -33,6 +33,7 @@ export interface StoredRun {
     model: string;
     workspace: string;
     mode?: 'foreground' | 'detached' | 'interactive';
+    execution?: 'one_shot' | 'session';
     workspaces?: WorkbenchWorkspaceBinding[];
     allow_host_docker?: boolean;
     registry?: CatalogRegistryReference;
@@ -218,7 +219,11 @@ export class RunStore {
 
     async *follow(
         id: string,
-        options: { pollMilliseconds?: number } = {}
+        options: {
+            pollMilliseconds?: number;
+            afterSequence?: number;
+            signal?: AbortSignal;
+        } = {}
     ): AsyncGenerator<WorkbenchEvent> {
         RunStore.validateId(id);
         await this.read(id);
@@ -227,8 +232,9 @@ export class RunStore {
         let pending = '';
         const decoder = new TextDecoder();
         const pollMilliseconds = options.pollMilliseconds ?? 100;
+        const afterSequence = options.afterSequence ?? 0;
 
-        while (true) {
+        while (!options.signal?.aborted) {
             const details = await stat(path).catch(() => null);
             if (details && details.size > offset) {
                 const handle = await open(path, 'r');
@@ -246,17 +252,21 @@ export class RunStore {
                 pending = lines.pop() ?? '';
                 for (const line of lines) {
                     if (!line) continue;
-                    yield this.parseEvent(line, id);
+                    const event = this.parseEvent(line, id);
+                    if (event.sequence > afterSequence) yield event;
                 }
             }
 
             const run = await this.read(id);
             if (RunStore.isTerminal(run.status)) {
-                if (pending.trim()) yield this.parseEvent(pending, id);
+                if (pending.trim()) {
+                    const event = this.parseEvent(pending, id);
+                    if (event.sequence > afterSequence) yield event;
+                }
                 return;
             }
             this.assertWorkerAlive(run);
-            await this.delay(pollMilliseconds);
+            await this.delay(pollMilliseconds, options.signal);
         }
     }
 
@@ -320,7 +330,16 @@ export class RunStore {
         }
     }
 
-    private delay(milliseconds: number): Promise<void> {
-        return new Promise((resolve) => setTimeout(resolve, milliseconds));
+    private delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+        if (signal?.aborted) return Promise.resolve();
+        return new Promise((resolve) => {
+            const finish = () => {
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', finish);
+                resolve();
+            };
+            const timer = setTimeout(finish, milliseconds);
+            signal?.addEventListener('abort', finish, { once: true });
+        });
     }
 }

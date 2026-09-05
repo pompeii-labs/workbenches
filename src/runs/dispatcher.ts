@@ -1,6 +1,7 @@
 import { basename } from 'node:path';
 
 import { modelLabel } from '../models/index.js';
+import { RunnerRegistry } from '../runners/index.js';
 import { SessionStore, type StoredSession } from '../sessions/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
@@ -35,6 +36,10 @@ export class RunDispatcher {
     async prepare(options: PrepareRunOptions): Promise<StoredRun> {
         const workbench = options.resolved.workbench;
         const id = RunStore.createId();
+        const execution = this.executionFor(
+            workbench.manifest.runtime,
+            workbench.manifest.runner
+        );
         const reference =
             options.session?.reference ?? options.reference ?? workbench.manifest.name;
         const workspaces = options.session?.workspaces ?? options.workspaces ?? [];
@@ -67,6 +72,7 @@ export class RunDispatcher {
                     model: modelLabel(workbench.manifest.model),
                     workspace: options.resolved.workspaceDirectory,
                     mode: options.mode,
+                    execution,
                     workspaces,
                     allow_host_docker: options.allowHostDocker ?? false,
                     session_id: session.id,
@@ -101,6 +107,14 @@ export class RunDispatcher {
         return stored;
     }
 
+    private executionFor(runtime: string, runner: string): 'one_shot' | 'session' {
+        if (runtime !== 'local') return 'one_shot';
+        const resume =
+            RunnerRegistry.standard().session(runner).declaration.capabilities
+                .session_resume;
+        return resume.status === 'unsupported' ? 'one_shot' : 'session';
+    }
+
     private assertCompatible(options: PrepareRunOptions, session: StoredSession): void {
         const workbench = options.resolved.workbench;
         const compatible =
@@ -122,6 +136,7 @@ export class RunDispatcher {
     }
 
     async dispatch(options: DispatchRunOptions): Promise<number> {
+        let pid: number;
         try {
             const child = Bun.spawn(this.workerCommand(options.id), {
                 cwd: options.cwd,
@@ -136,8 +151,8 @@ export class RunDispatcher {
                 detached: true,
             });
             child.unref();
-            await this.store.update(options.id, { pid: child.pid });
-            return child.pid;
+            pid = child.pid;
+            await this.store.update(options.id, { pid });
         } catch (error) {
             await this.store
                 .update(options.id, {
@@ -148,6 +163,46 @@ export class RunDispatcher {
                 .catch(() => {});
             throw error;
         }
+        try {
+            await this.waitUntilStarted(options.id);
+            return pid;
+        } catch (error) {
+            await this.store
+                .read(options.id)
+                .then((run) => this.store.reconcile(run))
+                .catch(() => {});
+            throw error;
+        }
+    }
+
+    private async waitUntilStarted(id: string): Promise<void> {
+        const started = Date.now();
+        while (Date.now() - started < 15_000) {
+            const run = await this.store.read(id);
+            if (RunStore.isTerminal(run.status)) {
+                if (run.status === 'completed') return;
+                const events = await this.store.readEvents(id);
+                const message = events
+                    .toReversed()
+                    .find((event) => event.type === 'run.failed')?.data;
+                throw new Error(
+                    typeof message === 'object' &&
+                        message !== null &&
+                        typeof Reflect.get(message, 'message') === 'string'
+                        ? String(Reflect.get(message, 'message'))
+                        : `Workbench session failed to start: ${id}`
+                );
+            }
+            if (
+                run.status === 'running' &&
+                (run.execution !== 'session' || Boolean(run.runner_session_id))
+            ) {
+                return;
+            }
+            this.store.assertWorkerAlive(run);
+            await Bun.sleep(25);
+        }
+        throw new Error(`Workbench session did not start in time: ${id}`);
     }
 
     private workerCommand(id: string): string[] {
