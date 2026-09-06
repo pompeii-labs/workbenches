@@ -5,20 +5,21 @@ import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import {
     assertRunnerConfiguration,
     type PreparedRunner,
+    type PreparedRunnerSessionOptions,
     Runner,
     type RunnerEventNormalizer,
 } from '../runner.js';
+import { OpenCodeSessionAdapter } from './adapter.js';
 import { stageOpenCodeSkills } from './assets.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeInvocation, publicInvocation } from './invocation.js';
-import { OpenCodeSessionAdapter } from './session.js';
 
 export class OpenCodeRunner extends Runner {
     readonly name = 'opencode';
     readonly session = new OpenCodeSessionAdapter();
 
     async prepare(workbench: ResolvedWorkbench): Promise<PreparedRunner> {
-        return PreparedOpenCodeRunner.create(workbench);
+        return PreparedOpenCodeRunner.create(workbench, this.session);
     }
 }
 
@@ -31,17 +32,20 @@ class PreparedOpenCodeRunner implements PreparedRunner {
     readonly #nativeConfigFile: string | undefined;
     readonly #stagedDirectory: string | undefined;
     readonly #workbench: ResolvedWorkbench;
+    readonly #session: OpenCodeSessionAdapter;
 
     private constructor(options: {
         workbench: ResolvedWorkbench;
         stagedDirectory?: string;
         nativeConfigFile?: string;
         cleanup: () => Promise<void>;
+        session: OpenCodeSessionAdapter;
     }) {
         this.#workbench = options.workbench;
         this.#stagedDirectory = options.stagedDirectory;
         this.#nativeConfigFile = options.nativeConfigFile;
         this.#cleanup = options.cleanup;
+        this.#session = options.session;
         this.assets = [
             ...(options.stagedDirectory
                 ? [{ path: options.stagedDirectory, access: 'read-write' as const }]
@@ -52,7 +56,10 @@ class PreparedOpenCodeRunner implements PreparedRunner {
         ];
     }
 
-    static async create(workbench: ResolvedWorkbench): Promise<PreparedOpenCodeRunner> {
+    static async create(
+        workbench: ResolvedWorkbench,
+        session = new OpenCodeSessionAdapter()
+    ): Promise<PreparedOpenCodeRunner> {
         const staged = await stageOpenCodeSkills(workbench);
         const nativeConfigFile =
             workbench.runnerConfigPath &&
@@ -64,6 +71,7 @@ class PreparedOpenCodeRunner implements PreparedRunner {
             ...(staged?.directory ? { stagedDirectory: staged.directory } : {}),
             ...(nativeConfigFile ? { nativeConfigFile } : {}),
             cleanup: staged?.cleanup ?? (async () => {}),
+            session,
         });
     }
 
@@ -112,6 +120,45 @@ class PreparedOpenCodeRunner implements PreparedRunner {
 
     events(): RunnerEventNormalizer {
         return new OpenCodeEventAdapter();
+    }
+
+    startSession(runtime: PreparedRuntime, options: PreparedRunnerSessionOptions) {
+        assertRunnerConfiguration(this.#workbench, options.configuration);
+        return this.#session.startPrepared(
+            {
+                workbench: runtime.workbench,
+                workspaceDirectory: runtime.workspaceDirectory,
+                environment: new ModelRouter().environmentForRoute(
+                    this.#workbench,
+                    options.configuration,
+                    runtime.environment
+                ),
+                configuration: options.configuration,
+                host: options.host,
+                ...(options.session ? { session: options.session } : {}),
+            },
+            {
+                ...(this.#stagedDirectory
+                    ? { configDirectory: runtime.pathFor(this.#stagedDirectory) }
+                    : {}),
+                ...(this.#nativeConfigFile
+                    ? { nativeConfigFile: runtime.pathFor(this.#nativeConfigFile) }
+                    : {}),
+                launch: (buildInvocation) => {
+                    const service = runtime.launchService(buildInvocation);
+                    const process = service.process;
+                    return {
+                        process: {
+                            exited: process.exited,
+                            ...(process.stdout ? { stdout: process.stdout } : {}),
+                            ...(process.stderr ? { stderr: process.stderr } : {}),
+                            kill: () => runtime.cancel(process),
+                        },
+                        resolveUrl: service.resolveUrl,
+                    };
+                },
+            }
+        );
     }
 
     cleanup(): Promise<void> {

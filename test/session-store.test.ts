@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,6 +25,7 @@ describe('interactive session storage', () => {
             workbench_version: '0.1.0',
             runner: 'opencode',
             model: 'openai/gpt-5.6-terra',
+            runtime: 'local',
             reference: 'creator',
             workbench_path: '/repo/.workbenches/creator',
             workspace: '/repo',
@@ -76,6 +77,15 @@ describe('interactive session storage', () => {
         expect(store.nativeDirectory(session.id)).toBe(
             join(home, 'sessions', session.id, 'native')
         );
+
+        const metadataPath = join(home, 'sessions', session.id, 'session.json');
+        const legacy = JSON.parse(await readFile(metadataPath, 'utf8')) as Record<
+            string,
+            unknown
+        >;
+        delete legacy.runtime;
+        await writeFile(metadataPath, `${JSON.stringify(legacy)}\n`);
+        expect(await store.read(session.id)).toMatchObject({ runtime: 'local' });
 
         const updated = await store.update(session.id, {
             native_session_id: 'ses_native_1',

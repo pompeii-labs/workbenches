@@ -63,6 +63,26 @@ describe('Workbench session lifecycle', () => {
         });
     });
 
+    test('locks a resumed session to its original runtime', async () => {
+        const home = await temporaryHome();
+        const dispatcher = new RunDispatcher(home);
+        const first = await dispatcher.prepare({
+            resolved: fixtureReference(),
+            mode: 'interactive',
+        });
+        const session = await new SessionStore(home).read(first.id);
+        const changed = fixtureReference();
+        changed.workbench.manifest.runtime = 'docker';
+
+        await expect(
+            dispatcher.prepare({
+                resolved: changed,
+                mode: 'interactive',
+                session,
+            })
+        ).rejects.toThrow('does not match the resolved Workbench package');
+    });
+
     test('lists active and resumable sessions while retaining legacy history', async () => {
         const home = await temporaryHome();
         const dispatcher = new RunDispatcher(home);

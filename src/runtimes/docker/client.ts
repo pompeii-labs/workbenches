@@ -141,7 +141,14 @@ export class DockerClient {
         command: string[],
         options: DockerSpawnOptions
     ): SpawnedRunner {
-        return Bun.spawn(command, options);
+        const child = Bun.spawn(command, options);
+        return {
+            exited: child.exited,
+            ...(child.stdin ? { stdin: child.stdin } : {}),
+            ...(child.stdout ? { stdout: child.stdout } : {}),
+            ...(child.stderr ? { stderr: child.stderr } : {}),
+            kill: () => child.kill(),
+        };
     }
 
     private static async interactProcess(

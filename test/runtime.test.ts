@@ -60,6 +60,37 @@ describe('local runtime provider contract', () => {
         await runtime.cleanup();
     });
 
+    test('launches session processes and loopback services on the host', async () => {
+        let input: string | undefined;
+        const runtime = await new LocalRuntimeProvider({
+            findExecutable: (name) => `/bin/${name}`,
+            spawn: (_command, options) => {
+                input = options.stdin;
+                return {
+                    exited: Promise.resolve(0),
+                    stdin: { write() {} },
+                };
+            },
+        }).prepare(request);
+        await runtime.preflight();
+        const process = runtime.launchSession(
+            { command: ['pi'], cwd: '/workspace', env: {} },
+            { stdin: 'pipe' }
+        );
+        expect(input).toBe('pipe');
+        expect(process.stdin).toBeDefined();
+
+        const service = runtime.launchService((binding) => ({
+            command: ['opencode', 'serve', binding.hostname, String(binding.port)],
+            cwd: '/workspace',
+            env: {},
+        }));
+        await expect(service.resolveUrl('http://127.0.0.1:3123')).resolves.toBe(
+            'http://127.0.0.1:3123'
+        );
+        await runtime.cleanup();
+    });
+
     test('executes captured commands and hands interactive commands to the terminal', async () => {
         let interactiveCommand: string[] = [];
         let interactiveOptions: Record<string, unknown> = {};

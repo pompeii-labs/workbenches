@@ -20,6 +20,7 @@ export interface StoredSession {
     workbench_version: string;
     runner: string;
     model: string;
+    runtime: string;
     reference: string;
     workbench_path: string;
     workspace: string;
@@ -33,8 +34,10 @@ export interface StoredSession {
 
 export type CreateStoredSessionOptions = Omit<
     StoredSession,
-    'version' | 'created_at' | 'updated_at'
->;
+    'version' | 'runtime' | 'created_at' | 'updated_at'
+> & {
+    runtime?: string;
+};
 
 export class SessionStore {
     constructor(private readonly home: string) {}
@@ -63,6 +66,7 @@ export class SessionStore {
         const session: StoredSession = {
             version: 1,
             ...options,
+            runtime: options.runtime ?? 'local',
             created_at: timestamp,
             updated_at: timestamp,
         };
@@ -75,6 +79,7 @@ export class SessionStore {
         const source = await readFile(this.metadataPath(id), 'utf8').catch(() => null);
         if (!source) throw new Error(`Workbench session does not exist: ${id}`);
         const value = JSON.parse(source) as Partial<StoredSession>;
+        const runtime = value.runtime ?? 'local';
         if (
             value.version !== 1 ||
             value.id !== id ||
@@ -82,6 +87,8 @@ export class SessionStore {
             typeof value.workbench_version !== 'string' ||
             typeof value.runner !== 'string' ||
             typeof value.model !== 'string' ||
+            typeof runtime !== 'string' ||
+            runtime.length === 0 ||
             typeof value.reference !== 'string' ||
             typeof value.workbench_path !== 'string' ||
             typeof value.workspace !== 'string' ||
@@ -94,7 +101,7 @@ export class SessionStore {
         ) {
             throw new Error(`Invalid Workbench session record: ${id}`);
         }
-        return value as StoredSession;
+        return { ...value, runtime } as StoredSession;
     }
 
     async update(

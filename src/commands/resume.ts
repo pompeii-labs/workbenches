@@ -60,6 +60,11 @@ export const resumeCommand = defineCommand({
             valueHint: 'NAME=value',
             description: 'Set a declared environment binding (repeatable)',
         },
+        'allow-host-docker': {
+            type: 'boolean',
+            description: 'Authorize a declared host Docker engine binding for this run',
+            default: false,
+        },
     },
     async run({ args, rawArgs }) {
         if (args.prompt !== undefined && args.task !== undefined) {
@@ -80,6 +85,14 @@ export const resumeCommand = defineCommand({
             target.resolved.workbench,
             overrides
         );
+        if (
+            target.resolved.workbench.manifest.docker?.engine &&
+            !args['allow-host-docker']
+        ) {
+            throw new Error(
+                'This Workbench requests host Docker engine access. Re-run with --allow-host-docker to authorize it.'
+            );
+        }
         if (!task) {
             if (args.detach || args.json || args.final) {
                 throw new Error('This resume mode requires a non-empty task');
@@ -88,6 +101,7 @@ export const resumeCommand = defineCommand({
                 initial: target,
                 environment,
                 workspaces: target.session.workspaces,
+                allowHostDocker: args['allow-host-docker'],
             });
             return;
         }
@@ -104,6 +118,7 @@ export const resumeCommand = defineCommand({
                 args['env-file'] || overrides.explicit.size > 0
             ),
             workspaces: target.session.workspaces,
+            allowHostDocker: args['allow-host-docker'],
         });
         if (args.detach) {
             console.log(target.session.id);

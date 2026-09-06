@@ -1049,6 +1049,7 @@ function recentSession(workbench: string): StoredSession {
         workbench_version: '0.1.0',
         runner: 'opencode',
         model: 'openai/gpt-5.4-mini',
+        runtime: 'local',
         reference: workbench,
         workbench_path: `/tmp/${workbench}`,
         workspace: '/tmp/workspace',

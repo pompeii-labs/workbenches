@@ -7,6 +7,9 @@ export type {
     RuntimePreparation,
     RuntimePrepareRequest,
     RuntimeProvider,
+    RuntimeService,
+    RuntimeServiceBinding,
+    RuntimeSessionOptions,
 } from './contracts.js';
 export {
     type DockerCommandResult,

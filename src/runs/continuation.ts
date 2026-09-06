@@ -14,6 +14,7 @@ export interface ContinueRunOptions {
     environment: Record<string, string | undefined>;
     environmentOverrides?: boolean;
     workspaces?: WorkbenchWorkspaceBinding[];
+    allowHostDocker?: boolean;
 }
 
 export interface ContinuedRun {
@@ -30,6 +31,7 @@ export interface OpenInteractiveRunOptions {
     reference: string;
     environment: Record<string, string | undefined>;
     workspaces?: WorkbenchWorkspaceBinding[];
+    allowHostDocker?: boolean;
     session?: StoredSession;
 }
 
@@ -124,6 +126,9 @@ export class RunContinuation {
             mode: options.mode,
             reference: session.reference,
             workspaces: options.workspaces ?? session.workspaces,
+            ...(options.allowHostDocker !== undefined
+                ? { allowHostDocker: options.allowHostDocker }
+                : {}),
             session,
         });
         await this.#dispatcher.dispatch({
@@ -148,6 +153,9 @@ export class RunContinuation {
             reference: options.reference,
             mode: 'interactive',
             workspaces: options.workspaces ?? options.session?.workspaces ?? [],
+            ...(options.allowHostDocker !== undefined
+                ? { allowHostDocker: options.allowHostDocker }
+                : {}),
             ...(options.session ? { session: options.session } : {}),
         });
         await this.#dispatcher.dispatch({

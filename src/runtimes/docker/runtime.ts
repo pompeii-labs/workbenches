@@ -17,6 +17,9 @@ import type {
     PreparedRuntime,
     RuntimeCommandOptions,
     RuntimePrepareRequest,
+    RuntimeService,
+    RuntimeServiceBinding,
+    RuntimeSessionOptions,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
 import type { DockerClient } from './client.js';
@@ -178,6 +181,37 @@ export class DockerRuntime implements PreparedRuntime {
     }
 
     launch(invocation: RunnerInvocation): SpawnedRunner {
+        return this.launchSession(invocation, { stdin: 'ignore' });
+    }
+
+    launchSession(
+        invocation: RunnerInvocation,
+        options: RuntimeSessionOptions
+    ): SpawnedRunner {
+        return this.launchContainer(invocation, options).process;
+    }
+
+    launchService(
+        buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
+    ): RuntimeService {
+        const port = 4096;
+        const launched = this.launchContainer(
+            buildInvocation({ hostname: '0.0.0.0', port }),
+            { stdin: 'ignore' },
+            port
+        );
+        return {
+            process: launched.process,
+            resolveUrl: (reportedUrl) =>
+                this.resolvePublishedUrl(launched.name, port, reportedUrl),
+        };
+    }
+
+    private launchContainer(
+        invocation: RunnerInvocation,
+        options: RuntimeSessionOptions,
+        publishedPort?: number
+    ): { name: string; process: SpawnedRunner } {
         this.assertAvailable('launch');
         if (!this.ready) {
             throw new Error('Runtime preflight must succeed before launch');
@@ -196,6 +230,10 @@ export class DockerRuntime implements PreparedRuntime {
                     '--init',
                     '--name',
                     name,
+                    ...(options.stdin === 'pipe' ? ['--interactive'] : []),
+                    ...(publishedPort
+                        ? ['--publish', `127.0.0.1::${publishedPort}`]
+                        : []),
                     '--network',
                     'bridge',
                     '--read-only',
@@ -212,7 +250,7 @@ export class DockerRuntime implements PreparedRuntime {
                 {
                     cwd: process.cwd(),
                     env: process.env,
-                    stdin: 'ignore',
+                    stdin: options.stdin,
                     stdout: 'pipe',
                     stderr: 'pipe',
                 }
@@ -222,6 +260,7 @@ export class DockerRuntime implements PreparedRuntime {
             throw error;
         }
         const tracked: SpawnedRunner = {
+            ...(child.stdin ? { stdin: child.stdin } : {}),
             ...(child.stdout ? { stdout: child.stdout } : {}),
             ...(child.stderr ? { stderr: child.stderr } : {}),
             ...(child.kill ? { kill: () => child.kill?.() } : {}),
@@ -231,7 +270,7 @@ export class DockerRuntime implements PreparedRuntime {
             }),
         };
         this.active.set(name, tracked);
-        return tracked;
+        return { name, process: tracked };
     }
 
     cancel(process: SpawnedRunner): void {
@@ -381,11 +420,49 @@ export class DockerRuntime implements PreparedRuntime {
             '--force',
             name,
         ]);
+        if (
+            result.stderr.includes('removal of container') &&
+            result.stderr.includes('already in progress')
+        ) {
+            for (let attempt = 0; attempt < 80; attempt += 1) {
+                const inspected = await this.options.client.run([
+                    this.options.client.executable,
+                    'container',
+                    'inspect',
+                    name,
+                ]);
+                if (inspected.code !== 0) return;
+                await Bun.sleep(25);
+            }
+        }
         if (result.code !== 0 && !result.stderr.includes('No such container')) {
             throw new Error(
                 this.options.client.diagnostic(result, 'Failed to remove container')
             );
         }
+    }
+
+    private async resolvePublishedUrl(
+        name: string,
+        containerPort: number,
+        reportedUrl: string
+    ): Promise<string> {
+        const result = await this.options.client.require(
+            [this.options.client.executable, 'port', name, `${containerPort}/tcp`],
+            'Failed to resolve Docker session endpoint'
+        );
+        const address = result.stdout
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .find((line) => /^127\.0\.0\.1:\d+$/.test(line));
+        if (!address) {
+            throw new Error('Docker did not expose a loopback session endpoint');
+        }
+        const url = new URL(reportedUrl);
+        const separator = address.lastIndexOf(':');
+        url.hostname = address.slice(0, separator);
+        url.port = address.slice(separator + 1);
+        return url.toString();
     }
 
     private queueContainerRemoval(name: string): void {

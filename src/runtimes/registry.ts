@@ -12,6 +12,9 @@ import type {
     RuntimePreparation,
     RuntimePrepareRequest,
     RuntimeProvider,
+    RuntimeService,
+    RuntimeServiceBinding,
+    RuntimeSessionOptions,
 } from './contracts.js';
 import {
     type DockerRuntimeDependencies,
@@ -141,6 +144,27 @@ class GuardedRuntime implements PreparedRuntime {
     launch(invocation: RunnerInvocation): SpawnedRunner {
         try {
             return this.runtime.launch(invocation);
+        } catch (error) {
+            throw RuntimeError.from(this.name, 'launch', error);
+        }
+    }
+
+    launchSession(
+        invocation: RunnerInvocation,
+        options: RuntimeSessionOptions
+    ): SpawnedRunner {
+        try {
+            return this.runtime.launchSession(invocation, options);
+        } catch (error) {
+            throw RuntimeError.from(this.name, 'launch', error);
+        }
+    }
+
+    launchService(
+        buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
+    ): RuntimeService {
+        try {
+            return this.runtime.launchService(buildInvocation);
         } catch (error) {
             throw RuntimeError.from(this.name, 'launch', error);
         }

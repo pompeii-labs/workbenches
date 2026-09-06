@@ -20,7 +20,7 @@ export interface DockerProcessOptions {
 }
 
 export interface DockerSpawnOptions extends DockerProcessOptions {
-    stdin: 'ignore';
+    stdin: 'ignore' | 'pipe';
     stdout: 'pipe';
     stderr: 'pipe';
 }

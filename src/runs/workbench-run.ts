@@ -42,7 +42,7 @@ export interface WorkbenchRunDependencies {
         options: {
             cwd: string;
             env: Record<string, string | undefined>;
-            stdin: 'ignore';
+            stdin: 'ignore' | 'pipe';
             stdout: 'pipe';
             stderr: 'pipe';
         }

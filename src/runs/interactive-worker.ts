@@ -91,6 +91,7 @@ export class InteractiveRunWorker {
                 reference: request.reference ?? metadata.workbench,
                 home: this.home,
                 workspaces: request.workspaces ?? [],
+                allowHostDocker: request.allow_host_docker ?? false,
                 interactive: metadata.mode === 'interactive',
                 ...(request.session_id
                     ? {
@@ -116,6 +117,9 @@ export class InteractiveRunWorker {
                         : {}),
                     ...(this.dependencies.registry
                         ? { registry: this.dependencies.registry }
+                        : {}),
+                    ...(this.dependencies.runtimeRegistry
+                        ? { runtimeRegistry: this.dependencies.runtimeRegistry }
                         : {}),
                     ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
                 },

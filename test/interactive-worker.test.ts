@@ -178,6 +178,7 @@ describe('interactive run worker', () => {
             workbench_version: '0.1.0',
             runner: 'opencode',
             model: 'openai/gpt-5.6-terra',
+            runtime: 'local',
             reference: 'fixture-core',
             workbench_path: '/repo/.workbenches/core',
             workspace: '/workspace',
@@ -776,13 +777,32 @@ class InteractiveWorkerTestRunner extends Runner {
         super();
     }
 
-    prepare(
+    async prepare(
         workbench: ResolvedWorkbench,
         environment: Record<string, string | undefined>
     ): Promise<PreparedRunner> {
-        return RunnerRegistry.standard()
+        const prepared = await RunnerRegistry.standard()
             .resolve(this.name)
             .prepare(workbench, environment);
+        return {
+            name: prepared.name,
+            failureLabel: prepared.failureLabel,
+            assets: prepared.assets,
+            build: (...args) => prepared.build(...args),
+            native: (...args) => prepared.native(...args),
+            publicInvocation: (...args) => prepared.publicInvocation(...args),
+            events: () => prepared.events(),
+            startSession: (runtime, options) =>
+                this.session.start({
+                    workbench: runtime.workbench,
+                    workspaceDirectory: runtime.workspaceDirectory,
+                    environment: runtime.environment,
+                    configuration: options.configuration,
+                    host: options.host,
+                    ...(options.session ? { session: options.session } : {}),
+                }),
+            cleanup: () => prepared.cleanup(),
+        };
     }
 }
 

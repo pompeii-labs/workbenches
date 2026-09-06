@@ -80,11 +80,22 @@ export function buildOpenCodeServerInvocation(
     workspaceDirectory = workbench.repositoryDirectory,
     model = modelLabel(workbench.manifest.model),
     nativeConfigFile?: string,
-    databasePath?: string
+    databasePath?: string,
+    binding: { hostname: string; port: number } = {
+        hostname: '127.0.0.1',
+        port: 0,
+    }
 ): RunnerInvocation {
     if (!password) throw new Error('OpenCode server password must not be empty');
     return {
-        command: ['opencode', 'serve', '--hostname', '127.0.0.1', '--port', '0'],
+        command: [
+            'opencode',
+            'serve',
+            '--hostname',
+            binding.hostname,
+            '--port',
+            String(binding.port),
+        ],
         cwd: workspaceDirectory,
         env: {
             ...buildOpenCodeEnvironment(

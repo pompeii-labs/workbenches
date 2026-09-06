@@ -1,0 +1,128 @@
+import { lstat } from 'node:fs/promises';
+
+import type {
+    RunnerSession,
+    RunnerSessionAdapter,
+    RunnerSessionStartOptions,
+} from '../session.js';
+import { stageOpenCodeSkills } from './assets.js';
+import { OPENCODE_SESSION_DECLARATION } from './capabilities.js';
+import {
+    launchLocalOpenCodeServer,
+    type OpenCodeFetch,
+    type OpenCodeServerLauncher,
+    type SpawnedOpenCodeServer,
+    spawnOpenCodeServer,
+} from './server.js';
+import { OpenCodeServerSession } from './session.js';
+
+export interface OpenCodeSessionDependencies {
+    spawn?: (
+        command: string[],
+        options: {
+            cwd: string;
+            env: Record<string, string | undefined>;
+            stdin: 'ignore';
+            stdout: 'pipe';
+            stderr: 'pipe';
+        }
+    ) => SpawnedOpenCodeServer;
+    fetch?: OpenCodeFetch;
+    password?: () => string;
+    startupTimeoutMs?: number;
+}
+
+export interface PreparedOpenCodeSession {
+    configDirectory?: string;
+    nativeConfigFile?: string;
+    launch: OpenCodeServerLauncher;
+}
+
+export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
+    readonly runner = 'opencode';
+    readonly declaration = OPENCODE_SESSION_DECLARATION;
+    private readonly dependencies: Required<OpenCodeSessionDependencies>;
+
+    constructor(dependencies: OpenCodeSessionDependencies = {}) {
+        this.dependencies = {
+            spawn: dependencies.spawn ?? spawnOpenCodeServer,
+            fetch: dependencies.fetch ?? globalThis.fetch,
+            password: dependencies.password ?? (() => crypto.randomUUID()),
+            startupTimeoutMs: dependencies.startupTimeoutMs ?? 10_000,
+        };
+    }
+
+    async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
+        const staged = await stageOpenCodeSkills(options.workbench);
+        let nativeConfigFile: string | undefined;
+        try {
+            nativeConfigFile = await this.nativeConfigFile(options);
+        } catch (error) {
+            await staged?.cleanup();
+            throw error;
+        }
+        return this.startConfigured(
+            options,
+            {
+                ...(staged?.directory ? { configDirectory: staged.directory } : {}),
+                ...(nativeConfigFile ? { nativeConfigFile } : {}),
+                launch: launchLocalOpenCodeServer(this.dependencies.spawn),
+            },
+            staged?.cleanup ?? (async () => {})
+        );
+    }
+
+    startPrepared(
+        options: RunnerSessionStartOptions,
+        prepared: PreparedOpenCodeSession
+    ): Promise<RunnerSession> {
+        return this.startConfigured(options, prepared, async () => {});
+    }
+
+    private async startConfigured(
+        options: RunnerSessionStartOptions,
+        prepared: PreparedOpenCodeSession,
+        cleanup: () => Promise<void>
+    ): Promise<RunnerSession> {
+        const session = new OpenCodeServerSession({
+            ...options,
+            ...this.dependencies,
+            ...prepared,
+            cleanup,
+        });
+        try {
+            await this.withTimeout(
+                session.start(),
+                'OpenCode session did not become ready in time'
+            );
+            return session;
+        } catch (error) {
+            await session.close().catch(() => {});
+            throw error;
+        }
+    }
+
+    private async nativeConfigFile(
+        options: RunnerSessionStartOptions
+    ): Promise<string | undefined> {
+        const path = options.workbench.runnerConfigPath;
+        return path && (await lstat(path)).isFile() ? path : undefined;
+    }
+
+    private async withTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+            return await Promise.race([
+                promise,
+                new Promise<T>((_, reject) => {
+                    timeout = setTimeout(
+                        () => reject(new Error(message)),
+                        this.dependencies.startupTimeoutMs
+                    );
+                }),
+            ]);
+        } finally {
+            if (timeout) clearTimeout(timeout);
+        }
+    }
+}
