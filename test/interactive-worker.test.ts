@@ -147,6 +147,56 @@ describe('interactive run worker', () => {
         await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
     });
 
+    test('accepts a client attachment while the native session is starting', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const startup = deferred<void>();
+        const adapter = new ControlledAdapter({ startAfter: startup.promise });
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForRunning(home, stored.id);
+
+        await expect(handle.attach()).resolves.toMatchObject({
+            disposition: 'attached',
+        });
+        expect((await new RunStore(home).read(stored.id)).runner_session_id).toBe(
+            undefined
+        );
+
+        await expect(handle.detach()).resolves.toMatchObject({
+            disposition: 'detached',
+        });
+        startup.resolve();
+        await expect(execution).resolves.toBe(0);
+        await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
+    });
+
+    test('cancels cleanly while the native session is starting', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const startup = deferred<void>();
+        const adapter = new ControlledAdapter({ startAfter: startup.promise });
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForRunning(home, stored.id);
+
+        await expect(handle.cancel('cancel during startup')).resolves.toMatchObject({
+            disposition: 'cancelled',
+        });
+        startup.resolve();
+
+        await expect(execution).resolves.toBe(130);
+        await expect(handle.result).resolves.toMatchObject({ status: 'cancelled' });
+        expect((await new RunStore(home).readEvents(stored.id)).at(-1)).toMatchObject({
+            type: 'run.cancelled',
+            data: { reason: 'cancel during startup' },
+        });
+    });
+
     test('lets an active turn finish after its controlling client detaches', async () => {
         const home = await temporaryHome();
         const stored = await fixtureRun(home);
@@ -671,6 +721,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
             requestQuestion?: boolean;
             deferSteeringDelivery?: boolean;
             autoComplete?: boolean;
+            startAfter?: Promise<void>;
         } = {}
     ) {
         let markPermissionRequested!: () => void;
@@ -694,6 +745,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
         this.starts += 1;
         this.host = options.host;
         this.session = options.session;
+        await this.options.startAfter;
         return {
             id: 'native-session-1',
             prompt: (input) => this.prompt(input),
@@ -905,6 +957,15 @@ async function waitForReady(home: string, runId: string): Promise<void> {
     throw new Error('Timed out waiting for interactive run');
 }
 
+async function waitForRunning(home: string, runId: string): Promise<void> {
+    const store = new RunStore(home);
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+        if ((await store.read(runId)).status === 'running') return;
+        await Bun.sleep(2);
+    }
+    throw new Error('Timed out waiting for interactive worker ownership');
+}
+
 async function waitForEvent(
     home: string,
     runId: string,
@@ -957,6 +1018,14 @@ function field(value: unknown, key: string): string | undefined {
     }
     const candidate = (value as Record<string, unknown>)[key];
     return typeof candidate === 'string' ? candidate : undefined;
+}
+
+function deferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    const promise = new Promise<T>((next) => {
+        resolve = next;
+    });
+    return { promise, resolve };
 }
 
 function eventIndex(

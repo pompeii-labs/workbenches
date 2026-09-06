@@ -193,7 +193,9 @@ export class RunDispatcher {
             }
             if (
                 run.status === 'running' &&
-                (run.execution !== 'session' || Boolean(run.runner_session_id))
+                (run.mode === 'interactive' ||
+                    run.execution !== 'session' ||
+                    Boolean(run.runner_session_id))
             ) {
                 return;
             }

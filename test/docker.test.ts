@@ -305,6 +305,40 @@ describe('Docker runtime provider', () => {
         }
     });
 
+    test('checks in-image commands and assets concurrently', async () => {
+        const fixture = await createFixture({
+            image: 'ghcr.io/example/lux:0.1.0',
+            tools: ['cargo', 'lux'],
+        });
+        const mockedDocker = dockerMock([]);
+        let active = 0;
+        let peak = 0;
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            async command(command) {
+                const preflight =
+                    command[1] === 'run' &&
+                    (command.includes('command -v "$1" 2>/dev/null') ||
+                        command.includes('test -r "$1"'));
+                if (!preflight) return mockedDocker(command);
+                active += 1;
+                peak = Math.max(peak, active);
+                await Bun.sleep(2);
+                try {
+                    return await mockedDocker(command);
+                } finally {
+                    active -= 1;
+                }
+            },
+        }).prepare(request(fixture));
+        try {
+            await runtime.preflight();
+            expect(peak).toBeGreaterThan(1);
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('mounts only declared assets and isolates model provider credentials', async () => {
         const fixture = await createFixture({
             image: 'ghcr.io/example/lux:0.1.0',

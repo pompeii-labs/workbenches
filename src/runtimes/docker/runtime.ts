@@ -96,24 +96,36 @@ export class DockerRuntime implements PreparedRuntime {
         const configuration = new WorkbenchPreflight({
             environment: this.environment,
         }).checkConfiguration(this.workbench);
-        const runnerPath = await this.findInside(this.workbench.manifest.runner);
+        const names = [
+            this.workbench.manifest.runner,
+            ...this.workbench.manifest.tools,
+            ...(this.options.hostSocket ? ['docker'] : []),
+        ];
+        const paths = await Promise.all(names.map((name) => this.findInside(name)));
+        const runnerPath = paths[0];
         if (!runnerPath) {
             throw new Error(
                 `Runner CLI is unavailable in Docker image ${this.preparation.immutableReference}: ${this.workbench.manifest.runner}`
             );
         }
-        const tools: Array<{ name: string; path: string }> = [];
-        for (const name of this.workbench.manifest.tools) {
-            const path = await this.findInside(name);
+        const tools = this.workbench.manifest.tools.map((name, index) => {
+            const path = paths[index + 1];
             if (!path) {
                 throw new Error(
                     `Required CLI tool is unavailable in Docker image ${this.preparation.immutableReference}: ${name}`
                 );
             }
-            tools.push({ name, path });
+            return { name, path };
+        });
+        if (this.options.hostSocket && !paths.at(-1)) {
+            throw new Error(
+                `Docker CLI is unavailable in Docker image ${this.preparation.immutableReference} for the declared host engine binding`
+            );
         }
-        if (this.options.hostSocket) await this.preflightHostDocker();
-        await this.preflightAssets();
+        await Promise.all([
+            this.preflightAssets(),
+            ...(this.options.hostSocket ? [this.preflightHostDocker()] : []),
+        ]);
         this.ready = true;
         return {
             runner: { name: this.workbench.manifest.runner, path: runnerPath },
@@ -306,11 +318,6 @@ export class DockerRuntime implements PreparedRuntime {
     }
 
     private async preflightHostDocker(): Promise<void> {
-        if (!(await this.findInside('docker'))) {
-            throw new Error(
-                `Docker CLI is unavailable in Docker image ${this.preparation.immutableReference} for the declared host engine binding`
-            );
-        }
         const daemon = await this.runEphemeral(
             ['docker', 'version', '--format', '{{.Server.Version}}'],
             { network: 'none', readOnly: true }
@@ -330,14 +337,20 @@ export class DockerRuntime implements PreparedRuntime {
             this.workbench.instructionsPath,
             ...this.workbench.skills.map((skill) => skill.manifestPath),
         ];
-        for (const path of paths) {
-            const result = await this.runEphemeral(
-                ['/bin/sh', '-c', 'test -r "$1"', 'workbench-preflight', path],
-                { network: 'none', readOnly: true }
+        const results = await Promise.all(
+            paths.map(async (path) => ({
+                path,
+                result: await this.runEphemeral(
+                    ['/bin/sh', '-c', 'test -r "$1"', 'workbench-preflight', path],
+                    { network: 'none', readOnly: true }
+                ),
+            }))
+        );
+        const unreadable = results.find(({ result }) => result.code !== 0);
+        if (unreadable) {
+            throw new Error(
+                `Required runtime asset is unreadable: ${unreadable.path}`
             );
-            if (result.code !== 0) {
-                throw new Error(`Required runtime asset is unreadable: ${path}`);
-            }
         }
     }
 
