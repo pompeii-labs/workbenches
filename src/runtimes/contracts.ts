@@ -42,6 +42,20 @@ export interface RuntimeCommandResult {
     stderr: string;
 }
 
+export interface RuntimeSessionOptions {
+    stdin: 'ignore' | 'pipe';
+}
+
+export interface RuntimeServiceBinding {
+    hostname: string;
+    port: number;
+}
+
+export interface RuntimeService {
+    process: SpawnedRunner;
+    resolveUrl(reportedUrl: string): Promise<string>;
+}
+
 export interface RuntimePreparation {
     kind: 'host' | 'image';
     reference?: string;
@@ -66,6 +80,13 @@ export interface PreparedRuntime {
     ): Promise<RuntimeCommandResult>;
     interact(invocation: RunnerInvocation): Promise<number>;
     launch(invocation: RunnerInvocation): SpawnedRunner;
+    launchSession(
+        invocation: RunnerInvocation,
+        options: RuntimeSessionOptions
+    ): SpawnedRunner;
+    launchService(
+        buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
+    ): RuntimeService;
     cancel(process: SpawnedRunner): void;
     cleanup(): Promise<void>;
 }

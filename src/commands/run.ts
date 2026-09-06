@@ -126,6 +126,7 @@ export const runCommand = defineCommand({
                     ...workbenchWorkspaces.environment(workspaces),
                 },
                 workspaces,
+                allowHostDocker: args['allow-host-docker'],
             });
             return;
         }

@@ -301,6 +301,7 @@ function storedSession(): StoredSession {
         workbench_version: '0.1.0',
         runner: 'opencode',
         model: 'openai/gpt-5.6-terra',
+        runtime: 'local',
         reference: 'lux-ops',
         workbench_path: '/repo/.workbenches/ops',
         workspace: '/workspace',

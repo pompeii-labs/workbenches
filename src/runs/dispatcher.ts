@@ -36,10 +36,7 @@ export class RunDispatcher {
     async prepare(options: PrepareRunOptions): Promise<StoredRun> {
         const workbench = options.resolved.workbench;
         const id = RunStore.createId();
-        const execution = this.executionFor(
-            workbench.manifest.runtime,
-            workbench.manifest.runner
-        );
+        const execution = this.executionFor(workbench.manifest.runner);
         const reference =
             options.session?.reference ?? options.reference ?? workbench.manifest.name;
         const workspaces = options.session?.workspaces ?? options.workspaces ?? [];
@@ -52,6 +49,7 @@ export class RunDispatcher {
                 workbench_version: workbench.manifest.version,
                 runner: workbench.manifest.runner,
                 model: modelLabel(workbench.manifest.model),
+                runtime: workbench.manifest.runtime,
                 reference,
                 workbench_path: workbench.packageDirectory,
                 workspace: options.resolved.workspaceDirectory,
@@ -107,8 +105,7 @@ export class RunDispatcher {
         return stored;
     }
 
-    private executionFor(runtime: string, runner: string): 'one_shot' | 'session' {
-        if (runtime !== 'local') return 'one_shot';
+    private executionFor(runner: string): 'one_shot' | 'session' {
         const resume =
             RunnerRegistry.standard().session(runner).declaration.capabilities
                 .session_resume;
@@ -122,6 +119,7 @@ export class RunDispatcher {
             session.workbench_version === workbench.manifest.version &&
             session.runner === workbench.manifest.runner &&
             session.model === modelLabel(workbench.manifest.model) &&
+            session.runtime === workbench.manifest.runtime &&
             session.workbench_path === workbench.packageDirectory &&
             session.workspace === options.resolved.workspaceDirectory;
         if (!compatible) {
@@ -195,7 +193,9 @@ export class RunDispatcher {
             }
             if (
                 run.status === 'running' &&
-                (run.execution !== 'session' || Boolean(run.runner_session_id))
+                (run.mode === 'interactive' ||
+                    run.execution !== 'session' ||
+                    Boolean(run.runner_session_id))
             ) {
                 return;
             }

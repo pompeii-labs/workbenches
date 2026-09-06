@@ -452,6 +452,7 @@ function runner(name: string): PreparedRunner {
             consume: () => ({ events: [] }),
             summary: () => ({ finalText: '', turnCompleted: false }),
         }),
+        startSession: () => Promise.reject(new Error('unused')),
         cleanup: async () => {},
     };
 }
@@ -471,6 +472,11 @@ function runtime(
         execute: () => Promise.resolve({ code: 0, stdout: output, stderr: '' }),
         interact: () => Promise.resolve(0),
         launch: () => ({ exited: Promise.resolve(0) }),
+        launchSession: () => ({ exited: Promise.resolve(0) }),
+        launchService: () => ({
+            process: { exited: Promise.resolve(0) },
+            resolveUrl: async (url) => url,
+        }),
         cancel: () => {},
         cleanup: async () => {},
         ...overrides,

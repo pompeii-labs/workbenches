@@ -9,6 +9,9 @@ import type {
     RuntimeCommandResult,
     RuntimePrepareRequest,
     RuntimeProvider,
+    RuntimeService,
+    RuntimeServiceBinding,
+    RuntimeSessionOptions,
 } from './contracts.js';
 import { RuntimeError } from './error.js';
 
@@ -19,7 +22,7 @@ export interface LocalRuntimeDependencies {
         options: {
             cwd: string;
             env: Record<string, string | undefined>;
-            stdin: 'ignore';
+            stdin: 'ignore' | 'pipe';
             stdout: 'pipe';
             stderr: 'pipe';
         }
@@ -141,6 +144,13 @@ export class LocalRuntime implements PreparedRuntime {
     }
 
     launch(invocation: RunnerInvocation): SpawnedRunner {
+        return this.launchSession(invocation, { stdin: 'ignore' });
+    }
+
+    launchSession(
+        invocation: RunnerInvocation,
+        options: RuntimeSessionOptions
+    ): SpawnedRunner {
         this.assertAvailable('launch');
         if (!this.ready) {
             throw new RuntimeError(
@@ -153,13 +163,26 @@ export class LocalRuntime implements PreparedRuntime {
             return this.dependencies.spawn(invocation.command, {
                 cwd: invocation.cwd,
                 env: invocation.env,
-                stdin: 'ignore',
+                stdin: options.stdin,
                 stdout: 'pipe',
                 stderr: 'pipe',
             });
         } catch (error) {
             throw RuntimeError.from(this.name, 'launch', error);
         }
+    }
+
+    launchService(
+        buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
+    ): RuntimeService {
+        const process = this.launchSession(
+            buildInvocation({ hostname: '127.0.0.1', port: 0 }),
+            { stdin: 'ignore' }
+        );
+        return {
+            process,
+            resolveUrl: async (reportedUrl) => reportedUrl,
+        };
     }
 
     cancel(process: SpawnedRunner): void {
@@ -188,7 +211,14 @@ export class LocalRuntime implements PreparedRuntime {
         command: string[],
         options: Parameters<NonNullable<LocalRuntimeDependencies['spawn']>>[1]
     ): SpawnedRunner {
-        return Bun.spawn(command, options);
+        const child = Bun.spawn(command, options);
+        return {
+            exited: child.exited,
+            ...(child.stdin ? { stdin: child.stdin } : {}),
+            ...(child.stdout ? { stdout: child.stdout } : {}),
+            ...(child.stderr ? { stderr: child.stderr } : {}),
+            kill: () => child.kill(),
+        };
     }
 
     static async interactProcess(

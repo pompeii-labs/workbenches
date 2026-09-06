@@ -11,6 +11,7 @@ export async function launchWorkbenchTui(
         };
         environment?: Record<string, string | undefined>;
         workspaces?: WorkbenchWorkspaceBinding[];
+        allowHostDocker?: boolean;
     } = {}
 ): Promise<void> {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {

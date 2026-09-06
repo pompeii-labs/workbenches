@@ -39,6 +39,7 @@ export class InteractiveRunWorker {
     private session: InteractiveRunSession | undefined;
     private activeTurn: Promise<void> | undefined;
     private termination: Promise<void> | undefined;
+    private pendingShutdown: { cancelled: boolean; reason?: string } | undefined;
     private drainPaused = false;
     private terminal = false;
     private exitCode = 0;
@@ -58,6 +59,7 @@ export class InteractiveRunWorker {
     async execute(options: ExecuteInteractiveRunOptions): Promise<number> {
         const metadata = await this.store.read(this.runId);
         let launchReport = Promise.resolve();
+        let controls = Promise.resolve();
         let abortRequested = options.signal?.aborted ?? false;
         const abort = () => {
             abortRequested = true;
@@ -77,6 +79,7 @@ export class InteractiveRunWorker {
                 started_at: new Date().toISOString(),
                 pid: process.pid,
             });
+            controls = this.controlLoop().catch((error) => this.fail(error));
             const workbench = this.dependencies.loadWorkbench
                 ? await this.dependencies.loadWorkbench(request.workbench_path)
                 : await Workbench.load(request.workbench_path);
@@ -91,6 +94,7 @@ export class InteractiveRunWorker {
                 reference: request.reference ?? metadata.workbench,
                 home: this.home,
                 workspaces: request.workspaces ?? [],
+                allowHostDocker: request.allow_host_docker ?? false,
                 interactive: metadata.mode === 'interactive',
                 ...(request.session_id
                     ? {
@@ -116,6 +120,9 @@ export class InteractiveRunWorker {
                         : {}),
                     ...(this.dependencies.registry
                         ? { registry: this.dependencies.registry }
+                        : {}),
+                    ...(this.dependencies.runtimeRegistry
+                        ? { runtimeRegistry: this.dependencies.runtimeRegistry }
                         : {}),
                     ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
                 },
@@ -145,12 +152,18 @@ export class InteractiveRunWorker {
                     runner_session_id: this.session.runnerSessionId,
                 });
             }
-            if (abortRequested) {
+            if (this.pendingShutdown) {
+                await this.finish(
+                    this.pendingShutdown.cancelled,
+                    this.pendingShutdown.reason
+                );
+            } else if (abortRequested) {
                 await this.finish(true, 'interrupted');
             } else if (request.task.trim()) {
                 await this.deliverTurn(this.initialRequest(request.task));
             }
-            await this.controlLoop();
+            await this.finishIfUnattended();
+            await controls;
             await this.termination;
             return this.exitCode;
         } catch (error) {
@@ -160,6 +173,7 @@ export class InteractiveRunWorker {
             await launchReport;
             options.signal?.removeEventListener('abort', abort);
             this.receiveAbort.abort();
+            await controls.catch(() => {});
             this.nativeRequests.rejectAll();
             await this.control
                 .rejectPending(
@@ -218,7 +232,7 @@ export class InteractiveRunWorker {
             outcome: 'accepted',
             disposition: attached ? 'attached' : 'detached',
         });
-        if (!attached) await this.finishIfUnattended();
+        if (!attached && this.session) await this.finishIfUnattended();
     }
 
     private async send(request: RunControlRequest, followUp: boolean): Promise<void> {
@@ -230,6 +244,13 @@ export class InteractiveRunWorker {
                 request,
                 'run_terminal',
                 'Workbench run is no longer accepting input'
+            );
+        }
+        if (!this.session) {
+            return this.reject(
+                request,
+                'run_starting',
+                'Workbench session is still starting'
             );
         }
         if (this.activeTurn) {
@@ -286,7 +307,15 @@ export class InteractiveRunWorker {
     }
 
     private async cancelTurn(request: RunControlRequest): Promise<void> {
-        const session = this.requireSession();
+        const session = this.session;
+        if (!session) {
+            await this.accept(request);
+            await this.control.resolve(request, {
+                outcome: 'accepted',
+                disposition: 'already_idle',
+            });
+            return;
+        }
         if (!this.activeTurn || !session.busy) {
             await this.accept(request);
             await this.control.resolve(request, {
@@ -367,6 +396,17 @@ export class InteractiveRunWorker {
             );
         }
         await this.accept(request);
+        if (!this.session) {
+            this.pendingShutdown = {
+                cancelled,
+                ...(request.reason ? { reason: request.reason } : {}),
+            };
+            await this.control.resolve(request, {
+                outcome: 'accepted',
+                disposition: cancelled ? 'cancelled' : 'closed',
+            });
+            return;
+        }
         await this.finish(cancelled, request.reason);
         await this.control.resolve(request, {
             outcome: 'accepted',

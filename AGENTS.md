@@ -299,12 +299,12 @@ wb run workbench-creator \
 
 The repository is in public pre-alpha development. The current reference engine
 supports the draft-0 manifest plus OpenCode and Pi runners. Local execution
-supports one-shot, detached, and experimental interactive sessions. Docker
-execution supports image preparation, in-container smoke checks, one-shot runs,
-and detached runs; its interactive TUI path is not yet supported. OpenCode and
-Pi have different native capabilities, which must be reported honestly rather
-than hidden behind a fallback. Other runners and hosted runtimes are part of the
-standard's extensible design but are not yet runnable through this release.
+and Docker execution support one-shot, detached, and experimental interactive
+sessions, including native context resume. Docker also supports image
+preparation and in-container smoke checks. OpenCode and Pi have different native
+capabilities, which must be reported honestly rather than hidden behind a
+fallback. Other runners and hosted runtimes are part of the standard's
+extensible design but are not yet runnable through this release.
 
 The Workbench author locks its runner, model policy, provider routes, and native
 runner configuration. Consumers connect credentials with `wb connect`; they do

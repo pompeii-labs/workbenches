@@ -4,6 +4,7 @@ import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import {
     assertRunnerConfiguration,
     type PreparedRunner,
+    type PreparedRunnerSessionOptions,
     Runner,
     type RunnerEventNormalizer,
 } from '../runner.js';
@@ -14,7 +15,7 @@ import {
     piCredentialCommand,
     publicPiInvocation,
 } from './invocation.js';
-import { PiSessionAdapter } from './session.js';
+import { PiSessionAdapter, type SpawnedPi } from './session.js';
 
 export class PiRunner extends Runner {
     readonly name = 'pi';
@@ -24,7 +25,7 @@ export class PiRunner extends Runner {
         workbench: ResolvedWorkbench,
         environment: Record<string, string | undefined>
     ): Promise<PreparedRunner> {
-        return PreparedPiRunner.create(workbench, environment);
+        return PreparedPiRunner.create(workbench, environment, this.session);
     }
 }
 
@@ -36,21 +37,25 @@ class PreparedPiRunner implements PreparedRunner {
     readonly #cleanup: () => Promise<void>;
     readonly #stagedDirectory: string;
     readonly #workbench: ResolvedWorkbench;
+    readonly #session: PiSessionAdapter;
 
     private constructor(options: {
         workbench: ResolvedWorkbench;
         stagedDirectory: string;
         cleanup: () => Promise<void>;
+        session: PiSessionAdapter;
     }) {
         this.#workbench = options.workbench;
         this.#stagedDirectory = options.stagedDirectory;
         this.#cleanup = options.cleanup;
+        this.#session = options.session;
         this.assets = [{ path: options.stagedDirectory, access: 'read-write' }];
     }
 
     static async create(
         workbench: ResolvedWorkbench,
-        environment: Record<string, string | undefined>
+        environment: Record<string, string | undefined>,
+        session = new PiSessionAdapter()
     ): Promise<PreparedPiRunner> {
         const staged = await stagePiConfig(workbench, environment, {
             linkNativeCredentials: workbench.manifest.runtime === 'local',
@@ -59,6 +64,7 @@ class PreparedPiRunner implements PreparedRunner {
             workbench,
             stagedDirectory: staged.directory,
             cleanup: staged.cleanup,
+            session,
         });
     }
 
@@ -108,6 +114,53 @@ class PreparedPiRunner implements PreparedRunner {
 
     events(): RunnerEventNormalizer {
         return new PiEventAdapter();
+    }
+
+    startSession(runtime: PreparedRuntime, options: PreparedRunnerSessionOptions) {
+        assertRunnerConfiguration(this.#workbench, options.configuration);
+        return this.#session.startPrepared(
+            {
+                workbench: runtime.workbench,
+                workspaceDirectory: runtime.workspaceDirectory,
+                environment: new ModelRouter().environmentForRoute(
+                    this.#workbench,
+                    options.configuration,
+                    runtime.environment
+                ),
+                configuration: options.configuration,
+                host: options.host,
+                ...(options.session ? { session: options.session } : {}),
+            },
+            {
+                configDirectory: runtime.pathFor(this.#stagedDirectory),
+                spawn: (command, spawnOptions): SpawnedPi => {
+                    const process = runtime.launchSession(
+                        {
+                            command,
+                            cwd: spawnOptions.cwd,
+                            env: spawnOptions.env,
+                        },
+                        { stdin: 'pipe' }
+                    );
+                    const input = process.stdin;
+                    if (!input) {
+                        runtime.cancel(process);
+                        throw new Error('Runtime did not expose Pi session input');
+                    }
+                    return {
+                        exited: process.exited,
+                        stdin: {
+                            write: (value) => input.write(value),
+                            ...(input.flush ? { flush: () => input.flush?.() } : {}),
+                            ...(input.end ? { end: () => void input.end?.() } : {}),
+                        },
+                        ...(process.stdout ? { stdout: process.stdout } : {}),
+                        ...(process.stderr ? { stderr: process.stderr } : {}),
+                        kill: () => runtime.cancel(process),
+                    };
+                },
+            }
+        );
     }
 
     cleanup(): Promise<void> {

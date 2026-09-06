@@ -305,6 +305,40 @@ describe('Docker runtime provider', () => {
         }
     });
 
+    test('checks in-image commands and assets concurrently', async () => {
+        const fixture = await createFixture({
+            image: 'ghcr.io/example/lux:0.1.0',
+            tools: ['cargo', 'lux'],
+        });
+        const mockedDocker = dockerMock([]);
+        let active = 0;
+        let peak = 0;
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            async command(command) {
+                const preflight =
+                    command[1] === 'run' &&
+                    (command.includes('command -v "$1" 2>/dev/null') ||
+                        command.includes('test -r "$1"'));
+                if (!preflight) return mockedDocker(command);
+                active += 1;
+                peak = Math.max(peak, active);
+                await Bun.sleep(2);
+                try {
+                    return await mockedDocker(command);
+                } finally {
+                    active -= 1;
+                }
+            },
+        }).prepare(request(fixture));
+        try {
+            await runtime.preflight();
+            expect(peak).toBeGreaterThan(1);
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('mounts only declared assets and isolates model provider credentials', async () => {
         const fixture = await createFixture({
             image: 'ghcr.io/example/lux:0.1.0',
@@ -465,6 +499,69 @@ describe('Docker runtime provider', () => {
         }
     });
 
+    test('publishes loopback services and preserves piped session input', async () => {
+        const fixture = await createFixture({
+            image: 'ghcr.io/example/lux:0.1.0',
+        });
+        let spawnedCommand: string[] = [];
+        let spawnedInput: string | undefined;
+        const mockedDocker = dockerMock([]);
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command(command) {
+                if (command[1] === 'port') {
+                    return Promise.resolve(result(0, '127.0.0.1:49153\n'));
+                }
+                return mockedDocker(command);
+            },
+            spawn(command, options) {
+                spawnedCommand = command;
+                spawnedInput = options.stdin;
+                return {
+                    exited: Promise.resolve(0),
+                    stdin: {
+                        write() {},
+                    },
+                    kill() {},
+                };
+            },
+        }).prepare(request(fixture));
+        try {
+            await runtime.preflight();
+            const service = runtime.launchService((binding) => ({
+                command: [
+                    'opencode',
+                    'serve',
+                    '--hostname',
+                    binding.hostname,
+                    '--port',
+                    String(binding.port),
+                ],
+                cwd: runtime.workspaceDirectory,
+                env: runtime.environment,
+            }));
+            expect(spawnedCommand).toContain('--publish');
+            expect(spawnedCommand).toContain('127.0.0.1::4096');
+            expect(spawnedCommand).toContain('0.0.0.0');
+            await expect(service.resolveUrl('http://0.0.0.0:4096')).resolves.toBe(
+                'http://127.0.0.1:49153/'
+            );
+
+            runtime.launchSession(
+                {
+                    command: ['pi', '--mode', 'rpc'],
+                    cwd: runtime.workspaceDirectory,
+                    env: runtime.environment,
+                },
+                { stdin: 'pipe' }
+            );
+            expect(spawnedInput).toBe('pipe');
+            expect(spawnedCommand).toContain('--interactive');
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('removes a cancelled container and surfaces cleanup failures', async () => {
         const fixture = await createFixture({
             image: 'ghcr.io/example/lux:0.1.0',
@@ -515,6 +612,57 @@ describe('Docker runtime provider', () => {
             )
         ).toBeTrue();
         await expect(stat(dirname(environmentFile))).rejects.toThrow();
+    });
+
+    test('waits for an in-progress container removal to finish', async () => {
+        const fixture = await createFixture({
+            image: 'ghcr.io/example/lux:0.1.0',
+        });
+        const commands: string[][] = [];
+        const mockedDocker = dockerMock(commands);
+        let inspections = 0;
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command(command) {
+                if (command[1] === 'container' && command[2] === 'rm') {
+                    commands.push(command);
+                    return Promise.resolve(
+                        result(
+                            1,
+                            '',
+                            'removal of container workbench-fixture is already in progress'
+                        )
+                    );
+                }
+                if (command[1] === 'container' && command[2] === 'inspect') {
+                    commands.push(command);
+                    inspections += 1;
+                    return Promise.resolve(
+                        inspections === 1
+                            ? result(0, 'still present')
+                            : result(1, '', 'No such container')
+                    );
+                }
+                return mockedDocker(command);
+            },
+            spawn() {
+                return { exited: new Promise(() => {}), kill() {} };
+            },
+        }).prepare(request(fixture));
+
+        await runtime.preflight();
+        const process = runtime.launchSession(
+            {
+                command: ['pi', '--mode', 'rpc'],
+                cwd: runtime.workspaceDirectory,
+                env: runtime.environment,
+            },
+            { stdin: 'pipe' }
+        );
+        runtime.cancel(process);
+
+        await expect(runtime.cleanup()).resolves.toBeUndefined();
+        expect(inspections).toBe(2);
     });
 
     test('rejects environment values that Docker env files cannot represent', async () => {

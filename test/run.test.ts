@@ -460,6 +460,11 @@ describe('local run lifecycle', () => {
                             stdout: new Response('').body as ReadableStream<Uint8Array>,
                             stderr: new Response('').body as ReadableStream<Uint8Array>,
                         }),
+                        launchSession: () => ({ exited: Promise.resolve(0) }),
+                        launchService: () => ({
+                            process: { exited: Promise.resolve(0) },
+                            resolveUrl: async (url) => url,
+                        }),
                         execute: async () => ({
                             code: 0,
                             stdout: 'OpenRouter api\n',

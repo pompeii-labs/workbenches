@@ -9,7 +9,13 @@ import {
     type RunnerSessionStartOptions,
 } from '../src/runners/session.js';
 import { InteractiveRun, type WorkbenchEvent } from '../src/runs/index.js';
-import type { ResolvedWorkbench } from '../src/types.js';
+import type {
+    PreparedRuntime,
+    RuntimePrepareRequest,
+    RuntimeProvider,
+} from '../src/runtimes/contracts.js';
+import { RuntimeRegistry } from '../src/runtimes/index.js';
+import type { ResolvedWorkbench, SpawnedRunner } from '../src/types.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 import { supportedRunnerDeclaration } from './runner-adapter-contract.js';
 
@@ -194,6 +200,41 @@ describe('runner-neutral interactive host', () => {
         });
         expect(adapter.closes).toBe(1);
     });
+
+    test('keeps the declared runtime alive for the native session lifecycle', async () => {
+        const adapter = new FakeAdapter();
+        const provider = new CapturingRuntimeProvider();
+        const resolved = reference();
+        resolved.workbench.manifest.runtime = 'docker';
+        resolved.workbench.manifest.image = 'ghcr.io/example/session:1.0.0';
+        const nativeDirectory = '/host/session/native';
+
+        const session = await InteractiveRun.start({
+            resolved,
+            session: { id: 'wb_runtime_lifecycle', directory: nativeDirectory },
+            allowHostDocker: true,
+            onEvent: () => {},
+            dependencies: {
+                ...dependencies(adapter),
+                runtimeRegistry: new RuntimeRegistry([provider]),
+            },
+        });
+
+        expect(provider.request?.authorizations).toEqual({ hostDocker: true });
+        expect(provider.request?.purpose).toBe('run');
+        expect(provider.request?.assets).toContainEqual({
+            path: nativeDirectory,
+            access: 'read-write',
+        });
+        expect(adapter.startOptions?.session).toEqual({
+            id: 'wb_runtime_lifecycle',
+            directory: `/runtime${nativeDirectory}`,
+        });
+        expect(provider.cleanupCount).toBe(0);
+
+        await session.close();
+        expect(provider.cleanupCount).toBe(1);
+    });
 });
 
 class FakeAdapter implements RunnerSessionAdapter {
@@ -204,6 +245,7 @@ class FakeAdapter implements RunnerSessionAdapter {
     closes = 0;
     readonly permissionDecisions: string[] = [];
     readonly questionResponses: unknown[] = [];
+    startOptions: RunnerSessionStartOptions | undefined;
     private host?: RunnerSessionStartOptions['host'];
     private release?: () => void;
     private readonly markStarted: () => void;
@@ -234,6 +276,7 @@ class FakeAdapter implements RunnerSessionAdapter {
     }
 
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
+        this.startOptions = options;
         this.host = options.host;
         return {
             id: 'native-session-1',
@@ -291,6 +334,55 @@ class FakeAdapter implements RunnerSessionAdapter {
     }
 }
 
+class CapturingRuntimeProvider implements RuntimeProvider {
+    readonly name = 'docker';
+    request: RuntimePrepareRequest | undefined;
+    cleanupCount = 0;
+
+    async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
+        this.request = request;
+        const runtimeWorkbench = structuredClone(request.workbench);
+        return {
+            name: this.name,
+            workbench: runtimeWorkbench,
+            workspaceDirectory: '/runtime/workspace',
+            environment: request.environment,
+            workspaces: [],
+            preparation: {
+                kind: 'image',
+                reference: 'ghcr.io/example/session:1.0.0',
+                immutableReference: 'ghcr.io/example/session@sha256:fixture',
+                action: 'cache-hit',
+            },
+            pathFor: (path) => `/runtime${path}`,
+            preflight: async () => ({
+                runner: { name: 'opencode', path: '/usr/bin/opencode' },
+                tools: [],
+                enabledMcps: [],
+                disabledMcps: [],
+                optionalEnvironment: [],
+                workspaces: [],
+            }),
+            execute: async () => ({ code: 0, stdout: '', stderr: '' }),
+            interact: async () => 0,
+            launch: () => CapturingRuntimeProvider.process(),
+            launchSession: () => CapturingRuntimeProvider.process(),
+            launchService: () => ({
+                process: CapturingRuntimeProvider.process(),
+                resolveUrl: async (url) => url,
+            }),
+            cancel: () => {},
+            cleanup: async () => {
+                this.cleanupCount += 1;
+            },
+        };
+    }
+
+    private static process(): SpawnedRunner {
+        return { exited: Promise.resolve(0), kill() {} };
+    }
+}
+
 function dependencies(adapter: RunnerSessionAdapter) {
     return {
         env: { OPENROUTER_API_KEY: 'fixture-openrouter-key' },
@@ -309,13 +401,32 @@ class InteractiveTestRunner extends Runner {
         this.session = session;
     }
 
-    prepare(
+    async prepare(
         workbench: ResolvedWorkbench,
         environment: Record<string, string | undefined>
     ): Promise<PreparedRunner> {
-        return RunnerRegistry.standard()
+        const prepared = await RunnerRegistry.standard()
             .resolve(this.name)
             .prepare(workbench, environment);
+        return {
+            name: prepared.name,
+            failureLabel: prepared.failureLabel,
+            assets: prepared.assets,
+            build: (...args) => prepared.build(...args),
+            native: (...args) => prepared.native(...args),
+            publicInvocation: (...args) => prepared.publicInvocation(...args),
+            events: () => prepared.events(),
+            startSession: (runtime, options) =>
+                this.session.start({
+                    workbench: runtime.workbench,
+                    workspaceDirectory: runtime.workspaceDirectory,
+                    environment: runtime.environment,
+                    configuration: options.configuration,
+                    host: options.host,
+                    ...(options.session ? { session: options.session } : {}),
+                }),
+            cleanup: () => prepared.cleanup(),
+        };
     }
 }
 

@@ -1,4 +1,3 @@
-import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
     RunnerInput,
@@ -6,80 +5,15 @@ import type {
     RunnerPermissionDecision,
     RunnerQuestionPrompt,
     RunnerSession,
-    RunnerSessionAdapter,
     RunnerSessionStartOptions,
     RunnerTurnResult,
 } from '../session.js';
 import { normalizeRunnerInput } from '../session.js';
-import { stageOpenCodeSkills } from './assets.js';
-import { OPENCODE_SESSION_DECLARATION } from './capabilities.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
 import { OpenCodeQuestion } from './question.js';
-import {
-    type OpenCodeFetch,
-    OpenCodeServer,
-    type SpawnedOpenCodeServer,
-    spawnOpenCodeServer,
-} from './server.js';
-
-export interface OpenCodeSessionDependencies {
-    spawn?: (
-        command: string[],
-        options: {
-            cwd: string;
-            env: Record<string, string | undefined>;
-            stdin: 'ignore';
-            stdout: 'pipe';
-            stderr: 'pipe';
-        }
-    ) => SpawnedOpenCodeServer;
-    fetch?: OpenCodeFetch;
-    password?: () => string;
-    startupTimeoutMs?: number;
-}
-
-export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
-    readonly runner = 'opencode';
-    readonly declaration = OPENCODE_SESSION_DECLARATION;
-    private readonly dependencies: Required<OpenCodeSessionDependencies>;
-
-    constructor(dependencies: OpenCodeSessionDependencies = {}) {
-        this.dependencies = {
-            spawn: dependencies.spawn ?? spawnOpenCodeServer,
-            fetch: dependencies.fetch ?? globalThis.fetch,
-            password: dependencies.password ?? (() => crypto.randomUUID()),
-            startupTimeoutMs: dependencies.startupTimeoutMs ?? 10_000,
-        };
-    }
-
-    async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
-        const staged = await stageOpenCodeSkills(options.workbench);
-        const nativeConfigFile =
-            options.workbench.runnerConfigPath &&
-            (await lstat(options.workbench.runnerConfigPath)).isFile()
-                ? options.workbench.runnerConfigPath
-                : undefined;
-        const session = new OpenCodeServerSession({
-            ...options,
-            ...this.dependencies,
-            ...(staged?.directory ? { configDirectory: staged.directory } : {}),
-            ...(nativeConfigFile ? { nativeConfigFile } : {}),
-            cleanup: staged?.cleanup ?? (async () => {}),
-        });
-        try {
-            await withTimeout(
-                session.start(),
-                this.dependencies.startupTimeoutMs,
-                'OpenCode session did not become ready in time'
-            );
-            return session;
-        } catch (error) {
-            await session.close().catch(() => {});
-            throw error;
-        }
-    }
-}
+import type { OpenCodeFetch, OpenCodeServerLauncher } from './server.js';
+import { OpenCodeServer } from './server.js';
 
 interface ActiveTurn {
     adapter: OpenCodeEventAdapter;
@@ -100,14 +34,18 @@ interface AlwaysPermission {
     resources: Set<string>;
 }
 
-class OpenCodeServerSession implements RunnerSession {
-    private readonly options: RunnerSessionStartOptions &
-        Required<OpenCodeSessionDependencies> & {
-            configuration: RunnerSessionStartOptions['configuration'];
-            configDirectory?: string;
-            nativeConfigFile?: string;
-            cleanup: () => Promise<void>;
-        };
+export interface OpenCodeServerSessionOptions extends RunnerSessionStartOptions {
+    fetch: OpenCodeFetch;
+    password: () => string;
+    startupTimeoutMs: number;
+    configDirectory?: string;
+    nativeConfigFile?: string;
+    launch: OpenCodeServerLauncher;
+    cleanup: () => Promise<void>;
+}
+
+export class OpenCodeServerSession implements RunnerSession {
+    private readonly options: OpenCodeServerSessionOptions;
     private readonly closing = deferred<void>();
     private readonly server: OpenCodeServer;
     private readonly streamedTextParts = new Set<string>();
@@ -120,19 +58,11 @@ class OpenCodeServerSession implements RunnerSession {
     private closed = false;
     private failure: Error | undefined;
 
-    constructor(
-        options: RunnerSessionStartOptions &
-            Required<OpenCodeSessionDependencies> & {
-                configuration: RunnerSessionStartOptions['configuration'];
-                configDirectory?: string;
-                nativeConfigFile?: string;
-                cleanup: () => Promise<void>;
-            }
-    ) {
+    constructor(options: OpenCodeServerSessionOptions) {
         this.options = options;
         this.server = new OpenCodeServer({
             workspaceDirectory: options.workspaceDirectory,
-            spawn: options.spawn,
+            launch: options.launch,
             fetch: options.fetch,
             password: options.password,
             startupTimeoutMs: options.startupTimeoutMs,
@@ -145,7 +75,7 @@ class OpenCodeServerSession implements RunnerSession {
 
     async start(): Promise<void> {
         await this.server.start(
-            (password) =>
+            (password, binding) =>
                 buildOpenCodeServerInvocation(
                     this.options.workbench,
                     password,
@@ -156,7 +86,8 @@ class OpenCodeServerSession implements RunnerSession {
                     this.options.nativeConfigFile,
                     this.options.session
                         ? join(this.options.session.directory, 'opencode.sqlite')
-                        : undefined
+                        : undefined,
+                    binding
                 ),
             (error) => this.fail(error)
         );
@@ -653,20 +584,6 @@ function deferred<T>() {
         reject = rejected;
     });
     return { promise, resolve, reject };
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-        return await Promise.race([
-            promise,
-            new Promise<T>((_, reject) => {
-                timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
-            }),
-        ]);
-    } finally {
-        if (timeout) clearTimeout(timeout);
-    }
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

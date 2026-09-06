@@ -47,13 +47,13 @@ export const PI_SESSION_DECLARATION: RunnerAdapterDeclaration = {
     },
 };
 
-interface PiInput {
+export interface PiInput {
     write(value: string): unknown;
     flush?(): unknown;
     end?(): void | Promise<void>;
 }
 
-interface SpawnedPi {
+export interface SpawnedPi {
     exited: Promise<number>;
     stdin: PiInput;
     stdout?: ReadableStream<Uint8Array>;
@@ -75,6 +75,11 @@ export interface PiSessionDependencies {
     startupTimeoutMs?: number;
 }
 
+export interface PreparedPiSession {
+    configDirectory: string;
+    spawn: NonNullable<PiSessionDependencies['spawn']>;
+}
+
 export class PiSessionAdapter implements RunnerSessionAdapter {
     readonly runner = 'pi';
     readonly declaration = PI_SESSION_DECLARATION;
@@ -89,11 +94,33 @@ export class PiSessionAdapter implements RunnerSessionAdapter {
 
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
         const staged = await stagePiConfig(options.workbench, options.environment);
+        return this.startConfigured(
+            options,
+            {
+                configDirectory: staged.directory,
+                spawn: this.dependencies.spawn,
+            },
+            staged.cleanup
+        );
+    }
+
+    startPrepared(
+        options: RunnerSessionStartOptions,
+        prepared: PreparedPiSession
+    ): Promise<RunnerSession> {
+        return this.startConfigured(options, prepared, async () => {});
+    }
+
+    private async startConfigured(
+        options: RunnerSessionStartOptions,
+        prepared: PreparedPiSession,
+        cleanup: () => Promise<void>
+    ): Promise<RunnerSession> {
         const session = new PiRpcSession({
             ...options,
             ...this.dependencies,
-            configDirectory: staged.directory,
-            cleanup: staged.cleanup,
+            ...prepared,
+            cleanup,
         });
         try {
             await session.start();

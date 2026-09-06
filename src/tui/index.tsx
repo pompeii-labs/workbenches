@@ -27,6 +27,7 @@ export async function renderWorkbenchTui(
         };
         environment?: Record<string, string | undefined>;
         workspaces?: WorkbenchWorkspaceBinding[];
+        allowHostDocker?: boolean;
     } = {}
 ): Promise<void> {
     const home = workbenchHome();
@@ -73,6 +74,7 @@ export async function renderWorkbenchTui(
                                     ...launch,
                                     environment: options.environment ?? process.env,
                                     workspaces: options.workspaces ?? [],
+                                    allowHostDocker: options.allowHostDocker ?? false,
                                 })
                             }
                         />

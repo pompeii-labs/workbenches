@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRouter } from '../src/models/index.js';
-import { OpenCodeSessionAdapter } from '../src/runners/opencode/session.js';
+import { OpenCodeSessionAdapter } from '../src/runners/opencode/adapter.js';
 import type {
     RunnerPermissionRequest,
     RunnerQuestionRequest,

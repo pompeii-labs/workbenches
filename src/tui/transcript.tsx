@@ -2,7 +2,7 @@ import { isAbsolute, relative } from 'node:path';
 
 import { type Accessor, For, Match, Show, Switch } from 'solid-js';
 
-import { renderMarkdownPreview, sanitizeMarkdown } from '../rendering/index.js';
+import { sanitizeMarkdown } from '../rendering/index.js';
 import { ActivityIndicator } from './activity.js';
 import type { TranscriptDisplayItem } from './model.js';
 import { useTheme } from './theme/index.js';
@@ -48,39 +48,32 @@ export function Transcript(props: {
                 </box>
             </Match>
             <Match when={props.item.kind === 'assistant'}>
-                <box flexDirection="column" marginTop={1}>
+                <box
+                    id={`transcript-${props.item.id}`}
+                    flexDirection="column"
+                    marginTop={1}
+                >
                     <text fg={theme.accent}>{props.assistantLabel}</text>
-                    <Show
-                        when={!props.streaming}
-                        fallback={
-                            <text fg={theme.text} wrapMode="word">
-                                {props.item.kind === 'assistant'
-                                    ? renderMarkdownPreview(props.item.text)
-                                    : ''}
-                            </text>
+                    <markdown
+                        content={
+                            props.item.kind === 'assistant'
+                                ? normalizeTuiMarkdown(props.item.text)
+                                : ''
                         }
-                    >
-                        <markdown
-                            content={
-                                props.item.kind === 'assistant'
-                                    ? normalizeTuiMarkdown(props.item.text)
-                                    : ''
-                            }
-                            syntaxStyle={syntax()}
-                            fg={theme.text}
-                            conceal={true}
-                            concealCode={true}
-                            streaming={false}
-                            internalBlockMode="top-level"
-                            tableOptions={{
-                                style: 'columns',
-                                widthMode: 'full',
-                                wrapMode: 'word',
-                                cellPaddingX: 1,
-                            }}
-                            width="100%"
-                        />
-                    </Show>
+                        syntaxStyle={syntax()}
+                        fg={theme.text}
+                        conceal={true}
+                        concealCode={true}
+                        streaming={props.streaming}
+                        internalBlockMode="top-level"
+                        tableOptions={{
+                            style: 'columns',
+                            widthMode: 'full',
+                            wrapMode: 'word',
+                            cellPaddingX: 1,
+                        }}
+                        width="100%"
+                    />
                 </box>
             </Match>
             <Match when={props.item.kind === 'activity'}>

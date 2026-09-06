@@ -1,6 +1,6 @@
 import { ConnectionInspector } from '../connections/inspector.js';
 import { ConnectionStore } from '../connections/store.js';
-import { ModelRouter, type ResolvedRunnerConfiguration } from '../models/index.js';
+import type { ResolvedRunnerConfiguration } from '../models/index.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import {
@@ -42,6 +42,7 @@ export interface InteractiveRunDependencies {
     env?: Record<string, string | undefined>;
     findExecutable?: (name: string) => string | null;
     registry?: RunnerRegistry;
+    runtimeRegistry?: RuntimeRegistry;
     now?: () => Date;
 }
 
@@ -59,6 +60,7 @@ export interface InteractiveRunOptions {
     ) => Promise<RunnerQuestionResponse> | RunnerQuestionResponse;
     dependencies?: InteractiveRunDependencies;
     workspaces?: WorkbenchWorkspaceBinding[];
+    allowHostDocker?: boolean;
     session?: RunnerSessionContext;
     interactive?: boolean;
 }
@@ -77,9 +79,6 @@ export class InteractiveRun {
     private async start(): Promise<InteractiveRunSession> {
         const { workbench } = this.options.resolved;
         const environment = this.dependencies.env ?? process.env;
-        if (workbench.manifest.runtime !== 'local') {
-            throw new Error('Interactive mode currently requires runtime: local');
-        }
         const registry = this.dependencies.registry ?? RunnerRegistry.standard();
         const emitter = new RunEvents({
             runId: this.options.runId ?? RunStore.createId(),
@@ -88,39 +87,36 @@ export class InteractiveRun {
             ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
         });
         let session: RunnerSession | undefined;
+        let preparedRunner: PreparedRunner | undefined;
+        let preparedRuntime: PreparedRuntime | undefined;
         try {
-            const preparedRunner = await registry.prepare(workbench, environment);
-            const {
-                configuration,
-                preflight,
-                environment: runtimeEnvironment,
-            } = await this.prepare(preparedRunner, environment);
-            const adapter = registry.session(workbench.manifest.runner);
+            preparedRunner = await registry.prepare(workbench, environment);
+            const prepared = await this.prepare(preparedRunner, environment);
+            preparedRuntime = prepared.runtime;
             await emitter.emit('run.started', {
                 workbench: workbench.manifest.name,
                 workbench_version: workbench.manifest.version,
-                model: configuration.model,
+                model: prepared.configuration.model,
                 model_route: {
-                    canonical: configuration.canonicalModel,
-                    provider: configuration.provider,
-                    ...(configuration.catalogVersion
-                        ? { catalog_version: configuration.catalogVersion }
+                    canonical: prepared.configuration.canonicalModel,
+                    provider: prepared.configuration.provider,
+                    ...(prepared.configuration.catalogVersion
+                        ? { catalog_version: prepared.configuration.catalogVersion }
                         : {}),
                 },
                 runtime: workbench.manifest.runtime,
                 workspace: this.options.resolved.workspaceDirectory,
                 ...(this.options.interactive ? { interactive: true } : {}),
                 workspaces: this.options.workspaces ?? [],
+                ...(workbench.manifest.docker?.engine
+                    ? {
+                          docker_engine: workbench.manifest.docker.engine.mode,
+                          host_docker_authorized: this.options.allowHostDocker ?? false,
+                      }
+                    : {}),
             });
-            session = await adapter.start({
-                workbench,
-                workspaceDirectory: this.options.resolved.workspaceDirectory,
-                environment: new ModelRouter().environmentForRoute(
-                    workbench,
-                    configuration,
-                    runtimeEnvironment
-                ),
-                configuration,
+            session = await preparedRunner.startSession(preparedRuntime, {
+                configuration: prepared.configuration,
                 host: {
                     emit: async (event) => {
                         await emitter.emitDraft(event);
@@ -130,22 +126,36 @@ export class InteractiveRun {
                     requestQuestion: (request) =>
                         this.requestQuestion(emitter, request),
                 },
-                ...(this.options.session ? { session: this.options.session } : {}),
+                ...(this.options.session
+                    ? {
+                          session: {
+                              ...this.options.session,
+                              directory: preparedRuntime.pathFor(
+                                  this.options.session.directory
+                              ),
+                          },
+                      }
+                    : {}),
             });
             await emitter.emit('run.ready', {
-                runner: preflight.runner.name,
-                tools: preflight.tools.map((tool) => tool.name),
-                enabled_mcps: preflight.enabledMcps,
-                disabled_mcps: preflight.disabledMcps,
-                workspaces: this.options.workspaces ?? [],
+                runner: prepared.preflight.runner.name,
+                tools: prepared.preflight.tools.map((tool) => tool.name),
+                enabled_mcps: prepared.preflight.enabledMcps,
+                disabled_mcps: prepared.preflight.disabledMcps,
+                workspaces: preparedRuntime.workspaces,
+                ...(prepared.preflight.dockerEngine
+                    ? { docker_engine: prepared.preflight.dockerEngine }
+                    : {}),
             });
             return new HostedInteractiveSession(
                 session,
                 emitter,
-                this.options.interactive ?? false
+                this.options.interactive ?? false,
+                () => this.cleanup(preparedRuntime, preparedRunner)
             );
         } catch (error) {
             await session?.close().catch(() => undefined);
+            await this.cleanup(preparedRuntime, preparedRunner).catch(() => undefined);
             await emitter
                 .emit('run.failed', { message: InteractiveRun.errorMessage(error) })
                 .catch(() => undefined);
@@ -159,7 +169,7 @@ export class InteractiveRun {
     ): Promise<{
         configuration: ResolvedRunnerConfiguration;
         preflight: PreflightResult;
-        environment: Record<string, string | undefined>;
+        runtime: PreparedRuntime;
     }> {
         const { workbench } = this.options.resolved;
         let preparedRuntime: PreparedRuntime | undefined;
@@ -167,10 +177,13 @@ export class InteractiveRun {
         let preflight: PreflightResult | undefined;
         let preparationError: unknown;
         try {
-            preparedRuntime = await RuntimeRegistry.standard({
-                findExecutable: this.dependencies.findExecutable ?? Bun.which,
-            })
-                .resolve('local')
+            const runtimes =
+                this.dependencies.runtimeRegistry ??
+                RuntimeRegistry.standard({
+                    findExecutable: this.dependencies.findExecutable ?? Bun.which,
+                });
+            preparedRuntime = await runtimes
+                .resolve(workbench.manifest.runtime)
                 .prepare({
                     workbench,
                     workspaceDirectory: this.options.resolved.workspaceDirectory,
@@ -190,7 +203,19 @@ export class InteractiveRun {
                             workspace: workspace.name,
                         })),
                         ...preparedRunner.assets,
+                        ...(this.options.session
+                            ? [
+                                  {
+                                      path: this.options.session.directory,
+                                      access: 'read-write' as const,
+                                  },
+                              ]
+                            : []),
                     ],
+                    authorizations: {
+                        hostDocker: this.options.allowHostDocker ?? false,
+                    },
+                    purpose: 'run',
                 });
             preflight = await preparedRuntime.preflight();
             configuration = await new ConnectionInspector({
@@ -205,23 +230,32 @@ export class InteractiveRun {
         } catch (error) {
             preparationError = error;
         }
-        const cleanup = await Promise.allSettled([
-            preparedRuntime?.cleanup(),
-            preparedRunner.cleanup(),
-        ]);
-        if (preparationError) throw preparationError;
-        const cleanupFailure = cleanup.find(
-            (result): result is PromiseRejectedResult => result.status === 'rejected'
-        );
-        if (cleanupFailure) throw cleanupFailure.reason;
+        if (preparationError) {
+            await preparedRuntime?.cleanup().catch(() => undefined);
+            throw preparationError;
+        }
         if (!preparedRuntime || !configuration || !preflight) {
             throw new Error('Interactive Workbench preparation did not complete');
         }
         return {
             configuration,
             preflight,
-            environment: preparedRuntime.environment,
+            runtime: preparedRuntime,
         };
+    }
+
+    private async cleanup(
+        runtime: PreparedRuntime | undefined,
+        runner: PreparedRunner | undefined
+    ): Promise<void> {
+        const results = await Promise.allSettled([
+            runtime?.cleanup(),
+            runner?.cleanup(),
+        ]);
+        const failure = results.find(
+            (result): result is PromiseRejectedResult => result.status === 'rejected'
+        );
+        if (failure) throw failure.reason;
     }
 
     private async requestPermission(
@@ -291,11 +325,13 @@ class HostedInteractiveSession implements InteractiveRunSession {
     private terminal = false;
     private cancellationRequested = false;
     private activeTurn: Promise<void> | undefined;
+    private releasePromise: Promise<void> | undefined;
 
     constructor(
         runner: RunnerSession,
         emitter: RunEvents,
-        private readonly interactive: boolean
+        private readonly interactive: boolean,
+        private readonly cleanup: () => Promise<void>
     ) {
         this.runner = runner;
         this.emitter = emitter;
@@ -398,7 +434,7 @@ class HostedInteractiveSession implements InteractiveRunSession {
             }
             this.terminal = true;
             this.closed = true;
-            await this.runner.close().catch(() => undefined);
+            await this.releaseResources().catch(() => undefined);
             await this.emitter.emit('run.failed', {
                 message: error instanceof Error ? error.message : String(error),
             });
@@ -414,7 +450,7 @@ class HostedInteractiveSession implements InteractiveRunSession {
         if (this.working) await this.cancelTurn();
         this.closed = true;
         try {
-            await this.runner.close();
+            await this.releaseResources();
             if (!this.terminal) {
                 this.terminal = true;
                 await this.emitter.emit(type, data);
@@ -428,5 +464,24 @@ class HostedInteractiveSession implements InteractiveRunSession {
             }
             throw error;
         }
+    }
+
+    private releaseResources(): Promise<void> {
+        if (this.releasePromise) return this.releasePromise;
+        this.releasePromise = (async () => {
+            let failure: unknown;
+            try {
+                await this.runner.close();
+            } catch (error) {
+                failure = error;
+            }
+            try {
+                await this.cleanup();
+            } catch (error) {
+                failure ??= error;
+            }
+            if (failure) throw failure;
+        })();
+        return this.releasePromise;
     }
 }

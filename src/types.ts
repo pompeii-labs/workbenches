@@ -85,6 +85,11 @@ export interface RunnerInvocation {
 
 export interface SpawnedRunner {
     exited: Promise<number>;
+    stdin?: {
+        write(value: string | Uint8Array): unknown;
+        flush?(): unknown;
+        end?(): unknown;
+    };
     stdout?: ReadableStream<Uint8Array>;
     stderr?: ReadableStream<Uint8Array>;
     kill?: () => void;
