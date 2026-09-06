@@ -39,9 +39,7 @@ export class InteractiveRunWorker {
     private session: InteractiveRunSession | undefined;
     private activeTurn: Promise<void> | undefined;
     private termination: Promise<void> | undefined;
-    private pendingShutdown:
-        | { cancelled: boolean; reason?: string }
-        | undefined;
+    private pendingShutdown: { cancelled: boolean; reason?: string } | undefined;
     private drainPaused = false;
     private terminal = false;
     private exitCode = 0;

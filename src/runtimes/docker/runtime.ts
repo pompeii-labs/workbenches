@@ -348,9 +348,7 @@ export class DockerRuntime implements PreparedRuntime {
         );
         const unreadable = results.find(({ result }) => result.code !== 0);
         if (unreadable) {
-            throw new Error(
-                `Required runtime asset is unreadable: ${unreadable.path}`
-            );
+            throw new Error(`Required runtime asset is unreadable: ${unreadable.path}`);
         }
     }
 
