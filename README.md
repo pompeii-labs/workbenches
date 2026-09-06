@@ -104,9 +104,9 @@ This repository contains `workbench`, also available as `wb`: the TypeScript
 reference engine and command-line client for the standard.
 
 The project is in public pre-alpha development. The draft-0 format, OpenCode and
-Pi adapters, local runtime, and Docker runtime for one-shot and detached
-execution are implemented. The format is not yet stable. Other runners and
-hosted runtimes are not yet supported by the reference engine.
+Pi adapters, and local and Docker runtimes for one-shot, detached, and
+interactive execution are implemented. The format is not yet stable. Other
+runners and hosted runtimes are not yet supported by the reference engine.
 
 ### Install the current prerelease
 
@@ -371,8 +371,13 @@ expose a numeric host user and group, containers run under that identity so
 workspace writes retain host ownership. Docker Desktop still mediates bind
 mounts through its virtual machine, so filesystem performance and permission
 details can differ from native Linux. Images must tolerate a read-only root and
-write caches beneath the provided temporary `HOME`; interactive Docker sessions
-are not supported in execution protocol draft 0.
+write caches beneath the provided temporary `HOME`.
+
+Interactive Docker sessions keep the runner inside the container. Pi uses its
+native stdin RPC transport. OpenCode's native HTTP service listens inside the
+container and is published only to a dynamically assigned host loopback port.
+Native session files live in the Workbench session's private host directory and
+are mounted read-write so a later container can resume the same native context.
 
 If the Workbench itself must use the host Docker engine, it must declare that
 high-risk requirement:
@@ -416,6 +421,7 @@ wb kill                # latest active session
 wb resume wb_...       # open or attach the terminal client
 wb resume wb_... "Review the latest change"
 wb resume wb_... --task "Run the checks" --detach
+wb resume wb_... --allow-host-docker # reauthorize a declared host engine
 ```
 
 Every execution belongs to one stable Workbench session. The first run shares
@@ -446,7 +452,7 @@ wb run project-core
 
 The OpenCode interactive adapter currently supports multi-turn context,
 streaming, image input, cancellation, tool events, explicit permission decisions,
-native questions, and native mid-turn steering for the local runtime. The Pi
+native questions, and native mid-turn steering in local and Docker runtimes. The Pi
 adapter supports multi-turn context, streaming, image input, steering at Pi's
 next legal model boundary, follow-up input, cancellation, and tool events. Pi
 does not provide native question or permission request protocols, or native MCP
@@ -475,8 +481,8 @@ Commands are handled by Workbench and are never sent to the runner as prompts.
 `/theme` includes the Workbench default, Flexoki, GitHub, and Catppuccin themes.
 The adapted themes are attributed in `NOTICE`.
 
-Local session-capable runs use one background session worker whether they begin
-in the terminal client, foreground CLI output, or detached mode. Normalized
+Session-capable runs use one background session worker whether they begin in the
+terminal client, foreground CLI output, or detached mode. Normalized
 events survive a client disconnect. Another terminal client can take control of
 the same live runner, while `wb attach` can observe it without taking control.
 Exiting the terminal client detaches it; an active turn and queued follow-ups
@@ -484,16 +490,17 @@ continue, then the unattended worker closes while its native context remains
 resumable. User prompts, permission decisions, and question answers are transient
 control messages, not durable run history.
 
-Local sessions can be reopened with `wb resume <session-or-run-id>`, from
+Supported sessions can be reopened with `wb resume <session-or-run-id>`, from
 `/sessions`, or from recent sessions on the home screen. An active session is
 reattached instead of duplicated. A closed session creates a new durable run
 linked to the same stable session. Workbench keeps a small private session index
 and a disposable transcript presentation cache. The selected runner remains the
 source of truth for model context: OpenCode resumes from its session database and
 Pi resumes from its session file. A session remains locked to its original
-Workbench version, runner, model, workspace, and workspace bindings. Docker
-Workbenches support detached execution and replay through `wb attach`, but do not
-support live terminal control or native session resume yet.
+Workbench version, runner, model, runtime, workspace, and workspace bindings.
+Docker credentials remain in the runner's private named volume. A Workbench that
+declares host Docker access must be explicitly reauthorized with
+`--allow-host-docker` for each resumed run.
 
 ## Source and authorization boundaries
 
@@ -538,12 +545,16 @@ bun install --frozen-lockfile
 bun run check
 bun run test:coverage
 bun run test:docker
+bun run test:docker:sessions
 bun run build
 ```
 
 `test:docker` requires a running Docker daemon and network access to pull its
 pinned fixture image. It exercises the real container boundary; the default
 test suite uses deterministic provider doubles and does not require Docker.
+`test:docker:sessions` additionally runs real multi-turn and native-resume probes
+for OpenCode and Pi. It requires previously connected runner credentials and
+makes model-provider requests.
 
 `bun run check` runs type checking, Biome, and the unit and integration suite.
 The compiled `dist/workbench` binary is self-contained and does not require Bun

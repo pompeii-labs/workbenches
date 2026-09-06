@@ -157,13 +157,20 @@ same image and volume that later runs use. The Workbench package is never given
 ownership of the volume, and the engine does not read or upload the stored token
 contents.
 
+Interactive runners remain inside the selected Docker runtime. Pi uses its
+native stdin RPC transport, so the container is launched with piped input.
+OpenCode starts its native HTTP service on a fixed container port. Docker
+publishes that port only to a dynamically assigned host loopback port, and the
+adapter connects through the resolved loopback URL. The service is never bound
+to an external host interface.
+
 The reference binaries currently target macOS and Linux. Numeric host-user
 mapping is applied only where the host runtime exposes it. Docker Desktop uses
 virtualized bind mounts, so permission behavior and filesystem performance may
 differ from native Linux. A Workbench image must support an arbitrary numeric
 user, a read-only root filesystem, and writable state beneath the temporary
-`HOME`. Draft 0 supports one-shot and detached Docker execution, not interactive
-Docker sessions.
+`HOME`. Draft 0 supports one-shot, detached, and interactive Docker execution for
+OpenCode and Pi.
 
 A manifest can request `docker.engine.mode: host`. The request is inert until
 the caller supplies an explicit per-run authorization; the reference CLI uses
@@ -257,14 +264,17 @@ after receiving it.
 
 ## Resumable interactive sessions
 
-Every execution has one stable Workbench session ID. Local runners with native
-session support use the same background session engine for foreground commands,
-detached commands, and the terminal client. The first execution owns the stable
-ID. A later continuation either joins its active run or creates a new internal
-run linked to the same session after the previous run closes. The session index
-records only the locked Workbench identity, runner, model, workspace bindings,
-native session identifier, and latest run. Native runner state remains
-authoritative and is stored under the session's private native-state directory.
+Every execution has one stable Workbench session ID. Runners with native session
+support use the same background session engine for foreground commands, detached
+commands, and the terminal client in local and Docker runtimes. The first
+execution owns the stable ID. A later continuation either joins its active run
+or creates a new internal run linked to the same session after the previous run
+closes. The session index records only the locked Workbench identity, runner,
+model, runtime, workspace bindings, native session identifier, and latest run.
+Native runner state remains authoritative and is stored under the session's
+private native-state directory. Docker mounts that directory read-write into
+each new container for native resume; it does not reconstruct context from the
+normalized event stream.
 
 `wb resume <session-or-run-id>` opens the exact Workbench package and workspace
 recorded by the session. It attaches to an active run or starts a linked run from
@@ -273,7 +283,8 @@ opening the terminal client; `--detach` leaves it in the background. The TUI
 exposes the same operation through `/sessions` and the recent-session area on the
 home screen. A resume is rejected if the package no longer matches the recorded
 Workbench name, version, runner, model, or workspace, or if the original runner
-never reached a resumable state.
+never reached a resumable state. A Workbench that declares host Docker engine
+access requires a new explicit `--allow-host-docker` authorization on resume.
 
 `wb attach` is observation only. It follows the latest normalized event stream
 without keeping the runner alive or becoming a controlling client. Exiting the
