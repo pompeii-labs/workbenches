@@ -4,7 +4,7 @@ import {
     createEffect,
     createMemo,
     createSignal,
-    For,
+    Index,
     onCleanup,
     onMount,
     Show,
@@ -491,20 +491,20 @@ export function ChatScreen(props: ChatScreenProps) {
                         </Show>
                     </box>
                 </Show>
-                <For each={transcript()} fallback={<box height={0} />}>
+                <Index each={transcript()} fallback={<box height={0} />}>
                     {(item, index) => (
                         <Transcript
-                            item={item}
+                            item={item()}
                             assistantLabel={manifest.name}
                             workspace={props.resolved.workspaceDirectory}
                             streaming={
-                                item.kind === 'assistant' &&
+                                item().kind === 'assistant' &&
                                 state().busy &&
-                                index() === transcript().length - 1
+                                index === transcript().length - 1
                             }
                         />
                     )}
-                </For>
+                </Index>
                 <Show when={activityStatus()}>
                     {(status: () => string) => (
                         <box marginTop={1}>

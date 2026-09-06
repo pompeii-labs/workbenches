@@ -844,7 +844,7 @@ describe.serial('Workbench TUI', () => {
         expect(frame).not.toContain('|---|---|');
     });
 
-    test('uses a stable marker-free preview while assistant text is streaming', async () => {
+    test('uses native incremental Markdown while assistant text is streaming', async () => {
         const setup = await testRender(
             () => (
                 <ThemeProvider controller={themes}>
@@ -864,20 +864,71 @@ describe.serial('Workbench TUI', () => {
             { width: 100, height: 24 }
         );
         renderers.push(setup.renderer);
-        await setup.flush();
+        let frame = setup.captureCharFrame();
+        for (
+            let attempt = 0;
+            attempt < 200 && !frame.includes('const safe = true');
+            attempt += 1
+        ) {
+            await Bun.sleep(10);
+            await setup.renderOnce();
+            frame = setup.captureCharFrame();
+        }
 
-        const frame = setup.captureCharFrame();
-        expect(frame).toContain('▌ Findings');
+        expect(frame).toContain('Findings');
         expect(frame).toContain('This is important.');
         expect(frame).toContain('✓ Checked');
         expect(frame).toContain('○ Follow up');
-        expect(frame).toContain('┌─ ts');
         expect(frame).toContain('const safe = true');
         expect(frame).not.toContain('# Findings');
         expect(frame).not.toContain('**important**');
         expect(frame).not.toContain('[x]');
         expect(frame).not.toContain('[ ]');
         expect(frame).not.toContain('```');
+    });
+
+    test('keeps the active assistant renderable mounted across streamed deltas', async () => {
+        const nextChunk = deferred<void>();
+        const handle = streamingHandle(nextChunk.promise);
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => handle}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const first = setup.renderer.root.findDescendantById(
+            'transcript-assistant-stream'
+        );
+        expect(first).toBeDefined();
+        expect(setup.captureCharFrame()).toContain('First streamed line.');
+
+        nextChunk.resolve();
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const updated = setup.renderer.root.findDescendantById(
+            'transcript-assistant-stream'
+        );
+        expect(updated).toBe(first);
+        expect(first?.isDestroyed).toBeFalse();
+        expect(setup.captureCharFrame()).toContain('Second streamed line.');
     });
 
     test('renders every tool action and keeps failure details visible', async () => {
@@ -1137,6 +1188,28 @@ function handleAwaitingReady(
                 yield event(0, 'run.ready', {});
             })(),
     };
+}
+
+function streamingHandle(nextChunk: Promise<void>): RunHandle {
+    const handle = fakeHandle(() => {});
+    const observe: RunHandle['observe'] = (options = {}) =>
+        (async function* () {
+            yield event(0, 'run.ready', {});
+            yield event(1, 'turn.started', { index: 1 });
+            yield event(2, 'output.text', {
+                id: 'assistant-stream',
+                text: 'First streamed line.\n',
+            });
+            yield event(3, 'usage.updated', { total_tokens: 1 });
+            await nextChunk;
+            if (options.signal?.aborted) return;
+            yield event(4, 'output.text', {
+                id: 'assistant-stream',
+                text: 'Second streamed line.',
+            });
+            yield event(5, 'usage.updated', { total_tokens: 2 });
+        })();
+    return { ...handle, observe };
 }
 
 function event(
