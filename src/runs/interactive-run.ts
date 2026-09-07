@@ -91,7 +91,11 @@ export class InteractiveRun {
         let preparedRuntime: PreparedRuntime | undefined;
         try {
             preparedRunner = await registry.prepare(workbench, environment);
-            const prepared = await this.prepare(preparedRunner, environment);
+            const prepared = await this.prepare(
+                preparedRunner,
+                environment,
+                emitter.runId
+            );
             preparedRuntime = prepared.runtime;
             await emitter.emit('run.started', {
                 workbench: workbench.manifest.name,
@@ -165,7 +169,8 @@ export class InteractiveRun {
 
     private async prepare(
         preparedRunner: PreparedRunner,
-        environment: Record<string, string | undefined>
+        environment: Record<string, string | undefined>,
+        runId: string
     ): Promise<{
         configuration: ResolvedRunnerConfiguration;
         preflight: PreflightResult;
@@ -216,6 +221,14 @@ export class InteractiveRun {
                         hostDocker: this.options.allowHostDocker ?? false,
                     },
                     purpose: 'run',
+                    ...(this.options.home
+                        ? {
+                              run: {
+                                  id: runId,
+                                  scope: RunStore.scope(this.options.home),
+                              },
+                          }
+                        : {}),
                 });
             preflight = await preparedRuntime.preflight();
             configuration = await new ConnectionInspector({

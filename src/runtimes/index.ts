@@ -13,9 +13,11 @@ export type {
 } from './contracts.js';
 export {
     type DockerCommandResult,
+    DockerManagedContainers,
     type DockerPreparation,
     type DockerRuntimeDependencies,
     DockerRuntimeProvider,
+    type ManagedDockerContainer,
 } from './docker/index.js';
 export { RuntimeError } from './error.js';
 export {

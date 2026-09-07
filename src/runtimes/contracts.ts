@@ -29,6 +29,7 @@ export interface RuntimePrepareRequest {
     assets: RuntimeAsset[];
     authorizations?: { hostDocker: boolean };
     purpose?: 'build' | 'connect' | 'run';
+    run?: { id: string; scope: string };
 }
 
 export interface RuntimeCommandOptions {

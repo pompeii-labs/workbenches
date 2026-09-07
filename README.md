@@ -422,6 +422,8 @@ wb resume wb_...       # open or attach the terminal client
 wb resume wb_... "Review the latest change"
 wb resume wb_... --task "Run the checks" --detach
 wb resume wb_... --allow-host-docker # reauthorize a declared host engine
+wb clean                            # preview terminal history older than 30 days
+wb clean --older-than 7d --apply
 ```
 
 Every execution belongs to one stable Workbench session. The first run shares
@@ -439,6 +441,21 @@ session. It joins an active run's follow-up queue or starts a linked internal ru
 when the previous one is closed. `--detach` returns the stable session ID while
 that continuation runs in the background. Killing cooperatively terminates the
 active run without deleting the session or its resumable context.
+
+Run and session data is never removed by `wb clean` until `--apply` is passed.
+The default policy selects terminal, non-resumable sessions and obsolete run
+history older than 30 days. Active runs are never eligible. Native resumable
+context and its latest run are protected unless `--include-sessions` is also
+passed. To explicitly clear all terminal history, including resumable context,
+use `wb clean --older-than 0s --include-sessions --apply`. `--json` returns the
+same preview or result as a stable machine-readable report, including byte
+counts and protected resources.
+
+Durable Docker runner containers carry Workbench ownership labels scoped to the
+current data directory. Normal exits remove them through Docker's `--rm`
+contract. `wb clean` also detects labeled containers whose run is terminal or
+missing and removes them only with `--apply`. It does not remove images, build
+caches, runner credential volumes, or unrelated containers.
 
 ### Interactive client
 

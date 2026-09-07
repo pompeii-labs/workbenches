@@ -11,10 +11,12 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { RunStore } from '../src/runs/index.js';
 import { DockerBuildContext } from '../src/runtimes/docker/build-context.js';
 import { DockerCredentialVolume } from '../src/runtimes/docker/credentials.js';
 import {
     type DockerCommandResult,
+    DockerManagedContainers,
     DockerRuntimeProvider,
 } from '../src/runtimes/docker/index.js';
 import { RuntimeRegistry } from '../src/runtimes/index.js';
@@ -32,6 +34,88 @@ afterEach(async () => {
 });
 
 describe('Docker runtime provider', () => {
+    test('labels durable run containers without exposing the Workbench home', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        const run = {
+            id: RunStore.createId(),
+            scope: RunStore.scope('/private/workbench/home'),
+        };
+        let spawnedCommand: string[] = [];
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock([]),
+            spawn(command) {
+                spawnedCommand = command;
+                return { exited: Promise.resolve(0), kill() {} };
+            },
+        }).prepare({ ...request(fixture), run });
+        try {
+            await runtime.preflight();
+            runtime.launch({
+                command: ['opencode', 'run', 'inspect'],
+                cwd: runtime.workspaceDirectory,
+                env: runtime.environment,
+            });
+
+            expect(spawnedCommand).toContain('dev.workbenches.managed=true');
+            expect(spawnedCommand).toContain(`dev.workbenches.run=${run.id}`);
+            expect(spawnedCommand).toContain(`dev.workbenches.scope=${run.scope}`);
+            expect(spawnedCommand.join(' ')).not.toContain('/private/workbench/home');
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('discovers and removes only valid managed containers in one storage scope', async () => {
+        const scope = RunStore.scope('/private/workbench/home');
+        const runId = RunStore.createId();
+        const commands: string[][] = [];
+        const containers = await DockerManagedContainers.connect(scope, {
+            findExecutable: () => '/usr/bin/docker',
+            command: async (command) => {
+                commands.push(command);
+                if (command[1] === 'version') return result(0, '28.1.1\n');
+                if (command[1] === 'container' && command[2] === 'ls') {
+                    return result(
+                        0,
+                        [
+                            `${'a'.repeat(12)}\tworkbench-${'1'.repeat(20)}\t${runId}`,
+                            `invalid\tworkbench-${'2'.repeat(20)}\t${runId}`,
+                            `${'b'.repeat(12)}\tunrelated\t${runId}`,
+                        ].join('\n')
+                    );
+                }
+                if (command[1] === 'container' && command[2] === 'rm') {
+                    return result(0);
+                }
+                throw new Error(`Unexpected Docker command: ${command.join(' ')}`);
+            },
+        });
+        if (!containers) throw new Error('Expected a managed container store');
+
+        const listed = await containers.list();
+        expect(listed).toEqual([
+            {
+                id: 'a'.repeat(12),
+                name: `workbench-${'1'.repeat(20)}`,
+                runId,
+            },
+        ]);
+        const first = listed[0];
+        if (!first) throw new Error('Expected one managed container');
+        await containers.remove(first);
+        expect(commands.at(-1)).toEqual([
+            '/usr/bin/docker',
+            'container',
+            'rm',
+            '--force',
+            'a'.repeat(12),
+        ]);
+        expect(commands.find((command) => command.includes('ls'))).toContain(
+            `label=dev.workbenches.scope=${scope}`
+        );
+    });
+
     test('reports unavailable host Docker dependencies before image work', async () => {
         const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
         await expect(

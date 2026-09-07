@@ -23,6 +23,7 @@ import type {
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
 import type { DockerClient } from './client.js';
+import { DockerManagedContainers } from './containers.js';
 import type {
     DockerCommandResult,
     DockerHostSocket,
@@ -242,6 +243,9 @@ export class DockerRuntime implements PreparedRuntime {
                     '--init',
                     '--name',
                     name,
+                    ...(this.options.request.run
+                        ? DockerManagedContainers.labels(this.options.request.run)
+                        : []),
                     ...(options.stdin === 'pipe' ? ['--interactive'] : []),
                     ...(publishedPort
                         ? ['--publish', `127.0.0.1::${publishedPort}`]

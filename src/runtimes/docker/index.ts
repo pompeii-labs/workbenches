@@ -1,3 +1,7 @@
+export {
+    DockerManagedContainers,
+    type ManagedDockerContainer,
+} from './containers.js';
 export type {
     DockerCommandResult,
     DockerPreparation,

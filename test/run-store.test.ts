@@ -154,6 +154,78 @@ describe('durable Workbench runs', () => {
         });
     });
 
+    test('reconciles an abandoned worker exactly once across concurrent readers', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const run = await fixtureRun(home);
+        await store.update(run.id, {
+            status: 'running',
+            pid: 2_147_483_647,
+            started_at: '2026-08-18T00:00:00.000Z',
+        });
+
+        const [first, second] = await Promise.all([
+            store.reconcile(await store.read(run.id)),
+            store.reconcile(await store.read(run.id)),
+        ]);
+
+        expect(first.status).toBe('failed');
+        expect(second.status).toBe('failed');
+        expect(
+            (await store.readEvents(run.id)).filter(
+                (candidate) => candidate.type === 'run.failed'
+            )
+        ).toHaveLength(1);
+    });
+
+    test('recovers terminal metadata from the event written before a worker exit', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const cases = [
+            { type: 'run.completed' as const, status: 'completed', exitCode: 0 },
+            { type: 'run.cancelled' as const, status: 'cancelled', exitCode: 130 },
+            { type: 'run.failed' as const, status: 'failed', exitCode: 17 },
+        ];
+        for (const candidate of cases) {
+            const run = await fixtureRun(home);
+            await store.update(run.id, {
+                status: 'running',
+                pid: 2_147_483_647,
+                started_at: '2026-08-18T00:00:00.000Z',
+            });
+            await store.appendEvent(run.id, {
+                ...event(run.id, 1, candidate.type),
+                timestamp: '2026-08-18T00:00:01.000Z',
+                data: { exit_code: candidate.exitCode },
+            });
+
+            expect(await store.reconcile(await store.read(run.id))).toMatchObject({
+                status: candidate.status,
+                exit_code: candidate.exitCode,
+                finished_at: '2026-08-18T00:00:01.000Z',
+            });
+            expect(await store.readEvents(run.id)).toHaveLength(1);
+        }
+    });
+
+    test('measures and removes only terminal run storage', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const active = await fixtureRun(home);
+        const terminal = await fixtureRun(home);
+        await store.update(terminal.id, { status: 'completed' });
+
+        expect(await store.size(terminal.id)).toBeGreaterThan(0);
+        await expect(store.removeTerminal(active.id)).rejects.toThrow(
+            'Active Workbench run cannot be removed'
+        );
+        await store.removeTerminal(terminal.id);
+        await expect(store.read(terminal.id)).rejects.toThrow(
+            'Workbench run does not exist'
+        );
+        expect((await store.read(active.id)).status).toBe('dispatched');
+    });
+
     test('lists runs newest first across execution modes', async () => {
         const home = await temporaryHome();
         const store = new RunStore(home);
@@ -297,7 +369,7 @@ function fixtureRun(
 function event(
     id: string,
     sequence: number,
-    type: 'run.started' | 'run.completed'
+    type: 'run.started' | 'run.completed' | 'run.failed' | 'run.cancelled'
 ): WorkbenchEvent {
     return {
         protocol: 0,

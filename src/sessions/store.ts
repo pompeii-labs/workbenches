@@ -1,4 +1,5 @@
 import {
+    lstat,
     mkdir,
     readdir,
     readFile,
@@ -141,6 +142,11 @@ export class SessionStore {
         await rm(this.directory(id), { recursive: true, force: true });
     }
 
+    async size(id: string): Promise<number> {
+        await this.read(id);
+        return this.directorySize(this.directory(id));
+    }
+
     nativeDirectory(id: string): string {
         RunStore.validateId(id);
         return join(this.directory(id), 'native');
@@ -243,6 +249,17 @@ export class SessionStore {
             mode: 0o600,
         });
         await rename(temporary, path);
+    }
+
+    private async directorySize(path: string): Promise<number> {
+        const details = await lstat(path).catch(() => undefined);
+        if (!details) return 0;
+        if (!details.isDirectory()) return details.size;
+        const entries = await readdir(path).catch(() => []);
+        const sizes = await Promise.all(
+            entries.map((entry) => this.directorySize(join(path, entry)))
+        );
+        return sizes.reduce((total, size) => total + size, 0);
     }
 }
 
