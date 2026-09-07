@@ -6,6 +6,7 @@ import packageMetadata from '../package.json' with { type: 'json' };
 import { addCommand } from './commands/add.js';
 import { attachCommand } from './commands/attach.js';
 import { buildCommand } from './commands/build.js';
+import { cleanCommand } from './commands/clean.js';
 import { connectCommand } from './commands/connect.js';
 import { imageCommand } from './commands/image.js';
 import { initCommand } from './commands/init.js';
@@ -58,6 +59,7 @@ export const workbenchCommand = defineCommand({
         publish: publishCommand,
         ps: psCommand,
         build: buildCommand,
+        clean: cleanCommand,
         connect: connectCommand,
         add: addCommand,
         remove: removeCommand,

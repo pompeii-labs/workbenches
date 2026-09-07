@@ -151,6 +151,12 @@ environment file and removed after the container exits. Values do not appear in
 Docker command arguments, and the host Docker client retains its own
 environment.
 
+Long-lived runner containers use random engine-owned names and carry managed,
+run ID, and opaque data-scope labels. The scope is a one-way digest of the
+Workbench data directory, not the host path. This lets cleanup identify only
+containers created for the same local store. Preflight and other short-lived
+containers are not labeled because they execute synchronously under `--rm`.
+
 Each supported runner uses a private named Docker volume for its native
 credential store. `wb connect` runs the runner's own authentication flow in the
 same image and volume that later runs use. The Workbench package is never given
@@ -445,6 +451,34 @@ a session; without an ID it selects the latest active session. The worker observ
 a private cancellation request, terminates the runner child, emits
 `run.cancelled`, and then marks the durable run cancelled. Session metadata and
 native resumable context remain available.
+
+## Retention and cleanup
+
+`wb clean` previews deletion and never removes data unless `--apply` is passed.
+Its default cutoff is 30 days and can be changed with durations such as `12h`,
+`7d`, or `4w`. `--json` emits one versioned report with the policy, eligible
+resources, protected resources, reconciled runs, byte counts, and applied
+result. Previewing may repair stale nonterminal metadata as described below.
+
+The default policy may select:
+
+- A terminal session that never reached native resumable state.
+- A terminal run that has no session record.
+- An old historical run that is not the latest run of its session.
+- A managed Docker container whose scoped run is terminal or no longer exists.
+
+Active runs are never eligible. A session with native resumable state protects
+its session directory and latest run even after the cutoff. Removing that state
+requires both `--include-sessions` and `--apply`. Images, build caches, saved
+Workbench packages, runner credential volumes, and unrelated Docker containers
+are outside this cleanup contract.
+
+Before cleanup, nonterminal records are reconciled against their worker process.
+A missing worker produces one `run.failed` event and one terminal metadata
+transition. Reconciliation is serialized per run so concurrent `ps`, `attach`,
+or cleanup processes cannot create duplicate terminal events. Cleanup then
+rechecks every candidate under the session lease before deletion. A resource
+that became active or became the latest session run is left in place.
 
 ## Preflight boundary
 

@@ -13,6 +13,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { RunStore } from '../src/runs/index.js';
+import { SessionStore } from '../src/sessions/index.js';
 import { seedModelCatalogFixture } from './model-catalog-fixture.js';
 
 const projectDirectory = resolve(import.meta.dir, '..');
@@ -28,6 +30,85 @@ afterEach(async () => {
 });
 
 describe('CLI integration', () => {
+    test('previews cleanup before removing only explicitly selected history', async () => {
+        const home = await temporaryDirectory('workbench-clean-');
+        const runs = new RunStore(home);
+        const sessions = new SessionStore(home);
+        const disposable = RunStore.createId();
+        await sessions.create({
+            id: disposable,
+            workbench: 'fixture-core',
+            workbench_version: '0.1.0',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            reference: 'fixture-core',
+            workbench_path: '/repo/.workbenches/core',
+            workspace: '/repo',
+            workspaces: [],
+            latest_run_id: disposable,
+        });
+        await runs.create({
+            id: disposable,
+            metadata: {
+                workbench: 'fixture-core',
+                workbench_version: '0.1.0',
+                runner: 'opencode',
+                model: 'openai/gpt-5.6-terra',
+                workspace: '/repo',
+                mode: 'foreground',
+                session_id: disposable,
+            },
+            request: {
+                workbench_path: '/repo/.workbenches/core',
+                workspace: '/repo',
+                task: 'fixture',
+            },
+        });
+        await runs.update(disposable, {
+            status: 'completed',
+            exit_code: 0,
+            finished_at: new Date().toISOString(),
+        });
+        await Bun.sleep(2);
+        const environment = {
+            WORKBENCH_HOME: home,
+            PATH: '/usr/bin:/bin',
+        };
+
+        const preview = await executeCli(
+            ['clean', '--older-than', '0ms', '--json'],
+            environment
+        );
+        expect(preview.code).toBe(0);
+        expect(JSON.parse(preview.stdout)).toMatchObject({
+            version: 1,
+            mode: 'preview',
+            eligible: {
+                sessions: [{ id: disposable }],
+                runs: [{ id: disposable }],
+            },
+        });
+        expect((await runs.read(disposable)).status).toBe('completed');
+
+        const applied = await executeCli(
+            ['clean', '--older-than=0ms', '--apply', '--json'],
+            environment
+        );
+        expect(applied.code).toBe(0);
+        expect(JSON.parse(applied.stdout)).toMatchObject({
+            version: 1,
+            mode: 'apply',
+            removed: {
+                sessions: [disposable],
+                runs: [disposable],
+            },
+            skipped: [],
+        });
+        await expect(runs.read(disposable)).rejects.toThrow(
+            'Workbench run does not exist'
+        );
+    });
+
     test('renders framework-generated command help', async () => {
         const result = await executeCli(['--help']);
         expect(result.code).toBe(0);
@@ -907,9 +988,13 @@ describe('CLI integration', () => {
         expect(events.at(-1)).toMatchObject({ type: 'run.completed' });
 
         const commands = await readFile(docker.record, 'utf8');
+        const runId = events[0]?.run_id;
+        expect(runId).toMatch(/^wb_[a-z0-9]{20,64}$/);
         expect(commands).toContain('--workdir /workspace');
         expect(commands).toContain('--entrypoint opencode');
         expect(commands).toContain('--env-file');
+        expect(commands).toContain('dev.workbenches.managed=true');
+        expect(commands).toContain(`dev.workbenches.run=${runId}`);
         expect(commands).not.toContain(secret);
     });
 

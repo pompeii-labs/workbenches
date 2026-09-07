@@ -1,6 +1,7 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
     appendFile,
+    lstat,
     mkdir,
     open,
     readdir,
@@ -10,11 +11,12 @@ import {
     stat,
     writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { CatalogRegistryReference } from '../catalog/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import { RunControl } from './control.js';
 import type { WorkbenchEvent } from './events.js';
+import { RunReconciliationLease } from './reconciliation.js';
 
 export type StoredRunStatus =
     | 'dispatched'
@@ -80,6 +82,10 @@ export class RunStore {
         return `wb_${Date.now().toString(36)}${randomBytes(10).toString('hex')}`;
     }
 
+    static scope(home: string): string {
+        return createHash('sha256').update(resolve(home)).digest('hex').slice(0, 24);
+    }
+
     static validateId(id: string): void {
         if (!/^wb_[a-z0-9]{20,64}$/.test(id)) {
             throw new Error(`Invalid run ID: ${id}`);
@@ -98,28 +104,42 @@ export class RunStore {
 
     async reconcile(run: StoredRun, now = Date.now()): Promise<StoredRun> {
         if (RunStore.isTerminal(run.status)) return run;
-        const dispatchedAt = Date.parse(run.dispatched_at);
-        const waitingForWorker =
-            !run.pid && Number.isFinite(dispatchedAt) && now - dispatchedAt < 30_000;
-        if (waitingForWorker || (run.pid && this.processAlive(run.pid))) return run;
-        const events = await this.readEvents(run.id);
-        const last = events.at(-1);
-        if (!last || !terminalEventTypes.has(last.type)) {
-            await this.appendEvent(run.id, {
-                protocol: 0,
-                run_id: run.id,
-                sequence: (last?.sequence ?? 0) + 1,
-                timestamp: new Date(now).toISOString(),
-                type: 'run.failed',
-                runner: run.runner,
-                data: { message: 'Workbench run worker exited unexpectedly' },
-            });
-        }
-        return this.update(run.id, {
-            status: 'failed',
-            exit_code: 1,
-            finished_at: new Date(now).toISOString(),
-        });
+        return new RunReconciliationLease(run.id, this.directory(run.id)).exclusive(
+            async () => {
+                const current = await this.read(run.id);
+                if (RunStore.isTerminal(current.status)) return current;
+                const dispatchedAt = Date.parse(current.dispatched_at);
+                const waitingForWorker =
+                    !current.pid &&
+                    Number.isFinite(dispatchedAt) &&
+                    now - dispatchedAt < 30_000;
+                if (
+                    waitingForWorker ||
+                    (current.pid && this.processAlive(current.pid))
+                ) {
+                    return current;
+                }
+                const events = await this.readEvents(current.id);
+                const last = events.at(-1);
+                if (last && terminalEventTypes.has(last.type)) {
+                    return this.update(current.id, this.terminalState(last));
+                }
+                await this.appendEvent(current.id, {
+                    protocol: 0,
+                    run_id: current.id,
+                    sequence: (last?.sequence ?? 0) + 1,
+                    timestamp: new Date(now).toISOString(),
+                    type: 'run.failed',
+                    runner: current.runner,
+                    data: { message: 'Workbench run worker exited unexpectedly' },
+                });
+                return this.update(current.id, {
+                    status: 'failed',
+                    exit_code: 1,
+                    finished_at: new Date(now).toISOString(),
+                });
+            }
+        );
     }
 
     async create(options: CreateStoredRunOptions): Promise<StoredRun> {
@@ -288,6 +308,19 @@ export class RunStore {
             );
     }
 
+    async size(id: string): Promise<number> {
+        await this.read(id);
+        return this.directorySize(this.directory(id));
+    }
+
+    async removeTerminal(id: string): Promise<void> {
+        const run = await this.read(id);
+        if (!RunStore.isTerminal(run.status)) {
+            throw new Error(`Active Workbench run cannot be removed: ${id}`);
+        }
+        await rm(this.directory(id), { recursive: true, force: true });
+    }
+
     private directory(id: string): string {
         return join(this.home, 'runs', id);
     }
@@ -302,6 +335,17 @@ export class RunStore {
 
     private eventsPath(id: string): string {
         return join(this.directory(id), 'events.ndjson');
+    }
+
+    private async directorySize(path: string): Promise<number> {
+        const details = await lstat(path).catch(() => undefined);
+        if (!details) return 0;
+        if (!details.isDirectory()) return details.size;
+        const entries = await readdir(path).catch(() => []);
+        const sizes = await Promise.all(
+            entries.map((entry) => this.directorySize(join(path, entry)))
+        );
+        return sizes.reduce((total, size) => total + size, 0);
     }
 
     private async writeJson(path: string, value: unknown): Promise<void> {
@@ -322,6 +366,36 @@ export class RunStore {
         } catch {
             throw new Error(`Invalid event stream for Workbench run: ${id}`);
         }
+    }
+
+    private terminalState(
+        event: WorkbenchEvent
+    ): Pick<StoredRun, 'status' | 'exit_code' | 'finished_at'> {
+        const exitCode =
+            typeof event.data === 'object' &&
+            event.data !== null &&
+            typeof Reflect.get(event.data, 'exit_code') === 'number'
+                ? Number(Reflect.get(event.data, 'exit_code'))
+                : undefined;
+        if (event.type === 'run.completed') {
+            return {
+                status: 'completed',
+                exit_code: exitCode ?? 0,
+                finished_at: event.timestamp,
+            };
+        }
+        if (event.type === 'run.cancelled') {
+            return {
+                status: 'cancelled',
+                exit_code: exitCode ?? 130,
+                finished_at: event.timestamp,
+            };
+        }
+        return {
+            status: 'failed',
+            exit_code: exitCode ?? 1,
+            finished_at: event.timestamp,
+        };
     }
 
     private processAlive(pid: number): boolean {

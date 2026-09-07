@@ -3,8 +3,12 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { InteractiveRun, type WorkbenchEvent } from '../src/runs/index.js';
-import { DockerRuntimeProvider } from '../src/runtimes/docker/index.js';
+import { InteractiveRun, RunStore, type WorkbenchEvent } from '../src/runs/index.js';
+import {
+    DockerManagedContainers,
+    DockerRuntimeProvider,
+} from '../src/runtimes/docker/index.js';
+import { SessionRetention } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 
 const temporaryDirectories: string[] = [];
@@ -36,6 +40,54 @@ async function removeTemporaryDirectory(directory: string): Promise<void> {
 }
 
 describe('Docker runtime end-to-end', () => {
+    dockerTest(
+        'removes only a scoped managed container whose run no longer exists',
+        async () => {
+            const home = await mkdtemp(join(tmpdir(), 'workbench-docker-clean-'));
+            temporaryDirectories.push(home);
+            const run = { id: RunStore.createId(), scope: RunStore.scope(home) };
+            const name = `workbench-${crypto.randomUUID().replaceAll('-', '').slice(0, 20)}`;
+            const launched = Bun.spawn(
+                [
+                    'docker',
+                    'run',
+                    '--detach',
+                    '--name',
+                    name,
+                    ...DockerManagedContainers.labels(run),
+                    'alpine:3.22',
+                    'sleep',
+                    '30',
+                ],
+                { stdout: 'pipe', stderr: 'pipe' }
+            );
+            const [code, stderr] = await Promise.all([
+                launched.exited,
+                new Response(launched.stderr).text(),
+            ]);
+            expect({ code, stderr }).toEqual({ code: 0, stderr: '' });
+            try {
+                const containers = await DockerManagedContainers.connect(run.scope);
+                if (!containers) throw new Error('Docker is unavailable');
+                const retention = new SessionRetention(home, { containers });
+
+                const review = await retention.review({ before: new Date() });
+                expect(review.containers.map((container) => container.name)).toEqual([
+                    name,
+                ]);
+                const result = await retention.apply({ before: new Date() });
+                expect(result.removedContainers).toHaveLength(1);
+                expect(await dockerContainerExists(name)).toBeFalse();
+            } finally {
+                await Bun.spawn(['docker', 'container', 'rm', '--force', name], {
+                    stdout: 'ignore',
+                    stderr: 'ignore',
+                }).exited;
+            }
+        },
+        120_000
+    );
+
     dockerTest(
         'enforces workspace, package, root, temporary home, and host-user policy',
         async () => {
@@ -449,4 +501,13 @@ async function expectWorkbenchContainers(expected: string[]): Promise<void> {
         await Bun.sleep(25);
     }
     expect(await workbenchContainers()).toEqual(expected);
+}
+
+async function dockerContainerExists(name: string): Promise<boolean> {
+    return (
+        (await Bun.spawn(['docker', 'container', 'inspect', name], {
+            stdout: 'ignore',
+            stderr: 'ignore',
+        }).exited) === 0
+    );
 }

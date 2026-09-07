@@ -103,7 +103,14 @@ export class WorkbenchRun {
             );
             runtime = await this.runtimeRegistry
                 .resolve(workbench.manifest.runtime)
-                .prepare(this.runtimeRequest(workbench, runner.assets, workspaces));
+                .prepare(
+                    this.runtimeRequest(
+                        workbench,
+                        runner.assets,
+                        workspaces,
+                        events.runId
+                    )
+                );
             const preflight = await runtime.preflight();
             const configuration = await new ConnectionInspector({
                 workbench,
@@ -265,7 +272,8 @@ export class WorkbenchRun {
     private runtimeRequest(
         workbench: ResolvedWorkbench,
         runnerAssets: RuntimeAsset[],
-        workspaces: WorkbenchWorkspaceBinding[]
+        workspaces: WorkbenchWorkspaceBinding[],
+        runId: string
     ) {
         const workspace =
             this.options.workspaceDirectory ?? workbench.repositoryDirectory;
@@ -289,6 +297,9 @@ export class WorkbenchRun {
             authorizations: {
                 hostDocker: this.options.allowHostDocker ?? false,
             },
+            ...(this.options.home
+                ? { run: { id: runId, scope: RunStore.scope(this.options.home) } }
+                : {}),
         };
     }
 
