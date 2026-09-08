@@ -32,7 +32,7 @@ afterEach(async () => {
 describe('native Workbench authoring', () => {
     test('puts the exact invoking CLI ahead of installed wb binaries', async () => {
         const home = await temporaryDirectory('workbench-authoring-cli-home-');
-        const exactCli = join(home, 'exact-cli.ts');
+        const exactCli = join(home, "exact creator's cli.ts");
         await writeFile(
             exactCli,
             'process.stdout.write(JSON.stringify(process.argv.slice(2)));\n'
@@ -46,9 +46,12 @@ describe('native Workbench authoring', () => {
         });
         const shimDirectory = environment.PATH?.split(delimiter)[0];
         expect(shimDirectory).toBe(join(home, 'authoring', 'author_exact_cli', 'bin'));
+        expect(await readFile(join(shimDirectory as string, 'wb'), 'utf8')).toStartWith(
+            '#!/bin/sh\nexec '
+        );
 
         const child = Bun.spawn(
-            [join(shimDirectory as string, 'wb'), 'validate', '.'],
+            [join(shimDirectory as string, 'wb'), 'validate', "creator's package"],
             {
                 stdout: 'pipe',
                 stderr: 'pipe',
@@ -63,7 +66,7 @@ describe('native Workbench authoring', () => {
 
         expect(exitCode).toBe(0);
         expect(stderr).toBe('');
-        expect(JSON.parse(stdout)).toEqual(['validate', '.']);
+        expect(JSON.parse(stdout)).toEqual(['validate', "creator's package"]);
     });
 
     test('keeps the creator CLI shim out of candidate verification', async () => {
@@ -449,6 +452,106 @@ describe('native Workbench authoring', () => {
         expect(await readFile(bounded.path, 'utf8')).toBe(bounded.content);
     });
 
+    test('builds improvement evidence from canonical run events without a TUI transcript', async () => {
+        const home = await temporaryDirectory('workbench-run-evidence-');
+        const sessionId = 'wb_canonicalsession1234567890';
+        const runId = 'wb_canonicalrun1234567890123';
+        const sessions = new SessionStore(home);
+        const session = await sessions.create({
+            id: sessionId,
+            workbench: 'lux-ops',
+            workbench_version: '1.2.3',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            runtime: 'local',
+            reference: './repo#lux-ops',
+            workbench_path: '/repo/.workbenches/lux-ops',
+            source_workbench_path: '/repo/.workbenches/lux-ops',
+            workbench_digest: `sha256:${'a'.repeat(64)}`,
+            workspace: '/repo',
+            workspaces: [],
+            latest_run_id: runId,
+        });
+        const runs = new RunStore(home);
+        await runs.create({
+            id: runId,
+            metadata: {
+                workbench: 'lux-ops',
+                workbench_version: '1.2.3',
+                runner: 'opencode',
+                model: 'openai/gpt-5.6-terra',
+                workspace: '/repo',
+                mode: 'detached',
+                execution: 'one_shot',
+                session_id: sessionId,
+            },
+            request: {
+                workbench_path: '/repo/.workbenches/lux-ops',
+                workspace: '/repo',
+                task: 'ignored after dispatch',
+            },
+        });
+        await runs.takeRequest(runId);
+        const events = [
+            {
+                type: 'input.delivered' as const,
+                data: {
+                    id: 'input-1',
+                    kind: 'send',
+                    text: 'Review the migrations with ghp_abcdefghijklmnopqrstuvwxyz',
+                    images: [{ name: 'schema.png', mime_type: 'image/png' }],
+                },
+            },
+            {
+                type: 'output.text' as const,
+                data: { id: 'output-1', text: 'I found ' },
+            },
+            {
+                type: 'output.text' as const,
+                data: { id: 'output-1', text: 'the issue.' },
+            },
+            {
+                type: 'tool.started' as const,
+                data: { id: 'tool-1', name: 'read', title: 'Read', target: 'db.lux' },
+            },
+            {
+                type: 'tool.completed' as const,
+                data: {
+                    id: 'tool-1',
+                    name: 'read',
+                    title: 'Read',
+                    target: 'db.lux',
+                    status: 'completed',
+                },
+            },
+        ];
+        for (const [index, event] of events.entries()) {
+            await runs.appendEvent(runId, {
+                protocol: 0,
+                run_id: runId,
+                sequence: index + 1,
+                timestamp: new Date(index).toISOString(),
+                runner: 'opencode',
+                ...event,
+            });
+        }
+        await runs.update(runId, { status: 'completed' });
+
+        const result = await new ImprovementEvidence(home).write({
+            operationId: 'author_canonical_evidence',
+            session,
+            feedback: '',
+        });
+
+        expect(result.transcriptItems).toBe(3);
+        expect(result.content).toContain('Review the migrations with [REDACTED]');
+        expect(result.content).toContain('Attached images: schema.png');
+        expect(result.content).toContain('I found the issue.');
+        expect(result.content).toContain('- Tool: Read');
+        expect(result.content).toContain('- Target: db.lux');
+        expect(result.content).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz');
+    });
+
     test('records changed package files and requires an existing version to advance', async () => {
         const home = await temporaryDirectory('workbench-operation-home-');
         const repository = await temporaryDirectory('workbench-operation-repo-');
@@ -697,7 +800,115 @@ describe('native Workbench authoring', () => {
         await writeFile(join(sibling, 'instructions.md'), '# changed sibling\n');
 
         await expect(operation.finish()).rejects.toThrow(
-            'outside the requested core package'
+            'outside the requested .workbenches/core package'
+        );
+    });
+
+    test('rejects repository source changes outside the requested package', async () => {
+        const home = await temporaryDirectory('workbench-operation-home-');
+        const repository = await temporaryDirectory('workbench-operation-repo-');
+        const packageDirectory = await writeWorkbench(repository, 'core', '0.1.0');
+        const readme = join(repository, 'README.md');
+        await writeFile(readme, '# Before\n');
+        const operation = await AuthoringOperation.prepare(
+            home,
+            {
+                id: 'author_repository_scope',
+                kind: 'edit',
+                repository,
+                targetSelector: 'core',
+                creator: {
+                    version: '0.1.4',
+                    digest: `sha256:${'b'.repeat(64)}`,
+                    registry_version_id: 'version-id',
+                    cached: false,
+                },
+            },
+            smoke
+        );
+        await Promise.all([
+            writeFile(readme, '# After\n'),
+            writeFile(join(packageDirectory, 'instructions.md'), '# changed\n'),
+            writeFile(
+                join(packageDirectory, 'workbench.yml'),
+                manifest('core', '0.1.1')
+            ),
+        ]);
+
+        await expect(operation.finish()).rejects.toThrow(
+            'outside the requested .workbenches/core package: README.md'
+        );
+    });
+
+    test('enforces repository scope in a Git-backed authoring directory', async () => {
+        const home = await temporaryDirectory('workbench-operation-home-');
+        const repository = await temporaryDirectory('workbench-operation-git-repo-');
+        const packageDirectory = await writeWorkbench(repository, 'core', '0.1.0');
+        const readme = join(repository, 'README.md');
+        await writeFile(readme, '# Before\n');
+        expect(Bun.spawnSync(['git', 'init', '--quiet', repository]).exitCode).toBe(0);
+        expect(Bun.spawnSync(['git', '-C', repository, 'add', '.']).exitCode).toBe(0);
+        const operation = await AuthoringOperation.prepare(
+            home,
+            {
+                id: 'author_git_scope',
+                kind: 'edit',
+                repository,
+                targetSelector: 'core',
+                creator: {
+                    version: '0.1.4',
+                    digest: `sha256:${'b'.repeat(64)}`,
+                    registry_version_id: 'version-id',
+                    cached: false,
+                },
+            },
+            smoke
+        );
+        await Promise.all([
+            writeFile(readme, '# After\n'),
+            writeFile(join(packageDirectory, 'instructions.md'), '# changed\n'),
+            writeFile(
+                join(packageDirectory, 'workbench.yml'),
+                manifest('core', '0.1.1')
+            ),
+        ]);
+
+        await expect(operation.finish()).rejects.toThrow(
+            'outside the requested .workbenches/core package: README.md'
+        );
+    });
+
+    test('rejects files written directly to the Workbench collection root', async () => {
+        const home = await temporaryDirectory('workbench-operation-home-');
+        const repository = await temporaryDirectory('workbench-operation-repo-');
+        const packageDirectory = await writeWorkbench(repository, 'core', '0.1.0');
+        const operation = await AuthoringOperation.prepare(
+            home,
+            {
+                id: 'author_collection_scope',
+                kind: 'edit',
+                repository,
+                targetSelector: 'core',
+                creator: {
+                    version: '0.1.4',
+                    digest: `sha256:${'b'.repeat(64)}`,
+                    registry_version_id: 'version-id',
+                    cached: false,
+                },
+            },
+            smoke
+        );
+        await Promise.all([
+            writeFile(join(repository, '.workbenches', 'README.md'), '# unexpected\n'),
+            writeFile(join(packageDirectory, 'instructions.md'), '# changed\n'),
+            writeFile(
+                join(packageDirectory, 'workbench.yml'),
+                manifest('core', '0.1.1')
+            ),
+        ]);
+
+        await expect(operation.finish()).rejects.toThrow(
+            'outside the requested .workbenches/core package: .workbenches/README.md'
         );
     });
 
@@ -732,6 +943,38 @@ describe('native Workbench authoring', () => {
         );
         expect(record).not.toContain('API_KEY');
         expect(record).not.toContain('secret');
+    });
+
+    test('uses the runner credential policy for private-key files', async () => {
+        const home = await temporaryDirectory('workbench-operation-home-');
+        const repository = await temporaryDirectory('workbench-operation-repo-');
+        const packageDirectory = await writeWorkbench(repository, 'core', '0.1.0');
+        const operation = await AuthoringOperation.prepare(
+            home,
+            {
+                id: 'author_private_key',
+                kind: 'edit',
+                repository,
+                targetSelector: 'core',
+                creator: {
+                    version: '0.1.4',
+                    digest: `sha256:${'b'.repeat(64)}`,
+                    registry_version_id: 'version-id',
+                    cached: false,
+                },
+            },
+            smoke
+        );
+        await writeFile(join(packageDirectory, 'identity.pem'), 'private key bytes');
+
+        await expect(operation.finish()).rejects.toThrow(
+            'Credential-like files are not allowed'
+        );
+        const record = await readFile(
+            join(home, 'authoring', 'author_private_key', 'operation.json'),
+            'utf8'
+        );
+        expect(record).not.toContain('private key bytes');
     });
 
     test('pins resumable sessions to the exact local Workbench package digest', async () => {

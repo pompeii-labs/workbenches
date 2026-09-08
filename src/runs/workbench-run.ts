@@ -165,6 +165,12 @@ export class WorkbenchRun {
                     ? { docker_engine: preflight.dockerEngine }
                     : {}),
             });
+            await events.emit('input.delivered', {
+                id: `input_${events.runId}`,
+                kind: 'send',
+                text: this.options.task,
+                images: [],
+            });
             await events.emit('turn.started', { index: 1 });
 
             return await this.launch(workbench, runner, runtime, events, invocation);

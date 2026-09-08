@@ -60,6 +60,7 @@ export interface ChatScreenProps {
         reference: string;
         session?: StoredSession;
         environment?: Record<string, string | undefined>;
+        authoring?: boolean;
     }) => Promise<RunHandle>;
     session?: StoredSession;
     initialPrompt?: string;
@@ -384,6 +385,7 @@ export function ChatScreen(props: ChatScreenProps) {
             session = await props.start({
                 resolved: props.resolved,
                 reference: props.alias,
+                authoring: Boolean(props.operation),
                 ...(props.session ? { session: props.session } : {}),
                 ...(props.environment ? { environment: props.environment } : {}),
             });

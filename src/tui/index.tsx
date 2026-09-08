@@ -40,7 +40,7 @@ export async function renderWorkbenchTui(
 ): Promise<AuthoringOperationResult[]> {
     const home = workbenchHome();
     const authoring = new WorkbenchAuthoring(home, {
-        environment: options.environment ?? process.env,
+        environment: process.env,
         verification: {
             environment: options.environment ?? process.env,
             ...(options.workspaces ? { workspaces: options.workspaces } : {}),
@@ -94,17 +94,22 @@ export async function renderWorkbenchTui(
                             improveWorkbench={(sessionId, feedback) =>
                                 authoring.create({ from: sessionId, feedback })
                             }
-                            start={(launch) =>
-                                continuation.open({
-                                    ...launch,
+                            start={(launch) => {
+                                const { authoring: creator, ...run } = launch;
+                                return continuation.open({
+                                    ...run,
                                     environment:
-                                        launch.environment ??
+                                        run.environment ??
                                         options.environment ??
                                         process.env,
-                                    workspaces: options.workspaces ?? [],
-                                    allowHostDocker: options.allowHostDocker ?? false,
-                                })
-                            }
+                                    workspaces: creator
+                                        ? []
+                                        : (options.workspaces ?? []),
+                                    allowHostDocker: creator
+                                        ? false
+                                        : (options.allowHostDocker ?? false),
+                                });
+                            }}
                             onAuthoringFinished={(result) => results.push(result)}
                         />
                     </ThemeProvider>

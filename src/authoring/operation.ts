@@ -6,11 +6,13 @@ import { SemanticVersion } from '../releases/index.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import {
+    CredentialFilePolicy,
     type EnvironmentOverrides,
     Workbench,
     WorkbenchEnvironment,
     WorkbenchWorkspaces,
 } from '../workbench/index.js';
+import { AuthoringRepository, type RepositoryFileState } from './repository.js';
 
 export type AuthoringKind = 'create' | 'edit' | 'improve';
 
@@ -52,20 +54,6 @@ interface PackageState {
     files: Array<{ path: string; digest: string }>;
 }
 
-const sensitiveFileNames = new Set([
-    '.env',
-    '.netrc',
-    '.npmrc',
-    '_netrc',
-    'auth.json',
-    'credentials.json',
-    'id_dsa',
-    'id_ecdsa',
-    'id_ed25519',
-    'id_rsa',
-    'oauth.json',
-]);
-
 interface AuthoringOperationRecord {
     version: 1;
     id: string;
@@ -101,18 +89,22 @@ export interface PrepareAuthoringOperationOptions {
 }
 
 export class AuthoringOperation {
+    static readonly #credentials = new CredentialFilePolicy();
     readonly #path: string;
     readonly #smoke: AuthoringSmoke;
     readonly #finishOptions: AuthoringFinishOptions;
+    readonly #repository: AuthoringRepository;
     private constructor(
         readonly home: string,
         private record: AuthoringOperationRecord,
+        private readonly repositoryBefore: RepositoryFileState[],
         smoke?: AuthoringSmoke,
         finishOptions: AuthoringFinishOptions = {}
     ) {
         this.#path = join(home, 'authoring', record.id, 'operation.json');
         this.#smoke = smoke ?? ((workbench, options) => this.smoke(workbench, options));
         this.#finishOptions = finishOptions;
+        this.#repository = new AuthoringRepository();
     }
 
     get id(): string {
@@ -124,6 +116,11 @@ export class AuthoringOperation {
         options: PrepareAuthoringOperationOptions,
         smoke?: AuthoringSmoke
     ): Promise<AuthoringOperation> {
+        const repository = new AuthoringRepository();
+        const [before, repositoryBefore] = await Promise.all([
+            AuthoringOperation.packages(options.repository),
+            repository.snapshot(options.repository),
+        ]);
         const operation = new AuthoringOperation(
             home,
             {
@@ -142,9 +139,10 @@ export class AuthoringOperation {
                     ? { evidence_path: options.evidencePath }
                     : {}),
                 creator: options.creator,
-                before: await AuthoringOperation.packages(options.repository),
+                before,
                 started_at: new Date().toISOString(),
             },
+            repositoryBefore,
             smoke,
             options.verification
         );
@@ -157,8 +155,12 @@ export class AuthoringOperation {
     ): Promise<AuthoringOperationResult> {
         const finishOptions = { ...this.#finishOptions, ...options };
         let after: PackageState[];
+        let repositoryAfter: RepositoryFileState[];
         try {
-            after = await AuthoringOperation.packages(this.record.repository);
+            [after, repositoryAfter] = await Promise.all([
+                AuthoringOperation.packages(this.record.repository),
+                this.#repository.snapshot(this.record.repository),
+            ]);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             await this.write({
@@ -169,7 +171,10 @@ export class AuthoringOperation {
             });
             throw new Error(message);
         }
-        const changedFiles = this.changedFiles(this.record.before, after);
+        const changedFiles = this.#repository.changes(
+            this.repositoryBefore,
+            repositoryAfter
+        );
         const status = changedFiles.length === 0 ? 'unchanged' : 'completed';
         const candidates = this.candidateSelectors(after, changedFiles);
         let error = this.validateCandidate(after, changedFiles, candidates);
@@ -227,35 +232,31 @@ export class AuthoringOperation {
         };
     }
 
-    private changedFiles(before: PackageState[], after: PackageState[]): string[] {
-        const previous = new Map(
-            before.flatMap((entry) =>
-                entry.files.map((file) => [
-                    join('.workbenches', entry.selector, file.path),
-                    file.digest,
-                ])
-            )
-        );
-        const current = new Map(
-            after.flatMap((entry) =>
-                entry.files.map((file) => [
-                    join('.workbenches', entry.selector, file.path),
-                    file.digest,
-                ])
-            )
-        );
-        return [...new Set([...previous.keys(), ...current.keys()])]
-            .filter((path) => previous.get(path) !== current.get(path))
-            .toSorted();
-    }
-
     private validateCandidate(
         after: PackageState[],
         changedFiles: string[],
         selectors: string[]
     ): string | undefined {
+        const allowed = new Set(
+            this.record.target_selector ? [this.record.target_selector] : selectors
+        );
+        const outside = changedFiles.filter((path) => {
+            const [root, selector] = path.split('/');
+            return root !== '.workbenches' || !selector || !allowed.has(selector);
+        });
+        if (outside.length > 0) {
+            const boundary = this.record.target_selector
+                ? `.workbenches/${this.record.target_selector}`
+                : selectors.length === 1
+                  ? `.workbenches/${selectors[0]}`
+                  : 'the created Workbench package';
+            return `Authoring changed files outside the requested ${boundary} package: ${outside.join(', ')}`;
+        }
         const changedSelectors = new Set(
-            changedFiles.map((path) => path.split(/[\\/]/)[1]).filter(Boolean)
+            changedFiles
+                .filter((path) => path.startsWith('.workbenches/'))
+                .map((path) => path.split('/')[1])
+                .filter(Boolean)
         );
         if (this.record.target_selector) {
             const unexpected = [...changedSelectors].filter(
@@ -310,7 +311,10 @@ export class AuthoringOperation {
         if (this.record.target_selector) return [this.record.target_selector];
         const before = new Set(this.record.before.map((entry) => entry.selector));
         const changed = new Set(
-            changedFiles.map((path) => path.split(/[\\/]/)[1]).filter(Boolean)
+            changedFiles
+                .filter((path) => path.startsWith('.workbenches/'))
+                .map((path) => path.split('/')[1])
+                .filter(Boolean)
         );
         return after
             .map((entry) => entry.selector)
@@ -474,7 +478,7 @@ export class AuthoringOperation {
     }
 
     private static sensitive(name: string): boolean {
-        return sensitiveFileNames.has(name) || name.startsWith('.env.');
+        return AuthoringOperation.#credentials.matches(name);
     }
 
     private static async partialIdentity(

@@ -512,6 +512,7 @@ describe.serial('Workbench TUI', () => {
         let finishCalls = 0;
         let closeCalls = 0;
         let environment: Record<string, string | undefined> | undefined;
+        let authoring = false;
         let completed: AuthoringOperationResult | undefined;
         const result: AuthoringOperationResult = {
             id: 'author_tui_finish',
@@ -553,6 +554,7 @@ describe.serial('Workbench TUI', () => {
                         }}
                         start={async (options) => {
                             environment = options.environment;
+                            authoring = options.authoring ?? false;
                             return handle;
                         }}
                         onAuthoringFinished={(value) => {
@@ -572,6 +574,7 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
 
         expect(environment?.PATH).toBe('/exact-authoring-cli');
+        expect(authoring).toBe(true);
         expect(finishCalls).toBe(1);
         expect(closeCalls).toBe(1);
         expect(completed).toEqual(result);

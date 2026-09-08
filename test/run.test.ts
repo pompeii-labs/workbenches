@@ -239,6 +239,18 @@ describe('local run lifecycle', () => {
                 data: expect.objectContaining({ text: 'Pi works' }),
             })
         );
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                type: 'input.delivered',
+                runner: 'pi',
+                data: {
+                    id: expect.stringMatching(/^input_wb_/),
+                    kind: 'send',
+                    text: 'inspect',
+                    images: [],
+                },
+            })
+        );
         expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER_REASONING');
         expect(events.at(-1)).toMatchObject({ type: 'run.completed' });
     });

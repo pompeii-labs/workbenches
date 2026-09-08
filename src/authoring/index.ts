@@ -21,4 +21,5 @@ export {
     type AuthoringSmokeOptions,
     type PrepareAuthoringOperationOptions,
 } from './operation.js';
+export { AuthoringRepository, type RepositoryFileState } from './repository.js';
 export { AuthoringTarget, type ResolvedAuthoringTarget } from './target.js';

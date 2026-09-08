@@ -1,3 +1,4 @@
+export { CredentialFilePolicy } from './credentials.js';
 export {
     type EnvironmentOverrides,
     WorkbenchEnvironment,

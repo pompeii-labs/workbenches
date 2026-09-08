@@ -57,6 +57,20 @@ describe('interactive run worker', () => {
         const events = await new RunStore(home).readEvents(stored.id);
         const started = events.find((event) => event.type === 'turn.started');
         const completed = events.find((event) => event.type === 'turn.completed');
+        const delivered = events.find(
+            (event) =>
+                event.type === 'input.delivered' && field(event.data, 'kind') === 'send'
+        );
+        const accepted = events.find(
+            (event) =>
+                event.type === 'input.accepted' && field(event.data, 'kind') === 'send'
+        );
+        expect(delivered?.data).toMatchObject({
+            id: `input_${stored.id}`,
+            text: 'initial task',
+            images: [],
+        });
+        expect(field(accepted?.data, 'text')).toBeUndefined();
         expect(started?.data).toMatchObject({
             input_id: `input_${stored.id}`,
         });

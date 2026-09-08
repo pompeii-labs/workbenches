@@ -27,8 +27,12 @@ export class AuthoringCli {
     }
 
     private wrapper(): string {
-        const command = this.#command;
-        return `#!${process.execPath}\nconst command = ${JSON.stringify(command)};\nconst result = Bun.spawnSync({\n    cmd: [...command, ...process.argv.slice(2)],\n    cwd: process.cwd(),\n    env: process.env,\n    stdin: 'inherit',\n    stdout: 'inherit',\n    stderr: 'inherit',\n});\nprocess.exit(result.exitCode);\n`;
+        const command = this.#command.map((part) => this.shellQuote(part)).join(' ');
+        return `#!/bin/sh\nexec ${command} "$@"\n`;
+    }
+
+    private shellQuote(value: string): string {
+        return `'${value.replaceAll("'", `'"'"'`)}'`;
     }
 
     private currentCommand(): string[] {

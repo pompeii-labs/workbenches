@@ -1,12 +1,13 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { StoredRun } from '../runs/index.js';
+import type { StoredRun, WorkbenchEvent } from '../runs/index.js';
 import { RunStore } from '../runs/index.js';
 import type { StoredSession } from '../sessions/index.js';
 import { SessionStore } from '../sessions/index.js';
 
 interface StoredTranscriptItem {
+    id?: string;
     kind: 'user' | 'assistant' | 'tool' | 'notice';
     text?: string;
     name?: string;
@@ -46,10 +47,8 @@ export class ImprovementEvidence {
         session: StoredSession;
         feedback: string;
     }): Promise<ImprovementEvidenceResult> {
-        const [transcript, runs] = await Promise.all([
-            this.transcript(options.session.id),
-            this.sessionRuns(options.session.id),
-        ]);
+        const runs = await this.sessionRuns(options.session.id);
+        const transcript = await this.transcript(options.session.id, runs);
         const body = this.document(
             options.session,
             runs,
@@ -68,27 +67,130 @@ export class ImprovementEvidence {
         };
     }
 
-    private async transcript(sessionId: string): Promise<StoredTranscriptFile> {
+    private async transcript(
+        sessionId: string,
+        runs: StoredRun[]
+    ): Promise<StoredTranscriptFile> {
+        const canonical = await this.runTranscript(runs);
         const source = await readFile(
             this.#sessions.transcriptPath(sessionId),
             'utf8'
         ).catch(() => undefined);
-        if (!source) return { version: 1, items: [] };
+        if (!source) return canonical;
         let value: unknown;
         try {
             value = JSON.parse(source);
         } catch {
-            return { version: 1, items: [] };
+            return canonical;
         }
         if (!value || typeof value !== 'object' || Array.isArray(value)) {
-            return { version: 1, items: [] };
+            return canonical;
         }
         const items = Reflect.get(value, 'items');
-        if (!Array.isArray(items)) return { version: 1, items: [] };
-        return {
+        if (!Array.isArray(items)) return canonical;
+        const cached = {
             version: 1,
             items: items.filter(this.isItem),
+        } satisfies StoredTranscriptFile;
+        return canonical.items.some((item) => item.kind === 'user')
+            ? canonical
+            : cached.items.length > 0
+              ? cached
+              : canonical;
+    }
+
+    private async runTranscript(runs: StoredRun[]): Promise<StoredTranscriptFile> {
+        const events = await Promise.all(
+            runs.map((run) => this.#runs.readEvents(run.id).catch(() => []))
+        );
+        return { version: 1, items: events.flatMap((run) => this.project(run)) };
+    }
+
+    private project(events: WorkbenchEvent[]): StoredTranscriptItem[] {
+        const items: StoredTranscriptItem[] = [];
+        for (const event of events) {
+            const data = this.object(event.data);
+            if (event.type === 'input.delivered') {
+                const kind = this.string(data.kind);
+                const text = this.string(data.text);
+                if (!text || !['send', 'steer', 'follow_up'].includes(kind ?? '')) {
+                    continue;
+                }
+                const images = Array.isArray(data.images) ? data.images : [];
+                const names = images.flatMap((image) => {
+                    const name = this.string(this.object(image).name);
+                    return name ? [name] : [];
+                });
+                const id = this.string(data.id);
+                items.push({
+                    ...(id ? { id } : {}),
+                    kind: 'user',
+                    text: `${text}${names.length > 0 ? `\n\nAttached images: ${names.join(', ')}` : ''}`,
+                });
+                continue;
+            }
+            if (event.type === 'output.text') {
+                const text = this.string(data.text);
+                if (!text) continue;
+                const outputId = this.string(data.id);
+                const id = outputId ?? `output-${event.sequence}`;
+                const previous = items.at(-1);
+                if (
+                    previous?.kind === 'assistant' &&
+                    (!outputId || previous.id === outputId)
+                ) {
+                    previous.text = `${previous.text ?? ''}${text}`;
+                } else {
+                    items.push({ id, kind: 'assistant', text });
+                }
+                continue;
+            }
+            if (event.type === 'tool.started' || event.type === 'tool.completed') {
+                this.projectTool(items, event, data);
+                continue;
+            }
+            if (event.type === 'run.failed' || event.type === 'run.cancelled') {
+                const message = this.string(data.message) ?? this.string(data.reason);
+                items.push({
+                    kind: 'notice',
+                    text:
+                        message ??
+                        (event.type === 'run.failed'
+                            ? 'Workbench run failed'
+                            : 'Workbench run was cancelled'),
+                });
+            }
+        }
+        return items;
+    }
+
+    private projectTool(
+        items: StoredTranscriptItem[],
+        event: WorkbenchEvent,
+        data: Record<string, unknown>
+    ): void {
+        const id = this.string(data.id) ?? `tool-${event.sequence}`;
+        const existing = items.findLast(
+            (item) => item.kind === 'tool' && item.id === id
+        );
+        const completed = event.type === 'tool.completed';
+        const title = this.string(data.title) ?? existing?.title;
+        const target = this.string(data.target) ?? existing?.target;
+        const description = this.string(data.description) ?? existing?.description;
+        const error =
+            this.string(data.message) ?? this.string(data.error) ?? existing?.error;
+        const values: StoredTranscriptItem = {
+            id,
+            kind: 'tool',
+            name: this.string(data.name) ?? existing?.name ?? 'tool',
+            ...(title ? { title } : {}),
+            ...(target ? { target } : {}),
+            ...(description ? { description } : {}),
+            ...(error ? { error } : {}),
+            status: completed ? (this.string(data.status) ?? 'completed') : 'running',
         };
+        if (existing) Object.assign(existing, values);
+        else items.push(values);
     }
 
     private async sessionRuns(sessionId: string): Promise<StoredRun[]> {
@@ -197,6 +299,13 @@ export class ImprovementEvidence {
             .replace(
                 /\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD))\s*=\s*([^\s]+)/gu,
                 '$1=[REDACTED]'
+            )
+            .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/gu, '[REDACTED]')
+            .replace(/\bxox[baprs]-[A-Za-z0-9-]{16,}\b/gu, '[REDACTED]')
+            .replace(/\bAKIA[0-9A-Z]{16}\b/gu, '[REDACTED]')
+            .replace(
+                /-----BEGIN [^-\r\n]+ PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]+ PRIVATE KEY-----/gu,
+                '[REDACTED PRIVATE KEY]'
             );
     }
 
@@ -224,5 +333,15 @@ export class ImprovementEvidence {
             const item = Reflect.get(value, field);
             return item === undefined || typeof item === 'string';
         });
+    }
+
+    private object(value: unknown): Record<string, unknown> {
+        return value && typeof value === 'object' && !Array.isArray(value)
+            ? (value as Record<string, unknown>)
+            : {};
+    }
+
+    private string(value: unknown): string | undefined {
+        return typeof value === 'string' && value.length > 0 ? value : undefined;
     }
 }

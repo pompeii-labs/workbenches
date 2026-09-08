@@ -39,6 +39,7 @@ export interface TuiAppProps {
         reference: string;
         session?: StoredSession;
         environment?: Record<string, string | undefined>;
+        authoring?: boolean;
     }) => Promise<RunHandle>;
     onAuthoringFinished?: (result: AuthoringOperationResult) => void;
 }

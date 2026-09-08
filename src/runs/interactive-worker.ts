@@ -295,7 +295,11 @@ export class InteractiveRunWorker {
         });
         void delivery.delivered
             .then(
-                () => session.recordInput('input.delivered', this.eventData(request)),
+                () =>
+                    session.recordInput(
+                        'input.delivered',
+                        this.eventData(request, true)
+                    ),
                 (error) =>
                     session.recordInput('input.rejected', {
                         ...this.eventData(request),
@@ -417,7 +421,7 @@ export class InteractiveRunWorker {
     private async deliverTurn(request: RunControlRequest): Promise<void> {
         const session = this.requireSession();
         if (!request.input) throw new Error('Workbench input is missing');
-        await session.recordInput('input.delivered', this.eventData(request));
+        await session.recordInput('input.delivered', this.eventData(request, true));
         const turn = session.send(request.input, request.id);
         this.activeTurn = turn;
         void turn
@@ -569,8 +573,23 @@ export class InteractiveRunWorker {
         return this.session;
     }
 
-    private eventData(request: RunControlRequest): Record<string, unknown> {
-        return { id: request.id, kind: request.kind };
+    private eventData(
+        request: RunControlRequest,
+        includeInput = false
+    ): Record<string, unknown> {
+        return {
+            id: request.id,
+            kind: request.kind,
+            ...(includeInput && request.input
+                ? {
+                      text: request.input.text,
+                      images: request.input.images.map((image) => ({
+                          mime_type: image.mimeType,
+                          ...(image.name ? { name: image.name } : {}),
+                      })),
+                  }
+                : {}),
+        };
     }
 }
 
