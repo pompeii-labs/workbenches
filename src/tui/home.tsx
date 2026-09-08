@@ -23,6 +23,7 @@ export interface HomeScreenProps {
     resolve: (alias: string) => Promise<ResolvedWorkbenchReference>;
     onOpen: (alias: string, resolved: ResolvedWorkbenchReference) => void;
     onResume: (session: StoredSession) => void | Promise<void>;
+    onCreate?: () => void | Promise<void>;
     onExit: () => void;
 }
 
@@ -159,6 +160,18 @@ export function HomeScreen(props: HomeScreenProps) {
             });
         }
     };
+    const create = async () => {
+        if (!props.onCreate) return;
+        setStatus({ text: 'Opening the Workbench creator...', error: false });
+        try {
+            await props.onCreate();
+        } catch (error) {
+            setStatus({
+                text: error instanceof Error ? error.message : String(error),
+                error: true,
+            });
+        }
+    };
 
     useKeyboard((key) => {
         if (key.ctrl && key.name === 'c') {
@@ -169,6 +182,11 @@ export function HomeScreen(props: HomeScreenProps) {
         if (key.ctrl && key.name === 'r') {
             key.preventDefault();
             void resume(props.recentSessions?.[0]);
+            return;
+        }
+        if (key.ctrl && key.name === 'n' && props.onCreate) {
+            key.preventDefault();
+            void create();
             return;
         }
         if (key.name === 'escape') {
@@ -286,7 +304,9 @@ export function HomeScreen(props: HomeScreenProps) {
                     {status()?.text ?? ''}
                 </text>
                 <text fg={theme.faint}>
-                    ↑↓ navigate · enter open · ctrl+r resume latest · esc quit
+                    {wide()
+                        ? '↑↓ navigate · enter open · ctrl+n create · ctrl+r resume latest · esc quit'
+                        : '↑↓ navigate · enter open · ctrl+n create · esc quit'}
                 </text>
             </box>
         </box>
@@ -397,7 +417,9 @@ function SavedWorkbenchList(props: {
                                     <text fg={props.theme.textMuted} marginTop={1}>
                                         wb add owner/repository#name --as name
                                     </text>
-                                    <text fg={props.theme.textMuted}>wb init name</text>
+                                    <text fg={props.theme.textMuted}>
+                                        wb create name
+                                    </text>
                                 </>
                             }
                         >

@@ -64,7 +64,7 @@ export class PromptHistory {
 
     async #rewrite(): Promise<void> {
         await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
-        const temporary = `${this.#path}.${process.pid}.tmp`;
+        const temporary = `${this.#path}.${process.pid}.${crypto.randomUUID()}.tmp`;
         const source = this.#entries.map((entry) => JSON.stringify(entry)).join('\n');
         await writeFile(temporary, source ? `${source}\n` : '', { mode: 0o600 });
         await rename(temporary, this.#path);

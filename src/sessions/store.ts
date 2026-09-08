@@ -24,6 +24,8 @@ export interface StoredSession {
     runtime: string;
     reference: string;
     workbench_path: string;
+    source_workbench_path?: string;
+    workbench_digest?: string;
     workspace: string;
     workspaces: WorkbenchWorkspaceBinding[];
     registry?: CatalogRegistryReference;
@@ -92,6 +94,11 @@ export class SessionStore {
             runtime.length === 0 ||
             typeof value.reference !== 'string' ||
             typeof value.workbench_path !== 'string' ||
+            (value.source_workbench_path !== undefined &&
+                typeof value.source_workbench_path !== 'string') ||
+            (value.workbench_digest !== undefined &&
+                (typeof value.workbench_digest !== 'string' ||
+                    !/^sha256:[0-9a-f]{64}$/.test(value.workbench_digest))) ||
             typeof value.workspace !== 'string' ||
             !Array.isArray(value.workspaces) ||
             (value.native_session_id !== undefined &&

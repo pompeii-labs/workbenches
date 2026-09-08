@@ -47,6 +47,7 @@ class JsonEventRenderer implements EventRenderer {
 
 class FinalEventRenderer implements EventRenderer {
     private answer = '';
+    private answerId = '';
     private error = '';
 
     constructor(
@@ -55,7 +56,14 @@ class FinalEventRenderer implements EventRenderer {
     ) {}
 
     render(event: WorkbenchEvent): void {
-        if (event.type === 'output.text') this.answer += text(event.data, 'text');
+        if (event.type === 'output.text') {
+            const id = text(event.data, 'id');
+            if (id && id !== this.answerId) {
+                this.answer = '';
+                this.answerId = id;
+            }
+            this.answer += text(event.data, 'text');
+        }
         if (event.type === 'run.failed') this.error = text(event.data, 'message');
     }
 

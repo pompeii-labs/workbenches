@@ -77,6 +77,18 @@ export class WorkbenchSource {
         sourceDirectory: string,
         selector?: string
     ): Promise<ResolvedWorkbench> {
+        if (
+            selector &&
+            selector !== '.' &&
+            selector !== '..' &&
+            !selector.includes('/') &&
+            !selector.includes('\\')
+        ) {
+            const packageDirectory = join(sourceDirectory, '.workbenches', selector);
+            if ((await stat(packageDirectory).catch(() => null))?.isDirectory()) {
+                return Workbench.load(packageDirectory);
+            }
+        }
         const workbenches = await this.discover(sourceDirectory);
         if (workbenches.length === 0) {
             throw new Error(`No Workbenches found in ${sourceDirectory}`);

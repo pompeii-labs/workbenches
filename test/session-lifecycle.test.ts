@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,7 +23,7 @@ describe('Workbench session lifecycle', () => {
 
         for (const mode of ['foreground', 'detached'] as const) {
             const run = await dispatcher.prepare({
-                resolved: fixtureReference(),
+                resolved: await fixtureReference(home),
                 mode,
                 task: 'inspect',
             });
@@ -40,7 +40,7 @@ describe('Workbench session lifecycle', () => {
         const dispatcher = new RunDispatcher(home);
         const sessions = new SessionStore(home);
         const lifecycle = new SessionLifecycle(home);
-        const resolved = fixtureReference();
+        const resolved = await fixtureReference(home);
         const first = await dispatcher.prepare({ resolved, mode: 'interactive' });
         const resumable = await sessions.update(first.id, {
             native_session_id: 'native-session',
@@ -67,11 +67,11 @@ describe('Workbench session lifecycle', () => {
         const home = await temporaryHome();
         const dispatcher = new RunDispatcher(home);
         const first = await dispatcher.prepare({
-            resolved: fixtureReference(),
+            resolved: await fixtureReference(home),
             mode: 'interactive',
         });
         const session = await new SessionStore(home).read(first.id);
-        const changed = fixtureReference();
+        const changed = await fixtureReference(home);
         changed.workbench.manifest.runtime = 'docker';
 
         await expect(
@@ -89,7 +89,7 @@ describe('Workbench session lifecycle', () => {
         const runs = new RunStore(home);
         const sessions = new SessionStore(home);
         const lifecycle = new SessionLifecycle(home);
-        const resolved = fixtureReference();
+        const resolved = await fixtureReference(home);
 
         const completed = await dispatcher.prepare({
             resolved,
@@ -150,15 +150,39 @@ async function temporaryHome(): Promise<string> {
     return home;
 }
 
-function fixtureReference(): ResolvedWorkbenchReference {
+async function fixtureReference(home: string): Promise<ResolvedWorkbenchReference> {
+    const repository = join(home, 'repository');
+    const packageDirectory = join(repository, '.workbenches', 'core');
+    await mkdir(packageDirectory, { recursive: true });
+    await Promise.all([
+        writeFile(
+            join(packageDirectory, 'workbench.yml'),
+            [
+                'spec: 0',
+                'version: 0.1.0',
+                'name: fixture-core',
+                'runner: opencode',
+                'model:',
+                '  id: openai/gpt-5.6-terra',
+                'instructions: ./instructions.md',
+                'runtime: local',
+                'skills: []',
+                'tools: []',
+                'mcps: []',
+                'env: {}',
+                '',
+            ].join('\n')
+        ),
+        writeFile(join(packageDirectory, 'instructions.md'), '# Fixture\n'),
+    ]);
     return {
         workspaceDirectory: '/workspace',
         cleanup: async () => {},
         workbench: {
-            repositoryDirectory: '/repo',
-            packageDirectory: '/repo/.workbenches/core',
-            manifestPath: '/repo/.workbenches/core/workbench.yml',
-            instructionsPath: '/repo/.workbenches/core/instructions.md',
+            repositoryDirectory: repository,
+            packageDirectory,
+            manifestPath: join(packageDirectory, 'workbench.yml'),
+            instructionsPath: join(packageDirectory, 'instructions.md'),
             manifest: {
                 spec: 0,
                 name: 'fixture-core',

@@ -9,6 +9,8 @@ describe('OpenCode event adapter', () => {
             type: 'text',
             sessionID: 'ses_123',
             part: {
+                id: 'part_123',
+                messageID: 'message_123',
                 type: 'text',
                 text: 'Hello',
                 metadata: { openrouter: { reasoning_details: ['SECRET_BLOB'] } },
@@ -29,7 +31,12 @@ describe('OpenCode event adapter', () => {
             },
         });
 
-        expect(text.events).toEqual([{ type: 'output.text', data: { text: 'Hello' } }]);
+        expect(text.events).toEqual([
+            {
+                type: 'output.text',
+                data: { id: 'message_123', text: 'Hello' },
+            },
+        ]);
         expect(finish.events).toEqual([
             {
                 type: 'usage.updated',

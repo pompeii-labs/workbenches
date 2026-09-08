@@ -23,3 +23,13 @@ export function ActivityIndicator(props: { label: string }) {
         </box>
     );
 }
+
+export function usageLabel(
+    tokens: number | undefined,
+    cost: number | undefined
+): string {
+    const details: string[] = [];
+    if (tokens !== undefined) details.push(`${tokens.toLocaleString()} tokens`);
+    if (cost !== undefined) details.push(`$${cost.toFixed(4)}`);
+    return details.length ? `${details.join(' · ')} · ` : '';
+}

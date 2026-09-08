@@ -1,4 +1,9 @@
 export {
+    type AuthoringLaunch,
+    WorkbenchAuthoring,
+    type WorkbenchAuthoringOptions,
+} from './authoring/index.js';
+export {
     type CatalogEntry,
     type CatalogRegistryReference,
     type CatalogUpgrade,

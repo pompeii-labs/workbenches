@@ -74,6 +74,15 @@ describe('sources and saved catalog', () => {
         ).rejects.toThrow('Workbench selector required. Available: alpha, zeta');
     });
 
+    test('selects a package without loading invalid sibling drafts', async () => {
+        const fixture = await createRepository(['core']);
+        await mkdir(join(fixture.root, '.workbenches', 'broken'));
+
+        const selected = await new WorkbenchSource().select(fixture.root, 'core');
+
+        expect(selected.manifest.name).toBe('core');
+    });
+
     test('distinguishes missing local paths from GitHub slugs without materializing', async () => {
         const source = new WorkbenchSource();
         expect(await source.local('lux-db/lux')).toBeUndefined();

@@ -131,21 +131,55 @@ checksum, installs `workbench` to `~/.local/bin` by default, and creates the `wb
 alias. It never invokes `sudo` or edits shell startup files. Use `--version` to
 install a specific release and `--bin-dir` to choose another destination.
 
-### Create a Workbench
+### Author a Workbench
 
-Run `init` from a repository root to create `.workbenches/<name>`:
+Run the official creator from a repository root for a native, interactive
+authoring session:
+
+```sh
+wb create migrations
+```
+
+The creator inspects the target repository and authors the complete package in
+`.workbenches/`. It receives the exact `wb` CLI build that opened the authoring
+session instead of another globally installed version. If `migrations` already
+exists in the current repository, the same command opens it for editing instead.
+The engine resolves and verifies the official creator through the Workbench
+registry and keeps its cache separate from the user's saved Workbenches.
+
+Finish an idle authoring session with `/quit` or `Ctrl+C`. The engine validates
+the candidate, checks its version and package scope, and runs `wb smoke` before
+closing the creator. A failed check leaves the creator open with the concrete
+error so it can repair the package. An active creator turn must be cancelled or
+allowed to finish before authoring can be completed.
+
+Candidates that declare environment values, named workspaces, or host Docker
+access can be verified with the same `--env-file`, repeatable `--env`, repeatable
+`--workspace`, and `--allow-host-docker` options accepted by `smoke` and `run`.
+Their values are used only for the final smoke and are never written to the
+authoring record or improvement evidence.
+
+Edit a local source package through the same authoring environment:
+
+```sh
+wb create .#migrations
+```
+
+`create` never mutates an immutable saved snapshot. Pass a local repository path
+or selector so the creator changes the source package directly.
+
+For deterministic scaffolding without a model run, use `init`:
 
 ```sh
 wb init core
 wb init migrations --runner opencode --model openai/gpt-5.6-terra
 ```
 
-This repository also publishes a `creator` Workbench containing the current
-schema and maintainer-authored package guidance. Save it once, then use it to
-design, author, review, or repair Workbenches in another repository:
+The creator remains a normal published Workbench and can also be run directly
+for automation or integration with another agent:
 
 ```sh
-wb add pompeii-labs/workbenches#creator --as workbench-creator
+wb add pompeii-labs/creator --as workbench-creator
 wb run workbench-creator \
   --dir /path/to/repository \
   --task "Inspect this repository and create a focused migrations Workbench"
@@ -497,6 +531,25 @@ exit.
 Commands are handled by Workbench and are never sent to the runner as prompts.
 `/theme` includes the Workbench default, Flexoki, GitHub, and Catppuccin themes.
 The adapted themes are attributed in `NOTICE`.
+
+Use `/improve [feedback]` from an idle local Workbench session to open the
+official creator with bounded, normalized evidence from that session. Feedback
+is optional. With plain `/improve`, the creator diagnoses improvements from the
+conversation, tool activity, and run outcome, and you can steer it normally in
+the creator session. The creator edits the source package, not the immutable
+package already loaded by the active run. Run evidence is treated as untrusted
+data, and the authoring record captures the creator version and digest, source
+session, package digests, and changed files. The same flow is available outside
+the terminal client:
+
+```sh
+wb create --from wb_... \
+  --feedback "The migration path missed our rollback convention"
+```
+
+Changes apply only to future runs. New sessions remain pinned to the exact
+package content they started with and will refuse to resume if that source was
+modified in place.
 
 Session-capable runs use one background session worker whether they begin in the
 terminal client, foreground CLI output, or detached mode. Normalized
