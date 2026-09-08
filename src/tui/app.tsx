@@ -1,11 +1,14 @@
 import { useRenderer } from '@opentui/solid';
 import { createMemo, createSignal, Match, Show, Switch } from 'solid-js';
-
+import type {
+    AuthoringOperation,
+    AuthoringOperationResult,
+} from '../authoring/index.js';
 import type { CatalogEntry } from '../catalog/index.js';
 import type { RunHandle } from '../runs/index.js';
 import type { ResolvedSession, StoredSession } from '../sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
-import { ChatScreen } from './chat.js';
+import { ChatScreen, type PreparedWorkbenchChat } from './chat.js';
 import { DialogProvider } from './dialog/index.js';
 import { HomeScreen } from './home.js';
 import { useTheme } from './theme/index.js';
@@ -20,14 +23,25 @@ export interface TuiAppProps {
         alias: string;
         resolved: ResolvedWorkbenchReference;
         session?: StoredSession;
+        prompt?: string;
+        operation?: AuthoringOperation;
+        environment?: Record<string, string | undefined>;
     };
     resolve: (alias: string) => Promise<ResolvedWorkbenchReference>;
     resolveSession?: (id: string) => Promise<ResolvedSession>;
+    createWorkbench?: () => Promise<PreparedWorkbenchChat>;
+    improveWorkbench?: (
+        sessionId: string,
+        feedback: string
+    ) => Promise<PreparedWorkbenchChat>;
     start: (options: {
         resolved: ResolvedWorkbenchReference;
         reference: string;
         session?: StoredSession;
+        environment?: Record<string, string | undefined>;
+        authoring?: boolean;
     }) => Promise<RunHandle>;
+    onAuthoringFinished?: (result: AuthoringOperationResult) => void;
 }
 
 interface ChatScreenState {
@@ -35,11 +49,15 @@ interface ChatScreenState {
     alias: string;
     resolved: ResolvedWorkbenchReference;
     session?: StoredSession;
+    prompt?: string;
+    operation?: AuthoringOperation;
+    environment?: Record<string, string | undefined>;
 }
 
 export function WorkbenchApp(props: TuiAppProps) {
     const renderer = useRenderer();
     const { theme } = useTheme();
+    const createWorkbench = props.createWorkbench;
     const [screen, setScreen] = createSignal<{ kind: 'home' } | ChatScreenState>(
         props.initial
             ? {
@@ -47,6 +65,13 @@ export function WorkbenchApp(props: TuiAppProps) {
                   alias: props.initial.alias,
                   resolved: props.initial.resolved,
                   ...(props.initial.session ? { session: props.initial.session } : {}),
+                  ...(props.initial.prompt ? { prompt: props.initial.prompt } : {}),
+                  ...(props.initial.operation
+                      ? { operation: props.initial.operation }
+                      : {}),
+                  ...(props.initial.environment
+                      ? { environment: props.initial.environment }
+                      : {}),
               }
             : { kind: 'home' }
     );
@@ -58,6 +83,16 @@ export function WorkbenchApp(props: TuiAppProps) {
     });
     const openSession = (target: ResolvedSession) => {
         setScreen({ kind: 'chat', ...target });
+    };
+    const openAuthoring = (target: PreparedWorkbenchChat) => {
+        setScreen({
+            kind: 'chat',
+            alias: target.alias,
+            resolved: target.resolved,
+            prompt: target.prompt,
+            ...(target.operation ? { operation: target.operation } : {}),
+            ...(target.environment ? { environment: target.environment } : {}),
+        });
     };
     const resume = async (session: StoredSession) => {
         if (!props.resolveSession) {
@@ -84,6 +119,12 @@ export function WorkbenchApp(props: TuiAppProps) {
                                 : {})}
                             resolve={props.resolve}
                             onResume={resume}
+                            {...(createWorkbench
+                                ? {
+                                      onCreate: async () =>
+                                          openAuthoring(await createWorkbench()),
+                                  }
+                                : {})}
                             onOpen={(alias, resolved) =>
                                 setScreen({ kind: 'chat', alias, resolved })
                             }
@@ -100,13 +141,35 @@ export function WorkbenchApp(props: TuiAppProps) {
                                     {...(current.session
                                         ? { session: current.session }
                                         : {})}
+                                    {...(current.prompt
+                                        ? { initialPrompt: current.prompt }
+                                        : {})}
+                                    {...(current.operation
+                                        ? { operation: current.operation }
+                                        : {})}
+                                    {...(current.environment
+                                        ? { environment: current.environment }
+                                        : {})}
                                     start={props.start}
                                     {...(props.resolveSession
                                         ? { resolveSession: props.resolveSession }
                                         : {})}
                                     onResume={openSession}
+                                    {...(props.improveWorkbench
+                                        ? {
+                                              prepareImprovement:
+                                                  props.improveWorkbench,
+                                              onAuthoring: openAuthoring,
+                                          }
+                                        : {})}
                                     onBack={() => setScreen({ kind: 'home' })}
                                     onExit={exit}
+                                    {...(props.onAuthoringFinished
+                                        ? {
+                                              onAuthoringFinished:
+                                                  props.onAuthoringFinished,
+                                          }
+                                        : {})}
                                     homeAvailable={!props.initial}
                                 />
                             )}

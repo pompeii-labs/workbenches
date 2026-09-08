@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { InputRenderable, Renderable, TextareaRenderable } from '@opentui/core';
 import { testRender } from '@opentui/solid';
-
+import type {
+    AuthoringOperation,
+    AuthoringOperationResult,
+} from '../src/authoring/index.js';
 import type { CatalogEntry } from '../src/catalog/index.js';
 import type { RunnerInput } from '../src/runners/session.js';
 import type {
@@ -16,9 +19,9 @@ import type {
 } from '../src/runs/index.js';
 import { SessionStore, type StoredSession } from '../src/sessions/index.js';
 import { Transcript, WorkbenchApp } from '../src/tui/app.js';
-import { TurnCancellation } from '../src/tui/chat.js';
 import { holdRendererUntilShutdown } from '../src/tui/lifecycle.js';
 import { QuestionPrompt } from '../src/tui/question.js';
+import { TurnCancellation } from '../src/tui/session.js';
 import { SessionTranscript } from '../src/tui/session-transcript.js';
 import { ThemeController, ThemeProvider } from '../src/tui/theme/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
@@ -139,6 +142,76 @@ describe.serial('Workbench TUI', () => {
         expect(frame).toContain('local runtime');
         expect(frame).toContain('1 OF 2 · ↓ MORE');
         expect(frame).not.toContain('PACKAGE');
+    });
+
+    test('opens native Workbench creation from the home screen', async () => {
+        let created = 0;
+        const prompts: RunnerInput[] = [];
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        resolve={async (alias) => homeWorkbench(alias)}
+                        createWorkbench={async () => {
+                            created += 1;
+                            return {
+                                alias: 'creator',
+                                resolved: resolvedWorkbench(
+                                    'workbench-creator',
+                                    'opencode'
+                                ),
+                                prompt: 'Create a focused Workbench.',
+                            };
+                        }}
+                        start={async () => fakeHandle((input) => prompts.push(input))}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28 }
+        );
+        renderers.push(setup.renderer);
+
+        setup.mockInput.pressKey('n', { ctrl: true });
+        await Bun.sleep(10);
+        await setup.flush();
+
+        expect(created).toBe(1);
+        expect(setup.captureCharFrame()).toContain('creator · workbench-creator');
+        expect(prompts).toEqual(['Create a focused Workbench.']);
+    });
+
+    test('keeps create shortcut letters available to home search', async () => {
+        let created = 0;
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[entry('lux-core'), entry('lux-migrations')]}
+                        resolve={async (alias) => homeWorkbench(alias)}
+                        createWorkbench={async () => {
+                            created += 1;
+                            throw new Error('creation should not start');
+                        }}
+                        start={async () => fakeHandle(() => {})}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28 }
+        );
+        renderers.push(setup.renderer);
+
+        await setup.mockInput.typeText('core');
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const frame = setup.captureCharFrame();
+        expect(created).toBe(0);
+        expect(frame).toContain('core');
+        expect(frame).toContain('lux-core');
+        expect(frame).not.toContain('lux-migrations');
     });
 
     test('filters saved Workbenches and opens the selected result', async () => {
@@ -372,6 +445,251 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
         expect(setup.captureCharFrame()).not.toContain('Themes');
         expect(findPrompt(setup.renderer.root).isDestroyed).toBeFalse();
+    });
+
+    test('opens the creator from improve and submits the prepared evidence task', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-tui-improve-'));
+        temporaryDirectories.push(home);
+        const sent: Array<{ workbench: string; input: RunnerInput }> = [];
+        let improvedSession = '';
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home={home}
+                        entries={[]}
+                        initial={{
+                            alias: 'lux-ops',
+                            resolved: resolvedWorkbench('lux-ops', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        improveWorkbench={async (sessionId, feedback) => {
+                            improvedSession = sessionId;
+                            expect(feedback).toBe('teach the safe migration path');
+                            return {
+                                alias: 'creator',
+                                resolved: resolvedWorkbench(
+                                    'workbench-creator',
+                                    'opencode'
+                                ),
+                                prompt: 'Read the prepared evidence and improve lux-ops.',
+                            };
+                        }}
+                        start={async ({ resolved }) => {
+                            const workbench = resolved.workbench.manifest.name;
+                            return fakeHandle((input) =>
+                                sent.push({ workbench, input })
+                            );
+                        }}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const original = findPrompt(setup.renderer.root);
+        original.setText('/improve teach the safe migration path');
+        original.submit();
+        await Bun.sleep(30);
+        await setup.flush();
+
+        expect(improvedSession).toStartWith('wb_tuitest');
+        expect(setup.captureCharFrame()).toContain('creator · workbench-creator');
+        expect(sent).toEqual([
+            {
+                workbench: 'workbench-creator',
+                input: 'Read the prepared evidence and improve lux-ops.',
+            },
+        ]);
+    });
+
+    test('verifies authoring before closing its creator session', async () => {
+        let finishCalls = 0;
+        let closeCalls = 0;
+        let environment: Record<string, string | undefined> | undefined;
+        let authoring = false;
+        let completed: AuthoringOperationResult | undefined;
+        const result: AuthoringOperationResult = {
+            id: 'author_tui_finish',
+            kind: 'improve',
+            status: 'completed',
+            packages: ['lux-ops'],
+            changedFiles: ['.workbenches/lux-ops/instructions.md'],
+        };
+        const operation = {
+            id: result.id,
+            finish: async () => {
+                finishCalls += 1;
+                return result;
+            },
+            fail: async () => result,
+        } as unknown as AuthoringOperation;
+        const handle = fakeHandle(() => {});
+        handle.close = async () => {
+            closeCalls += 1;
+            return receipt('close', 'closed');
+        };
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench(
+                                'workbench-creator',
+                                'opencode'
+                            ),
+                            operation,
+                            environment: { PATH: '/exact-authoring-cli' },
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async (options) => {
+                            environment = options.environment;
+                            authoring = options.authoring ?? false;
+                            return handle;
+                        }}
+                        onAuthoringFinished={(value) => {
+                            completed = value;
+                        }}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28, exitOnCtrlC: false }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        setup.mockInput.pressCtrlC();
+        await Bun.sleep(10);
+        await setup.flush();
+
+        expect(environment?.PATH).toBe('/exact-authoring-cli');
+        expect(authoring).toBe(true);
+        expect(finishCalls).toBe(1);
+        expect(closeCalls).toBe(1);
+        expect(completed).toEqual(result);
+    });
+
+    test('does not finalize authoring while the creator turn is active', async () => {
+        let finishCalls = 0;
+        let closeCalls = 0;
+        const operation = {
+            id: 'author_tui_busy',
+            finish: async () => {
+                finishCalls += 1;
+                throw new Error('should not finish');
+            },
+            fail: async () => {
+                throw new Error('should not fail');
+            },
+        } as unknown as AuthoringOperation;
+        const handle = fakeHandle(() => {}, event(1, 'turn.started', { index: 1 }));
+        handle.close = async () => {
+            closeCalls += 1;
+            return receipt('close', 'closed');
+        };
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench(
+                                'workbench-creator',
+                                'opencode'
+                            ),
+                            operation,
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => handle}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28, exitOnCtrlC: false }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('/quit');
+        prompt.submit();
+        await Bun.sleep(10);
+        await setup.flush();
+
+        expect(finishCalls).toBe(0);
+        expect(closeCalls).toBe(0);
+        expect(setup.captureCharFrame()).toContain(
+            'Finish or cancel the active creator turn before completing authoring.'
+        );
+    });
+
+    test('keeps the creator open when engine verification fails', async () => {
+        let closeCalls = 0;
+        const operation = {
+            id: 'author_tui_invalid',
+            finish: async () => {
+                throw new Error('Workbench core failed smoke: missing tool lux');
+            },
+            fail: async () => {
+                throw new Error('should not fail');
+            },
+        } as unknown as AuthoringOperation;
+        const handle = fakeHandle(() => {});
+        handle.close = async () => {
+            closeCalls += 1;
+            return receipt('close', 'closed');
+        };
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench(
+                                'workbench-creator',
+                                'opencode'
+                            ),
+                            operation,
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => handle}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28, exitOnCtrlC: false }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        setup.mockInput.pressCtrlC();
+        await Bun.sleep(10);
+        await setup.flush();
+
+        expect(closeCalls).toBe(0);
+        expect(setup.renderer.isDestroyed).toBeFalse();
+        expect(setup.captureCharFrame()).toContain(
+            'Workbench core failed smoke: missing tool lux'
+        );
     });
 
     test('keeps slash command names and titles on one readable row', async () => {

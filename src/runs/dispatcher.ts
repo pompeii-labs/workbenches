@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
 
+import { WorkbenchPackage } from '../catalog/index.js';
 import { modelLabel } from '../models/index.js';
 import { RunnerRegistry } from '../runners/index.js';
 import { SessionStore, type StoredSession } from '../sessions/index.js';
@@ -40,7 +41,10 @@ export class RunDispatcher {
         const reference =
             options.session?.reference ?? options.reference ?? workbench.manifest.name;
         const workspaces = options.session?.workspaces ?? options.workspaces ?? [];
-        if (options.session) this.assertCompatible(options, options.session);
+        const digest = WorkbenchPackage.digest(
+            await new WorkbenchPackage(workbench).files()
+        );
+        if (options.session) this.assertCompatible(options, options.session, digest);
         const session =
             options.session ??
             (await this.sessions.create({
@@ -52,6 +56,10 @@ export class RunDispatcher {
                 runtime: workbench.manifest.runtime,
                 reference,
                 workbench_path: workbench.packageDirectory,
+                ...(options.resolved.source === 'local'
+                    ? { source_workbench_path: workbench.packageDirectory }
+                    : {}),
+                workbench_digest: digest,
                 workspace: options.resolved.workspaceDirectory,
                 workspaces,
                 ...(options.resolved.registry
@@ -112,7 +120,11 @@ export class RunDispatcher {
         return resume.status === 'unsupported' ? 'one_shot' : 'session';
     }
 
-    private assertCompatible(options: PrepareRunOptions, session: StoredSession): void {
+    private assertCompatible(
+        options: PrepareRunOptions,
+        session: StoredSession,
+        digest: string
+    ): void {
         const workbench = options.resolved.workbench;
         const compatible =
             session.workbench === workbench.manifest.name &&
@@ -121,6 +133,7 @@ export class RunDispatcher {
             session.model === modelLabel(workbench.manifest.model) &&
             session.runtime === workbench.manifest.runtime &&
             session.workbench_path === workbench.packageDirectory &&
+            (!session.workbench_digest || session.workbench_digest === digest) &&
             session.workspace === options.resolved.workspaceDirectory;
         if (!compatible) {
             throw new Error(

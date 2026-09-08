@@ -116,8 +116,18 @@ describe('CLI integration', () => {
             'Discover, save, verify, and run open Workbenches'
         );
         expect(result.stdout).toContain('run');
+        expect(result.stdout).toContain('create');
+        expect(result.stdout).not.toContain('\n  edit ');
+        expect(result.stdout).not.toContain('\n  improve ');
         expect(result.stdout).toContain('update');
         expect(result.stdout).toContain('upgrade');
+
+        const create = await executeCli(['create', '--help']);
+        expect(create.code).toBe(0);
+        expect(create.stdout).toContain('--env-file=<path>');
+        expect(create.stdout).toContain('--env=<NAME=value>');
+        expect(create.stdout).toContain('--workspace=<NAME=path>');
+        expect(create.stdout).toContain('--allow-host-docker');
     });
 
     test('reports argument errors without dumping command help', async () => {
@@ -517,6 +527,14 @@ describe('CLI integration', () => {
         expect(bare.stderr).toContain(
             'The Workbench TUI requires an interactive terminal'
         );
+
+        const home = await temporaryDirectory('workbench-create-non-tty-');
+        const create = await executeCli(['create', 'core'], { WORKBENCH_HOME: home });
+        expect(create.code).toBe(1);
+        expect(create.stderr).toContain(
+            'The Workbench TUI requires an interactive terminal'
+        );
+        expect(await stat(join(home, 'authoring')).catch(() => null)).toBeNull();
     });
 
     test('detaches, prints a session ID, and attaches to its latest run', async () => {
@@ -1265,6 +1283,15 @@ describe('CLI integration', () => {
             repository
         );
         expect(customValidated.code).toBe(0);
+
+        await mkdir(join(repository, '.workbenches/broken'));
+        const selectedValidation = await executeCli(
+            ['validate', `${repository}#core`],
+            {},
+            repository
+        );
+        expect(selectedValidation.code).toBe(0);
+        expect(selectedValidation.stdout).toContain('valid\tcore');
 
         const unknown = await executeCli(
             ['init', 'unknown', '--model', 'example/custom-model'],

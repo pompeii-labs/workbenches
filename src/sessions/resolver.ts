@@ -40,6 +40,7 @@ export class SessionResolver {
                 workbench,
                 workspaceDirectory: session.workspace,
                 cleanup: async () => {},
+                source: session.source_workbench_path ? 'local' : 'saved',
                 ...(session.registry ? { registry: session.registry } : {}),
             },
         };

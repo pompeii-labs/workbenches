@@ -46,6 +46,27 @@ describe('Workbench event renderers', () => {
         expect(stderr).toBe('');
     });
 
+    test('prints only the last assistant message in final mode', () => {
+        let stdout = '';
+        const renderer = createEventRenderer({
+            mode: 'final',
+            stdout: (value) => {
+                stdout += value;
+            },
+        });
+        renderer.render(
+            event(1, 'output.text', { id: 'progress', text: 'I will inspect it.' })
+        );
+        renderer.render(event(2, 'tool.started', { id: 'read', name: 'read' }));
+        renderer.render(
+            event(3, 'output.text', { id: 'final', text: 'The issue is ' })
+        );
+        renderer.render(event(4, 'output.text', { id: 'final', text: 'resolved.' }));
+        renderer.finish();
+
+        expect(stdout).toBe('The issue is resolved.\n');
+    });
+
     test('renders a compact human activity stream and aggregates usage deltas', () => {
         let stdout = '';
         let stderr = '';

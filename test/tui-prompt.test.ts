@@ -20,6 +20,26 @@ afterEach(async () => {
 });
 
 describe('TUI prompt history', () => {
+    test('compacts concurrently without sharing an atomic-write path', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-history-'));
+        homes.push(home);
+        const path = join(home, 'prompt-history.jsonl');
+        await writeFile(
+            path,
+            `${JSON.stringify({ text: 'first' })}\n${JSON.stringify({ text: 'second' })}\n`
+        );
+
+        await Promise.all([
+            new PromptHistory(home).load(),
+            new PromptHistory(home).load(),
+        ]);
+
+        expect(parsePromptHistory(await readFile(path, 'utf8'))).toEqual([
+            { text: 'first' },
+            { text: 'second' },
+        ]);
+    });
+
     test('recovers valid entries and limits retained history', () => {
         const source = [
             'not json',

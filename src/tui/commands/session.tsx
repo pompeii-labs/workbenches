@@ -15,6 +15,7 @@ export interface SessionCommandActions {
     clearTranscript(): void;
     attachments(): Array<{ name: string; path: string }>;
     clearAttachments(): void;
+    improve(feedback: string): void | Promise<void>;
     cancelTurn(): void | Promise<void>;
     exit(): void | Promise<void>;
     showError(message: string): void;
@@ -39,6 +40,7 @@ export class SessionCommands {
             dialog: DialogContextValue;
             themes: SessionThemeActions;
             actions: SessionCommandActions;
+            authoring?: boolean;
         }
     ) {
         this.registry = new TuiCommandRegistry(this.#definitions());
@@ -169,6 +171,15 @@ export class SessionCommands {
                 () => this.#showSessions()
             ),
             this.#command(
+                'improve',
+                'Improve Workbench',
+                'Open the official creator with evidence from this session',
+                'Workbench',
+                (argument) => this.options.actions.improve(argument),
+                undefined,
+                '[feedback]'
+            ),
+            this.#command(
                 'theme',
                 'Choose theme',
                 'Change the terminal color theme',
@@ -191,8 +202,10 @@ export class SessionCommands {
             ),
             this.#command(
                 'quit',
-                'Quit',
-                'Detach this terminal and exit',
+                this.options.authoring ? 'Finish authoring' : 'Quit',
+                this.options.authoring
+                    ? 'Validate the candidate, close the creator, and exit'
+                    : 'Detach this terminal and exit',
                 'Session',
                 () => this.options.actions.exit(),
                 ['exit']

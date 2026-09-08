@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkbenchEvent } from '../src/runs/index.js';
@@ -246,7 +246,7 @@ describe('durable Workbench runs', () => {
     test('stores the Workbench reference without derived routes or credentials', async () => {
         const home = await temporaryHome();
         const store = new RunStore(home);
-        const resolved = fixtureReference('pi');
+        const resolved = await fixtureReference(home, 'pi');
         const run = await new RunDispatcher(home).prepare({
             resolved,
             task: 'inspect',
@@ -269,7 +269,7 @@ describe('durable Workbench runs', () => {
         const dispatcher = new RunDispatcher(home);
         const runs = new RunStore(home);
         const sessions = new SessionStore(home);
-        const resolved = fixtureReference('opencode');
+        const resolved = await fixtureReference(home, 'opencode');
         const first = await dispatcher.prepare({
             resolved,
             mode: 'interactive',
@@ -318,7 +318,7 @@ describe('durable Workbench runs', () => {
     test('rejects resuming a session with a different locked Workbench', async () => {
         const home = await temporaryHome();
         const dispatcher = new RunDispatcher(home);
-        const resolved = fixtureReference('opencode');
+        const resolved = await fixtureReference(home, 'opencode');
         const first = await dispatcher.prepare({
             resolved,
             mode: 'interactive',
@@ -326,7 +326,7 @@ describe('durable Workbench runs', () => {
         const session = await new SessionStore(home).update(first.id, {
             native_session_id: 'ses_native_1',
         });
-        const changed = fixtureReference('pi');
+        const changed = await fixtureReference(home, 'pi');
 
         await expect(
             dispatcher.prepare({
@@ -382,15 +382,42 @@ function event(
     };
 }
 
-function fixtureReference(runner: string): ResolvedWorkbenchReference {
+async function fixtureReference(
+    home: string,
+    runner: string
+): Promise<ResolvedWorkbenchReference> {
+    const repository = join(home, 'repository');
+    const packageDirectory = join(repository, '.workbenches', 'core');
+    await mkdir(packageDirectory, { recursive: true });
+    await Promise.all([
+        writeFile(
+            join(packageDirectory, 'workbench.yml'),
+            [
+                'spec: 0',
+                'version: 0.1.0',
+                'name: fixture-core',
+                `runner: ${runner}`,
+                'model:',
+                '  id: manifest/model',
+                'instructions: ./instructions.md',
+                'runtime: local',
+                'skills: []',
+                'tools: []',
+                'mcps: []',
+                'env: {}',
+                '',
+            ].join('\n')
+        ),
+        writeFile(join(packageDirectory, 'instructions.md'), '# Fixture\n'),
+    ]);
     return {
         workspaceDirectory: '/workspace',
         cleanup: async () => {},
         workbench: {
-            manifestPath: '/repo/.workbenches/core/workbench.yml',
-            packageDirectory: '/repo/.workbenches/core',
-            repositoryDirectory: '/repo',
-            instructionsPath: '/repo/.workbenches/core/instructions.md',
+            manifestPath: join(packageDirectory, 'workbench.yml'),
+            packageDirectory,
+            repositoryDirectory: repository,
+            instructionsPath: join(packageDirectory, 'instructions.md'),
             skills: [],
             manifest: {
                 spec: 0,

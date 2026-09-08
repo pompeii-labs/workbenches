@@ -8,6 +8,7 @@ import { attachCommand } from './commands/attach.js';
 import { buildCommand } from './commands/build.js';
 import { cleanCommand } from './commands/clean.js';
 import { connectCommand } from './commands/connect.js';
+import { createCommand } from './commands/create.js';
 import { imageCommand } from './commands/image.js';
 import { initCommand } from './commands/init.js';
 import { killCommand } from './commands/kill.js';
@@ -30,7 +31,7 @@ import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
 import { RunWorker } from './runs/index.js';
 import { workbenchHome } from './storage.js';
-import { launchWorkbenchTui } from './tui.js';
+import { assertWorkbenchTuiSupported, launchWorkbenchTui } from './tui.js';
 
 const bareInvocation = import.meta.main && process.argv.length === 2;
 
@@ -45,6 +46,7 @@ export const workbenchCommand = defineCommand({
     },
     subCommands: {
         init: initCommand,
+        create: createCommand,
         image: imageCommand,
         list: listCommand,
         view: viewCommand,
@@ -95,12 +97,15 @@ if (import.meta.main) {
     try {
         const invocation = extractApiUrl(process.argv.slice(2));
         RegistryClient.configureApiUrl(invocation.apiUrl);
-        if (usesModelCatalog(invocation.args, bareInvocation)) {
-            await new ModelCatalog({ home: workbenchHome() }).refresh();
-        }
         const explicitHelp = invocation.args.some(
             (argument) => argument === '--help' || argument === '-h'
         );
+        if (!explicitHelp && (bareInvocation || invocation.args[0] === 'create')) {
+            assertWorkbenchTuiSupported();
+        }
+        if (usesModelCatalog(invocation.args, bareInvocation)) {
+            await new ModelCatalog({ home: workbenchHome() }).refresh();
+        }
         await runMain(workbenchCommand, {
             rawArgs: invocation.args,
             showUsage: async (command, parent) => {
@@ -115,9 +120,16 @@ if (import.meta.main) {
 
 function usesModelCatalog(args: string[], bare: boolean): boolean {
     if (bare) return true;
-    return new Set(['build', 'connect', 'init', 'resume', 'run', 'smoke', 'view']).has(
-        args[0] ?? ''
-    );
+    return new Set([
+        'build',
+        'connect',
+        'create',
+        'init',
+        'resume',
+        'run',
+        'smoke',
+        'view',
+    ]).has(args[0] ?? '');
 }
 
 export function extractApiUrl(args: string[]): {

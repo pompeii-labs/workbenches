@@ -9,7 +9,10 @@ import {
     onMount,
     Show,
 } from 'solid-js';
-
+import type {
+    AuthoringOperation,
+    AuthoringOperationResult,
+} from '../authoring/index.js';
 import { modelLabel } from '../models/index.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type {
@@ -18,10 +21,10 @@ import type {
     RunnerQuestionRequest,
     RunnerQuestionResponse,
 } from '../runners/session.js';
-import type { RunControlReceipt, RunHandle, WorkbenchEvent } from '../runs/index.js';
+import type { RunHandle } from '../runs/index.js';
 import type { ResolvedSession, StoredSession } from '../sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
-import { ActivityIndicator } from './activity.js';
+import { ActivityIndicator, usageLabel } from './activity.js';
 import { SessionCommands } from './commands/session.js';
 import { useDialog } from './dialog/index.js';
 import {
@@ -34,6 +37,7 @@ import {
     reduceTranscriptDuringCancellation,
     TranscriptEventBuffer,
 } from './model.js';
+import { PermissionPrompt, permissionFromEvent } from './permission.js';
 import {
     PromptAttachmentReader,
     type PromptImageAttachment,
@@ -41,6 +45,7 @@ import {
 import { Composer, type ComposerRef } from './prompt/composer.js';
 import { PromptHistory } from './prompt/history.js';
 import { QuestionPrompt, questionFromEvent } from './question.js';
+import { consumeEvents, eventData, TurnCancellation } from './session.js';
 import type { TranscriptCursor } from './session-transcript.js';
 import { SessionTranscript } from './session-transcript.js';
 import { useTheme } from './theme/index.js';
@@ -54,30 +59,32 @@ export interface ChatScreenProps {
         resolved: ResolvedWorkbenchReference;
         reference: string;
         session?: StoredSession;
+        environment?: Record<string, string | undefined>;
+        authoring?: boolean;
     }) => Promise<RunHandle>;
     session?: StoredSession;
+    initialPrompt?: string;
+    operation?: AuthoringOperation;
+    environment?: Record<string, string | undefined>;
     resolveSession?: (id: string) => Promise<ResolvedSession>;
+    prepareImprovement?: (
+        sessionId: string,
+        feedback: string
+    ) => Promise<PreparedWorkbenchChat>;
+    onAuthoring?: (launch: PreparedWorkbenchChat) => void;
+    onAuthoringFinished?: (result: AuthoringOperationResult) => void;
     onResume: (session: ResolvedSession) => void;
     onBack: () => void;
     onExit: () => void;
     homeAvailable: boolean;
 }
 
-export class TurnCancellation {
-    private pendingRequest: Promise<RunControlReceipt> | undefined;
-
-    get pending(): boolean {
-        return this.pendingRequest !== undefined;
-    }
-
-    request(session: Pick<RunHandle, 'cancelTurn'>): Promise<RunControlReceipt> {
-        if (this.pendingRequest) return this.pendingRequest;
-        const pending = session.cancelTurn().finally(() => {
-            if (this.pendingRequest === pending) this.pendingRequest = undefined;
-        });
-        this.pendingRequest = pending;
-        return pending;
-    }
+export interface PreparedWorkbenchChat {
+    alias: string;
+    resolved: ResolvedWorkbenchReference;
+    prompt: string;
+    operation?: AuthoringOperation;
+    environment?: Record<string, string | undefined>;
 }
 
 export function ChatScreen(props: ChatScreenProps) {
@@ -94,6 +101,10 @@ export function ChatScreen(props: ChatScreenProps) {
     const [question, setQuestion] = createSignal<RunnerQuestionRequest>();
     const [questionResponsePending, setQuestionResponsePending] = createSignal(false);
     const [cancellationPending, setCancellationPending] = createSignal(false);
+    const [terminal, setTerminal] = createSignal<{
+        status: 'completed' | 'failed' | 'cancelled';
+        message?: string;
+    }>();
     const [storedTranscript, setStoredTranscript] = createSignal<SessionTranscript>();
     const [eventCursor, setEventCursor] = createSignal<TranscriptCursor>();
     let session: RunHandle | undefined;
@@ -108,6 +119,7 @@ export function ChatScreen(props: ChatScreenProps) {
     ).declaration.capabilities.image_input;
     let composer: ComposerRef | undefined;
     let leaving = false;
+    let initialPromptSubmitted = false;
     const events = new TranscriptEventBuffer((event) =>
         setState((current) => {
             return current.interruptionPending
@@ -151,11 +163,38 @@ export function ChatScreen(props: ChatScreenProps) {
     };
     const close = async (back: boolean) => {
         if (leaving) return;
+        if (props.operation && state().busy && !terminal()) {
+            setError(
+                'Finish or cancel the active creator turn before completing authoring.'
+            );
+            return;
+        }
         leaving = true;
         await decidePermission('reject');
         await respondToQuestion({ outcome: 'rejected' });
+        if (props.operation) {
+            const stopped = terminal();
+            if (stopped?.status === 'failed' || stopped?.status === 'cancelled') {
+                const result = await props.operation.fail(
+                    stopped.message ?? `Creator run ${stopped.status}`
+                );
+                props.onAuthoringFinished?.(result);
+            } else {
+                setState((current) => ({ ...current, status: 'Verifying' }));
+                try {
+                    const result = await props.operation.finish();
+                    await session?.close();
+                    props.onAuthoringFinished?.(result);
+                } catch (cause) {
+                    leaving = false;
+                    setError(cause instanceof Error ? cause.message : String(cause));
+                    setState((current) => ({ ...current, status: 'Ready' }));
+                    return;
+                }
+            }
+        }
         observation.abort();
-        await session?.detach().catch(() => {});
+        if (!props.operation) await session?.detach().catch(() => {});
         await storedTranscript()
             ?.flush()
             .catch(() => {});
@@ -174,6 +213,12 @@ export function ChatScreen(props: ChatScreenProps) {
             setError('Session resume is unavailable.');
             return;
         }
+        if (props.operation) {
+            setError(
+                'Finish this authoring operation before resuming another session.'
+            );
+            return;
+        }
         let resolved: ResolvedSession;
         try {
             resolved = await props.resolveSession(target.id);
@@ -189,6 +234,37 @@ export function ChatScreen(props: ChatScreenProps) {
             .catch(() => {});
         await props.resolved.cleanup();
         props.onResume(resolved);
+    };
+    const improve = async (feedback: string) => {
+        if (leaving || state().busy) {
+            setError(
+                'Finish or cancel the active turn before improving this Workbench.'
+            );
+            return;
+        }
+        if (!props.prepareImprovement || !props.onAuthoring) {
+            setError('Workbench improvement is unavailable.');
+            return;
+        }
+        const sessionId = props.session?.id ?? session?.runId;
+        if (!sessionId) {
+            setError('This Workbench session is not ready to improve.');
+            return;
+        }
+        setError('');
+        setState((current) => ({ ...current, status: 'Preparing improvement' }));
+        try {
+            await storedTranscript()?.flush();
+            const launch = await props.prepareImprovement(sessionId, feedback);
+            leaving = true;
+            observation.abort();
+            await session?.detach().catch(() => {});
+            await props.resolved.cleanup();
+            props.onAuthoring(launch);
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+            setState((current) => ({ ...current, status: 'Ready' }));
+        }
     };
     const cancelTurn = (): Promise<void> => {
         if (cancellation.pending) return Promise.resolve();
@@ -309,7 +385,9 @@ export function ChatScreen(props: ChatScreenProps) {
             session = await props.start({
                 resolved: props.resolved,
                 reference: props.alias,
+                authoring: Boolean(props.operation),
                 ...(props.session ? { session: props.session } : {}),
+                ...(props.environment ? { environment: props.environment } : {}),
             });
             if (!storedTranscript()) {
                 setStoredTranscript(new SessionTranscript(props.home, session.runId));
@@ -325,12 +403,30 @@ export function ChatScreen(props: ChatScreenProps) {
                 if (event.type === 'run.ready') {
                     setSessionReady(true);
                     composer?.focus();
+                    if (props.initialPrompt && !initialPromptSubmitted) {
+                        initialPromptSubmitted = true;
+                        queueMicrotask(
+                            () => void submit(props.initialPrompt as string)
+                        );
+                    }
                 } else if (
                     event.type === 'run.failed' ||
                     event.type === 'run.cancelled' ||
                     event.type === 'run.completed'
                 ) {
                     setSessionReady(false);
+                    const data = eventData(event.data);
+                    setTerminal({
+                        status:
+                            event.type === 'run.failed'
+                                ? 'failed'
+                                : event.type === 'run.cancelled'
+                                  ? 'cancelled'
+                                  : 'completed',
+                        ...(typeof data?.message === 'string'
+                            ? { message: data.message }
+                            : {}),
+                    });
                 }
                 const requested = permissionFromEvent(event);
                 if (requested) setPermission({ request: requested });
@@ -339,7 +435,7 @@ export function ChatScreen(props: ChatScreenProps) {
                 if (
                     (event.type === 'question.answered' ||
                         event.type === 'question.rejected') &&
-                    object(event.data)?.id === question()?.id
+                    eventData(event.data)?.id === question()?.id
                 ) {
                     setQuestion(undefined);
                 }
@@ -431,12 +527,14 @@ export function ChatScreen(props: ChatScreenProps) {
         resolved: props.resolved,
         dialog,
         themes,
+        authoring: Boolean(props.operation),
         actions: {
             currentSessionId: () => props.session?.id ?? session?.runId,
             resumeSession: resume,
             clearTranscript: () => setState((current) => ({ ...current, items: [] })),
             attachments,
             clearAttachments: () => setAttachments([]),
+            improve,
             cancelTurn,
             exit: () => close(false),
             showError: setError,
@@ -555,31 +653,8 @@ export function ChatScreen(props: ChatScreenProps) {
                             />
                         }
                     >
-                        {(
-                            pending: Accessor<{
-                                request: RunnerPermissionRequest;
-                            }>
-                        ) => (
-                            <box
-                                height={5}
-                                border={true}
-                                borderStyle="rounded"
-                                borderColor={theme.yellow}
-                                backgroundColor={theme.panelRaised}
-                                paddingX={1}
-                                flexDirection="column"
-                            >
-                                <text fg={theme.yellow} wrapMode="word">
-                                    ? {pending().request.message}
-                                </text>
-                                <text fg={theme.faint}>
-                                    y allow once
-                                    {pending().request.allowAlways
-                                        ? ' · a always allow'
-                                        : ''}{' '}
-                                    · n deny
-                                </text>
-                            </box>
+                        {(pending: Accessor<{ request: RunnerPermissionRequest }>) => (
+                            <PermissionPrompt request={pending().request} />
                         )}
                     </Show>
                 }
@@ -604,59 +679,4 @@ export function ChatScreen(props: ChatScreenProps) {
             </box>
         </box>
     );
-}
-
-async function consumeEvents(
-    session: RunHandle,
-    signal: AbortSignal,
-    afterSequence: number | undefined,
-    consume: (event: WorkbenchEvent) => void
-): Promise<void> {
-    for await (const event of session.observe({
-        signal,
-        ...(afterSequence === undefined ? {} : { afterSequence }),
-    })) {
-        consume(event);
-    }
-}
-
-function permissionFromEvent(
-    event: WorkbenchEvent
-): RunnerPermissionRequest | undefined {
-    if (event.type !== 'input.requested') return undefined;
-    const data = object(event.data);
-    const id = string(data?.id);
-    const action = string(data?.action);
-    const message = string(data?.message);
-    if (!id || !action || !message) return undefined;
-    return {
-        id,
-        action,
-        message,
-        resources: strings(data?.resources),
-        allowAlways: strings(data?.options).includes('allow_always'),
-    };
-}
-
-function usageLabel(tokens: number | undefined, cost: number | undefined): string {
-    const details: string[] = [];
-    if (tokens !== undefined) details.push(`${tokens.toLocaleString()} tokens`);
-    if (cost !== undefined) details.push(`$${cost.toFixed(4)}`);
-    return details.length ? `${details.join(' · ')} · ` : '';
-}
-
-function object(value: unknown): Record<string, unknown> | undefined {
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : undefined;
-}
-
-function string(value: unknown): string | undefined {
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function strings(value: unknown): string[] {
-    return Array.isArray(value)
-        ? value.filter((item): item is string => typeof item === 'string')
-        : [];
 }

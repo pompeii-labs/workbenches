@@ -1,6 +1,11 @@
 import { createCliRenderer } from '@opentui/core';
 import { render } from '@opentui/solid';
 
+import {
+    type AuthoringOperation,
+    type AuthoringOperationResult,
+    WorkbenchAuthoring,
+} from '../authoring/index.js';
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
 import { RunContinuation } from '../runs/index.js';
 import {
@@ -24,13 +29,27 @@ export async function renderWorkbenchTui(
             alias: string;
             resolved: ResolvedWorkbenchReference;
             session?: StoredSession;
+            prompt?: string;
+            operation?: AuthoringOperation;
+            environment?: Record<string, string | undefined>;
         };
         environment?: Record<string, string | undefined>;
         workspaces?: WorkbenchWorkspaceBinding[];
         allowHostDocker?: boolean;
     } = {}
-): Promise<void> {
+): Promise<AuthoringOperationResult[]> {
     const home = workbenchHome();
+    const authoring = new WorkbenchAuthoring(home, {
+        environment: process.env,
+        verification: {
+            environment: options.environment ?? process.env,
+            ...(options.workspaces ? { workspaces: options.workspaces } : {}),
+            ...(options.allowHostDocker !== undefined
+                ? { allowHostDocker: options.allowHostDocker }
+                : {}),
+        },
+    });
+    const results: AuthoringOperationResult[] = [];
     const resolver = new WorkbenchResolver();
     const sessionResolver = new SessionResolver(home);
     const continuation = new RunContinuation(home);
@@ -69,14 +88,29 @@ export async function renderWorkbenchTui(
                             {...(options.initial ? { initial: options.initial } : {})}
                             resolve={(alias) => resolver.resolve(alias, { home })}
                             resolveSession={(id) => sessionResolver.resolve(id)}
-                            start={(launch) =>
-                                continuation.open({
-                                    ...launch,
-                                    environment: options.environment ?? process.env,
-                                    workspaces: options.workspaces ?? [],
-                                    allowHostDocker: options.allowHostDocker ?? false,
-                                })
+                            createWorkbench={() =>
+                                authoring.create({ directory: process.cwd() })
                             }
+                            improveWorkbench={(sessionId, feedback) =>
+                                authoring.create({ from: sessionId, feedback })
+                            }
+                            start={(launch) => {
+                                const { authoring: creator, ...run } = launch;
+                                return continuation.open({
+                                    ...run,
+                                    environment:
+                                        run.environment ??
+                                        options.environment ??
+                                        process.env,
+                                    workspaces: creator
+                                        ? []
+                                        : (options.workspaces ?? []),
+                                    allowHostDocker: creator
+                                        ? false
+                                        : (options.allowHostDocker ?? false),
+                                });
+                            }}
+                            onAuthoringFinished={(result) => results.push(result)}
                         />
                     </ThemeProvider>
                 ),
@@ -85,4 +119,5 @@ export async function renderWorkbenchTui(
         shutdown,
         destroy: () => renderer.destroy(),
     });
+    return results;
 }

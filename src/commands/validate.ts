@@ -42,15 +42,9 @@ export const validateCommand = defineCommand({
         const reference = source.parse(args.source);
         const local = await source.local(reference.source);
         if (local) {
-            const workbenches = await source.discover(local.directory);
             const selected = reference.selector
-                ? workbenches.filter(
-                      (workbench) =>
-                          workbench.packageDirectory.endsWith(
-                              `/${reference.selector}`
-                          ) || workbench.manifest.name === reference.selector
-                  )
-                : workbenches;
+                ? [await source.select(local.directory, reference.selector)]
+                : await source.discover(local.directory);
             if (selected.length === 0) throw new Error('No matching Workbenches found');
             for (const workbench of selected) {
                 output.record({

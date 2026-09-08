@@ -57,7 +57,11 @@ export class OpenCodeEventAdapter {
         const text = string(part?.text);
         if (!text) return this.result([]);
         this.finalText += text;
-        return this.result([{ type: 'output.text', data: { text } }], text);
+        const id = string(part?.messageID) ?? string(part?.id);
+        return this.result(
+            [{ type: 'output.text', data: { ...(id ? { id } : {}), text } }],
+            text
+        );
     }
 
     private tool(event: Record<string, unknown>): OpenCodeAdapterResult {
