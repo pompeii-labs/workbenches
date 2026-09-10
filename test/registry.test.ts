@@ -61,6 +61,74 @@ describe('Workbench registry provider', () => {
         });
     });
 
+    test('searches published Workbenches with curation metadata', async () => {
+        const requests: Array<{ input: string; init?: RequestInit }> = [];
+        const client = new RegistryClient({
+            apiUrl: 'https://registry.example',
+            fetch: async (input, init) => {
+                requests.push({ input: String(input), ...(init ? { init } : {}) });
+                return Response.json({ workbenches: [searchResult()] });
+            },
+        });
+
+        const results = await client.search('lux auth');
+
+        expect(requests[0]?.input).toBe('https://registry.example/v1/searches');
+        expect(requests[0]?.init?.method).toBe('POST');
+        expect(requests[0]?.init?.body).toBe(JSON.stringify({ query: 'lux auth' }));
+        expect(results).toEqual([
+            {
+                reference: { publisher: 'lux', workbench: 'auth' },
+                name: 'lux-auth',
+                summary: 'Build Lux authentication.',
+                runner: 'opencode',
+                runtime: 'local',
+                model: 'openai/gpt-5.6-terra',
+                version: '0.1.0',
+                sourceReference: 'lux-db/lux#auth',
+                sourceUrl: 'https://workbenches.dev/lux/auth',
+                publisherName: 'Lux',
+                verifiedPublisher: true,
+                saves: 12,
+                runs: 34,
+            },
+        ]);
+    });
+
+    test('combines direct matches with a reusable discovery index', async () => {
+        const bodies: string[] = [];
+        const client = new RegistryClient({
+            apiUrl: 'https://registry.example',
+            fetch: async (_input, init) => {
+                const body = String(init?.body ?? '');
+                bodies.push(body);
+                return Response.json({
+                    workbenches: body === '{}' ? [searchResult()] : [],
+                });
+            },
+        });
+
+        expect(await client.discover('lxu')).toHaveLength(1);
+        expect(await client.discover('authentication')).toHaveLength(1);
+        expect(bodies.filter((body) => body === '{}')).toHaveLength(1);
+        expect(bodies).toContain(JSON.stringify({ query: 'lxu' }));
+        expect(bodies).toContain(JSON.stringify({ query: 'authentication' }));
+    });
+
+    test('rejects malformed registry search results', async () => {
+        const client = new RegistryClient({
+            apiUrl: 'https://registry.example',
+            fetch: async () => Response.json({ workbenches: [{ slug: 'broken' }] }),
+        });
+
+        await expect(client.search('broken')).rejects.toThrow(
+            'malformed search results'
+        );
+        await expect(client.search('x'.repeat(121))).rejects.toThrow(
+            'may not exceed 120 characters'
+        );
+    });
+
     test('returns no package for a registry miss and rejects unsafe or malformed responses', async () => {
         const missing = new RegistryClient({
             apiUrl: 'https://registry.example',
@@ -187,5 +255,25 @@ function registryResponse() {
             digest: 'b'.repeat(64),
             source_commit: 'a'.repeat(40),
         },
+    };
+}
+
+function searchResult() {
+    return {
+        slug: 'auth',
+        name: 'lux-auth',
+        summary: 'Build Lux authentication.',
+        runner: 'opencode',
+        runtime: 'local',
+        model: 'openai/gpt-5.6-terra',
+        source_reference: 'lux-db/lux#auth',
+        source_url: 'https://workbenches.dev/lux/auth',
+        publisher: {
+            slug: 'lux',
+            name: 'Lux',
+            verified: true,
+        },
+        latest_version: { version: '0.1.0' },
+        metrics: { saves: 12, runs: 34 },
     };
 }

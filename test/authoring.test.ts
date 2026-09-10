@@ -114,6 +114,10 @@ describe('native Workbench authoring', () => {
         });
         const authoring = new WorkbenchAuthoring(home, { official, smoke });
 
+        const blank = await authoring.create({ directory: repository });
+        expect(blank.prompt).toBeUndefined();
+        await blank.operation.fail('Test completed without authoring');
+
         const create = await authoring.create({
             directory: repository,
             target: 'core',

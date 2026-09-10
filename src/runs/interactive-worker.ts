@@ -37,6 +37,8 @@ export class InteractiveRunWorker {
     private readonly nativeRequests = new NativeRequests();
     private readonly queued: RunControlRequest[] = [];
     private session: InteractiveRunSession | undefined;
+    private sessionId: string | undefined;
+    private namingStarted = false;
     private activeTurn: Promise<void> | undefined;
     private termination: Promise<void> | undefined;
     private pendingShutdown: { cancelled: boolean; reason?: string } | undefined;
@@ -70,6 +72,7 @@ export class InteractiveRunWorker {
         options.signal?.addEventListener('abort', abort, { once: true });
         try {
             const request = await this.store.takeRequest(this.runId);
+            this.sessionId = request.session_id;
             this.audience.initialize(
                 metadata.mode === 'interactive',
                 request.task.trim().length > 0
@@ -160,7 +163,9 @@ export class InteractiveRunWorker {
             } else if (abortRequested) {
                 await this.finish(true, 'interrupted');
             } else if (request.task.trim()) {
-                await this.deliverTurn(this.initialRequest(request.task));
+                const initial = this.initialRequest(request.task);
+                this.nameSessionFromInput(initial);
+                await this.deliverTurn(initial);
             }
             await this.finishIfUnattended();
             await controls;
@@ -271,6 +276,7 @@ export class InteractiveRunWorker {
             return;
         }
         await this.accept(request);
+        this.nameSessionFromInput(request);
         await this.deliverTurn(request);
         await this.control.resolve(request, {
             outcome: 'accepted',
@@ -287,6 +293,7 @@ export class InteractiveRunWorker {
             return this.reject(request, 'turn_idle', 'No Workbench turn is active');
         }
         await this.accept(request);
+        this.nameSessionFromInput(request);
         const delivery = await session.steer(request.input);
         await session.recordInput('input.queued', this.eventData(request));
         await this.control.resolve(request, {
@@ -503,6 +510,14 @@ export class InteractiveRunWorker {
 
     private async accept(request: RunControlRequest): Promise<void> {
         await this.session?.recordInput('input.accepted', this.eventData(request));
+    }
+
+    private nameSessionFromInput(request: RunControlRequest): void {
+        const id = this.sessionId;
+        const prompt = request.input?.text;
+        if (this.namingStarted || !id || !prompt?.trim()) return;
+        this.namingStarted = true;
+        void this.sessions.nameFromPrompt(id, prompt).catch(() => {});
     }
 
     private async reject(

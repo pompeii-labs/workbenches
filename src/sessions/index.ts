@@ -1,3 +1,4 @@
+export { SessionIdentity } from './identity.js';
 export {
     type SessionActivity,
     SessionLifecycle,

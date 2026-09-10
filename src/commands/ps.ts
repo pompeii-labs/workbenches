@@ -1,7 +1,11 @@
 import { defineCommand } from 'citty';
 
 import { RunStore } from '../runs/index.js';
-import { type SessionActivity, SessionLifecycle } from '../sessions/index.js';
+import {
+    type SessionActivity,
+    SessionIdentity,
+    SessionLifecycle,
+} from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
 import { CliPresenter } from './presenter.js';
 
@@ -25,6 +29,7 @@ export const psCommand = defineCommand({
     },
     async run({ args }) {
         const output = new CliPresenter();
+        const identity = new SessionIdentity();
         const activities = await new SessionLifecycle(workbenchHome()).list({
             all: args.all,
         });
@@ -45,6 +50,7 @@ export const psCommand = defineCommand({
                     `${JSON.stringify({
                         ...run,
                         session_id: activity.id,
+                        session_name: activity.session?.name,
                         resumable: activity.resumable,
                     })}\n`
                 );
@@ -57,11 +63,15 @@ export const psCommand = defineCommand({
                 run.runner,
                 String(run.pid ?? '-'),
                 run.dispatched_at,
+                activity.session?.name,
             ];
             output.record({
                 machine: fields,
-                title: activity.id,
+                title: activity.session
+                    ? identity.label(activity.session)
+                    : activity.id,
                 details: [
+                    activity.session?.name ? activity.id : undefined,
                     run.status,
                     `${run.workbench}@${run.workbench_version}`,
                     run.runner,

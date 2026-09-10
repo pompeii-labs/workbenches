@@ -76,7 +76,7 @@ export const createCommand = defineCommand({
             initial: {
                 alias: launch.alias,
                 resolved: launch.resolved,
-                prompt: launch.prompt,
+                ...(launch.prompt ? { prompt: launch.prompt } : {}),
                 operation: launch.operation,
                 environment: launch.environment,
             },

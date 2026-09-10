@@ -24,7 +24,10 @@ describe('TUI themes', () => {
             'flexoki',
             'github',
             'catppuccin',
+            'nightowl',
         ]);
+        themes.preview('nightowl');
+        expect(themes.current.background).toBe('#011627');
     });
 
     test('persists a selected theme without changing a Workbench package', async () => {

@@ -463,7 +463,9 @@ wb clean --older-than 7d --apply
 Every execution belongs to one stable Workbench session. The first run shares
 its `wb_...` ID with the session; later resumes create internal runs while the
 session ID stays fixed. Detachment only controls whether the current terminal is
-watching the active run.
+watching the active run. A session can also have a user-defined display name.
+Names make interactive surfaces easier to scan, but the stable ID remains the
+only automation and resume key.
 
 Attaching observes or replays the latest run without taking control or starting
 model work. Resuming without a task opens the terminal client. If the latest run
@@ -529,8 +531,15 @@ set covers Workbench, runtime, model, capability, session, and staged attachment
 details; attachment and transcript clearing; turn cancellation; themes; and clean
 exit.
 Commands are handled by Workbench and are never sent to the runner as prompts.
-`/theme` includes the Workbench default, Flexoki, GitHub, and Catppuccin themes.
-The adapted themes are attributed in `NOTICE`.
+`/theme` includes the Workbench default, Flexoki, GitHub, Catppuccin, and Night
+Owl themes. The adapted themes are attributed in `NOTICE`.
+
+Use `/rename <name>` to give the current session a durable display name. The
+name appears in `/resume`, the active chat header, and `wb ps` without changing
+the Workbench package, native runner session, or stable `wb_...` ID. When the
+terminal client exits a native resumable session, it restores the terminal and
+prints the stable ID with a copyable `wb resume <id>` command. It does not print
+a resume handoff for a failed start or a runner without native resume support.
 
 Use `/improve [feedback]` from an idle local Workbench session to open the
 official creator with bounded, normalized evidence from that session. Feedback
@@ -560,8 +569,10 @@ continue, then the unattended worker closes while its native context remains
 resumable. User prompts, permission decisions, and question answers are transient
 control messages, not durable run history.
 
-Supported sessions can be reopened with `wb resume <session-or-run-id>`, from
-`/sessions`, or from recent sessions on the home screen. An active session is
+Supported sessions can be reopened with `wb resume <session-or-run-id>` or from
+the TUI's `/resume` browser. The browser is scoped to the active workspace. On a
+bare invocation that is the current working directory; an explicit `--dir` or
+resumed session preserves its recorded workspace. An active session is
 reattached instead of duplicated. A closed session creates a new durable run
 linked to the same stable session. Workbench keeps a small private session index
 and a disposable transcript presentation cache. The selected runner remains the

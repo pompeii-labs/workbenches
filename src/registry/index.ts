@@ -10,6 +10,7 @@ export {
     type RegistryPackage,
     type RegistryReference,
     type RegistryRequestOptions,
+    type RegistrySearchResult,
 } from './client.js';
 export {
     type OciClientRunner,
@@ -19,6 +20,10 @@ export {
     type RegistryImagePushOptions,
     registryImageReference,
 } from './images/index.js';
+export {
+    RegistryWorkbenchSaver,
+    type RegistryWorkbenchSaverOptions,
+} from './saver.js';
 export {
     type RegistryEventKind,
     RegistryTelemetry,

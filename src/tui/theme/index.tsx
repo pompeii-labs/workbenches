@@ -15,6 +15,7 @@ import {
 import catppuccin from './assets/catppuccin.json' with { type: 'json' };
 import flexoki from './assets/flexoki.json' with { type: 'json' };
 import github from './assets/github.json' with { type: 'json' };
+import nightOwl from './assets/nightowl.json' with { type: 'json' };
 
 export type ThemeMode = 'dark' | 'light';
 
@@ -116,6 +117,7 @@ const definitions: Record<string, { label: string; value: ThemeJson }> = {
     flexoki: { label: 'Flexoki', value: flexoki as ThemeJson },
     github: { label: 'GitHub', value: github as ThemeJson },
     catppuccin: { label: 'Catppuccin', value: catppuccin as ThemeJson },
+    nightowl: { label: 'Night Owl', value: nightOwl as ThemeJson },
 };
 
 type ThemeListener = () => void;
@@ -188,7 +190,7 @@ export class ThemeController {
 
     private async persist(): Promise<void> {
         await mkdir(this.home, { recursive: true, mode: 0o700 });
-        const temporary = `${this.path}.${process.pid}.tmp`;
+        const temporary = `${this.path}.${crypto.randomUUID()}.tmp`;
         await writeFile(
             temporary,
             `${JSON.stringify({ theme: this.active }, null, 2)}\n`,

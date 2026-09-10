@@ -7,6 +7,7 @@ import {
     WorkbenchAuthoring,
 } from '../authoring/index.js';
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
+import { RegistryClient, RegistryWorkbenchSaver } from '../registry/index.js';
 import { RunContinuation } from '../runs/index.js';
 import {
     SessionResolver,
@@ -21,7 +22,13 @@ import {
 } from '../workbench/index.js';
 import { WorkbenchApp } from './app.js';
 import { holdRendererUntilShutdown } from './lifecycle.js';
-import { ThemeController, ThemeProvider } from './theme/index.js';
+import { ThemeController, ThemeProvider, type WorkbenchTheme } from './theme/index.js';
+
+export interface WorkbenchTuiResult {
+    authoringResults: AuthoringOperationResult[];
+    theme: WorkbenchTheme;
+    sessionId?: string;
+}
 
 export async function renderWorkbenchTui(
     options: {
@@ -37,10 +44,10 @@ export async function renderWorkbenchTui(
         workspaces?: WorkbenchWorkspaceBinding[];
         allowHostDocker?: boolean;
     } = {}
-): Promise<AuthoringOperationResult[]> {
+): Promise<WorkbenchTuiResult> {
     const home = workbenchHome();
     const authoring = new WorkbenchAuthoring(home, {
-        environment: process.env,
+        environment: options.environment ?? process.env,
         verification: {
             environment: options.environment ?? process.env,
             ...(options.workspaces ? { workspaces: options.workspaces } : {}),
@@ -50,13 +57,18 @@ export async function renderWorkbenchTui(
         },
     });
     const results: AuthoringOperationResult[] = [];
+    let sessionId: string | undefined;
     const resolver = new WorkbenchResolver();
+    const registry = new RegistryClient();
+    const registrySaver = new RegistryWorkbenchSaver(home, { client: registry });
     const sessionResolver = new SessionResolver(home);
     const continuation = new RunContinuation(home);
+    const workspace = options.initial?.resolved.workspaceDirectory ?? process.cwd();
     const entries = await new SavedWorkbenchCatalog(home).list();
-    const recentSessions = (
-        await new SessionStore(home).list({ resumableOnly: true })
-    ).slice(0, 3);
+    const recentSessions = await new SessionStore(home).list({
+        resumableOnly: true,
+        workspace,
+    });
     const themes = new ThemeController(home);
     await themes.load();
     let finish: () => void = () => {};
@@ -85,17 +97,41 @@ export async function renderWorkbenchTui(
                             home={home}
                             entries={entries}
                             recentSessions={recentSessions}
+                            plainBranding={
+                                process.env.NO_COLOR !== undefined ||
+                                process.env.TERM === 'dumb'
+                            }
                             {...(options.initial ? { initial: options.initial } : {})}
-                            resolve={(alias) => resolver.resolve(alias, { home })}
+                            resolve={(alias) =>
+                                resolver.resolve(alias, {
+                                    home,
+                                    workspaceDirectory: workspace,
+                                })
+                            }
+                            searchRegistry={(query) => registry.discover(query)}
+                            saveRegistry={(workbench) =>
+                                registrySaver.save(workbench.reference)
+                            }
                             resolveSession={(id) => sessionResolver.resolve(id)}
+                            listSessions={() =>
+                                new SessionStore(home).list({
+                                    resumableOnly: true,
+                                    workspace,
+                                })
+                            }
                             createWorkbench={() =>
-                                authoring.create({ directory: process.cwd() })
+                                authoring.create({ directory: workspace })
                             }
                             improveWorkbench={(sessionId, feedback) =>
                                 authoring.create({ from: sessionId, feedback })
                             }
                             start={(launch) => {
                                 const { authoring: creator, ...run } = launch;
+                                if (creator && run.session) {
+                                    throw new Error(
+                                        'A creator launch must start a fresh Workbench session'
+                                    );
+                                }
                                 return continuation.open({
                                     ...run,
                                     environment:
@@ -111,6 +147,9 @@ export async function renderWorkbenchTui(
                                 });
                             }}
                             onAuthoringFinished={(result) => results.push(result)}
+                            onSessionObserved={(id) => {
+                                sessionId = id;
+                            }}
                         />
                     </ThemeProvider>
                 ),
@@ -119,5 +158,9 @@ export async function renderWorkbenchTui(
         shutdown,
         destroy: () => renderer.destroy(),
     });
-    return results;
+    return {
+        authoringResults: results,
+        theme: themes.current,
+        ...(sessionId ? { sessionId } : {}),
+    };
 }
