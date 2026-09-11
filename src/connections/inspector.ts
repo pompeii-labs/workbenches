@@ -139,18 +139,12 @@ export class ConnectionInspector {
     async require(): Promise<ResolvedRunnerConfiguration> {
         const status = await this.inspect();
         if (status.configuration) return status.configuration;
-        if (this.#runtime.name === 'e2b') {
-            throw e2bAuthenticationError(canonicalModel(this.#workbench));
-        }
         throw new Error(
             `No authenticated route is available for ${canonicalModel(this.#workbench)}. Run ${status.connectCommand}.`
         );
     }
 
     async connect(nativeProvider?: string): Promise<RunnerAuthenticationStatus> {
-        if (this.#runtime.name === 'e2b') {
-            throw e2bAuthenticationError(canonicalModel(this.#workbench));
-        }
         const command = nativeConnectCommand(
             this.#workbench.manifest.runner,
             nativeProvider
@@ -183,14 +177,16 @@ export class ConnectionInspector {
 
     supportsNativeAuthentication(): boolean {
         return (
-            this.#runtime.name !== 'e2b' &&
-            this.#workbench.manifest.runner === 'opencode'
+            this.#runtime.nativeAuthentication === 'persistent' &&
+            ['opencode', 'pi'].includes(this.#workbench.manifest.runner)
         );
     }
 
     nativeAuthenticationError(): Error {
-        if (this.#runtime.name === 'e2b') {
-            return e2bAuthenticationError(canonicalModel(this.#workbench));
+        if (this.#runtime.nativeAuthentication === 'unavailable') {
+            return new Error(
+                `${runnerLabel(this.#workbench.manifest.runner)} native authentication requires persistent credential storage in the ${this.#runtime.name} runtime`
+            );
         }
         return nativeAuthenticationError(this.#workbench.manifest.runner);
     }
@@ -355,25 +351,17 @@ function nativeConnectCommand(runner: string, provider?: string): string[] {
             : ['opencode', 'auth', 'login'];
     }
     if (runner === 'pi') {
-        throw nativeAuthenticationError(runner);
+        return ['pi', '--no-context-files'];
     }
     return unsupportedRunner(runner);
 }
 
 function nativeAuthenticationError(runner: string): Error {
     if (runner === 'pi') {
-        return new Error(
-            'Pi does not expose a command-line login operation. Configure Pi credentials before running wb connect. Docker Pi Workbenches must receive declared provider credentials through --env-file or --env.'
-        );
+        return new Error('Pi native authentication is unavailable in this runtime');
     }
     return new Error(
         `${runnerLabel(runner)} does not expose a supported command-line login operation`
-    );
-}
-
-function e2bAuthenticationError(model: string): Error {
-    return new Error(
-        `No authenticated route is available for ${model}. E2B does not persist native runner sign-in. Supply a model-provider credential through inherited environment, or declare it in workbench.yml before using --env-file or --env.`
     );
 }
 

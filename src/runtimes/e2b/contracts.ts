@@ -28,6 +28,22 @@ export interface E2BCommand {
     kill(): Promise<void>;
 }
 
+export interface E2BPtyOptions {
+    cwd?: string;
+    env?: Record<string, string>;
+    columns: number;
+    rows: number;
+    onData(data: Uint8Array): void | Promise<void>;
+}
+
+export interface E2BPty {
+    readonly pid: number;
+    wait(): Promise<RuntimeCommandResult>;
+    sendInput(data: Uint8Array): Promise<void>;
+    resize(columns: number, rows: number): Promise<void>;
+    kill(): Promise<void>;
+}
+
 export interface E2BSandboxInfo {
     startedAt: Date;
     endAt: Date;
@@ -42,6 +58,7 @@ export interface E2BSandbox {
         options?: Omit<E2BCommandOptions, 'stdin'>
     ): Promise<RuntimeCommandResult>;
     start(command: string, options?: E2BCommandOptions): Promise<E2BCommand>;
+    startPty(command: string, options: E2BPtyOptions): Promise<E2BPty>;
     upload(path: string, data: ReadableStream<Uint8Array>): Promise<void>;
     download(path: string): Promise<ReadableStream<Uint8Array>>;
     fileSize(path: string): Promise<number>;

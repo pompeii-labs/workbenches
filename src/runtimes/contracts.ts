@@ -22,11 +22,18 @@ export interface RuntimeAsset {
     workspace?: string;
 }
 
+export interface RuntimeCredentialBinding {
+    runtime: string;
+    runner: string;
+    directory: string;
+}
+
 export interface RuntimePrepareRequest {
     workbench: ResolvedWorkbench;
     workspaceDirectory: string;
     environment: Record<string, string | undefined>;
     assets: RuntimeAsset[];
+    credentials?: RuntimeCredentialBinding;
     authorizations?: { hostDocker: boolean };
     purpose?: 'build' | 'connect' | 'run';
     run?: { id: string; scope: string };
@@ -94,6 +101,7 @@ export interface PreparedRuntime {
     readonly environment: Record<string, string | undefined>;
     readonly workspaces: WorkbenchWorkspaceBinding[];
     readonly preparation?: RuntimePreparation;
+    readonly nativeAuthentication: 'persistent' | 'unavailable';
     pathFor(hostPath: string): string;
     preflight(): Promise<PreflightResult>;
     execute(

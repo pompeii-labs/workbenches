@@ -12,6 +12,8 @@ import type {
     E2BCommandOptions,
     E2BManagedSandbox,
     E2BPreparedTemplate,
+    E2BPty,
+    E2BPtyOptions,
     E2BSandbox,
     E2BSandboxInfo,
     E2BTemplateSource,
@@ -158,6 +160,25 @@ class SdkSandbox implements E2BSandbox {
         return new SdkCommand(handle);
     }
 
+    async startPty(command: string, options: E2BPtyOptions): Promise<E2BPty> {
+        const handle = await this.sandbox.pty.create({
+            cols: options.columns,
+            rows: options.rows,
+            onData: options.onData,
+            ...(options.cwd ? { cwd: options.cwd } : {}),
+            ...(options.env ? { envs: options.env } : {}),
+            timeoutMs: 0,
+        });
+        const terminal = new SdkPty(this.sandbox, handle);
+        try {
+            await terminal.sendInput(new TextEncoder().encode(`exec ${command}\r`));
+        } catch (error) {
+            await terminal.kill().catch(() => {});
+            throw error;
+        }
+        return terminal;
+    }
+
     async upload(path: string, data: ReadableStream<Uint8Array>): Promise<void> {
         await this.sandbox.files.write(path, data, {
             useOctetStream: true,
@@ -216,6 +237,41 @@ class SdkCommand implements E2BCommand {
 
     closeStdin(): Promise<void> {
         return this.handle.closeStdin();
+    }
+
+    async kill(): Promise<void> {
+        await this.handle.kill();
+    }
+}
+
+class SdkPty implements E2BPty {
+    constructor(
+        private readonly sandbox: E2BSdkSandbox,
+        private readonly handle: CommandHandle
+    ) {}
+
+    get pid(): number {
+        return this.handle.pid;
+    }
+
+    async wait(): Promise<{ code: number; stdout: string; stderr: string }> {
+        try {
+            return commandResult(await this.handle.wait());
+        } catch (error) {
+            if (error instanceof CommandExitError) return commandResult(error);
+            throw error;
+        }
+    }
+
+    sendInput(data: Uint8Array): Promise<void> {
+        return this.sandbox.pty.sendInput(this.handle.pid, data);
+    }
+
+    resize(columns: number, rows: number): Promise<void> {
+        return this.sandbox.pty.resize(this.handle.pid, {
+            cols: columns,
+            rows,
+        });
     }
 
     async kill(): Promise<void> {

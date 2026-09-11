@@ -30,7 +30,8 @@ import type { E2BPathPlan } from './paths.js';
 import { e2bMetadata } from './sdk.js';
 import { definedEnvironment, gitExcludePattern, quote, shellCommand } from './shell.js';
 import { E2BAssetSnapshot } from './snapshot.js';
-import { downloadE2BFile, pipeWebOutput } from './streams.js';
+import { downloadE2BFile } from './streams.js';
+import { terminalDimensions } from './terminal.js';
 
 interface E2BRuntimeOptions {
     request: RuntimePrepareRequest;
@@ -56,6 +57,7 @@ interface ActiveProcess {
 
 export class E2BRuntime implements PreparedRuntime {
     readonly name = 'e2b';
+    readonly nativeAuthentication: 'persistent' | 'unavailable';
     readonly workbench: ResolvedWorkbench;
     readonly workspaceDirectory: string;
     readonly environment: Record<string, string | undefined>;
@@ -73,6 +75,9 @@ export class E2BRuntime implements PreparedRuntime {
     private finalInfrastructure: RuntimeInfrastructureMetadata | undefined;
 
     constructor(private readonly options: E2BRuntimeOptions) {
+        this.nativeAuthentication = options.request.credentials
+            ? 'persistent'
+            : 'unavailable';
         this.preparation = options.preparation;
         this.workspaceDirectory = options.paths.pathFor(
             options.request.workspaceDirectory
@@ -170,19 +175,42 @@ export class E2BRuntime implements PreparedRuntime {
     }
 
     async interact(invocation: RunnerInvocation): Promise<number> {
-        const process = this.launchSession(invocation, { stdin: 'pipe' });
-        const input = process.stdin;
-        const onInput = (value: Buffer) => input?.write(value);
-        globalThis.process.stdin.on('data', onInput);
-        globalThis.process.stdin.resume();
+        const sandbox = this.requireReady();
+        const dimensions = terminalDimensions();
+        const terminal = await sandbox.startPty(shellCommand(invocation.command), {
+            cwd: invocation.cwd,
+            env: definedEnvironment(invocation.env),
+            columns: dimensions.columns,
+            rows: dimensions.rows,
+            onData: (data) => {
+                globalThis.process.stdout.write(data);
+            },
+        });
+        const input = globalThis.process.stdin;
+        const output = globalThis.process.stdout;
+        const previousRawMode = input.isTTY ? input.isRaw : undefined;
+        const wasFlowing = input.readableFlowing;
+        const onInput = (value: Buffer) => {
+            void terminal.sendInput(value).catch(() => {});
+        };
+        const onResize = () => {
+            const next = terminalDimensions();
+            void terminal.resize(next.columns, next.rows).catch(() => {});
+        };
+        if (input.isTTY) input.setRawMode(true);
+        input.on('data', onInput);
+        output.on('resize', onResize);
+        input.resume();
         try {
-            await Promise.all([
-                pipeWebOutput(process.stdout, globalThis.process.stdout),
-                pipeWebOutput(process.stderr, globalThis.process.stderr),
-            ]);
-            return await process.exited;
+            return (await terminal.wait()).code;
+        } catch (error) {
+            await terminal.kill().catch(() => {});
+            throw error;
         } finally {
-            globalThis.process.stdin.off('data', onInput);
+            input.off('data', onInput);
+            output.off('resize', onResize);
+            if (input.isTTY) input.setRawMode(previousRawMode ?? false);
+            if (wasFlowing !== true) input.pause();
         }
     }
 

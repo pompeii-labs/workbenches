@@ -357,6 +357,7 @@ class CapturingRuntimeProvider implements RuntimeProvider {
         const runtimeWorkbench = structuredClone(request.workbench);
         return {
             name: this.name,
+            nativeAuthentication: 'persistent',
             workbench: runtimeWorkbench,
             workspaceDirectory: '/runtime/workspace',
             environment: request.environment,

@@ -65,6 +65,7 @@ export class LocalRuntimeProvider implements RuntimeProvider {
 
 export class LocalRuntime implements PreparedRuntime {
     readonly name = 'local';
+    readonly nativeAuthentication = 'persistent' as const;
     readonly workbench;
     readonly workspaceDirectory;
     readonly environment;

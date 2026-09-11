@@ -1,3 +1,4 @@
+import { RunnerCredentialStore } from '../connections/credentials.js';
 import {
     ConnectionInspector,
     type RunnerAuthenticationStatus,
@@ -76,6 +77,17 @@ export class RuntimeSmoke {
                     authorizations: {
                         hostDocker: this.options.allowHostDocker ?? false,
                     },
+                    ...(this.options.workbench.manifest.runtime === 'e2b' &&
+                    this.options.home
+                        ? {
+                              credentials: await new RunnerCredentialStore(
+                                  this.options.home
+                              ).prepare(
+                                  this.options.workbench.manifest.runtime,
+                                  this.options.workbench.manifest.runner
+                              ),
+                          }
+                        : {}),
                     ...(this.options.home
                         ? {
                               run: {

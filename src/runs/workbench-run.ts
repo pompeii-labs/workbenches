@@ -1,3 +1,4 @@
+import { RunnerCredentialStore } from '../connections/credentials.js';
 import { ConnectionInspector } from '../connections/inspector.js';
 import { ConnectionStore } from '../connections/store.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
@@ -105,7 +106,7 @@ export class WorkbenchRun {
             runtime = await this.runtimeRegistry
                 .resolve(workbench.manifest.runtime)
                 .prepare(
-                    this.runtimeRequest(
+                    await this.runtimeRequest(
                         workbench,
                         runner.assets,
                         workspaces,
@@ -283,7 +284,7 @@ export class WorkbenchRun {
         );
     }
 
-    private runtimeRequest(
+    private async runtimeRequest(
         workbench: ResolvedWorkbench,
         runnerAssets: RuntimeAsset[],
         workspaces: WorkbenchWorkspaceBinding[],
@@ -311,6 +312,13 @@ export class WorkbenchRun {
             authorizations: {
                 hostDocker: this.options.allowHostDocker ?? false,
             },
+            ...(workbench.manifest.runtime === 'e2b' && this.options.home
+                ? {
+                      credentials: await new RunnerCredentialStore(
+                          this.options.home
+                      ).prepare(workbench.manifest.runtime, workbench.manifest.runner),
+                  }
+                : {}),
             ...(this.options.home
                 ? { run: { id: runId, scope: RunStore.scope(this.options.home) } }
                 : {}),

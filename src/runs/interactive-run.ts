@@ -1,3 +1,4 @@
+import { RunnerCredentialStore } from '../connections/credentials.js';
 import { ConnectionInspector } from '../connections/inspector.js';
 import { ConnectionStore } from '../connections/store.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
@@ -231,6 +232,16 @@ export class InteractiveRun {
                         hostDocker: this.options.allowHostDocker ?? false,
                     },
                     purpose: 'run',
+                    ...(workbench.manifest.runtime === 'e2b' && this.options.home
+                        ? {
+                              credentials: await new RunnerCredentialStore(
+                                  this.options.home
+                              ).prepare(
+                                  workbench.manifest.runtime,
+                                  workbench.manifest.runner
+                              ),
+                          }
+                        : {}),
                     ...(this.options.home
                         ? {
                               run: {

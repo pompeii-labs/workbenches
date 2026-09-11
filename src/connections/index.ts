@@ -1,3 +1,4 @@
+export { RunnerCredentialStore } from './credentials.js';
 export {
     ConnectionInspector,
     type ConnectionInspectorOptions,

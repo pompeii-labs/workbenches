@@ -179,9 +179,10 @@ containers are not labeled because they execute synchronously under `--rm`.
 
 Each supported runner uses a private named Docker volume for its native
 credential store. `wb connect` runs the runner's own authentication flow in the
-same image and volume that later runs use. The Workbench package is never given
-ownership of the volume, and the engine does not read or upload the stored token
-contents.
+same image and volume that later runs use. OpenCode exposes a standalone login
+command. Pi opens its TUI, where the user runs the provider-specific `/login`
+command shown by Workbench. The Workbench package is never given ownership of
+the volume, and the engine does not read or upload the stored token contents.
 
 Interactive runners remain inside the selected Docker runtime. Pi uses its
 native stdin RPC transport, so the container is launched with piped input.
@@ -224,11 +225,25 @@ The reference E2B provider accepts the same published OCI image or
 Workbench-local Dockerfile declaration as Docker. It builds and caches an E2B
 template, then creates a fresh secure sandbox for an execution. `E2B_API_KEY` is
 required by the host control plane but is excluded from the runtime environment.
-The sandbox receives only manifest-declared environment values and credentials
-for an allowed model route. Native host credential stores are never uploaded.
-`wb connect` does not open a native login inside a disposable E2B sandbox. An
-environment-backed route must already be available through inherited environment
-or a manifest-declared binding supplied by `--env-file` or `--env`.
+The sandbox receives manifest-declared environment values for allowed model
+routes and a separately staged native credential store for the selected runner.
+
+`wb connect` opens the runner's native authentication flow inside the same E2B
+image used for runs. OpenCode uses its provider-specific login command, including
+API-key and headless ChatGPT authentication. Pi opens its TUI and tells the user
+which `/login <provider>` command to run. The resulting files are synchronized
+to private, runtime- and runner-scoped storage beneath the Workbench data
+directory before the sandbox is destroyed. A later run copies that store into a
+fresh sandbox. The store is never included in the package, workspace, run record,
+normalized event stream, or artifact output.
+
+The engine treats native credential files as opaque. Some runners keep several
+provider logins in one file, so the E2B sandbox receives the native store for the
+runner rather than a parsed subset for one provider. The E2B provider and
+Workbench image are therefore part of the credential trust boundary. Existing
+stored credentials remain unchanged when staging or startup fails. A host crash
+before synchronization can lose credentials created during that remote login
+attempt.
 
 The provider copies only engine-declared runtime assets. The primary workspace
 is staged at `/workspace`, named workspaces at `/workspaces/<name>`, the
@@ -253,8 +268,9 @@ each have a 512 MiB limit based on uncompressed file content.
 
 The selected image must include the runner, declared tools, Git, and GNU tar
 with `--null` support. The OpenCode service uses E2B's authenticated host mapping
-for the sandbox port. Pi continues to use its piped stdin transport. Both stream
-through the ordinary runner session boundary.
+for the sandbox port. Pi continues to use its piped stdin transport for normal
+sessions. Native authentication uses an E2B PTY so interactive login menus,
+terminal resize, and control input behave like a real terminal.
 
 Normal cleanup terminates active commands, attempts synchronization once,
 destroys the sandbox, and removes local transfer files. A provider lease of 60
@@ -285,12 +301,13 @@ not model usage, and never appears in `usage.updated`.
 
 The draft E2B boundary differs from local and Docker execution in several
 intentional ways. It copies selected files rather than mounting host paths,
-cannot reuse native host login stores, creates a fresh sandbox when a linked
-session resumes, and can synchronize results only while the host process returns
-cleanly enough to collect them. A host crash can therefore leave a paused remote
-sandbox for the reaper without a recoverable result bundle. Direct host
-synchronization is the current compatibility behavior; portable result bundles
-and explicit apply or export actions are a separate product contract.
+keeps a private Workbench-managed copy of runner credentials, creates a fresh
+sandbox when a linked session resumes, and can synchronize results only while
+the host process returns cleanly enough to collect them. A host crash can
+therefore leave a paused remote sandbox for the reaper without a recoverable
+result bundle. Direct host synchronization is the current compatibility
+behavior; portable result bundles and explicit apply or export actions are a
+separate product contract.
 
 ## Session, run, and turn boundaries
 
@@ -376,7 +393,9 @@ model, runtime, workspace bindings, native session identifier, and latest run.
 Native runner state remains authoritative and is stored under the session's
 private native-state directory. Docker mounts that directory read-write into
 each new container for native resume. E2B copies it into each fresh sandbox and
-synchronizes it back during orderly cleanup. Neither provider reconstructs
+synchronizes it back during orderly cleanup. Runner credentials use a separate
+runtime- and runner-scoped store so authentication persists across unrelated
+sessions without becoming conversation state. Neither provider reconstructs
 context from the normalized event stream.
 
 `wb resume <session-or-run-id>` opens the exact Workbench package and workspace

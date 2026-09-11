@@ -20,6 +20,7 @@ export type ChooseRunnerConnection = (options: {
 
 export type ChooseRunnerProvider = (options: {
     runner: string;
+    runtime: string;
     model: string;
     providers: AuthenticatedModelRoute[];
 }) => Promise<AuthenticatedModelRoute>;
@@ -134,10 +135,13 @@ export class ConnectionManager {
         const runnerName = this.#options.workbench.manifest.runner;
         const provider = await chooseProvider({
             runner: runnerName,
+            runtime: this.#options.runtime.name,
             model: this.#options.workbench.manifest.model.id,
             providers: this.#inspector.candidates(),
         });
-        announce(authenticationMessage(runnerName, provider));
+        announce(
+            authenticationMessage(runnerName, this.#options.runtime.name, provider)
+        );
         const status = await this.#inspector.connect(provider.nativeProvider);
         const matching = status.connections.filter(
             (connection) =>
@@ -235,6 +239,7 @@ async function promptRunnerConnection(
 async function promptRunnerProvider(
     options: {
         runner: string;
+        runtime: string;
         model: string;
         providers: AuthenticatedModelRoute[];
     },
@@ -251,7 +256,7 @@ async function promptRunnerProvider(
         placeholder: 'Type to search providers',
         maxItems: 7,
         options: providers.map((provider, index) => {
-            const hint = authenticationHint(options.runner, provider);
+            const hint = authenticationHint(options.runner, options.runtime, provider);
             return {
                 value: index,
                 label: connectionLabel(provider),
@@ -306,22 +311,46 @@ function sameSelection(
 
 function authenticationMessage(
     runner: string,
+    runtime: string,
     provider: AuthenticatedModelRoute
 ): string {
-    const hint = authenticationHint(runner, provider);
-    return `Opening ${runnerLabel(runner)} authentication for ${connectionLabel(provider)}${hint ? `. Choose a sign-in method in the next prompt: ${hint}` : ''}. Workbench does not copy or store the credential.`;
+    const hint = authenticationHint(runner, runtime, provider);
+    const instructions =
+        runner === 'pi'
+            ? ` In Pi, run /login ${provider.nativeProvider}, finish signing in, then exit Pi to return to Workbench.`
+            : hint
+              ? ` Choose a sign-in method in the next prompt: ${hint}.`
+              : '';
+    return `Opening ${runnerLabel(runner)} authentication for ${connectionLabel(provider)}.${instructions}${credentialStorageMessage(runtime)}`;
 }
 
 function authenticationHint(
     runner: string,
+    runtime: string,
     provider: AuthenticatedModelRoute
 ): string | undefined {
     if (provider.nativeProvider === 'openai-codex') return 'ChatGPT Plus/Pro';
     if (provider.nativeProvider === 'openai') {
-        return runner === 'opencode' ? 'API key or ChatGPT Plus/Pro' : 'API key';
+        if (runner !== 'opencode') return 'API key';
+        return runtime === 'local'
+            ? 'API key or ChatGPT Plus/Pro'
+            : 'API key or ChatGPT Plus/Pro headless login';
     }
     if (provider.nativeProvider === 'openrouter') return 'API key';
     return undefined;
+}
+
+function credentialStorageMessage(runtime: string): string {
+    if (runtime === 'local') {
+        return ' The runner stores the credential in its native user store. Workbench never writes it to the package or run records.';
+    }
+    if (runtime === 'docker') {
+        return ' Workbench stores the credential in a private runner-specific Docker volume, never in the package or run records.';
+    }
+    if (runtime === 'e2b') {
+        return ' Workbench stores the credential in private local runtime storage and sends it only to E2B sandboxes using that runner, never to the package or run records.';
+    }
+    return ' Credentials stay in private runner storage and are never written to the Workbench package or run records.';
 }
 
 function clackSelect(options: RunnerSelectOptions): Promise<number | symbol> {

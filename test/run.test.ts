@@ -454,6 +454,7 @@ describe('local run lifecycle', () => {
                     assets = request.assets;
                     return {
                         name: 'local',
+                        nativeAuthentication: 'persistent',
                         workbench: request.workbench,
                         workspaceDirectory: request.workspaceDirectory,
                         environment: request.environment,

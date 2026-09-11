@@ -149,32 +149,71 @@ describe('native runner authentication', () => {
         });
     });
 
-    test('refuses to inject authentication commands into the Pi TUI', async () => {
+    test('opens the Pi TUI for its native login flow', async () => {
         const workbench = fixture('pi');
         let interacted = false;
+        let authenticated = false;
+        let command: string[] = [];
         const prepared = runtime('', {
-            interact() {
+            execute() {
+                return Promise.resolve({
+                    code: 0,
+                    stdout: authenticated
+                        ? 'provider model\nopenai gpt-5.6-terra\n'
+                        : 'provider model\n',
+                    stderr: '',
+                });
+            },
+            interact(invocation) {
                 interacted = true;
+                authenticated = true;
+                command = invocation.command;
                 return Promise.resolve(0);
             },
         });
 
-        await expect(
-            inspector(workbench, {
-                runner: runner('pi'),
-                runtime: prepared,
-            }).connect()
-        ).rejects.toThrow('Pi does not expose a command-line login operation');
-        expect(interacted).toBeFalse();
+        const connection = inspector(workbench, {
+            runner: runner('pi'),
+            runtime: prepared,
+        });
+        expect(connection.supportsNativeAuthentication()).toBeTrue();
+        await expect(connection.connect('openai')).resolves.toMatchObject({
+            ready: true,
+            configuration: { provider: 'openai' },
+        });
+        expect(interacted).toBeTrue();
+        expect(command).toEqual(['pi', '--no-context-files']);
     });
 
-    test('does not offer an ephemeral native sign-in inside E2B', async () => {
+    test('rejects Pi native login when runtime credentials cannot persist', () => {
+        const connection = inspector(fixture('pi'), {
+            runner: runner('pi'),
+            runtime: runtime('', { nativeAuthentication: 'unavailable' }),
+        });
+
+        expect(connection.supportsNativeAuthentication()).toBeFalse();
+        expect(connection.nativeAuthenticationError().message).toContain(
+            'requires persistent credential storage'
+        );
+    });
+
+    test('offers native sign-in inside E2B when credential storage persists', async () => {
         const workbench = fixture('opencode');
         let interacted = false;
+        let authenticated = false;
         const prepared = runtime('', {
             name: 'e2b',
+            nativeAuthentication: 'persistent',
+            execute() {
+                return Promise.resolve({
+                    code: 0,
+                    stdout: '',
+                    stderr: authenticated ? '● OpenAI oauth\n' : '',
+                });
+            },
             interact() {
                 interacted = true;
+                authenticated = true;
                 return Promise.resolve(0);
             },
         });
@@ -183,14 +222,28 @@ describe('native runner authentication', () => {
             runtime: prepared,
         });
 
+        expect(connection.supportsNativeAuthentication()).toBeTrue();
+        await expect(connection.connect()).resolves.toMatchObject({
+            ready: true,
+            configuration: { provider: 'openai' },
+        });
+        expect(interacted).toBeTrue();
+    });
+
+    test('does not offer native sign-in without persistent runtime storage', async () => {
+        const workbench = fixture('opencode');
+        const connection = inspector(workbench, {
+            runner: runner('opencode'),
+            runtime: runtime('', {
+                name: 'e2b',
+                nativeAuthentication: 'unavailable',
+            }),
+        });
+
         expect(connection.supportsNativeAuthentication()).toBeFalse();
-        await expect(connection.require()).rejects.toThrow(
-            'E2B does not persist native runner sign-in'
+        expect(connection.nativeAuthenticationError().message).toContain(
+            'requires persistent credential storage in the e2b runtime'
         );
-        await expect(connection.connect()).rejects.toThrow(
-            'E2B does not persist native runner sign-in'
-        );
-        expect(interacted).toBeFalse();
     });
 
     test('lets the native OpenCode flow choose among multiple locked routes', async () => {
@@ -319,6 +372,7 @@ function runtime(
 ): PreparedRuntime {
     return {
         name: 'local',
+        nativeAuthentication: 'persistent',
         workbench: fixture('pi'),
         workspaceDirectory: '/repo',
         environment: {},

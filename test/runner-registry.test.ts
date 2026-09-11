@@ -198,6 +198,7 @@ function preparedRuntime(
 ): PreparedRuntime {
     return {
         name,
+        nativeAuthentication: 'persistent',
         workbench,
         workspaceDirectory: '/workspace',
         environment: {

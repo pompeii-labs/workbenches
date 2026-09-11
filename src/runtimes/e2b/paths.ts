@@ -11,7 +11,7 @@ export interface E2BAssetBinding {
     access: 'read-only' | 'read-write';
     excludedHostPaths: string[];
     workspace?: string;
-    kind: 'workspace' | 'package' | 'asset';
+    kind: 'workspace' | 'package' | 'asset' | 'credentials';
 }
 
 export class E2BPathPlan {
@@ -67,6 +67,31 @@ export class E2BPathPlan {
                     ? { ...binding, access: 'read-write' }
                     : binding
             );
+        }
+        if (request.credentials) {
+            if (request.credentials.runtime !== 'e2b') {
+                throw new Error(
+                    `E2B received credential storage for the ${request.credentials.runtime} runtime`
+                );
+            }
+            if (request.credentials.runner !== request.workbench.manifest.runner) {
+                throw new Error(
+                    `Runner credential storage does not match the Workbench runner: ${request.credentials.runner}`
+                );
+            }
+            const hostPath = resolve(request.credentials.directory);
+            if (unique.has(hostPath)) {
+                throw new Error(
+                    `Runner credential storage must be separate from runtime assets: ${hostPath}`
+                );
+            }
+            unique.set(hostPath, {
+                hostPath,
+                runtimePath: '/workbench-credentials',
+                access: 'read-write',
+                excludedHostPaths: [],
+                kind: 'credentials',
+            });
         }
         const bindings = [...unique.values()];
         this.bindings = bindings.map((binding) => ({
@@ -135,8 +160,17 @@ export class E2BPathPlan {
     }
 
     environment(): Record<string, string | undefined> {
+        const credentials = this.bindings.find(
+            (binding) => binding.kind === 'credentials'
+        );
         return {
             HOME: '/tmp/workbench-home',
+            ...(credentials && this.request.workbench.manifest.runner === 'opencode'
+                ? { XDG_DATA_HOME: credentials.runtimePath }
+                : {}),
+            ...(credentials && this.request.workbench.manifest.runner === 'pi'
+                ? { WORKBENCH_CREDENTIALS_DIR: credentials.runtimePath }
+                : {}),
             ...Object.fromEntries(
                 E2BPathPlan.environmentNames(this.request.workbench).map((name) => [
                     name,

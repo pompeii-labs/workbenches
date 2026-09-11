@@ -1,4 +1,5 @@
 import { defineCommand } from 'citty';
+import { RunnerCredentialStore } from '../connections/credentials.js';
 import { ConnectionManager } from '../connections/manager.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRunner } from '../runners/runner.js';
@@ -52,6 +53,7 @@ export const connectCommand = defineCommand({
         let runner: PreparedRunner | undefined;
         let runtime: PreparedRuntime | undefined;
         let operationError: unknown;
+        let connectedRecord: Parameters<CliPresenter['record']>[0] | undefined;
         try {
             output.progress('Checking available runner connections');
             runner = await RunnerRegistry.standard().prepare(
@@ -76,6 +78,16 @@ export const connectCommand = defineCommand({
                         ...runner.assets,
                     ],
                     purpose: 'connect',
+                    ...(resolved.workbench.manifest.runtime === 'e2b'
+                        ? {
+                              credentials: await new RunnerCredentialStore(
+                                  home
+                              ).prepare(
+                                  resolved.workbench.manifest.runtime,
+                                  resolved.workbench.manifest.runner
+                              ),
+                          }
+                        : {}),
                     authorizations: { hostDocker: false },
                     run: {
                         id: RunStore.createId(),
@@ -107,7 +119,7 @@ export const connectCommand = defineCommand({
             const runnerName = ConnectionManager.runnerLabel(
                 resolved.workbench.manifest.runner
             );
-            output.record({
+            connectedRecord = {
                 machine: [
                     'connected',
                     resolved.workbench.manifest.name,
@@ -116,7 +128,7 @@ export const connectCommand = defineCommand({
                 ],
                 title: `Connected ${resolved.workbench.manifest.name}`,
                 details: [connection, runnerName],
-            });
+            };
         } catch (error) {
             operationError = error;
         }
@@ -130,5 +142,6 @@ export const connectCommand = defineCommand({
             (result): result is PromiseRejectedResult => result.status === 'rejected'
         );
         if (failure) throw failure.reason;
+        if (connectedRecord) output.record(connectedRecord);
     },
 });

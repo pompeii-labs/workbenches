@@ -4,6 +4,8 @@ export type {
     E2BCommandOptions,
     E2BManagedSandbox,
     E2BPreparedTemplate,
+    E2BPty,
+    E2BPtyOptions,
     E2BRuntimeDependencies,
     E2BSandbox,
     E2BSandboxInfo,

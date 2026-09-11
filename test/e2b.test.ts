@@ -8,6 +8,8 @@ import type {
     E2BCommand,
     E2BCommandOptions,
     E2BPreparedTemplate,
+    E2BPty,
+    E2BPtyOptions,
     E2BSandbox,
     E2BSandboxInfo,
     E2BTemplateSource,
@@ -158,6 +160,21 @@ describe('E2B runtime provider', () => {
             });
             expect(client.sandbox.input).toBe('steer\n');
 
+            await expect(
+                runtime.interact({
+                    command: ['opencode', 'auth', 'login', '--provider', 'openai'],
+                    cwd: runtime.workspaceDirectory,
+                    env: { XDG_DATA_HOME: '/workbench-credentials' },
+                })
+            ).resolves.toBe(0);
+            expect(client.sandbox.ptyStarted[0]?.command).toContain(
+                `'opencode' 'auth' 'login' '--provider' 'openai'`
+            );
+            expect(client.sandbox.ptyStarted[0]?.options).toMatchObject({
+                cwd: runtime.workspaceDirectory,
+                env: { XDG_DATA_HOME: '/workbench-credentials' },
+            });
+
             const service = runtime.launchService((binding) => ({
                 command: ['opencode', 'serve', binding.hostname, String(binding.port)],
                 cwd: runtime.workspaceDirectory,
@@ -192,6 +209,72 @@ describe('E2B runtime provider', () => {
         } finally {
             await runtime.cleanup();
         }
+    });
+
+    test('stages persistent native runner credentials without exposing the E2B key', async () => {
+        const resolved = await fixture();
+        const credentials = await mkdtemp(join(tmpdir(), 'workbench-e2b-credentials-'));
+        temporaryDirectories.push(credentials);
+        await mkdir(join(credentials, 'opencode'), { recursive: true });
+        await writeFile(join(credentials, 'opencode', 'auth.json'), '{}\n', {
+            mode: 0o600,
+        });
+        const client = new FakeClient();
+        const runtime = await new E2BRuntimeProvider({ client }).prepare({
+            ...request(resolved),
+            environment: {
+                E2B_API_KEY: 'e2b-secret',
+            },
+            credentials: {
+                runtime: 'e2b',
+                runner: 'opencode',
+                directory: credentials,
+            },
+        });
+        try {
+            expect(runtime.nativeAuthentication).toBe('persistent');
+            expect(runtime.pathFor(credentials)).toBe('/workbench-credentials');
+            expect(runtime.environment).toMatchObject({
+                HOME: '/tmp/workbench-home',
+                XDG_DATA_HOME: '/workbench-credentials',
+            });
+            expect(runtime.environment).not.toHaveProperty('E2B_API_KEY');
+            await runtime.preflight();
+            expect(client.sandbox.uploads.size).toBe(3);
+        } finally {
+            await runtime.cleanup();
+        }
+        expect(await readFile(join(credentials, 'opencode', 'auth.json'), 'utf8')).toBe(
+            '{}\n'
+        );
+    });
+
+    test('rejects credential storage for another runtime or runner', async () => {
+        const resolved = await fixture();
+        const credentials = await mkdtemp(join(tmpdir(), 'workbench-e2b-credentials-'));
+        temporaryDirectories.push(credentials);
+        const provider = new E2BRuntimeProvider({ client: new FakeClient() });
+
+        await expect(
+            provider.prepare({
+                ...request(resolved),
+                credentials: {
+                    runtime: 'docker',
+                    runner: 'opencode',
+                    directory: credentials,
+                },
+            })
+        ).rejects.toThrow('credential storage for the docker runtime');
+        await expect(
+            provider.prepare({
+                ...request(resolved),
+                credentials: {
+                    runtime: 'e2b',
+                    runner: 'pi',
+                    directory: credentials,
+                },
+            })
+        ).rejects.toThrow('credential storage does not match the Workbench runner');
     });
 
     test('fails preflight when a declared tool is absent inside the sandbox', async () => {
@@ -417,11 +500,14 @@ class FakeClient implements E2BClient {
 class FakeSandbox implements E2BSandbox {
     readonly id = 'sandbox-fixture';
     readonly started: Array<{ command: string; options: E2BCommandOptions }> = [];
+    readonly ptyStarted: Array<{ command: string; options: E2BPtyOptions }> = [];
     readonly uploads = new Map<number, Uint8Array>();
     deletedOutput = new Uint8Array();
     outputSize: number | undefined;
     outputDownload: Uint8Array | undefined;
     input = '';
+    readonly ptyInputs: Uint8Array[] = [];
+    readonly ptyResizes: Array<{ columns: number; rows: number }> = [];
     killed = false;
     sandboxInfo: E2BSandboxInfo = {
         startedAt: new Date('2026-09-11T12:00:00.000Z'),
@@ -463,6 +549,21 @@ class FakeSandbox implements E2BSandbox {
                     typeof value === 'string' ? value : new TextDecoder().decode(value);
             },
             closeStdin: async () => {},
+            kill: async () => {},
+        };
+    }
+
+    async startPty(command: string, options: E2BPtyOptions): Promise<E2BPty> {
+        this.ptyStarted.push({ command, options });
+        return {
+            pid: 11,
+            wait: async () => result(0),
+            sendInput: async (data) => {
+                this.ptyInputs.push(data);
+            },
+            resize: async (columns, rows) => {
+                this.ptyResizes.push({ columns, rows });
+            },
             kill: async () => {},
         };
     }

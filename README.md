@@ -278,21 +278,33 @@ wb run project-core --task "Review this migration"
 ```
 
 If more than one compatible connection is available, `wb connect` asks which
-one this Workbench should use. Run it again to switch connections. When the
-runner exposes a documented command-line login operation, `wb connect` can
-also open it for another provider. It never injects login commands into an
-interactive runner conversation. The selection is stored in
+one this Workbench should use. Run it again to switch connections or add or
+update a runner-native login. It never injects login commands into a Workbench
+conversation. The route selection is stored in
 `~/.workbench/connections.json`; it does not change the Workbench package,
 runner, model, or credential store.
 
-Local Workbenches use the runner's normal local credential store. OpenCode
-exposes a command-line login operation, so Docker Workbenches can retain its
-native credentials in a private Docker volume. Pi currently exposes credential
-inspection but not command-line login. Configure Pi before local runs. Docker
-and E2B Workbenches without a supported persistent login flow must declare their
-provider environment and receive it through inherited environment,
-`--env-file`, or `--env` on each command. The CLI checks only whether an allowed
-provider is ready. It does not read, upload, or rewrite provider tokens.
+Authentication uses the selected runner's native flow in every execution
+runtime. OpenCode opens `opencode auth login` for the selected provider. Pi has
+no standalone login command, so Workbench opens the Pi TUI and identifies the
+exact `/login <provider>` command to run before exiting back to Workbench.
+
+Local Workbenches use the runner's normal local credential store. Docker keeps
+each runner's native credentials in a private named volume. E2B keeps each
+runner's native credentials beneath the private Workbench data directory,
+copies that store only into fresh E2B sandboxes using that runner, and
+synchronizes changes back during orderly cleanup. The E2B control key and native
+provider credentials are separate: `E2B_API_KEY` stays on the host, while the
+runner's provider credential must exist inside the sandbox so the runner can
+authenticate. Credentials are never written to the Workbench package, workspace,
+run records, normalized events, or artifacts.
+
+Environment-backed provider routes remain supported through inherited
+environment, `--env-file`, or `--env`. The CLI checks whether an allowed route
+is ready but does not interpret or rewrite provider tokens. Because some runners
+keep all provider logins in one native file, an E2B sandbox receives the native
+store for that runner rather than a parsed provider-specific subset. Treat the
+sandbox provider and Workbench image as part of the credential trust boundary.
 
 Pi is distributed separately by the Pi project and must be installed in the
 selected runtime:
@@ -480,13 +492,20 @@ rejected.
 
 Input and output transfers each have a 512 MiB safety limit, enforced against
 uncompressed content. `E2B_API_KEY` is used only by the host control plane and is
-never sent to the sandbox. The sandbox receives only manifest-declared
-environment values and credentials needed by an allowed model route. Native
-runner credential stores are not uploaded, so provider credentials must be
-available through the run environment. `wb connect` does not open a native login
-inside a disposable E2B sandbox. It can use an already available
-environment-backed route, while missing credentials must be supplied through
-inherited environment, `--env-file`, or `--env`.
+never sent to the sandbox. The sandbox receives manifest-declared environment
+values for allowed model routes and the private native credential store for its
+selected runner. `wb connect` opens the runner's native authentication UI inside
+the same E2B image used for runs. OpenCode supports its API-key and headless
+ChatGPT login methods there. For Pi, Workbench opens the Pi TUI and directs the
+user to its native `/login` command.
+
+E2B runner credentials live beneath
+`~/.workbench/runtime-credentials/e2b/<runner>`, with private directory
+permissions. They are staged separately from packages and workspaces, then
+synchronized back before the disposable sandbox is destroyed. Existing local
+credentials are not modified if staging or startup fails. A host process crash
+before cleanup can lose a newly completed remote login, so `wb connect` reports
+success only after credential synchronization finishes.
 
 Normal completion, failure, or cancellation synchronizes eligible changes and
 destroys the sandbox. The 60-minute provider timeout pauses a crash survivor
@@ -505,11 +524,11 @@ shape, and a clearly marked infrastructure cost estimate when sandbox metadata
 is available. This stays separate from model tokens and model cost in
 `usage.updated`.
 
-E2B is copy-based rather than mount-based. It cannot reuse native host login
-stores, and a resumed Workbench session runs in a fresh sandbox after its native
-session state is copied in. If the host dies before result collection, the lease
-and `wb clean --apply` bound the surviving sandbox, but draft 0 does not recover
-a portable result bundle from it. Direct synchronization is the current
+E2B is copy-based rather than mount-based. A resumed Workbench session runs in a
+fresh sandbox after its native session state and runner credential store are
+copied in. If the host dies before result collection, the lease and
+`wb clean --apply` bound the surviving sandbox, but draft 0 does not recover a
+portable result bundle from it. Direct synchronization is the current
 compatibility behavior; explicit portable apply and export behavior is being
 specified separately.
 
@@ -657,9 +676,10 @@ Pi resumes from its session file. Docker mounts native state into each new
 container. E2B copies native state into each new sandbox and synchronizes it back
 on orderly cleanup. A session remains locked to its original
 Workbench version, runner, model, runtime, workspace, and workspace bindings.
-Docker credentials remain in the runner's private named volume. A Workbench that
-declares host Docker access must be explicitly reauthorized with
-`--allow-host-docker` for each resumed run.
+Docker credentials remain in the runner's private named volume. E2B runner
+credentials persist in private runtime storage independently of native session
+state. A Workbench that declares host Docker access must be explicitly
+reauthorized with `--allow-host-docker` for each resumed run.
 
 ## Source and authorization boundaries
 
@@ -677,11 +697,11 @@ values.
 For `runtime: local`, declared tools must exist on the host. For `runtime:
 docker` or `runtime: e2b`, declared tools and the runner must exist inside the
 resolved image; host installations do not satisfy the requirement. Only
-manifest-declared environment values and credential variables for the selected
-model provider are bound into the execution environment. `E2B_API_KEY` remains
-host-only. Secret values do not appear in Docker command arguments or durable
-Workbench metadata. Preflight failure stops execution before model tokens are
-spent.
+manifest-declared environment values, credential variables for the selected
+model provider, and the selected runner's private native credential store are
+bound into the execution environment. `E2B_API_KEY` remains host-only. Secret
+values do not appear in Docker command arguments or durable Workbench metadata.
+Preflight failure stops execution before model tokens are spent.
 
 ## Specification and documentation
 
@@ -719,7 +739,8 @@ for OpenCode and Pi. It requires previously connected runner credentials and
 makes model-provider requests.
 
 `test:e2b` requires `E2B_API_KEY`, builds a real E2B template, exercises remote
-streaming and workspace synchronization, and verifies sandbox destruction.
+streaming, PTY input, workspace synchronization, cross-sandbox credential
+persistence, and sandbox destruction.
 `test:e2b:sessions` additionally starts OpenCode in two fresh sandboxes and
 verifies native session resume. It requires a supported model-provider key and
 makes model-provider requests.

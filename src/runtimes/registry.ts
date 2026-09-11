@@ -110,6 +110,10 @@ class GuardedRuntime implements PreparedRuntime {
         return this.runtime.preparation ?? { kind: 'host' };
     }
 
+    get nativeAuthentication(): 'persistent' | 'unavailable' {
+        return this.runtime.nativeAuthentication;
+    }
+
     pathFor(hostPath: string): string {
         try {
             return this.runtime.pathFor(hostPath);

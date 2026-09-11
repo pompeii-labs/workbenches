@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { RunnerCredentialStore } from '../src/connections/credentials.js';
 import {
     InteractiveRun,
     type InteractiveRunSession,
@@ -9,6 +10,7 @@ import {
     type WorkbenchEvent,
 } from '../src/runs/index.js';
 import type { PreparedRuntime } from '../src/runtimes/contracts.js';
+import type { E2BPty } from '../src/runtimes/e2b/contracts.js';
 import { E2BManagedSandboxes } from '../src/runtimes/e2b/managed.js';
 import { E2BRuntimeProvider } from '../src/runtimes/e2b/provider.js';
 import { E2BSdkClient, e2bMetadata } from '../src/runtimes/e2b/sdk.js';
@@ -237,6 +239,201 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             await expectManagedSandboxGone(client, run.scope, run.id);
         },
         10 * 60 * 1_000
+    );
+
+    test(
+        'persists runner credentials across fresh sandboxes',
+        async () => {
+            const apiKey = process.env.E2B_API_KEY;
+            if (!apiKey) throw new Error('E2B_API_KEY is required for this test');
+            const workbench = await fixture();
+            const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-auth-home-'));
+            temporaryDirectories.push(home);
+            const client = new E2BSdkClient(apiKey);
+            const scope = RunStore.scope(home);
+            const credentials = await new RunnerCredentialStore(home).prepare(
+                'e2b',
+                'opencode'
+            );
+            const assets = [
+                {
+                    path: workbench.repositoryDirectory,
+                    access: 'read-write' as const,
+                },
+                {
+                    path: workbench.packageDirectory,
+                    access: 'read-only' as const,
+                },
+            ];
+
+            const firstRun = { id: RunStore.createId(), scope };
+            const first = await new E2BRuntimeProvider({ client }).prepare({
+                workbench,
+                workspaceDirectory: workbench.repositoryDirectory,
+                environment: process.env,
+                assets,
+                credentials,
+                purpose: 'connect',
+                run: firstRun,
+            });
+            activeRuntimes.add(first);
+            await first.preflight();
+            const written = await first.execute({
+                command: [
+                    '/bin/sh',
+                    '-c',
+                    'mkdir -p "$XDG_DATA_HOME/opencode"; printf \'{"fixture":"persistent"}\\n\' > "$XDG_DATA_HOME/opencode/auth.json"; chmod 600 "$XDG_DATA_HOME/opencode/auth.json"',
+                ],
+                cwd: first.workspaceDirectory,
+                env: first.environment,
+            });
+            expect(written.code, written.stderr).toBe(0);
+            await first.cleanup();
+            activeRuntimes.delete(first);
+            await expectManagedSandboxGone(client, scope, firstRun.id);
+            expect(
+                await readFile(
+                    join(credentials.directory, 'opencode', 'auth.json'),
+                    'utf8'
+                )
+            ).toBe('{"fixture":"persistent"}\n');
+
+            const secondRun = { id: RunStore.createId(), scope };
+            const second = await new E2BRuntimeProvider({ client }).prepare({
+                workbench,
+                workspaceDirectory: workbench.repositoryDirectory,
+                environment: process.env,
+                assets,
+                credentials,
+                purpose: 'run',
+                run: secondRun,
+            });
+            activeRuntimes.add(second);
+            await second.preflight();
+            const restored = await second.execute({
+                command: ['/bin/sh', '-c', 'cat "$XDG_DATA_HOME/opencode/auth.json"'],
+                cwd: second.workspaceDirectory,
+                env: second.environment,
+            });
+            expect(restored.code, restored.stderr).toBe(0);
+            expect(restored.stdout).toBe('{"fixture":"persistent"}\n');
+            await second.cleanup();
+            activeRuntimes.delete(second);
+            await expectManagedSandboxGone(client, scope, secondRun.id);
+        },
+        10 * 60 * 1_000
+    );
+
+    test(
+        'provides an interactive PTY with input forwarding',
+        async () => {
+            const apiKey = process.env.E2B_API_KEY;
+            if (!apiKey) throw new Error('E2B_API_KEY is required for this test');
+            const client = new E2BSdkClient(apiKey);
+            const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-pty-home-'));
+            temporaryDirectories.push(home);
+            const run = {
+                id: RunStore.createId(),
+                scope: RunStore.scope(home),
+            };
+            const prepared = await client.prepareTemplate(
+                { image: 'e2bdev/base:latest' },
+                'workbench-e2b-pty-e2e-v1'
+            );
+            const sandbox = await client.createSandbox({
+                template: prepared.immutableReference,
+                metadata: e2bMetadata(run),
+                timeoutMilliseconds: 60_000,
+            });
+            const decoder = new TextDecoder();
+            let output = '';
+            try {
+                const terminal = await sandbox.startPty(
+                    `/bin/sh -c 'read value; test "$value" = input && echo remote-pty-ok'`,
+                    {
+                        columns: 80,
+                        rows: 24,
+                        onData: (data) => {
+                            output += decoder.decode(data, { stream: true });
+                        },
+                    }
+                );
+                await terminal.sendInput(new TextEncoder().encode('input\r'));
+                const result = await terminal.wait();
+                output += decoder.decode();
+                expect(result.code, result.stderr).toBe(0);
+                expect(output).toContain('remote-pty-ok');
+            } finally {
+                await sandbox.kill().catch(() => {});
+            }
+            await expectManagedSandboxGone(client, run.scope, run.id);
+        },
+        2 * 60 * 1_000
+    );
+
+    test(
+        'opens the real OpenCode provider authentication menu in a PTY',
+        async () => {
+            const apiKey = process.env.E2B_API_KEY;
+            if (!apiKey) throw new Error('E2B_API_KEY is required for this test');
+            const client = new E2BSdkClient(apiKey);
+            const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-auth-pty-'));
+            temporaryDirectories.push(home);
+            const run = {
+                id: RunStore.createId(),
+                scope: RunStore.scope(home),
+            };
+            const prepared = await client.prepareTemplate(
+                { image: 'ghcr.io/anomalyco/opencode:1.18.30' },
+                'workbench-e2b-opencode-auth-e2e-v1'
+            );
+            const sandbox = await client.createSandbox({
+                template: prepared.immutableReference,
+                metadata: e2bMetadata(run),
+                timeoutMilliseconds: 60_000,
+            });
+            const decoder = new TextDecoder();
+            let output = '';
+            let terminal: E2BPty | undefined;
+            let resolveMenu: (() => void) | undefined;
+            let rejectMenu: ((error: Error) => void) | undefined;
+            const menu = new Promise<void>((resolveMenuPromise, rejectMenuPromise) => {
+                resolveMenu = resolveMenuPromise;
+                rejectMenu = rejectMenuPromise;
+            });
+            const timeout = setTimeout(() => {
+                rejectMenu?.(
+                    new Error(
+                        `OpenCode authentication menu did not appear: ${output.slice(-500)}`
+                    )
+                );
+            }, 30_000);
+            try {
+                terminal = await sandbox.startPty(
+                    'opencode auth login --provider openai',
+                    {
+                        columns: 100,
+                        rows: 30,
+                        env: { XDG_DATA_HOME: '/tmp/workbench-credentials' },
+                        onData: (data) => {
+                            output += decoder.decode(data, { stream: true });
+                            if (output.includes('ChatGPT')) resolveMenu?.();
+                        },
+                    }
+                );
+                await menu;
+                await terminal.sendInput(new Uint8Array([0x03]));
+                await terminal.wait();
+                output += decoder.decode();
+                expect(output).toContain('ChatGPT');
+            } finally {
+                clearTimeout(timeout);
+                await terminal?.kill().catch(() => {});
+                await sandbox.kill().catch(() => {});
+            }
+            await expectManagedSandboxGone(client, run.scope, run.id);
+        },
+        2 * 60 * 1_000
     );
 
     test(

@@ -135,7 +135,7 @@ describe('runner connection selection', () => {
             reference: 'project-core',
             home,
             choose: async (options) => {
-                expect(options.allowConnect).toBeFalse();
+                expect(options.allowConnect).toBeTrue();
                 const connection = options.connections.find(
                     (candidate) => candidate.nativeProvider === 'openai-codex'
                 );
@@ -158,19 +158,48 @@ describe('runner connection selection', () => {
         ).toBe('OpenAI Codex subscription');
     });
 
-    test('does not offer an interactive Pi login when no connection exists', async () => {
+    test('opens Pi with instructions for its native login flow', async () => {
         const home = await temporaryHome();
         const workbench = fixture('pi');
+        let authenticated = false;
+        let loginCommand: string[] = [];
+        const announcements: string[] = [];
+        const prepared = runtime('', {
+            execute: async () => ({
+                code: 0,
+                stdout: authenticated
+                    ? 'provider model\nopenai-codex gpt-5.6-terra\n'
+                    : 'provider model\n',
+                stderr: '',
+            }),
+            interact: async (invocation) => {
+                authenticated = true;
+                loginCommand = invocation.command;
+                return 0;
+            },
+        });
 
-        await expect(
-            configure({
-                workbench,
-                runner: runner('pi'),
-                runtime: runtime('provider model\n'),
-                reference: 'project-core',
-                home,
-            })
-        ).rejects.toThrow('Pi does not expose a command-line login operation');
+        const status = await configure({
+            workbench,
+            runner: runner('pi'),
+            runtime: prepared,
+            reference: 'project-core',
+            home,
+            chooseProvider: async (options) => {
+                const provider = options.providers.find(
+                    (candidate) => candidate.nativeProvider === 'openai-codex'
+                );
+                if (!provider) throw new Error('missing Codex fixture');
+                return provider;
+            },
+            announce: (message) => announcements.push(message),
+        });
+
+        expect(loginCommand).toEqual(['pi', '--no-context-files']);
+        expect(status.configuration?.nativeProvider).toBe('openai-codex');
+        expect(announcements.join('\n')).toContain(
+            'run /login openai-codex, finish signing in, then exit Pi'
+        );
     });
 
     test('connects the first compatible credential and asks when several were added', async () => {
@@ -245,7 +274,7 @@ describe('runner connection selection', () => {
             'Choose a sign-in method in the next prompt: API key or ChatGPT Plus/Pro'
         );
         expect(announcements.join('\n')).toContain(
-            'Workbench does not copy or store the credential'
+            'The runner stores the credential in its native user store'
         );
     });
 
@@ -333,6 +362,7 @@ describe('runner connection selection', () => {
         const provider = await ConnectionManager.promptProvider(
             {
                 runner: 'opencode',
+                runtime: 'local',
                 model: 'openai/gpt-5.6-terra',
                 providers: [
                     {
@@ -376,6 +406,37 @@ describe('runner connection selection', () => {
         ]);
         expect(observed?.placeholder).toBe('Type to search providers');
         expect(observed?.maxItems).toBe(7);
+    });
+
+    test('labels headless OpenAI authentication outside the local runtime', async () => {
+        let observed: Parameters<RunnerSelect>[0] | undefined;
+        await ConnectionManager.promptProvider(
+            {
+                runner: 'opencode',
+                runtime: 'e2b',
+                model: 'openai/gpt-5.6-terra',
+                providers: [
+                    {
+                        provider: 'openai',
+                        nativeProvider: 'openai',
+                        nativeModel: 'gpt-5.6-terra',
+                    },
+                    {
+                        provider: 'openrouter',
+                        nativeProvider: 'openrouter',
+                        nativeModel: 'openai/gpt-5.6-terra',
+                    },
+                ],
+            },
+            async (options) => {
+                observed = options;
+                return 0;
+            }
+        );
+
+        expect(observed?.options[0]?.hint).toBe(
+            'API key or ChatGPT Plus/Pro headless login'
+        );
     });
 
     test('rejects non-interactive and cancelled connection menus', async () => {
@@ -463,6 +524,7 @@ function runtime(
 ): PreparedRuntime {
     return {
         name: 'local',
+        nativeAuthentication: 'persistent',
         workbench: fixture('pi'),
         workspaceDirectory: '/repo',
         environment: {},
