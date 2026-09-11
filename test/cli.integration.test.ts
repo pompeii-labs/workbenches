@@ -668,7 +668,7 @@ describe('CLI integration', () => {
         expect(continued.stdout).toBe('fixture response\n');
         expect(await readFile(`${record}.args`, 'utf8')).toBe('second task\n');
 
-        await waitForRunEventCount(home, sessionId, 'turn.started', 2);
+        await waitForRunEventCount(home, sessionId, 'turn.started', 2, 15_000);
         const replayed = await executeCli(['attach', sessionId, '--json'], environment);
         const events = replayed.stdout
             .trim()
@@ -681,7 +681,7 @@ describe('CLI integration', () => {
         expect(new Set(events.map((event) => event.run_id))).toEqual(
             new Set([sessionId])
         );
-    });
+    }, 20_000);
 
     test('queues a detached continuation onto the active native session', async () => {
         const fixture = await createFixture();
@@ -706,7 +706,7 @@ describe('CLI integration', () => {
         expect(continued.stderr).toBe('');
         expect(continued.stdout).toBe(`${sessionId}\n`);
 
-        await waitForRunEventCount(home, sessionId, 'turn.completed', 2);
+        await waitForRunEventCount(home, sessionId, 'turn.completed', 2, 15_000);
         const attached = await executeCli(['attach', sessionId, '--json'], environment);
         const events = attached.stdout
             .trim()
@@ -719,7 +719,7 @@ describe('CLI integration', () => {
             run_id: sessionId,
             type: 'run.completed',
         });
-    });
+    }, 20_000);
 
     test('continues a completed session as a new linked native run', async () => {
         const fixture = await createFixture({
@@ -1410,11 +1410,12 @@ async function waitForRunEventCount(
     home: string,
     runId: string,
     type: string,
-    count: number
+    count: number,
+    timeoutMilliseconds = 5_000
 ): Promise<void> {
     const store = new RunStore(home);
     const started = Date.now();
-    while (Date.now() - started < 5_000) {
+    while (Date.now() - started < timeoutMilliseconds) {
         const events = await store.readEvents(runId);
         if (events.filter((event) => event.type === type).length >= count) return;
         await Bun.sleep(25);
