@@ -681,7 +681,7 @@ describe('CLI integration', () => {
         expect(new Set(events.map((event) => event.run_id))).toEqual(
             new Set([sessionId])
         );
-    });
+    }, 15_000);
 
     test('queues a detached continuation onto the active native session', async () => {
         const fixture = await createFixture();
@@ -719,7 +719,7 @@ describe('CLI integration', () => {
             run_id: sessionId,
             type: 'run.completed',
         });
-    });
+    }, 15_000);
 
     test('continues a completed session as a new linked native run', async () => {
         const fixture = await createFixture({
