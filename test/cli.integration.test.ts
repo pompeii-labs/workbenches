@@ -646,7 +646,7 @@ describe('CLI integration', () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-active-resume-');
         const record = join(fixture.root, 'runner');
-        const bin = await fakeBin([], { delay: 250 });
+        const bin = await fakeBin([], { delay: 2_000 });
         const environment = {
             PATH: `${bin}:${process.env.PATH}`,
             WORKBENCH_HOME: home,
@@ -686,7 +686,7 @@ describe('CLI integration', () => {
     test('queues a detached continuation onto the active native session', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-detached-resume-');
-        const bin = await fakeBin([], { delay: 250 });
+        const bin = await fakeBin([], { delay: 2_000 });
         const environment = {
             PATH: `${bin}:${process.env.PATH}`,
             WORKBENCH_HOME: home,
