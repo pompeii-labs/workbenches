@@ -208,7 +208,6 @@ describe('CLI integration', () => {
                 WB_TEST_RECORD: record,
             }
         );
-
         expect(result.code).toBe(0);
         expect(await readFile(`${record}.cwd`, 'utf8')).toBe(`${fixture.root}\n`);
         expect(await readFile(`${record}.args`, 'utf8')).toContain(
@@ -553,6 +552,10 @@ describe('CLI integration', () => {
         expect(dispatched.code).toBe(0);
         expect(dispatched.stderr).toBe('');
         expect(dispatched.stdout.trim()).toMatch(/^wb_[a-z0-9]{20,64}$/);
+        await new SessionStore(home).rename(
+            dispatched.stdout.trim(),
+            'Dependency audit'
+        );
 
         const active = await executeCli(['ps', '--json'], environment);
         expect(active.code).toBe(0);
@@ -562,6 +565,7 @@ describe('CLI integration', () => {
             session_id: dispatched.stdout.trim(),
             mode: 'detached',
             workbench: 'fixture-core',
+            session_name: 'Dependency audit',
             resumable: true,
         });
 
@@ -597,6 +601,7 @@ describe('CLI integration', () => {
 
         const finished = await executeCli(['ps'], environment);
         expect(finished.stdout).toContain(dispatched.stdout.trim());
+        expect(finished.stdout).toContain('Dependency audit');
         expect(finished.stdout).toContain('completed');
         const history = await executeCli(['ps', '--all'], environment);
         expect(history.stdout).toContain(dispatched.stdout.trim());

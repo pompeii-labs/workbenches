@@ -92,6 +92,17 @@ export class CliPresenter {
         );
     }
 
+    block(lines: string[], tone: CliTone = 'muted'): void {
+        if (!this.#interactive || lines.length === 0) return;
+        this.#stdout(`${lines.map((line) => this.#color(tone, line)).join('\n')}\n`);
+    }
+
+    formattedBlock(styledLines: string[], plainLines = styledLines): void {
+        if (!this.#interactive || styledLines.length === 0) return;
+        const lines = this.#colors.isColorSupported ? styledLines : plainLines;
+        this.#stdout(`${lines.join('\n')}\n`);
+    }
+
     #marker(tone: CliTone): string {
         if (tone === 'success') return this.#colors.green('✓');
         if (tone === 'info') return this.#colors.cyan('●');

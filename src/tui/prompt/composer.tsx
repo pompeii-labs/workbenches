@@ -49,7 +49,9 @@ export function Composer(props: ComposerProps) {
     });
     const suggestions = createMemo(() => {
         const query = commandQuery();
-        return query === undefined ? [] : props.commands.find(query).slice(0, 8);
+        if (query === undefined) return [];
+        const commands = props.commands.find(query);
+        return (query ? commands : featureCommands(commands)).slice(0, 8);
     });
     const suggestionNameWidth = createMemo(() =>
         Math.max(12, ...suggestions().map((command) => command.name.length + 3))
@@ -60,8 +62,8 @@ export function Composer(props: ComposerProps) {
         setValue(text);
     };
     const clear = () => setText('');
-    const complete = () => {
-        const command = suggestions()[selected()];
+    const complete = (selectedCommand?: TuiCommand) => {
+        const command = selectedCommand ?? suggestions()[selected()];
         if (!command) return;
         setText(`/${command.name}${command.usage ? ' ' : ''}`);
     };
@@ -70,13 +72,32 @@ export function Composer(props: ComposerProps) {
         if (!text || props.disabled) return;
         if (text.startsWith('/')) {
             const parsed = props.commands.parse(text);
-            const suggested = suggestions()[selected()];
+            const commandToken = text.slice(1).split(/\s/u, 1)[0] ?? '';
+            const hasArgumentSeparator = /\s/u.test(text.slice(1));
+            const exact = props.commands.exact(commandToken);
+            const suggested = hasArgumentSeparator
+                ? undefined
+                : props.commands.find(commandToken).slice(0, 8)[selected()];
+            if (suggested && !hasArgumentSeparator && exact !== suggested) {
+                if (suggested.usage) {
+                    complete(suggested);
+                    return;
+                }
+                clear();
+                props.history.reset();
+                void props.onCommand(suggested, '');
+                return;
+            }
             const command = parsed?.command ?? suggested;
             if (!command) {
                 props.onUnknownCommand(text.split(/\s/u)[0] ?? text);
                 return;
             }
             const argument = parsed?.argument ?? '';
+            if (!argument && command.usage?.startsWith('<')) {
+                setText(`/${command.name} `);
+                return;
+            }
             clear();
             props.history.reset();
             void props.onCommand(command, argument);
@@ -295,4 +316,26 @@ export function Composer(props: ComposerProps) {
             </box>
         </box>
     );
+}
+
+const featuredCommands = [
+    'resume',
+    'home',
+    'rename',
+    'improve',
+    'clear',
+    'permissions',
+    'theme',
+    'help',
+];
+
+function featureCommands(commands: TuiCommand[]): TuiCommand[] {
+    const priorities = new Map(
+        featuredCommands.map((name, index) => [name, index] as const)
+    );
+    return commands.toSorted((left, right) => {
+        const leftPriority = priorities.get(left.name) ?? featuredCommands.length;
+        const rightPriority = priorities.get(right.name) ?? featuredCommands.length;
+        return leftPriority - rightPriority || left.name.localeCompare(right.name);
+    });
 }

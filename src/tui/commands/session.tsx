@@ -11,7 +11,9 @@ import { type TuiCommand, TuiCommandRegistry } from './registry.js';
 
 export interface SessionCommandActions {
     currentSessionId(): string | undefined;
-    resumeSession(session: StoredSession): void | Promise<void>;
+    sessionRenamed(session: StoredSession): void;
+    home(): void | Promise<void>;
+    browseSessions(): void | Promise<void>;
     clearTranscript(): void;
     attachments(): Array<{ name: string; path: string }>;
     clearAttachments(): void;
@@ -163,22 +165,47 @@ export class SessionCommands {
                 undefined,
                 '[clear]'
             ),
-            this.#command(
-                'sessions',
-                'Recent sessions',
-                'Resume a local Workbench session',
-                'Session',
-                () => this.#showSessions()
-            ),
-            this.#command(
-                'improve',
-                'Improve Workbench',
-                'Open the official creator with evidence from this session',
-                'Workbench',
-                (argument) => this.options.actions.improve(argument),
-                undefined,
-                '[feedback]'
-            ),
+            ...(this.options.authoring
+                ? []
+                : [
+                      this.#command(
+                          'home',
+                          'Workbench home',
+                          'Detach this terminal and return to discovery',
+                          'Session',
+                          () => this.options.actions.home()
+                      ),
+                      this.#command(
+                          'resume',
+                          'Resume session',
+                          'Detach this terminal and browse previous sessions',
+                          'Session',
+                          () => this.options.actions.browseSessions(),
+                          ['sessions']
+                      ),
+                      this.#command(
+                          'rename',
+                          'Rename session',
+                          'Set the display name for this session',
+                          'Session',
+                          (argument) => this.#rename(argument),
+                          undefined,
+                          '<name>'
+                      ),
+                  ]),
+            ...(this.options.authoring
+                ? []
+                : [
+                      this.#command(
+                          'improve',
+                          'Improve Workbench',
+                          'Open the official creator with evidence from this session',
+                          'Workbench',
+                          (argument) => this.options.actions.improve(argument),
+                          undefined,
+                          '[feedback]'
+                      ),
+                  ]),
             this.#command(
                 'theme',
                 'Choose theme',
@@ -259,47 +286,20 @@ export class SessionCommands {
         ));
     }
 
-    async #showSessions(): Promise<void> {
-        const sessions = (
-            await new SessionStore(this.options.home).list({
-                resumableOnly: true,
-            })
-        ).slice(0, 20);
-        if (sessions.length === 0) {
-            this.options.dialog.open(() => (
-                <InfoDialog
-                    title="Sessions"
-                    description="No interactive Workbench sessions have been run locally."
-                />
-            ));
+    async #rename(name: string): Promise<void> {
+        const id = this.options.actions.currentSessionId();
+        if (!id) {
+            this.options.actions.showError('This Workbench session is not ready.');
             return;
         }
-        const current = this.options.actions.currentSessionId();
-        this.options.dialog.open(() => (
-            <SelectDialog
-                title="Sessions"
-                placeholder="Search sessions"
-                options={sessions.map((session) => ({
-                    title: `${session.workbench}@${session.workbench_version}`,
-                    description: `${session.runner} · ${this.#time(session.updated_at)} · ${session.id}`,
-                    value: session,
-                    current: session.id === current,
-                }))}
-                onSelect={(option) => {
-                    if (option.value.id === current) return;
-                    void this.options.actions.resumeSession(option.value);
-                }}
-            />
-        ));
-    }
-
-    #time(timestamp: string): string {
-        const date = new Date(timestamp);
-        if (Number.isNaN(date.valueOf())) return timestamp;
-        return new Intl.DateTimeFormat(undefined, {
-            dateStyle: 'medium',
-            timeStyle: 'short',
-        }).format(date);
+        try {
+            const session = await new SessionStore(this.options.home).rename(id, name);
+            this.options.actions.sessionRenamed(session);
+        } catch (error) {
+            this.options.actions.showError(
+                error instanceof Error ? error.message : String(error)
+            );
+        }
     }
 
     #showThemes(): void {

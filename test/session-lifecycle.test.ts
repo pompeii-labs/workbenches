@@ -30,6 +30,7 @@ describe('Workbench session lifecycle', () => {
             expect(run.session_id).toBe(run.id);
             expect(await sessions.read(run.id)).toMatchObject({
                 id: run.id,
+                name: 'inspect',
                 latest_run_id: run.id,
             });
         }

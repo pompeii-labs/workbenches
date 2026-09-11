@@ -203,7 +203,9 @@ Docker paths such as `/workspace` and `/workspaces/<name>`.
 A Workbench session is the stable user-facing identity for work with one locked
 Workbench, runner, model, and workspace. A run is one execution attempt inside
 that session. The first run and session share an ID; resuming creates a new
-internal run while preserving the session ID.
+internal run while preserving the session ID. An optional user-defined name is
+presentation metadata only. It never replaces the stable ID in automation,
+provenance, control messages, or native runner mappings.
 
 A run may contain multiple turns. `turn.completed` means the runner completed
 one response and may accept another input; it does not terminate the run.
@@ -286,11 +288,20 @@ normalized event stream.
 recorded by the session. It attaches to an active run or starts a linked run from
 saved native context. Adding a task performs the same continuation without
 opening the terminal client; `--detach` leaves it in the background. The TUI
-exposes the same operation through `/sessions` and the recent-session area on the
-home screen. A resume is rejected if the package no longer matches the recorded
-Workbench name, version, runner, model, or workspace, or if the original runner
-never reached a resumable state. A Workbench that declares host Docker engine
-access requires a new explicit `--allow-host-docker` authorization on resume.
+exposes the same operation through an active-workspace-scoped `/resume` browser.
+On a bare invocation the active workspace is the current working directory; an
+explicit `--dir` or resumed session preserves its recorded workspace. A resume
+is rejected if the package no longer matches the recorded Workbench name,
+version, runner, model, or workspace, or if the original runner never reached a
+resumable state. A Workbench that declares host Docker engine access requires a
+new explicit `--allow-host-docker` authorization on resume.
+
+`/rename <name>` updates the session's durable display metadata. Named sessions
+use that label in `/resume`, the active chat header, and `wb ps`, while still
+retaining the stable ID for control. After the alternate screen has closed, the
+terminal client prints a resume handoff only when the session reached native
+resumable state. Failed starts and runners without native resume support do not
+receive a misleading resume command.
 
 `wb attach` is observation only. It follows the latest normalized event stream
 without keeping the runner alive or becoming a controlling client. Exiting the

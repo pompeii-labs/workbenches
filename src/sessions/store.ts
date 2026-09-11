@@ -8,15 +8,17 @@ import {
     stat,
     writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import type { CatalogRegistryReference } from '../catalog/index.js';
 import { RunStore } from '../runs/store.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
+import { SessionIdentity } from './identity.js';
 
 export interface StoredSession {
     version: 1;
     id: string;
+    name?: string;
     workbench: string;
     workbench_version: string;
     runner: string;
@@ -37,22 +39,30 @@ export interface StoredSession {
 
 export type CreateStoredSessionOptions = Omit<
     StoredSession,
-    'version' | 'runtime' | 'created_at' | 'updated_at'
+    'version' | 'name' | 'runtime' | 'created_at' | 'updated_at'
 > & {
+    name?: string;
     runtime?: string;
 };
 
 export class SessionStore {
+    readonly #identity = new SessionIdentity();
+
     constructor(private readonly home: string) {}
 
     async exclusive<T>(id: string, operation: () => Promise<T>): Promise<T> {
         RunStore.validateId(id);
         const token = crypto.randomUUID();
-        await this.acquire(id, token);
+        const directory = this.continuationLeaseDirectory(id);
+        await this.acquireLease(
+            directory,
+            token,
+            `Timed out waiting to continue Workbench session: ${id}`
+        );
         try {
             return await operation();
         } finally {
-            await this.release(id, token);
+            await this.releaseLease(directory, token);
         }
     }
 
@@ -66,9 +76,11 @@ export class SessionStore {
             mode: 0o700,
         });
         const timestamp = new Date().toISOString();
+        const { name, ...metadata } = options;
         const session: StoredSession = {
             version: 1,
-            ...options,
+            ...metadata,
+            ...(name !== undefined ? { name: this.#identity.normalize(name) } : {}),
             runtime: options.runtime ?? 'local',
             created_at: timestamp,
             updated_at: timestamp,
@@ -86,6 +98,9 @@ export class SessionStore {
         if (
             value.version !== 1 ||
             value.id !== id ||
+            (value.name !== undefined &&
+                (typeof value.name !== 'string' ||
+                    !this.#identity.isNormalized(value.name))) ||
             typeof value.workbench !== 'string' ||
             typeof value.workbench_version !== 'string' ||
             typeof value.runner !== 'string' ||
@@ -116,20 +131,43 @@ export class SessionStore {
         id: string,
         patch: Partial<Pick<StoredSession, 'native_session_id' | 'latest_run_id'>>
     ): Promise<StoredSession> {
-        const current = await this.read(id);
-        const next: StoredSession = {
+        return this.mutate(id, (current) => ({
             ...current,
             ...patch,
             updated_at: new Date().toISOString(),
-        };
-        await this.write(next);
-        return next;
+        }));
     }
 
-    async list(options: { resumableOnly?: boolean } = {}): Promise<StoredSession[]> {
+    async rename(id: string, name: string): Promise<StoredSession> {
+        const normalized = this.#identity.normalize(name);
+        return this.mutate(id, (current) => ({
+            ...current,
+            name: normalized,
+            updated_at: new Date().toISOString(),
+        }));
+    }
+
+    async nameFromPrompt(id: string, prompt: string): Promise<StoredSession> {
+        const suggested = this.#identity.fromPrompt(prompt);
+        if (!suggested) return this.read(id);
+        return this.mutate(id, (current) =>
+            current.name
+                ? current
+                : {
+                      ...current,
+                      name: suggested,
+                      updated_at: new Date().toISOString(),
+                  }
+        );
+    }
+
+    async list(
+        options: { resumableOnly?: boolean; workspace?: string } = {}
+    ): Promise<StoredSession[]> {
         const entries = await readdir(this.root, { withFileTypes: true }).catch(
             () => []
         );
+        const workspace = options.workspace ? resolve(options.workspace) : undefined;
         const sessions = await Promise.all(
             entries
                 .filter((entry) => entry.isDirectory() && entry.name.startsWith('wb_'))
@@ -141,6 +179,7 @@ export class SessionStore {
                 (session) =>
                     !options.resumableOnly || Boolean(session.native_session_id)
             )
+            .filter((session) => !workspace || resolve(session.workspace) === workspace)
             .toSorted((left, right) => right.updated_at.localeCompare(left.updated_at));
     }
 
@@ -176,27 +215,57 @@ export class SessionStore {
         return join(this.directory(id), 'session.json');
     }
 
-    private leaseDirectory(id: string): string {
+    private continuationLeaseDirectory(id: string): string {
         return join(this.directory(id), '.lease');
     }
 
-    private leaseOwnerPath(id: string): string {
-        return join(this.leaseDirectory(id), 'owner.json');
+    private metadataLeaseDirectory(id: string): string {
+        return join(this.directory(id), '.metadata-lease');
     }
 
-    private async acquire(id: string, token: string): Promise<void> {
+    private leaseOwnerPath(directory: string): string {
+        return join(directory, 'owner.json');
+    }
+
+    private async mutate(
+        id: string,
+        operation: (current: StoredSession) => StoredSession
+    ): Promise<StoredSession> {
+        RunStore.validateId(id);
+        await this.read(id);
+        const directory = this.metadataLeaseDirectory(id);
+        const token = crypto.randomUUID();
+        await this.acquireLease(
+            directory,
+            token,
+            `Timed out updating Workbench session: ${id}`
+        );
+        try {
+            const next = operation(await this.read(id));
+            await this.write(next);
+            return next;
+        } finally {
+            await this.releaseLease(directory, token);
+        }
+    }
+
+    private async acquireLease(
+        directory: string,
+        token: string,
+        timeoutMessage: string
+    ): Promise<void> {
         const started = Date.now();
         while (Date.now() - started < 30_000) {
             try {
-                await mkdir(this.leaseDirectory(id), { mode: 0o700 });
+                await mkdir(directory, { mode: 0o700 });
                 try {
                     await writeFile(
-                        this.leaseOwnerPath(id),
+                        this.leaseOwnerPath(directory),
                         `${JSON.stringify({ version: 1, token, pid: process.pid })}\n`,
                         { mode: 0o600 }
                     );
                 } catch (error) {
-                    await rm(this.leaseDirectory(id), {
+                    await rm(directory, {
                         recursive: true,
                         force: true,
                     });
@@ -205,15 +274,15 @@ export class SessionStore {
                 return;
             } catch (error) {
                 if (!isAlreadyExists(error)) throw error;
-                if (await this.recoverAbandonedLease(id)) continue;
+                if (await this.recoverAbandonedLease(directory)) continue;
                 await Bun.sleep(25);
             }
         }
-        throw new Error(`Timed out waiting to continue Workbench session: ${id}`);
+        throw new Error(timeoutMessage);
     }
 
-    private async recoverAbandonedLease(id: string): Promise<boolean> {
-        const source = await readFile(this.leaseOwnerPath(id), 'utf8').catch(
+    private async recoverAbandonedLease(directory: string): Promise<boolean> {
+        const source = await readFile(this.leaseOwnerPath(directory), 'utf8').catch(
             () => undefined
         );
         if (source) {
@@ -222,20 +291,20 @@ export class SessionStore {
                 if (typeof owner.pid === 'number' && processIsAlive(owner.pid)) {
                     return false;
                 }
-                await rm(this.leaseDirectory(id), { recursive: true, force: true });
+                await rm(directory, { recursive: true, force: true });
                 return true;
             } catch {
                 // A partially written owner is handled by the age check below.
             }
         }
-        const details = await stat(this.leaseDirectory(id)).catch(() => undefined);
+        const details = await stat(directory).catch(() => undefined);
         if (!details || Date.now() - details.mtimeMs < 5_000) return false;
-        await rm(this.leaseDirectory(id), { recursive: true, force: true });
+        await rm(directory, { recursive: true, force: true });
         return true;
     }
 
-    private async release(id: string, token: string): Promise<void> {
-        const source = await readFile(this.leaseOwnerPath(id), 'utf8').catch(
+    private async releaseLease(directory: string, token: string): Promise<void> {
+        const source = await readFile(this.leaseOwnerPath(directory), 'utf8').catch(
             () => undefined
         );
         if (!source) return;
@@ -245,7 +314,7 @@ export class SessionStore {
         } catch {
             return;
         }
-        await rm(this.leaseDirectory(id), { recursive: true, force: true });
+        await rm(directory, { recursive: true, force: true });
     }
 
     private async write(session: StoredSession): Promise<void> {

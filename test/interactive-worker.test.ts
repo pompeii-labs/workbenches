@@ -290,6 +290,62 @@ describe('interactive run worker', () => {
         await expect(execution).resolves.toBe(0);
     });
 
+    test('names an unnamed resumed session from its first CLI input', async () => {
+        const home = await temporaryHome();
+        const sessionId = 'wb_workername123456789012';
+        const sessions = new SessionStore(home);
+        await sessions.create({
+            id: sessionId,
+            workbench: 'fixture-core',
+            workbench_version: '0.1.0',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            runtime: 'local',
+            reference: 'fixture-core',
+            workbench_path: '/repo/.workbenches/core',
+            workspace: '/workspace',
+            workspaces: [],
+            native_session_id: 'native-session-before',
+            latest_run_id: sessionId,
+        });
+        const stored = await new RunStore(home).create({
+            metadata: {
+                workbench: 'fixture-core',
+                workbench_version: '0.1.0',
+                runner: 'opencode',
+                model: 'openai/gpt-5.6-terra',
+                workspace: '/workspace',
+                mode: 'interactive',
+                session_id: sessionId,
+                resumed_from: sessionId,
+            },
+            request: {
+                workbench_path: '/repo/.workbenches/core',
+                workspace: '/workspace',
+                task: '',
+                session_id: sessionId,
+                native_session_id: 'native-session-before',
+            },
+        });
+        const adapter = new ControlledAdapter();
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+
+        await waitForReady(home, stored.id);
+        await handle.send('Audit Docker cleanup behavior');
+        await adapter.waitForPrompts(1);
+        await waitForSessionName(home, sessionId);
+        expect(await sessions.read(sessionId)).toMatchObject({
+            name: 'Audit Docker cleanup behavior',
+        });
+
+        await handle.cancelTurn();
+        await handle.close();
+        await expect(execution).resolves.toBe(0);
+    });
+
     test('preserves one session across steering, queued follow-ups, cancellation, and reconnect', async () => {
         const home = await temporaryHome();
         const stored = await fixtureRun(home);
@@ -978,6 +1034,15 @@ async function waitForRunning(home: string, runId: string): Promise<void> {
         await Bun.sleep(2);
     }
     throw new Error('Timed out waiting for interactive worker ownership');
+}
+
+async function waitForSessionName(home: string, sessionId: string): Promise<void> {
+    const store = new SessionStore(home);
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+        if ((await store.read(sessionId)).name) return;
+        await Bun.sleep(2);
+    }
+    throw new Error('Timed out waiting for Workbench session name');
 }
 
 async function waitForEvent(

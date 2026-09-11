@@ -3,7 +3,11 @@ import { basename } from 'node:path';
 import { WorkbenchPackage } from '../catalog/index.js';
 import { modelLabel } from '../models/index.js';
 import { RunnerRegistry } from '../runners/index.js';
-import { SessionStore, type StoredSession } from '../sessions/index.js';
+import {
+    SessionIdentity,
+    SessionStore,
+    type StoredSession,
+} from '../sessions/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import { type RunHandle, StoredRunHandle } from './handle.js';
@@ -28,6 +32,7 @@ export interface DispatchRunOptions {
 export class RunDispatcher {
     private readonly store: RunStore;
     private readonly sessions: SessionStore;
+    private readonly identity = new SessionIdentity();
 
     constructor(private readonly home: string) {
         this.store = new RunStore(home);
@@ -44,11 +49,15 @@ export class RunDispatcher {
         const digest = WorkbenchPackage.digest(
             await new WorkbenchPackage(workbench).files()
         );
+        const suggestedName = options.task
+            ? this.identity.fromPrompt(options.task)
+            : undefined;
         if (options.session) this.assertCompatible(options, options.session, digest);
         const session =
             options.session ??
             (await this.sessions.create({
                 id,
+                ...(suggestedName ? { name: suggestedName } : {}),
                 workbench: workbench.manifest.name,
                 workbench_version: workbench.manifest.version,
                 runner: workbench.manifest.runner,

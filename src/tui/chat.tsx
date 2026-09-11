@@ -13,7 +13,6 @@ import type {
     AuthoringOperation,
     AuthoringOperationResult,
 } from '../authoring/index.js';
-import { modelLabel } from '../models/index.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type {
     RunnerPermissionDecision,
@@ -22,9 +21,10 @@ import type {
     RunnerQuestionResponse,
 } from '../runners/session.js';
 import type { RunHandle } from '../runs/index.js';
-import type { ResolvedSession, StoredSession } from '../sessions/index.js';
+import { SessionStore, type StoredSession } from '../sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import { ActivityIndicator, usageLabel } from './activity.js';
+import { ChatHeader } from './chat-header.js';
 import { SessionCommands } from './commands/session.js';
 import { useDialog } from './dialog/index.js';
 import {
@@ -66,15 +66,16 @@ export interface ChatScreenProps {
     initialPrompt?: string;
     operation?: AuthoringOperation;
     environment?: Record<string, string | undefined>;
-    resolveSession?: (id: string) => Promise<ResolvedSession>;
     prepareImprovement?: (
         sessionId: string,
         feedback: string
     ) => Promise<PreparedWorkbenchChat>;
     onAuthoring?: (launch: PreparedWorkbenchChat) => void;
     onAuthoringFinished?: (result: AuthoringOperationResult) => void;
-    onResume: (session: ResolvedSession) => void;
+    onSessionObserved?: (id: string | undefined) => void;
+    onSessionUpdated?: (session: StoredSession) => void;
     onBack: () => void;
+    onBrowseSessions: () => void;
     onExit: () => void;
     homeAvailable: boolean;
 }
@@ -82,7 +83,7 @@ export interface ChatScreenProps {
 export interface PreparedWorkbenchChat {
     alias: string;
     resolved: ResolvedWorkbenchReference;
-    prompt: string;
+    prompt?: string;
     operation?: AuthoringOperation;
     environment?: Record<string, string | undefined>;
 }
@@ -93,6 +94,7 @@ export function ChatScreen(props: ChatScreenProps) {
     const dialog = useDialog();
     const [state, setState] = createSignal(emptyTranscript());
     const [sessionReady, setSessionReady] = createSignal(false);
+    const [sessionName, setSessionName] = createSignal(props.session?.name);
     const [attachments, setAttachments] = createSignal<PromptImageAttachment[]>([]);
     const [error, setError] = createSignal('');
     const [permission, setPermission] = createSignal<{
@@ -111,6 +113,7 @@ export function ChatScreen(props: ChatScreenProps) {
     const observation = new AbortController();
     const cancellation = new TurnCancellation();
     const history = new PromptHistory(props.home);
+    const sessions = new SessionStore(props.home);
     const attachmentReader = new PromptAttachmentReader(
         props.resolved.workspaceDirectory
     );
@@ -202,38 +205,24 @@ export function ChatScreen(props: ChatScreenProps) {
         if (back) props.onBack();
         else props.onExit();
     };
-    const resume = async (target: StoredSession) => {
-        if (leaving || state().busy) {
-            setError(
-                'Finish or cancel the active turn before resuming another session.'
-            );
-            return;
-        }
-        if (!props.resolveSession) {
-            setError('Session resume is unavailable.');
-            return;
-        }
+    const browseSessions = async () => {
+        if (leaving) return;
         if (props.operation) {
             setError(
                 'Finish this authoring operation before resuming another session.'
             );
             return;
         }
-        let resolved: ResolvedSession;
-        try {
-            resolved = await props.resolveSession(target.id);
-        } catch (cause) {
-            setError(cause instanceof Error ? cause.message : String(cause));
-            return;
-        }
         leaving = true;
+        await decidePermission('reject');
+        await respondToQuestion({ outcome: 'rejected' });
         observation.abort();
         await session?.detach().catch(() => {});
         await storedTranscript()
             ?.flush()
             .catch(() => {});
         await props.resolved.cleanup();
-        props.onResume(resolved);
+        props.onBrowseSessions();
     };
     const improve = async (feedback: string) => {
         if (leaving || state().busy) {
@@ -321,6 +310,17 @@ export function ChatScreen(props: ChatScreenProps) {
         try {
             if (steering) await session.steer(input);
             else await session.send(input);
+            if (!props.operation && !sessionName()) {
+                const id = props.session?.id ?? session.runId;
+                void sessions
+                    .nameFromPrompt(id, task)
+                    .then((updated) => {
+                        if (!updated.name) return;
+                        setSessionName(updated.name);
+                        props.onSessionUpdated?.(updated);
+                    })
+                    .catch(() => {});
+            }
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : String(cause);
             setError(message);
@@ -364,6 +364,7 @@ export function ChatScreen(props: ChatScreenProps) {
     };
 
     onMount(async () => {
+        props.onSessionObserved?.(undefined);
         void history.load().catch((cause) => {
             setError(
                 `Prompt history could not be loaded: ${cause instanceof Error ? cause.message : String(cause)}`
@@ -389,6 +390,9 @@ export function ChatScreen(props: ChatScreenProps) {
                 ...(props.session ? { session: props.session } : {}),
                 ...(props.environment ? { environment: props.environment } : {}),
             });
+            if (!props.operation) {
+                props.onSessionObserved?.(props.session?.id ?? session.runId);
+            }
             if (!storedTranscript()) {
                 setStoredTranscript(new SessionTranscript(props.home, session.runId));
             }
@@ -443,7 +447,9 @@ export function ChatScreen(props: ChatScreenProps) {
                 setEventCursor({ runId: event.run_id, sequence: event.sequence });
             }).catch(fail);
         } catch (cause) {
-            setError(cause instanceof Error ? cause.message : String(cause));
+            const message = cause instanceof Error ? cause.message : String(cause);
+            setError(message);
+            if (props.operation) setTerminal({ status: 'failed', message });
             setState((current) => ({ ...current, status: 'Failed' }));
         }
     });
@@ -530,7 +536,12 @@ export function ChatScreen(props: ChatScreenProps) {
         authoring: Boolean(props.operation),
         actions: {
             currentSessionId: () => props.session?.id ?? session?.runId,
-            resumeSession: resume,
+            sessionRenamed: (updated) => {
+                setSessionName(updated.name);
+                props.onSessionUpdated?.(updated);
+            },
+            home: () => close(true),
+            browseSessions,
             clearTranscript: () => setState((current) => ({ ...current, items: [] })),
             attachments,
             clearAttachments: () => setAttachments([]),
@@ -542,25 +553,11 @@ export function ChatScreen(props: ChatScreenProps) {
     });
     return (
         <box flexDirection="column" flexGrow={1} paddingX={3} paddingY={1}>
-            <box
-                flexDirection="row"
-                justifyContent="space-between"
-                border={['bottom']}
-                borderColor={theme.faint}
-                paddingBottom={1}
-            >
-                <box flexDirection="row" gap={1}>
-                    <text fg={theme.accent}>◆</text>
-                    <text fg={theme.text}>
-                        <strong>{props.alias}</strong>
-                    </text>
-                    <text fg={theme.muted}>· {manifest.name}</text>
-                </box>
-                <text fg={theme.muted}>
-                    {manifest.runner} · {modelLabel(manifest.model)} ·{' '}
-                    {manifest.runtime}
-                </text>
-            </box>
+            <ChatHeader
+                alias={props.alias}
+                sessionName={sessionName()}
+                manifest={manifest}
+            />
 
             <scrollbox
                 flexGrow={1}

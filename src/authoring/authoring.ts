@@ -29,7 +29,7 @@ interface WorkbenchAuthoringDependencies {
 export interface AuthoringLaunch {
     alias: string;
     resolved: ResolvedWorkbenchReference;
-    prompt: string;
+    prompt?: string;
     operation: AuthoringOperation;
     environment: Record<string, string | undefined>;
 }
@@ -55,13 +55,13 @@ export class WorkbenchAuthoring {
         readonly home: string,
         dependencies: WorkbenchAuthoringDependencies = {}
     ) {
+        this.#environment = dependencies.environment ?? process.env;
         this.#official = dependencies.official ?? new OfficialWorkbenchResolver(home);
         this.#sessions = dependencies.sessions ?? new SessionLifecycle(home);
         this.#resolver = dependencies.resolver ?? new WorkbenchResolver();
         this.#evidence = dependencies.evidence ?? new ImprovementEvidence(home);
         this.#cli = dependencies.cli ?? new AuthoringCli(home);
         this.#smoke = dependencies.smoke;
-        this.#environment = dependencies.environment ?? process.env;
         this.#verification = {
             environment: this.#environment,
             ...dependencies.verification,
@@ -115,9 +115,11 @@ export class WorkbenchAuthoring {
             kind: 'create',
             repository,
             ...(name ? { targetSelector: name } : {}),
-            prompt: name
-                ? `Create a production-ready Workbench named ${name} in this repository. Inspect the repository before selecting its exact expertise boundary. Use wb init only for deterministic scaffolding, then author, validate, and smoke the complete package.`
-                : 'Create a production-ready Workbench in this repository. Inspect the repository, propose the focused expertise boundary, and ask me for any choice that materially changes it before writing. Use wb init only for deterministic scaffolding, then author, validate, and smoke the complete package.',
+            ...(name
+                ? {
+                      prompt: `Create a production-ready Workbench named ${name} in this repository. Inspect the repository before selecting its exact expertise boundary. Use wb init only for deterministic scaffolding, then author, validate, and smoke the complete package.`,
+                  }
+                : {}),
         });
     }
 
@@ -199,7 +201,7 @@ export class WorkbenchAuthoring {
         sourceSessionId?: string;
         evidencePath?: string;
         verification?: AuthoringFinishOptions;
-        prompt: string;
+        prompt?: string;
     }): Promise<AuthoringLaunch> {
         const creator = await this.#official.creator(options.repository);
         const operation = await AuthoringOperation.prepare(
@@ -232,7 +234,7 @@ export class WorkbenchAuthoring {
         return {
             alias: 'creator',
             resolved: creator.resolved,
-            prompt: options.prompt,
+            ...(options.prompt ? { prompt: options.prompt } : {}),
             operation,
             environment,
         };

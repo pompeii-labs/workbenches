@@ -43,6 +43,9 @@ export {
     type RegistryClientOptions,
     type RegistryPackage,
     type RegistryReference,
+    type RegistrySearchResult,
+    RegistryWorkbenchSaver,
+    type RegistryWorkbenchSaverOptions,
 } from './registry/index.js';
 export {
     type CliRelease,

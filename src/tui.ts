@@ -3,7 +3,9 @@ import type {
     AuthoringOperationResult,
 } from './authoring/index.js';
 import { CliPresenter } from './commands/presenter.js';
-import type { StoredSession } from './sessions/index.js';
+import { SessionLifecycle, type StoredSession } from './sessions/index.js';
+import { workbenchHome } from './storage.js';
+import { TuiExitHandoff } from './tui/handoff.js';
 import type { WorkbenchWorkspaceBinding } from './types.js';
 import type { ResolvedWorkbenchReference } from './workbench/index.js';
 
@@ -24,8 +26,13 @@ export async function launchWorkbenchTui(
 ): Promise<void> {
     assertWorkbenchTuiSupported();
     const tui = await import('./tui/index.js');
-    const results = await tui.renderWorkbenchTui(options);
-    presentAuthoringResults(results);
+    const result = await tui.renderWorkbenchTui(options);
+    presentAuthoringResults(result.authoringResults);
+    await new TuiExitHandoff(
+        new SessionLifecycle(workbenchHome()),
+        new CliPresenter(),
+        result.theme
+    ).present(result.sessionId);
 }
 
 export function assertWorkbenchTuiSupported(): void {
