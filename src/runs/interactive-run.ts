@@ -14,7 +14,11 @@ import {
     type RunnerSession,
     type RunnerSessionContext,
 } from '../runners/session.js';
-import { type PreparedRuntime, RuntimeRegistry } from '../runtimes/index.js';
+import {
+    type PreparedRuntime,
+    type RuntimeInfrastructureMetadata,
+    RuntimeRegistry,
+} from '../runtimes/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import type {
     PreflightResult,
@@ -159,9 +163,15 @@ export class InteractiveRun {
             );
         } catch (error) {
             await session?.close().catch(() => undefined);
-            await this.cleanup(preparedRuntime, preparedRunner).catch(() => undefined);
+            const infrastructure = await this.cleanup(
+                preparedRuntime,
+                preparedRunner
+            ).catch(() => undefined);
             await emitter
-                .emit('run.failed', { message: InteractiveRun.errorMessage(error) })
+                .emit('run.failed', {
+                    message: InteractiveRun.errorMessage(error),
+                    ...(infrastructure ? { infrastructure } : {}),
+                })
                 .catch(() => undefined);
             throw error;
         }
@@ -260,15 +270,17 @@ export class InteractiveRun {
     private async cleanup(
         runtime: PreparedRuntime | undefined,
         runner: PreparedRunner | undefined
-    ): Promise<void> {
+    ): Promise<RuntimeInfrastructureMetadata | undefined> {
         const results = await Promise.allSettled([
             runtime?.cleanup(),
             runner?.cleanup(),
         ]);
+        const infrastructure = await runtime?.infrastructure?.().catch(() => undefined);
         const failure = results.find(
             (result): result is PromiseRejectedResult => result.status === 'rejected'
         );
         if (failure) throw failure.reason;
+        return infrastructure;
     }
 
     private async requestPermission(
@@ -338,13 +350,17 @@ class HostedInteractiveSession implements InteractiveRunSession {
     private terminal = false;
     private cancellationRequested = false;
     private activeTurn: Promise<void> | undefined;
-    private releasePromise: Promise<void> | undefined;
+    private releasePromise:
+        | Promise<RuntimeInfrastructureMetadata | undefined>
+        | undefined;
 
     constructor(
         runner: RunnerSession,
         emitter: RunEvents,
         private readonly interactive: boolean,
-        private readonly cleanup: () => Promise<void>
+        private readonly cleanup: () => Promise<
+            RuntimeInfrastructureMetadata | undefined
+        >
     ) {
         this.runner = runner;
         this.emitter = emitter;
@@ -447,9 +463,10 @@ class HostedInteractiveSession implements InteractiveRunSession {
             }
             this.terminal = true;
             this.closed = true;
-            await this.releaseResources().catch(() => undefined);
+            const infrastructure = await this.releaseResources().catch(() => undefined);
             await this.emitter.emit('run.failed', {
                 message: error instanceof Error ? error.message : String(error),
+                ...(infrastructure ? { infrastructure } : {}),
             });
             throw error;
         }
@@ -463,10 +480,13 @@ class HostedInteractiveSession implements InteractiveRunSession {
         if (this.working) await this.cancelTurn();
         this.closed = true;
         try {
-            await this.releaseResources();
+            const infrastructure = await this.releaseResources();
             if (!this.terminal) {
                 this.terminal = true;
-                await this.emitter.emit(type, data);
+                await this.emitter.emit(type, {
+                    ...data,
+                    ...(infrastructure ? { infrastructure } : {}),
+                });
             }
         } catch (error) {
             if (!this.terminal) {
@@ -479,7 +499,7 @@ class HostedInteractiveSession implements InteractiveRunSession {
         }
     }
 
-    private releaseResources(): Promise<void> {
+    private releaseResources(): Promise<RuntimeInfrastructureMetadata | undefined> {
         if (this.releasePromise) return this.releasePromise;
         this.releasePromise = (async () => {
             let failure: unknown;
@@ -488,12 +508,14 @@ class HostedInteractiveSession implements InteractiveRunSession {
             } catch (error) {
                 failure = error;
             }
+            let infrastructure: RuntimeInfrastructureMetadata | undefined;
             try {
-                await this.cleanup();
+                infrastructure = await this.cleanup();
             } catch (error) {
                 failure ??= error;
             }
             if (failure) throw failure;
+            return infrastructure;
         })();
         return this.releasePromise;
     }

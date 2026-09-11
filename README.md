@@ -104,9 +104,10 @@ This repository contains `workbench`, also available as `wb`: the TypeScript
 reference engine and command-line client for the standard.
 
 The project is in public pre-alpha development. The draft-0 format, OpenCode and
-Pi adapters, and local and Docker runtimes for one-shot, detached, and
+Pi adapters, and local, Docker, and E2B runtimes for one-shot, detached, and
 interactive execution are implemented. The format is not yet stable. Other
-runners and hosted runtimes are not yet supported by the reference engine.
+runners and remote runtime providers are not yet supported by the reference
+engine.
 
 ### Install the current prerelease
 
@@ -287,9 +288,10 @@ runner, model, or credential store.
 Local Workbenches use the runner's normal local credential store. OpenCode
 exposes a command-line login operation, so Docker Workbenches can retain its
 native credentials in a private Docker volume. Pi currently exposes credential
-inspection but not command-line login. Configure Pi before local runs. A Docker
-Pi Workbench must declare its provider environment and receive it through
-`--env-file` or `--env` on each command. The CLI checks only whether an allowed
+inspection but not command-line login. Configure Pi before local runs. Docker
+and E2B Workbenches without a supported persistent login flow must declare their
+provider environment and receive it through inherited environment,
+`--env-file`, or `--env` on each command. The CLI checks only whether an allowed
 provider is ready. It does not read, upload, or rewrite provider tokens.
 
 Pi is distributed separately by the Pi project and must be installed in the
@@ -309,10 +311,11 @@ wb run project-core --dir ./app --workspace api=../api \
 
 Required bindings fail before runner launch. Inside a local run, the resolved
 paths are exposed as `WORKBENCH_WORKSPACE_API` and
-`WORKBENCH_WORKSPACE_SCHEMAS`. Docker uses the same names with deterministic
-container paths such as `/workspaces/api`; read-only declarations are enforced
-by Docker mounts. Local access declarations are preflight checks, not an
-operating-system sandbox.
+`WORKBENCH_WORKSPACE_SCHEMAS`. Docker and E2B use the same names with
+deterministic paths such as `/workspaces/api`. Docker enforces read-only
+declarations at the mount boundary. E2B stages isolated copies and only
+synchronizes declared read-write directories back to the host. Local access
+declarations are preflight checks, not an operating-system sandbox.
 
 Use `--dry-run` to inspect the translated runner invocation without executing
 it. An interactive terminal shows a concise summary; `--json` or piped output
@@ -439,6 +442,77 @@ Host-engine runs preserve host workspace paths inside the Workbench container
 so nested Docker and Compose bind mounts resolve correctly. Other Docker engine
 modes and non-Unix contexts are rejected rather than silently substituted.
 
+### Run in E2B
+
+An E2B Workbench uses the same image declaration as Docker and requires an E2B
+API key on the host:
+
+```yaml
+runtime: e2b
+image:
+  build: ./Dockerfile.workbench
+  context: .
+```
+
+```sh
+E2B_API_KEY=... wb build project-core
+E2B_API_KEY=... wb smoke project-core
+E2B_API_KEY=... wb run project-core --task "Review this migration"
+```
+
+The image can be a public OCI reference or a Workbench-local Dockerfile. The
+reference engine builds and caches an E2B template for that image, then creates
+a fresh sandbox for each execution. Use versioned image tags or digests because
+an existing template identity is reused. Images must include the selected
+runner, every declared tool, `git`, and GNU `tar` with `--null` support.
+
+Before launch, the engine snapshots only the declared runtime assets. The
+primary workspace is staged at `/workspace`, named workspaces at
+`/workspaces/<name>`, and the Workbench package at `/workbench`. Gitignored
+workspace files, repository metadata, common credential stores, dependency
+trees, and common secret-bearing files such as `.env` are excluded. Read-only
+assets are copied into the sandbox and are never synchronized back. A separately
+staged asset nested beneath a writable directory is excluded from that parent
+snapshot. Read-write directories are compared with their original host state at
+cleanup, and remote edits, additions, and deletions are applied only if the same
+host files did not change during the run. Read-write single-file assets are
+rejected.
+
+Input and output transfers each have a 512 MiB safety limit, enforced against
+uncompressed content. `E2B_API_KEY` is used only by the host control plane and is
+never sent to the sandbox. The sandbox receives only manifest-declared
+environment values and credentials needed by an allowed model route. Native
+runner credential stores are not uploaded, so provider credentials must be
+available through the run environment. `wb connect` does not open a native login
+inside a disposable E2B sandbox. It can use an already available
+environment-backed route, while missing credentials must be supplied through
+inherited environment, `--env-file`, or `--env`.
+
+Normal completion, failure, or cancellation synchronizes eligible changes and
+destroys the sandbox. The 60-minute provider timeout pauses a crash survivor
+without preserving its memory. `wb clean` can find managed E2B sandboxes in the
+same scoped Workbench data store and removes only those whose run is terminal,
+or whose run is missing and whose sandbox is paused, and only when `--apply` is
+passed. A running sandbox with no matching local run is protected because it
+may belong to another host using the same scoped store. Prepared E2B templates
+are cached and are outside the `wb clean` contract.
+
+The provider does not automatically retry template builds, sandbox creation,
+command starts, transfers, or synchronization because an ambiguous remote
+outcome could duplicate billable work or replay a mutation. Cleanup is still
+attempted after failure. Terminal run events include E2B duration, CPU and memory
+shape, and a clearly marked infrastructure cost estimate when sandbox metadata
+is available. This stays separate from model tokens and model cost in
+`usage.updated`.
+
+E2B is copy-based rather than mount-based. It cannot reuse native host login
+stores, and a resumed Workbench session runs in a fresh sandbox after its native
+session state is copied in. If the host dies before result collection, the lease
+and `wb clean --apply` bound the surviving sandbox, but draft 0 does not recover
+a portable result bundle from it. Direct synchronization is the current
+compatibility behavior; explicit portable apply and export behavior is being
+specified separately.
+
 ### Sessions and background work
 
 ```sh
@@ -487,11 +561,13 @@ use `wb clean --older-than 0s --include-sessions --apply`. `--json` returns the
 same preview or result as a stable machine-readable report, including byte
 counts and protected resources.
 
-Durable Docker runner containers carry Workbench ownership labels scoped to the
-current data directory. Normal exits remove them through Docker's `--rm`
-contract. `wb clean` also detects labeled containers whose run is terminal or
-missing and removes them only with `--apply`. It does not remove images, build
-caches, runner credential volumes, or unrelated containers.
+Durable Docker runner containers and E2B sandboxes carry Workbench ownership
+metadata scoped to the current data directory. Normal exits destroy them.
+`wb clean` detects scoped resources whose run is terminal. It also detects
+Docker containers whose run is missing and paused E2B sandboxes whose run is
+missing. Removal still requires `--apply`. It does not remove images, build
+caches, E2B templates, runner credential volumes, or unrelated runtime
+resources.
 
 ### Interactive client
 
@@ -505,11 +581,11 @@ wb run project-core
 
 The OpenCode interactive adapter currently supports multi-turn context,
 streaming, image input, cancellation, tool events, explicit permission decisions,
-native questions, and native mid-turn steering in local and Docker runtimes. The Pi
-adapter supports multi-turn context, streaming, image input, steering at Pi's
-next legal model boundary, follow-up input, cancellation, and tool events. Pi
-does not provide native question or permission request protocols, or native MCP
-transport.
+native questions, and native mid-turn steering in local, Docker, and E2B
+runtimes. The Pi adapter supports multi-turn context, streaming, image input,
+steering at Pi's next legal model boundary, follow-up input, cancellation, and
+tool events. Pi does not provide native question or permission request
+protocols, or native MCP transport.
 
 Questions use one runner-neutral contract for choices, free-form answers, and
 multi-select prompts when the selected runner exposes a native question protocol.
@@ -577,7 +653,9 @@ reattached instead of duplicated. A closed session creates a new durable run
 linked to the same stable session. Workbench keeps a small private session index
 and a disposable transcript presentation cache. The selected runner remains the
 source of truth for model context: OpenCode resumes from its session database and
-Pi resumes from its session file. A session remains locked to its original
+Pi resumes from its session file. Docker mounts native state into each new
+container. E2B copies native state into each new sandbox and synchronizes it back
+on orderly cleanup. A session remains locked to its original
 Workbench version, runner, model, runtime, workspace, and workspace bindings.
 Docker credentials remain in the runner's private named volume. A Workbench that
 declares host Docker access must be explicitly reauthorized with
@@ -597,12 +675,13 @@ Dry runs, saved package metadata, and normalized events do not expose those
 values.
 
 For `runtime: local`, declared tools must exist on the host. For `runtime:
-docker`, declared tools and the runner must exist inside the resolved image;
-host installations do not satisfy the requirement. Only manifest-declared
-environment values and credential variables for the selected model provider are
-bound into the container. Their values do not appear in Docker command
-arguments or the environment of the host Docker client process. Preflight
-failure stops execution before model tokens are spent.
+docker` or `runtime: e2b`, declared tools and the runner must exist inside the
+resolved image; host installations do not satisfy the requirement. Only
+manifest-declared environment values and credential variables for the selected
+model provider are bound into the execution environment. `E2B_API_KEY` remains
+host-only. Secret values do not appear in Docker command arguments or durable
+Workbench metadata. Preflight failure stops execution before model tokens are
+spent.
 
 ## Specification and documentation
 
@@ -627,6 +706,8 @@ bun run check
 bun run test:coverage
 bun run test:docker
 bun run test:docker:sessions
+bun run test:e2b
+bun run test:e2b:sessions
 bun run build
 ```
 
@@ -635,6 +716,12 @@ pinned fixture image. It exercises the real container boundary; the default
 test suite uses deterministic provider doubles and does not require Docker.
 `test:docker:sessions` additionally runs real multi-turn and native-resume probes
 for OpenCode and Pi. It requires previously connected runner credentials and
+makes model-provider requests.
+
+`test:e2b` requires `E2B_API_KEY`, builds a real E2B template, exercises remote
+streaming and workspace synchronization, and verifies sandbox destruction.
+`test:e2b:sessions` additionally starts OpenCode in two fresh sandboxes and
+verifies native session resume. It requires a supported model-provider key and
 makes model-provider requests.
 
 `bun run check` runs type checking, Biome, and the unit and integration suite.

@@ -4,9 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { RunStore, type StoredRunStatus } from '../src/runs/index.js';
-import type { ManagedDockerContainer } from '../src/runtimes/index.js';
+import type {
+    ManagedDockerContainer,
+    ManagedE2BSandbox,
+} from '../src/runtimes/index.js';
 import {
     type ManagedContainerStorage,
+    type ManagedSandboxStorage,
     SessionRetention,
     SessionStore,
 } from '../src/sessions/index.js';
@@ -68,10 +72,16 @@ describe('Workbench session retention', () => {
             container('b'.repeat(12), missingRunId, '2'.repeat(20)),
             container('c'.repeat(12), activeId, '3'.repeat(20)),
         ]);
+        const sandboxStorage = new FixtureSandboxes([
+            sandbox('sandbox-missing', missingRunId),
+            sandbox('sandbox-running-without-local-run', missingRunId, 'running'),
+            sandbox('sandbox-active', activeId),
+        ]);
         await Bun.sleep(2);
         const policy = { before: new Date() };
         const retention = new SessionRetention(home, {
             containers: containerStorage,
+            sandboxes: sandboxStorage,
         });
 
         const review = await retention.review(policy);
@@ -85,6 +95,7 @@ describe('Workbench session retention', () => {
             'a'.repeat(12),
             'b'.repeat(12),
         ]);
+        expect(review.sandboxes.map((item) => item.id)).toEqual(['sandbox-missing']);
         expect(review.bytes).toBeGreaterThan(0);
 
         const result = await retention.apply(policy);
@@ -96,6 +107,7 @@ describe('Workbench session retention', () => {
             'a'.repeat(12),
             'b'.repeat(12),
         ]);
+        expect(result.removedSandboxes).toEqual(['sandbox-missing']);
         await expect(sessions.read(disposableId)).rejects.toThrow(
             'Workbench session does not exist'
         );
@@ -115,6 +127,24 @@ describe('Workbench session retention', () => {
             'a'.repeat(12),
             'b'.repeat(12),
         ]);
+        expect(sandboxStorage.removed).toEqual(['sandbox-missing']);
+    });
+
+    test('does not remove a running sandbox whose run is absent locally', async () => {
+        const home = await temporaryHome();
+        const missingRunId = RunStore.createId();
+        const sandboxStorage = new FixtureSandboxes([
+            sandbox('sandbox-running', missingRunId, 'running'),
+        ]);
+        const retention = new SessionRetention(home, {
+            sandboxes: sandboxStorage,
+        });
+
+        const review = await retention.review({ before: new Date() });
+        expect(review.sandboxes).toEqual([]);
+        const result = await retention.apply({ before: new Date() });
+        expect(result.removedSandboxes).toEqual([]);
+        expect(sandboxStorage.removed).toEqual([]);
     });
 
     test('requires an explicit policy to remove resumable native context', async () => {
@@ -153,6 +183,21 @@ class FixtureContainers implements ManagedContainerStorage {
 
     remove(container: ManagedDockerContainer): Promise<void> {
         this.removed.push(container.id);
+        return Promise.resolve();
+    }
+}
+
+class FixtureSandboxes implements ManagedSandboxStorage {
+    readonly removed: string[] = [];
+
+    constructor(private readonly sandboxes: ManagedE2BSandbox[]) {}
+
+    list(): Promise<ManagedE2BSandbox[]> {
+        return Promise.resolve(this.sandboxes);
+    }
+
+    remove(sandbox: ManagedE2BSandbox): Promise<void> {
+        this.removed.push(sandbox.id);
         return Promise.resolve();
     }
 }
@@ -215,4 +260,12 @@ async function fixtureRun(
 
 function container(id: string, runId: string, suffix: string): ManagedDockerContainer {
     return { id, runId, name: `workbench-${suffix}` };
+}
+
+function sandbox(
+    id: string,
+    runId: string,
+    state: ManagedE2BSandbox['state'] = 'paused'
+): ManagedE2BSandbox {
+    return { id, runId, state };
 }

@@ -3,6 +3,53 @@
     "$id": "https://workbenches.dev/schemas/events/v0/workbench-event.schema.json",
     "title": "Workbench event protocol v0",
     "type": "object",
+    "$defs": {
+        "infrastructure": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider", "duration_ms", "cost"],
+            "properties": {
+                "provider": { "type": "string", "minLength": 1 },
+                "duration_ms": { "type": "number", "minimum": 0 },
+                "maximum_duration_ms": { "type": "number", "minimum": 0 },
+                "resources": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "cpu_count": { "type": "number", "minimum": 0 },
+                        "memory_mb": { "type": "number", "minimum": 0 }
+                    }
+                },
+                "cost": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["kind", "currency", "amount_usd", "source"],
+                            "properties": {
+                                "kind": { "const": "estimated" },
+                                "currency": { "const": "USD" },
+                                "amount_usd": {
+                                    "type": "number",
+                                    "minimum": 0
+                                },
+                                "source": { "type": "string", "minLength": 1 }
+                            }
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["kind", "currency"],
+                            "properties": {
+                                "kind": { "const": "unavailable" },
+                                "currency": { "const": "USD" }
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    },
     "additionalProperties": false,
     "required": [
         "protocol",
@@ -188,6 +235,28 @@
                             "answer_count": {
                                 "type": "integer",
                                 "minimum": 0
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "type": {
+                        "enum": ["run.completed", "run.failed", "run.cancelled"]
+                    }
+                }
+            },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "duration_ms": { "type": "number", "minimum": 0 },
+                            "infrastructure": {
+                                "$ref": "#/$defs/infrastructure"
                             }
                         }
                     }

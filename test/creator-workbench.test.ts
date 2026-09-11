@@ -46,7 +46,7 @@ describe('creator Workbench', () => {
 
     test('keeps the published reference snapshot unchanged', async () => {
         expect(await digest(join(referencesDirectory, 'spec.md'))).toBe(
-            '47f5e81944fe9b1385b7fc37a7307823152f8175f514b2f5b85bbe4afd00dae8'
+            'ba7ecf4052174e9fd4eb0801417dbc61b3394a4925140dee0551a3199b3a627b'
         );
         expect(await digest(join(referencesDirectory, 'workbench.schema.json'))).toBe(
             '8f44c19b7cc4594fe80d5371064df05a7c46cce505e705eba8d7573762aed072'

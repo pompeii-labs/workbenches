@@ -34,9 +34,9 @@ export const buildCommand = defineCommand({
         const workbench = resolved.workbench;
         let runtime: PreparedRuntime | undefined;
         try {
-            if (workbench.manifest.runtime !== 'docker') {
+            if (!['docker', 'e2b'].includes(workbench.manifest.runtime)) {
                 throw new Error(
-                    `wb build only applies to Docker Workbenches. ${workbench.manifest.name} uses the ${workbench.manifest.runtime} runtime.`
+                    `wb build only applies to image-backed Workbenches. ${workbench.manifest.name} uses the ${workbench.manifest.runtime} runtime.`
                 );
             }
             if (!args.json) {
@@ -66,7 +66,7 @@ export const buildCommand = defineCommand({
                 });
             const preparation = runtime.preparation;
             if (preparation?.kind !== 'image') {
-                throw new Error('Docker provider did not report image preparation');
+                throw new Error('Runtime provider did not report image preparation');
             }
             if (args.json) {
                 process.stdout.write(`${JSON.stringify(preparation)}\n`);

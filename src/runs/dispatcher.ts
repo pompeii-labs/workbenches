@@ -85,6 +85,7 @@ export class RunDispatcher {
                     workbench_version: workbench.manifest.version,
                     runner: workbench.manifest.runner,
                     model: modelLabel(workbench.manifest.model),
+                    runtime: workbench.manifest.runtime,
                     workspace: options.resolved.workspaceDirectory,
                     mode: options.mode,
                     execution,
@@ -197,8 +198,11 @@ export class RunDispatcher {
 
     private async waitUntilStarted(id: string): Promise<void> {
         const started = Date.now();
-        while (Date.now() - started < 15_000) {
+        let startupTimeout = 15_000;
+        while (Date.now() - started < startupTimeout) {
             const run = await this.store.read(id);
+            startupTimeout =
+                run.runtime === 'docker' || run.runtime === 'e2b' ? 5 * 60_000 : 15_000;
             if (RunStore.isTerminal(run.status)) {
                 if (run.status === 'completed') return;
                 const events = await this.store.readEvents(id);

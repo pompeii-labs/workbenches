@@ -33,6 +33,7 @@ export interface StoredRun {
     workbench_version: string;
     runner: string;
     model: string;
+    runtime?: string;
     workspace: string;
     mode?: 'foreground' | 'detached' | 'interactive';
     execution?: 'one_shot' | 'session';

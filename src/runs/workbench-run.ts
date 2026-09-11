@@ -6,6 +6,7 @@ import type { PreparedRunner } from '../runners/runner.js';
 import {
     type PreparedRuntime,
     type RuntimeAsset,
+    type RuntimeInfrastructureMetadata,
     RuntimeRegistry,
 } from '../runtimes/index.js';
 import type {
@@ -151,7 +152,7 @@ export class WorkbenchRun {
                     : {}),
             });
             if (this.options.signal?.aborted) {
-                await this.emitCancellation(events);
+                await this.emitCancellation(events, runtime);
                 return 130;
             }
 
@@ -176,13 +177,15 @@ export class WorkbenchRun {
             return await this.launch(workbench, runner, runtime, events, invocation);
         } catch (error) {
             if (this.options.signal?.aborted) {
-                await this.emitCancellation(events);
+                await this.emitCancellation(events, runtime);
                 return 130;
             }
             const message = error instanceof Error ? error.message : String(error);
+            const infrastructure = await this.infrastructure(runtime);
             await events.emit('run.failed', {
                 message: RunnerOutput.redact(message, workbench, this.environment),
                 duration_ms: this.duration(),
+                ...(infrastructure ? { infrastructure } : {}),
             });
             return 1;
         } finally {
@@ -214,7 +217,7 @@ export class WorkbenchRun {
         try {
             const result = await output.consume(child, () => runtime.cancel(child));
             if (this.options.signal?.aborted) {
-                await this.emitCancellation(events);
+                await this.emitCancellation(events, runtime);
                 return 130;
             }
             if (result.code !== 0) {
@@ -223,19 +226,24 @@ export class WorkbenchRun {
                     workbench,
                     this.environment
                 );
+                const infrastructure = await this.infrastructure(runtime);
                 await events.emit('run.failed', {
                     message: `${runner.failureLabel} exited with code ${result.code}${detail ? `: ${detail}` : ''}`,
                     exit_code: result.code,
                     duration_ms: this.duration(),
+                    ...(infrastructure ? { infrastructure } : {}),
                 });
                 return result.code;
             }
             if (!result.summary.turnCompleted) {
                 await events.emit('turn.completed', { reason: 'process-exit' });
             }
+            await runtime.synchronize?.();
+            const infrastructure = await this.infrastructure(runtime);
             await events.emit('run.completed', {
                 exit_code: 0,
                 duration_ms: this.duration(),
+                ...(infrastructure ? { infrastructure } : {}),
             });
             return 0;
         } finally {
@@ -318,11 +326,22 @@ export class WorkbenchRun {
         }
     }
 
-    private async emitCancellation(events: RunEvents): Promise<void> {
+    private async emitCancellation(
+        events: RunEvents,
+        runtime?: PreparedRuntime
+    ): Promise<void> {
+        const infrastructure = await this.infrastructure(runtime);
         await events.emit('run.cancelled', {
             reason: 'requested',
             duration_ms: this.duration(),
+            ...(infrastructure ? { infrastructure } : {}),
         });
+    }
+
+    private async infrastructure(
+        runtime?: PreparedRuntime
+    ): Promise<RuntimeInfrastructureMetadata | undefined> {
+        return runtime?.infrastructure?.().catch(() => undefined);
     }
 
     private duration(): number {

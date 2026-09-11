@@ -10,6 +10,7 @@ export {
 export {
     type CleanupStorageItem,
     type ManagedContainerStorage,
+    type ManagedSandboxStorage,
     SessionRetention,
     type SessionRetentionDependencies,
     type SessionRetentionPolicy,

@@ -668,6 +668,7 @@ describe('CLI integration', () => {
         expect(continued.stdout).toBe('fixture response\n');
         expect(await readFile(`${record}.args`, 'utf8')).toBe('second task\n');
 
+        await waitForRunEventCount(home, sessionId, 'turn.started', 2);
         const replayed = await executeCli(['attach', sessionId, '--json'], environment);
         const events = replayed.stdout
             .trim()
@@ -705,6 +706,7 @@ describe('CLI integration', () => {
         expect(continued.stderr).toBe('');
         expect(continued.stdout).toBe(`${sessionId}\n`);
 
+        await waitForRunEventCount(home, sessionId, 'turn.completed', 2);
         const attached = await executeCli(['attach', sessionId, '--json'], environment);
         const events = attached.stdout
             .trim()
@@ -1402,6 +1404,22 @@ async function waitForActiveSession(home: string): Promise<string> {
         await Bun.sleep(25);
     }
     throw new Error('Timed out waiting for an active Workbench session');
+}
+
+async function waitForRunEventCount(
+    home: string,
+    runId: string,
+    type: string,
+    count: number
+): Promise<void> {
+    const store = new RunStore(home);
+    const started = Date.now();
+    while (Date.now() - started < 5_000) {
+        const events = await store.readEvents(runId);
+        if (events.filter((event) => event.type === type).length >= count) return;
+        await Bun.sleep(25);
+    }
+    throw new Error(`Timed out waiting for ${count} ${type} events`);
 }
 
 async function temporaryDirectory(prefix: string) {

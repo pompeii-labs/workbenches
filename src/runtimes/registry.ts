@@ -9,6 +9,7 @@ import type {
     PreparedRuntime,
     RuntimeCommandOptions,
     RuntimeCommandResult,
+    RuntimeInfrastructureMetadata,
     RuntimePreparation,
     RuntimePrepareRequest,
     RuntimeProvider,
@@ -20,11 +21,13 @@ import {
     type DockerRuntimeDependencies,
     DockerRuntimeProvider,
 } from './docker/index.js';
+import { type E2BRuntimeDependencies, E2BRuntimeProvider } from './e2b/index.js';
 import { RuntimeError } from './error.js';
 import { type LocalRuntimeDependencies, LocalRuntimeProvider } from './local.js';
 
 export interface RuntimeDependencies extends LocalRuntimeDependencies {
     docker?: DockerRuntimeDependencies;
+    e2b?: E2BRuntimeDependencies;
 }
 
 export class RuntimeRegistry {
@@ -45,6 +48,7 @@ export class RuntimeRegistry {
         return new RuntimeRegistry([
             new LocalRuntimeProvider(dependencies),
             new DockerRuntimeProvider(dependencies.docker),
+            new E2BRuntimeProvider(dependencies.e2b),
         ]);
     }
 
@@ -175,6 +179,22 @@ class GuardedRuntime implements PreparedRuntime {
             this.runtime.cancel(process);
         } catch (error) {
             throw RuntimeError.from(this.name, 'cancel', error);
+        }
+    }
+
+    async infrastructure(): Promise<RuntimeInfrastructureMetadata | undefined> {
+        try {
+            return await this.runtime.infrastructure?.();
+        } catch (error) {
+            throw RuntimeError.from(this.name, 'cleanup', error);
+        }
+    }
+
+    async synchronize(): Promise<void> {
+        try {
+            await this.runtime.synchronize?.();
+        } catch (error) {
+            throw RuntimeError.from(this.name, 'cleanup', error);
         }
     }
 

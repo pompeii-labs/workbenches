@@ -168,6 +168,31 @@ describe('native runner authentication', () => {
         expect(interacted).toBeFalse();
     });
 
+    test('does not offer an ephemeral native sign-in inside E2B', async () => {
+        const workbench = fixture('opencode');
+        let interacted = false;
+        const prepared = runtime('', {
+            name: 'e2b',
+            interact() {
+                interacted = true;
+                return Promise.resolve(0);
+            },
+        });
+        const connection = inspector(workbench, {
+            runner: runner('opencode'),
+            runtime: prepared,
+        });
+
+        expect(connection.supportsNativeAuthentication()).toBeFalse();
+        await expect(connection.require()).rejects.toThrow(
+            'E2B does not persist native runner sign-in'
+        );
+        await expect(connection.connect()).rejects.toThrow(
+            'E2B does not persist native runner sign-in'
+        );
+        expect(interacted).toBeFalse();
+    });
+
     test('lets the native OpenCode flow choose among multiple locked routes', async () => {
         const workbench = fixture('opencode');
         workbench.manifest.model = {

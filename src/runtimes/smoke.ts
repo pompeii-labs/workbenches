@@ -4,6 +4,7 @@ import {
 } from '../connections/inspector.js';
 import { ConnectionStore } from '../connections/store.js';
 import { RunnerRegistry } from '../runners/registry.js';
+import { RunStore } from '../runs/store.js';
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
 import { type PreflightResult, WorkbenchWorkspaces } from '../workbench/index.js';
 import type { PreparedRuntime } from './contracts.js';
@@ -75,6 +76,14 @@ export class RuntimeSmoke {
                     authorizations: {
                         hostDocker: this.options.allowHostDocker ?? false,
                     },
+                    ...(this.options.home
+                        ? {
+                              run: {
+                                  id: RunStore.createId(),
+                                  scope: RunStore.scope(this.options.home),
+                              },
+                          }
+                        : {}),
                 });
             const preflight = await runtime.preflight();
             const authentication = await new ConnectionInspector({

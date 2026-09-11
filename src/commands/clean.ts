@@ -1,7 +1,7 @@
 import { defineCommand } from 'citty';
 
 import { RunStore } from '../runs/index.js';
-import { DockerManagedContainers } from '../runtimes/index.js';
+import { DockerManagedContainers, E2BManagedSandboxes } from '../runtimes/index.js';
 import {
     SessionRetention,
     type SessionRetentionResult,
@@ -46,8 +46,13 @@ export const cleanCommand = defineCommand({
             includeResumableSessions: args['include-sessions'],
         };
         const containers = await DockerManagedContainers.connect(RunStore.scope(home));
+        const sandboxes = E2BManagedSandboxes.connect(
+            RunStore.scope(home),
+            process.env
+        );
         const retention = new SessionRetention(home, {
             ...(containers ? { containers } : {}),
+            ...(sandboxes ? { sandboxes } : {}),
         });
         const report = args.apply
             ? await retention.apply(policy)
@@ -90,8 +95,9 @@ function renderReport(
     const sessions = result?.removedSessions.length ?? report.sessions.length;
     const runs = result?.removedRuns.length ?? report.runs.length;
     const containers = result?.removedContainers.length ?? report.containers.length;
+    const sandboxes = result?.removedSandboxes.length ?? report.sandboxes.length;
     const bytes = result?.removedBytes ?? report.bytes;
-    if (sessions + runs + containers === 0) {
+    if (sessions + runs + containers + sandboxes === 0) {
         output.message('Nothing eligible for cleanup.');
     } else {
         output.record({
@@ -100,6 +106,7 @@ function renderReport(
                 String(sessions),
                 String(runs),
                 String(containers),
+                String(sandboxes),
                 String(bytes),
             ],
             title: applied ? 'Cleanup complete' : 'Cleanup preview',
@@ -107,12 +114,20 @@ function renderReport(
                 `${sessions} sessions`,
                 `${runs} runs`,
                 `${containers} containers`,
+                `${sandboxes} E2B sandboxes`,
                 formatBytes(bytes),
             ],
             tone: applied ? 'success' : 'info',
         });
     }
-    if (!applied && report.sessions.length + report.runs.length > 0) {
+    if (
+        !applied &&
+        report.sessions.length +
+            report.runs.length +
+            report.containers.length +
+            report.sandboxes.length >
+            0
+    ) {
         output.message('Run again with --apply to remove this data.');
     }
     if (report.protectedResumableSessions.length > 0) {
@@ -147,6 +162,11 @@ function machineReport(
                 name: container.name,
                 run_id: container.runId,
             })),
+            sandboxes: report.sandboxes.map((sandbox) => ({
+                id: sandbox.id,
+                run_id: sandbox.runId,
+                state: sandbox.state,
+            })),
             bytes: report.bytes,
         },
         protected: {
@@ -160,6 +180,7 @@ function machineReport(
                       sessions: result.removedSessions,
                       runs: result.removedRuns,
                       containers: result.removedContainers,
+                      sandboxes: result.removedSandboxes,
                       bytes: result.removedBytes,
                   },
                   skipped: result.skipped,

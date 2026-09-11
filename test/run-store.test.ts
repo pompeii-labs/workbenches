@@ -257,6 +257,7 @@ describe('durable Workbench runs', () => {
         expect(run).toMatchObject({
             runner: 'pi',
             model: 'manifest/model',
+            runtime: 'local',
         });
         const request = await store.takeRequest(run.id);
         expect(request.reference).toBe('publisher/project#core');

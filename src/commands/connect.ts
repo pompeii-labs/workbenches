@@ -3,6 +3,7 @@ import { ConnectionManager } from '../connections/manager.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import { runnerSetupError } from '../runners/setup.js';
+import { RunStore } from '../runs/index.js';
 import { type PreparedRuntime, RuntimeRegistry } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import { WorkbenchEnvironment, WorkbenchResolver } from '../workbench/index.js';
@@ -76,6 +77,10 @@ export const connectCommand = defineCommand({
                     ],
                     purpose: 'connect',
                     authorizations: { hostDocker: false },
+                    run: {
+                        id: RunStore.createId(),
+                        scope: RunStore.scope(home),
+                    },
                 });
             try {
                 await runtime.preflight();
