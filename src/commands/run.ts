@@ -219,6 +219,7 @@ export const runCommand = defineCommand({
                     id: stored.id,
                     cwd: resolved.workspaceDirectory,
                     environment,
+                    waitForInitialTurn: true,
                 });
                 console.log(stored.session_id ?? stored.id);
                 return;
@@ -242,6 +243,7 @@ export const runCommand = defineCommand({
                     id: stored.id,
                     cwd: resolved.workspaceDirectory,
                     environment,
+                    waitForInitialTurn: true,
                 });
                 const client = new CliRunClient();
                 const followed = await client.follow(handle, (event) =>

@@ -135,6 +135,7 @@ export class RunContinuation {
             id: stored.id,
             cwd: options.resolved.workspaceDirectory,
             environment: options.environment,
+            waitForInitialTurn: true,
         });
         return {
             sessionId: session.id,

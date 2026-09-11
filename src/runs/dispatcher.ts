@@ -27,6 +27,7 @@ export interface DispatchRunOptions {
     id: string;
     cwd: string;
     environment?: Record<string, string | undefined>;
+    waitForInitialTurn?: boolean;
 }
 
 export class RunDispatcher {
@@ -185,7 +186,10 @@ export class RunDispatcher {
             throw error;
         }
         try {
-            await this.waitUntilStarted(options.id);
+            await this.waitUntilStarted(
+                options.id,
+                options.waitForInitialTurn ?? false
+            );
             return pid;
         } catch (error) {
             await this.store
@@ -196,7 +200,10 @@ export class RunDispatcher {
         }
     }
 
-    private async waitUntilStarted(id: string): Promise<void> {
+    private async waitUntilStarted(
+        id: string,
+        waitForInitialTurn: boolean
+    ): Promise<void> {
         const started = Date.now();
         let startupTimeout = 15_000;
         while (Date.now() - started < startupTimeout) {
@@ -223,7 +230,9 @@ export class RunDispatcher {
                     run.execution !== 'session' ||
                     Boolean(run.runner_session_id))
             ) {
-                return;
+                if (!waitForInitialTurn || run.execution !== 'session') return;
+                const events = await this.store.readEvents(id);
+                if (events.some((event) => event.type === 'turn.started')) return;
             }
             this.store.assertWorkerAlive(run);
             await Bun.sleep(25);
