@@ -35,6 +35,42 @@ export const modelCatalogFixture: ModelCatalogSnapshot = {
         openai: { env: ['OPENAI_API_KEY'] },
         openrouter: { env: ['OPENROUTER_API_KEY'] },
     },
+    harnesses: {
+        pi: {
+            versions: {
+                '0.84.3': {
+                    providers: {
+                        anthropic: [
+                            {
+                                native_provider: 'anthropic',
+                                auth: ['api', 'oauth'],
+                            },
+                        ],
+                        'github-copilot': [
+                            {
+                                native_provider: 'github-copilot',
+                                auth: ['api', 'oauth'],
+                            },
+                        ],
+                        opencode: [{ native_provider: 'opencode', auth: ['api'] }],
+                        openai: [
+                            { native_provider: 'openai', auth: ['api'] },
+                            {
+                                native_provider: 'openai-codex',
+                                auth: ['oauth'],
+                            },
+                        ],
+                        openrouter: [
+                            {
+                                native_provider: 'openrouter',
+                                auth: ['api', 'oauth'],
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+    },
 };
 
 export function activateModelCatalogFixture(): void {

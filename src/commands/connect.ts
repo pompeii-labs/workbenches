@@ -241,7 +241,8 @@ async function selectConnectionTarget(input: {
         ),
         flag: '--harness',
     });
-    const providers = connectionProviders(ModelCatalog.current());
+    const catalog = ModelCatalog.current();
+    const providers = connectionProviders(harness, catalog);
     const provider = await chooseOption({
         ...(input.provider ? { provided: input.provider } : {}),
         values: providers.map((candidate) => candidate.id),
@@ -253,7 +254,12 @@ async function selectConnectionTarget(input: {
         flag: '--provider',
         searchable: true,
     });
-    const methods = connectionAuthenticationMethods(runtime, harness, provider);
+    const methods = connectionAuthenticationMethods(
+        runtime,
+        harness,
+        provider,
+        catalog
+    );
     const methodId = await chooseOption({
         ...(input.method ? { provided: input.method } : {}),
         values: methods.map((method) => method.id),

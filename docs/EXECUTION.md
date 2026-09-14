@@ -182,6 +182,12 @@ credential store. `wb connect` selects runtime, harness, provider, and
 authentication method before running the runner's own authentication flow in an
 engine-owned image and empty temporary workspace. The login and selected
 default can be reused by any compatible Docker Workbench using that runner.
+Provider choices are filtered through the selected harness version's capability
+map after model-route metadata is loaded. The map also records native provider
+aliases, so a catalog provider is never presented merely because it serves a
+model and runner-specific names remain explicit. Verified metadata can supply
+versioned maps; the engine retains the map matching its pinned harness as a safe
+fallback.
 OpenCode exposes a standalone login command. Pi opens its TUI, where the user
 runs the provider-specific `/login` command shown by Workbench. A Workbench
 reference can supply a custom authentication image when required. Workbench

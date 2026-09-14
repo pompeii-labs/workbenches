@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ModelCatalog } from '../models/catalog.js';
+import { PI_PACKAGE_VERSION } from '../runners/pi/providers.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { Workbench } from '../workbench/index.js';
 import { type ConnectionTarget, connectionModel } from './targets.js';
@@ -35,7 +36,7 @@ export async function prepareConnectionSetupWorkbench(
                 ? [
                       writeFile(
                           join(packageDirectory, 'Dockerfile.workbench'),
-                          'FROM node:22-bookworm-slim\n\nRUN npm install --global @earendil-works/pi-coding-agent@0.84.3\n'
+                          `FROM node:22-bookworm-slim\n\nRUN npm install --global @earendil-works/pi-coding-agent@${PI_PACKAGE_VERSION}\n`
                       ),
                   ]
                 : []),

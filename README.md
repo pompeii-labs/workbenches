@@ -314,6 +314,13 @@ Authentication uses the selected runner's native flow in every execution
 runtime. OpenCode opens `opencode auth login` for the selected provider. Pi has
 no standalone login command, so Workbench opens the Pi TUI and identifies the
 exact `/login <provider>` command to run before exiting back to Workbench.
+The provider menu is the intersection of providers serving catalog models and
+the selected harness version's capability map; model availability alone never
+implies that a harness supports a provider. Versioned harness maps may be
+delivered with the verified model metadata, with an engine-bundled map for the
+pinned harness version as the offline and compatibility fallback. Runtime-specific
+constraints, such as browser versus headless authentication, remain enforced by
+the engine.
 
 Local Workbenches use the runner's normal local credential store. Docker keeps
 each runner's native credentials in a private named volume. E2B keeps each

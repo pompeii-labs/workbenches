@@ -148,6 +148,25 @@ describe('CLI integration', () => {
         expect(result.stderr).not.toContain('saved Workbenches');
     });
 
+    test('rejects providers unsupported by the selected harness before preparing a runtime', async () => {
+        const result = await executeCli([
+            'connect',
+            '--runtime',
+            'docker',
+            '--harness',
+            'pi',
+            '--provider',
+            'wafer.ai',
+            '--method',
+            'api-key',
+        ]);
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain('Invalid --provider value wafer.ai');
+        expect(result.stderr).not.toContain('Docker daemon');
+        expect(result.stderr).not.toContain('Path is not staged');
+    });
+
     test('reports argument errors without dumping command help', async () => {
         for (const arguments_ of [['unknown-command'], ['run']]) {
             const result = await executeCli(arguments_);

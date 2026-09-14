@@ -35,6 +35,12 @@ describe('model metadata cache', () => {
 
         expect(first.source).toBe('remote');
         expect(first.catalog.version).toBe('remote-fixture');
+        expect(
+            first.catalog.harnesses?.pi?.versions['0.84.3']?.providers.openai
+        ).toEqual([
+            { native_provider: 'openai', auth: ['api'] },
+            { native_provider: 'openai-codex', auth: ['oauth'] },
+        ]);
         expect(second.source).toBe('cache');
         expect(loaded.source).toBe('cache');
         expect(stale.source).toBe('cache');

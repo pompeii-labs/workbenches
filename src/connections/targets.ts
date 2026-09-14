@@ -1,4 +1,11 @@
-import type { ModelCatalogSnapshot } from '../models/catalog.js';
+import type {
+    ModelCatalogHarnessProviderRoute,
+    ModelCatalogSnapshot,
+} from '../models/catalog.js';
+import {
+    PI_PACKAGE_VERSION,
+    PI_PROVIDER_CAPABILITIES,
+} from '../runners/pi/providers.js';
 
 export const connectionRuntimes = ['local', 'docker', 'e2b'] as const;
 export type ConnectionRuntime = (typeof connectionRuntimes)[number];
@@ -27,13 +34,17 @@ export interface ConnectionTarget {
 }
 
 export function connectionProviders(
+    harness: ConnectionHarness,
     catalog: ModelCatalogSnapshot
 ): ConnectionProvider[] {
+    const capabilities = connectionProviderCapabilities(harness, catalog);
     const served = new Set(
         Object.values(catalog.models).flatMap((model) => Object.keys(model.routes))
     );
     return [...served]
-        .filter((provider) => catalog.providers[provider])
+        .filter(
+            (provider) => catalog.providers[provider] && capabilities[provider]?.length
+        )
         .map((provider) => ({ id: provider, label: providerLabel(provider) }))
         .toSorted((left, right) => {
             const difference = providerRank(left.id) - providerRank(right.id);
@@ -44,7 +55,8 @@ export function connectionProviders(
 export function connectionAuthenticationMethods(
     runtime: ConnectionRuntime,
     harness: ConnectionHarness,
-    provider: string
+    provider: string,
+    catalog: ModelCatalogSnapshot
 ): ConnectionAuthenticationMethod[] {
     if (harness === 'opencode' && provider === 'openai') {
         return [
@@ -73,17 +85,47 @@ export function connectionAuthenticationMethods(
         ];
     }
     if (harness === 'pi' && provider === 'openai') {
+        const capabilities = connectionProviderCapabilities(harness, catalog)[provider];
+        return [
+            ...(capabilities?.some(
+                (candidate) =>
+                    candidate.native_provider === 'openai-codex' &&
+                    candidate.auth.includes('oauth')
+            )
+                ? [
+                      {
+                          id: 'chatgpt',
+                          label: 'ChatGPT subscription',
+                          nativeProvider: 'openai-codex',
+                          authenticationMethod: 'oauth' as const,
+                      },
+                  ]
+                : []),
+            ...(capabilities?.some(
+                (candidate) =>
+                    candidate.native_provider === 'openai' &&
+                    candidate.auth.includes('api')
+            )
+                ? [
+                      {
+                          id: 'api-key',
+                          label: 'OpenAI API key',
+                          nativeProvider: 'openai',
+                          authenticationMethod: 'api' as const,
+                      },
+                  ]
+                : []),
+        ];
+    }
+    const [capability] =
+        connectionProviderCapabilities(harness, catalog)[provider] ?? [];
+    if (!capability) return [];
+    if (capability.auth.length === 1 && capability.auth[0] === 'api') {
         return [
             {
-                id: 'chatgpt',
-                label: 'ChatGPT subscription',
-                nativeProvider: 'openai-codex',
-                authenticationMethod: 'oauth',
-            },
-            {
                 id: 'api-key',
-                label: 'OpenAI API key',
-                nativeProvider: 'openai',
+                label: `${providerLabel(provider)} credentials`,
+                nativeProvider: capability.native_provider,
                 authenticationMethod: 'api',
             },
         ];
@@ -92,10 +134,36 @@ export function connectionAuthenticationMethods(
         {
             id: 'native',
             label: `${providerLabel(provider)} sign-in`,
-            nativeProvider: provider,
+            nativeProvider: capability.native_provider,
             authenticationMethod: 'native',
         },
     ];
+}
+
+export function connectionProviderCapabilities(
+    harness: ConnectionHarness,
+    catalog: ModelCatalogSnapshot
+): Record<string, ModelCatalogHarnessProviderRoute[]> {
+    if (harness === 'pi') {
+        return (
+            catalog.harnesses?.pi?.versions[PI_PACKAGE_VERSION]?.providers ??
+            PI_PROVIDER_CAPABILITIES
+        );
+    }
+    return (
+        catalog.harnesses?.opencode?.versions['1.18.30']?.providers ??
+        (Object.fromEntries(
+            Object.keys(catalog.providers).map((provider) => [
+                provider,
+                [
+                    {
+                        native_provider: provider,
+                        auth: ['native'],
+                    },
+                ],
+            ])
+        ) as Record<string, ModelCatalogHarnessProviderRoute[]>)
+    );
 }
 
 export function connectionModel(

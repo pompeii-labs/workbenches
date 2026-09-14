@@ -5,10 +5,12 @@ import {
     ModelRouter,
     type ResolvedRunnerConfiguration,
 } from '../models/index.js';
+import { piRouteCandidates } from '../runners/pi/providers.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import type { PreparedRuntime } from '../runtimes/contracts.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { ConnectionStore, type RunnerConnectionSelection } from './store.js';
+import { connectionProviderCapabilities } from './targets.js';
 
 export interface RunnerAuthenticationStatus {
     model: string;
@@ -66,7 +68,13 @@ export class ConnectionInspector {
             }));
         }
         if (this.#workbench.manifest.runner === 'pi') {
-            return uniqueAuthenticatedRoutes(routes.flatMap(piRouteCandidates));
+            const capabilities = connectionProviderCapabilities(
+                'pi',
+                this.#router.catalog
+            );
+            return uniqueAuthenticatedRoutes(
+                routes.flatMap((route) => piRouteCandidates(route, capabilities))
+            );
         }
         return unsupportedRunner(this.#workbench.manifest.runner);
     }
@@ -358,8 +366,9 @@ async function inspectPi(
         throw new Error(diagnostic(result, 'Pi credentials could not be inspected'));
     }
     const available = parsePiModels(`${result.stdout}\n${result.stderr}`);
+    const capabilities = connectionProviderCapabilities('pi', router.catalog);
     const nativeRoutes = routes.flatMap((route) =>
-        piRouteCandidates(route).filter((candidate) =>
+        piRouteCandidates(route, capabilities).filter((candidate) =>
             available.has(`${candidate.nativeProvider}/${candidate.nativeModel}`)
         )
     );
@@ -395,27 +404,6 @@ function uniqueAuthenticatedRoutes(
                     candidate.authenticationMethod === route.authenticationMethod
             ) === index
     );
-}
-
-function piRouteCandidates(route: ModelRoute): AuthenticatedModelRoute[] {
-    return [
-        {
-            provider: route.provider,
-            nativeProvider: route.provider,
-            nativeModel: route.model,
-            authenticationMethod: 'api',
-        },
-        ...(route.provider === 'openai'
-            ? [
-                  {
-                      provider: route.provider,
-                      nativeProvider: 'openai-codex',
-                      nativeModel: route.model,
-                      authenticationMethod: 'oauth',
-                  },
-              ]
-            : []),
-    ];
 }
 
 function nativeConnectCommand(

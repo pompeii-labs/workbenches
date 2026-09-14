@@ -17,10 +17,26 @@ export interface ModelCatalogModel {
     routes: Record<string, string>;
 }
 
+export type ModelCatalogAuthenticationMethod = 'api' | 'oauth' | 'native';
+
+export interface ModelCatalogHarnessProviderRoute {
+    native_provider: string;
+    auth: ModelCatalogAuthenticationMethod[];
+}
+
+export interface ModelCatalogHarnessVersion {
+    providers: Record<string, ModelCatalogHarnessProviderRoute[]>;
+}
+
+export interface ModelCatalogHarness {
+    versions: Record<string, ModelCatalogHarnessVersion>;
+}
+
 export interface ModelCatalogSnapshot {
     version: string;
     models: Record<string, ModelCatalogModel>;
     providers: Record<string, ModelCatalogProvider>;
+    harnesses?: Record<string, ModelCatalogHarness>;
 }
 
 export interface ModelCatalogResult {
@@ -271,7 +287,61 @@ function parseSnapshot(value: unknown): ModelCatalogSnapshot {
         }
         providers[id] = { env: [...provider.env] };
     }
-    return { version: value.version, models, providers };
+    const harnesses = parseHarnesses(value.harnesses);
+    return {
+        version: value.version,
+        models,
+        providers,
+        ...(harnesses ? { harnesses } : {}),
+    };
+}
+
+function parseHarnesses(
+    value: unknown
+): Record<string, ModelCatalogHarness> | undefined {
+    if (value === undefined) return undefined;
+    if (!isRecord(value)) throw new Error('Invalid model catalog');
+    const harnesses: Record<string, ModelCatalogHarness> = {};
+    for (const [harnessId, harness] of Object.entries(value)) {
+        if (!isRecord(harness) || !isRecord(harness.versions)) {
+            throw new Error('Invalid model catalog');
+        }
+        const versions: Record<string, ModelCatalogHarnessVersion> = {};
+        for (const [versionId, version] of Object.entries(harness.versions)) {
+            if (!isRecord(version) || !isRecord(version.providers)) {
+                throw new Error('Invalid model catalog');
+            }
+            const providers: Record<string, ModelCatalogHarnessProviderRoute[]> = {};
+            for (const [providerId, routes] of Object.entries(version.providers)) {
+                if (!Array.isArray(routes)) throw new Error('Invalid model catalog');
+                providers[providerId] = routes.map((route) => {
+                    if (
+                        !isRecord(route) ||
+                        typeof route.native_provider !== 'string' ||
+                        !route.native_provider.trim() ||
+                        !Array.isArray(route.auth) ||
+                        route.auth.length === 0 ||
+                        !route.auth.every(isAuthenticationMethod)
+                    ) {
+                        throw new Error('Invalid model catalog');
+                    }
+                    return {
+                        native_provider: route.native_provider,
+                        auth: [...route.auth],
+                    };
+                });
+            }
+            versions[versionId] = { providers };
+        }
+        harnesses[harnessId] = { versions };
+    }
+    return harnesses;
+}
+
+function isAuthenticationMethod(
+    value: unknown
+): value is ModelCatalogAuthenticationMethod {
+    return value === 'api' || value === 'oauth' || value === 'native';
 }
 
 function parseState(value: unknown): ModelCatalogState {
