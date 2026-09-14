@@ -280,8 +280,9 @@ wb run project-core --task "Review this migration"
 The Workbench argument supplies the image and allowed routes needed to open the
 native login flow. The resulting connection and default selection belong to the
 runner and runtime, not that Workbench. Compatible Workbenches automatically
-reuse them. Run `wb connect` with no argument to choose from saved Workbenches
-and manage a runner environment.
+reuse them. Run `wb connect` with no argument to choose a runner/runtime
+environment. Workbench uses compatible saved package metadata to prepare that
+environment without presenting a package as the connection owner.
 
 If more than one compatible connection is available, `wb connect` asks which
 one should be the default for that runner and runtime. A single run can select a

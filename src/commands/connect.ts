@@ -3,6 +3,8 @@ import { defineCommand } from 'citty';
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
 import { RunnerCredentialStore } from '../connections/credentials.js';
 import { ConnectionManager } from '../connections/manager.js';
+import { ConnectionStore } from '../connections/store.js';
+import { ModelRouter } from '../models/index.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import { runnerSetupError } from '../runners/setup.js';
@@ -166,8 +168,22 @@ async function selectConnectionWorkbench(home: string): Promise<string> {
             workbench: await Workbench.load(entry.packagePath),
         }))
     );
-    const only = targets[0];
-    if (targets.length === 1 && only) return only.entry.alias;
+    const store = new ConnectionStore(home);
+    const environments = await Promise.all(
+        groupConnectionEnvironments(targets).map(async (environment) => {
+            const preferred = await store.find({
+                runner: environment.runner,
+                runtime: environment.runtime,
+            });
+            return {
+                ...environment,
+                preferred,
+                reference: selectEnvironmentReference(environment.targets, preferred),
+            };
+        })
+    );
+    const only = environments[0];
+    if (environments.length === 1 && only) return only.reference;
     if (!process.stdin.isTTY || !process.stderr.isTTY) {
         throw new Error(
             'wb connect requires a Workbench argument in a non-interactive terminal'
@@ -175,18 +191,83 @@ async function selectConnectionWorkbench(home: string): Promise<string> {
     }
     const selection = await autocomplete<number>({
         message: 'Choose a runner environment to connect',
-        placeholder: 'Search saved Workbenches',
+        placeholder: 'Search runner environments',
         maxItems: 7,
-        options: targets.map((target, index) => ({
+        options: environments.map((environment, index) => ({
             value: index,
-            label: target.entry.alias,
-            hint: `${ConnectionManager.runnerLabel(target.workbench.manifest.runner)} · ${runtimeLabel(target.workbench.manifest.runtime)} · ${target.workbench.manifest.model.id}`,
+            label: `${ConnectionManager.runnerLabel(environment.runner)} · ${runtimeLabel(environment.runtime)}`,
+            ...(environment.preferred
+                ? { hint: `default ${environment.preferred.nativeProvider}` }
+                : {}),
         })),
     });
     if (typeof selection === 'symbol') throw new Error('Connection setup cancelled');
-    const target = targets[selection];
-    if (!target) throw new Error('A runner environment must be selected');
-    return target.entry.alias;
+    const environment = environments[selection];
+    if (!environment) throw new Error('A runner environment must be selected');
+    return environment.reference;
+}
+
+function groupConnectionEnvironments(
+    targets: Array<{
+        entry: { alias: string; addedAt: string };
+        workbench: Workbench;
+    }>
+): Array<{
+    runner: string;
+    runtime: string;
+    targets: typeof targets;
+}> {
+    const grouped = new Map<string, (typeof targets)[number][]>();
+    for (const target of targets) {
+        const { runner, runtime } = target.workbench.manifest;
+        const key = `${runner}\0${runtime}`;
+        grouped.set(key, [...(grouped.get(key) ?? []), target]);
+    }
+    return [...grouped.values()]
+        .map((members) => ({
+            runner: members[0]?.workbench.manifest.runner ?? '',
+            runtime: members[0]?.workbench.manifest.runtime ?? '',
+            targets: members,
+        }))
+        .toSorted((left, right) =>
+            `${left.runner}\0${left.runtime}`.localeCompare(
+                `${right.runner}\0${right.runtime}`
+            )
+        );
+}
+
+function selectEnvironmentReference(
+    targets: Array<{
+        entry: { alias: string; addedAt: string };
+        workbench: Workbench;
+    }>,
+    preferred?: { provider: string; nativeProvider: string }
+): string {
+    const router = new ModelRouter();
+    const ordered = targets.toSorted((left, right) => {
+        const routeDifference =
+            availableProviderRoutes(router, right.workbench).length -
+            availableProviderRoutes(router, left.workbench).length;
+        return routeDifference || right.entry.addedAt.localeCompare(left.entry.addedAt);
+    });
+    const matching = preferred
+        ? ordered.find((target) =>
+              availableProviderRoutes(router, target.workbench).includes(
+                  preferred.provider
+              )
+          )
+        : undefined;
+    const selected = matching ?? ordered[0];
+    if (!selected) throw new Error('A runner environment must be selected');
+    return selected.entry.alias;
+}
+
+function availableProviderRoutes(router: ModelRouter, workbench: Workbench): string[] {
+    try {
+        return router.routes(workbench).map((route) => route.provider);
+    } catch {
+        return workbench.manifest.model.routes?.map((route) => route.provider) ?? [];
+    }
 }
 
 function runtimeLabel(runtime: string): string {
