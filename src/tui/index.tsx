@@ -39,6 +39,7 @@ export async function renderWorkbenchTui(
             prompt?: string;
             operation?: AuthoringOperation;
             environment?: Record<string, string | undefined>;
+            connection?: string;
         };
         environment?: Record<string, string | undefined>;
         workspaces?: WorkbenchWorkspaceBinding[];
@@ -144,6 +145,9 @@ export async function renderWorkbenchTui(
                                     allowHostDocker: creator
                                         ? false
                                         : (options.allowHostDocker ?? false),
+                                    ...(run.connection
+                                        ? { connection: run.connection }
+                                        : {}),
                                 });
                             }}
                             onAuthoringFinished={(result) => results.push(result)}

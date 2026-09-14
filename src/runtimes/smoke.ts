@@ -24,6 +24,7 @@ export interface RuntimeSmokeOptions {
     registry?: RuntimeRegistry;
     reference?: string;
     home?: string;
+    connection?: string;
 }
 
 export class RuntimeSmoke {
@@ -108,7 +109,12 @@ export class RuntimeSmoke {
                 ...(this.options.home
                     ? { store: new ConnectionStore(this.options.home) }
                     : {}),
-            }).inspect();
+            }).inspect({
+                ...(this.options.connection ? { discoverConnections: true } : {}),
+                ...(this.options.connection
+                    ? { connection: this.options.connection }
+                    : {}),
+            });
             result = { ...preflight, authentication };
         } catch (error) {
             operationError = error;

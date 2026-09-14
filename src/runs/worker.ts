@@ -94,6 +94,7 @@ export class RunWorker {
                     home: this.home,
                     runId: options.id,
                     signal: controller.signal,
+                    ...(request.connection ? { connection: request.connection } : {}),
                     onEvent: async (event) => {
                         await this.store.appendEvent(options.id, event);
                     },

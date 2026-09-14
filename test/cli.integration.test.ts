@@ -128,6 +128,26 @@ describe('CLI integration', () => {
         expect(create.stdout).toContain('--env=<NAME=value>');
         expect(create.stdout).toContain('--workspace=<NAME=path>');
         expect(create.stdout).toContain('--allow-host-docker');
+
+        const run = await executeCli(['run', '--help']);
+        expect(run.code).toBe(0);
+        expect(run.stdout).toContain('--connection=<connection>');
+
+        const resume = await executeCli(['resume', '--help']);
+        expect(resume.code).toBe(0);
+        expect(resume.stdout).toContain('--connection=<connection>');
+    });
+
+    test('explains that connection setup needs a saved or local Workbench context', async () => {
+        const result = await executeCli(['connect']);
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(
+            'No saved Workbenches are available to establish a runner connection'
+        );
+        expect(result.stderr).toContain(
+            'Pass a local Workbench path or save one first'
+        );
     });
 
     test('reports argument errors without dumping command help', async () => {

@@ -36,6 +36,7 @@ export interface ConnectionInspectorOptions {
 
 export interface InspectConnectionOptions {
     preferredConnection?: RunnerConnectionSelection;
+    connection?: string;
     discoverConnections?: boolean;
 }
 
@@ -73,9 +74,12 @@ export class ConnectionInspector {
     async inspect(
         options: InspectConnectionOptions = {}
     ): Promise<RunnerAuthenticationStatus> {
-        const context = ConnectionStore.context(this.#workbench, this.#reference);
-        const preferredConnection =
+        const context = ConnectionStore.context(this.#workbench);
+        const storedPreference =
             options.preferredConnection ?? (await this.#store?.find(context));
+        const discoveryPreference = options.connection
+            ? { provider: options.connection, nativeProvider: options.connection }
+            : storedPreference;
         const routes = this.#router.routes(this.#workbench);
         const nativeOptions = {
             workbench: this.#workbench,
@@ -91,16 +95,25 @@ export class ConnectionInspector {
                       nativeOptions,
                       routes,
                       this.#router,
-                      preferredConnection
+                      discoveryPreference
                   )
                 : this.#workbench.manifest.runner === 'pi'
                   ? await inspectPi(
                         nativeOptions,
                         routes,
                         this.#router,
-                        preferredConnection
+                        discoveryPreference
                     )
                   : unsupportedRunner(this.#workbench.manifest.runner);
+        const requested = options.connection
+            ? requestedConnection(authenticatedRoutes, options.connection)
+            : undefined;
+        if (options.connection && !requested) {
+            throw new Error(
+                `Connection ${options.connection} is not authenticated for ${canonicalModel(this.#workbench)} with ${this.#workbench.manifest.runner} in the ${this.#runtime.name} runtime. Run ${connectCommand(this.#reference)}.`
+            );
+        }
+        const preferredConnection = requested ?? storedPreference;
         const authenticatedProviders = [
             ...new Set(authenticatedRoutes.map((route) => route.provider)),
         ].toSorted();
@@ -136,9 +149,12 @@ export class ConnectionInspector {
         };
     }
 
-    async require(): Promise<ResolvedRunnerConfiguration> {
-        const status = await this.inspect();
-        if (status.configuration) return status.configuration;
+    async require(connection?: string): Promise<ResolvedRunnerConfiguration> {
+        const status = await this.inspect({
+            ...(connection ? { discoverConnections: true } : {}),
+            ...(connection ? { connection } : {}),
+        });
+        if (status.ready && status.configuration) return status.configuration;
         throw new Error(
             `No authenticated route is available for ${canonicalModel(this.#workbench)}. Run ${status.connectCommand}.`
         );
@@ -190,6 +206,26 @@ export class ConnectionInspector {
         }
         return nativeAuthenticationError(this.#workbench.manifest.runner);
     }
+}
+
+function requestedConnection(
+    connections: AuthenticatedModelRoute[],
+    requested: string
+): RunnerConnectionSelection | undefined {
+    const name = requested.trim().toLowerCase();
+    if (!name) return undefined;
+    const native = connections.find(
+        (connection) => connection.nativeProvider.toLowerCase() === name
+    );
+    if (native) {
+        return { provider: native.provider, nativeProvider: native.nativeProvider };
+    }
+    const provider = connections.find(
+        (connection) => connection.provider.toLowerCase() === name
+    );
+    return provider
+        ? { provider: provider.provider, nativeProvider: provider.nativeProvider }
+        : undefined;
 }
 
 async function inspectOpenCode(

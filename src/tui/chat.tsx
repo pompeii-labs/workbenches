@@ -61,11 +61,13 @@ export interface ChatScreenProps {
         session?: StoredSession;
         environment?: Record<string, string | undefined>;
         authoring?: boolean;
+        connection?: string;
     }) => Promise<RunHandle>;
     session?: StoredSession;
     initialPrompt?: string;
     operation?: AuthoringOperation;
     environment?: Record<string, string | undefined>;
+    connection?: string;
     prepareImprovement?: (
         sessionId: string,
         feedback: string
@@ -389,6 +391,7 @@ export function ChatScreen(props: ChatScreenProps) {
                 authoring: Boolean(props.operation),
                 ...(props.session ? { session: props.session } : {}),
                 ...(props.environment ? { environment: props.environment } : {}),
+                ...(props.connection ? { connection: props.connection } : {}),
             });
             if (!props.operation) {
                 props.onSessionObserved?.(props.session?.id ?? session.runId);

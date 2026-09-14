@@ -178,11 +178,13 @@ containers created for the same local store. Preflight and other short-lived
 containers are not labeled because they execute synchronously under `--rm`.
 
 Each supported runner uses a private named Docker volume for its native
-credential store. `wb connect` runs the runner's own authentication flow in the
-same image and volume that later runs use. OpenCode exposes a standalone login
-command. Pi opens its TUI, where the user runs the provider-specific `/login`
-command shown by Workbench. The Workbench package is never given ownership of
-the volume, and the engine does not read or upload the stored token contents.
+credential store. `wb connect <workbench>` runs the runner's own authentication
+flow in the same image and runner-scoped volume that later runs use. The login
+and selected default can be reused by any compatible Docker Workbench using that
+runner. OpenCode exposes a standalone login command. Pi opens its TUI, where the
+user runs the provider-specific `/login` command shown by Workbench. The
+Workbench package is never given ownership of the volume, and the engine does
+not read or upload the stored token contents.
 
 Interactive runners remain inside the selected Docker runtime. Pi uses its
 native stdin RPC transport, so the container is launched with piped input.
@@ -228,14 +230,15 @@ required by the host control plane but is excluded from the runtime environment.
 The sandbox receives manifest-declared environment values for allowed model
 routes and a separately staged native credential store for the selected runner.
 
-`wb connect` opens the runner's native authentication flow inside the same E2B
-image used for runs. OpenCode uses its provider-specific login command, including
-API-key and headless ChatGPT authentication. Pi opens its TUI and tells the user
-which `/login <provider>` command to run. The resulting files are synchronized
-to private, runtime- and runner-scoped storage beneath the Workbench data
-directory before the sandbox is destroyed. A later run copies that store into a
-fresh sandbox. The store is never included in the package, workspace, run record,
-normalized event stream, or artifact output.
+`wb connect <workbench>` opens the runner's native authentication flow inside the
+same E2B image used for runs. OpenCode uses its provider-specific login command,
+including API-key and headless ChatGPT authentication. Pi opens its TUI and tells
+the user which `/login <provider>` command to run. The resulting files are
+synchronized to private, runtime- and runner-scoped storage beneath the
+Workbench data directory before the sandbox is destroyed. Any compatible E2B
+Workbench using that runner can copy the store into a fresh sandbox. The store is
+never included in the package, workspace, run record, normalized event stream,
+or artifact output.
 
 The engine treats native credential files as opaque. Some runners keep several
 provider logins in one file, so the E2B sandbox receives the native store for the

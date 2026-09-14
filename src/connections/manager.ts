@@ -68,10 +68,7 @@ export class ConnectionManager {
     }
 
     async configure(): Promise<RunnerAuthenticationStatus> {
-        const context = ConnectionStore.context(
-            this.#options.workbench,
-            this.#options.reference
-        );
+        const context = ConnectionStore.context(this.#options.workbench);
         const preferred = await this.#store.find(context);
         const canAuthenticate = this.#inspector.supportsNativeAuthentication();
         const choose = this.#options.choose ?? ConnectionManager.promptConnection;

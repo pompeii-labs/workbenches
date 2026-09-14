@@ -55,9 +55,7 @@ describe('runner connection selection', () => {
             nativeProvider: 'openrouter',
         });
         expect(
-            await new ConnectionStore(home).find(
-                ConnectionStore.context(workbench, 'project-core')
-            )
+            await new ConnectionStore(home).find(ConnectionStore.context(workbench))
         ).toEqual({ provider: 'openrouter', nativeProvider: 'openrouter' });
         const remembered = await new ConnectionInspector({
             workbench,
@@ -67,6 +65,18 @@ describe('runner connection selection', () => {
             store: new ConnectionStore(home),
         }).inspect();
         expect(remembered.configuration?.provider).toBe('openrouter');
+
+        const otherWorkbench = fixture('opencode');
+        otherWorkbench.manifest.name = 'other-workbench';
+        otherWorkbench.manifest.model = workbench.manifest.model;
+        const reused = await new ConnectionInspector({
+            workbench: otherWorkbench,
+            runner: runner('opencode'),
+            runtime: runtime('● OpenAI oauth\n● OpenRouter api\n'),
+            reference: 'other-workbench',
+            store: new ConnectionStore(home),
+        }).inspect();
+        expect(reused.configuration?.provider).toBe('openrouter');
     });
 
     test('can add a new native connection instead of silently reusing one', async () => {

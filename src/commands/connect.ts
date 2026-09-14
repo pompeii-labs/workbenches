@@ -1,4 +1,6 @@
+import { autocomplete } from '@clack/prompts';
 import { defineCommand } from 'citty';
+import { SavedWorkbenchCatalog } from '../catalog/index.js';
 import { RunnerCredentialStore } from '../connections/credentials.js';
 import { ConnectionManager } from '../connections/manager.js';
 import { RunnerRegistry } from '../runners/registry.js';
@@ -7,19 +9,23 @@ import { runnerSetupError } from '../runners/setup.js';
 import { RunStore } from '../runs/index.js';
 import { type PreparedRuntime, RuntimeRegistry } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
-import { WorkbenchEnvironment, WorkbenchResolver } from '../workbench/index.js';
+import {
+    Workbench,
+    WorkbenchEnvironment,
+    WorkbenchResolver,
+} from '../workbench/index.js';
 import { CliPresenter } from './presenter.js';
 
 export const connectCommand = defineCommand({
     meta: {
         name: 'connect',
-        description: 'Choose a compatible runner connection for a Workbench.',
+        description: 'Manage reusable runner connections.',
     },
     args: {
         workbench: {
             type: 'positional',
             description: 'Saved alias or local Workbench reference',
-            required: true,
+            required: false,
         },
         dir: {
             type: 'string',
@@ -45,7 +51,8 @@ export const connectCommand = defineCommand({
             rawArgs,
         });
         const home = workbenchHome();
-        const resolved = await new WorkbenchResolver().resolve(args.workbench, {
+        const reference = args.workbench ?? (await selectConnectionWorkbench(home));
+        const resolved = await new WorkbenchResolver().resolve(reference, {
             home,
             ...(args.dir ? { workspaceDirectory: args.dir } : {}),
         });
@@ -103,7 +110,7 @@ export const connectCommand = defineCommand({
                 workbench: resolved.workbench,
                 runtime,
                 runner,
-                reference: args.workbench,
+                reference,
                 home,
                 announce: (message) => output.message(message, 'info', 'stderr'),
             }).configure();
@@ -122,12 +129,12 @@ export const connectCommand = defineCommand({
             connectedRecord = {
                 machine: [
                     'connected',
-                    resolved.workbench.manifest.name,
-                    configuration.provider,
+                    resolved.workbench.manifest.runtime,
                     resolved.workbench.manifest.runner,
+                    configuration.provider,
                 ],
-                title: `Connected ${resolved.workbench.manifest.name}`,
-                details: [connection, runnerName],
+                title: `Connected ${runnerName} in ${runtimeLabel(resolved.workbench.manifest.runtime)}`,
+                details: [connection, 'Available to compatible Workbenches'],
             };
         } catch (error) {
             operationError = error;
@@ -145,3 +152,44 @@ export const connectCommand = defineCommand({
         if (connectedRecord) output.record(connectedRecord);
     },
 });
+
+async function selectConnectionWorkbench(home: string): Promise<string> {
+    const entries = await new SavedWorkbenchCatalog(home).list();
+    if (entries.length === 0) {
+        throw new Error(
+            'No saved Workbenches are available to establish a runner connection. Pass a local Workbench path or save one first.'
+        );
+    }
+    const targets = await Promise.all(
+        entries.map(async (entry) => ({
+            entry,
+            workbench: await Workbench.load(entry.packagePath),
+        }))
+    );
+    const only = targets[0];
+    if (targets.length === 1 && only) return only.entry.alias;
+    if (!process.stdin.isTTY || !process.stderr.isTTY) {
+        throw new Error(
+            'wb connect requires a Workbench argument in a non-interactive terminal'
+        );
+    }
+    const selection = await autocomplete<number>({
+        message: 'Choose a runner environment to connect',
+        placeholder: 'Search saved Workbenches',
+        maxItems: 7,
+        options: targets.map((target, index) => ({
+            value: index,
+            label: target.entry.alias,
+            hint: `${ConnectionManager.runnerLabel(target.workbench.manifest.runner)} · ${runtimeLabel(target.workbench.manifest.runtime)} · ${target.workbench.manifest.model.id}`,
+        })),
+    });
+    if (typeof selection === 'symbol') throw new Error('Connection setup cancelled');
+    const target = targets[selection];
+    if (!target) throw new Error('A runner environment must be selected');
+    return target.entry.alias;
+}
+
+function runtimeLabel(runtime: string): string {
+    if (runtime === 'e2b') return 'E2B';
+    return runtime.charAt(0).toUpperCase() + runtime.slice(1);
+}

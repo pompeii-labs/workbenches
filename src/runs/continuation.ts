@@ -15,6 +15,7 @@ export interface ContinueRunOptions {
     environmentOverrides?: boolean;
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
+    connection?: string;
 }
 
 export interface ContinuedRun {
@@ -33,6 +34,7 @@ export interface OpenInteractiveRunOptions {
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
     session?: StoredSession;
+    connection?: string;
 }
 
 interface RunContinuationDependencies {
@@ -73,6 +75,11 @@ export class RunContinuation {
             const session = await this.#sessions.read(sessionId);
             const current = await this.latestRun(session);
             if (!RunStore.isTerminal(current.status)) {
+                if (options.connection) {
+                    throw new Error(
+                        'A connection override cannot change an active Workbench execution'
+                    );
+                }
                 const handle = this.#dispatcher.handle(current.id);
                 try {
                     await handle.attach();
@@ -94,6 +101,11 @@ export class RunContinuation {
         if (options.environmentOverrides) {
             throw new Error(
                 'Environment overrides cannot change an active Workbench execution'
+            );
+        }
+        if (options.connection) {
+            throw new Error(
+                'A connection override cannot change an active Workbench execution'
             );
         }
         const events = await this.#runs.readEvents(run.id);
@@ -129,6 +141,7 @@ export class RunContinuation {
             ...(options.allowHostDocker !== undefined
                 ? { allowHostDocker: options.allowHostDocker }
                 : {}),
+            ...(options.connection ? { connection: options.connection } : {}),
             session,
         });
         await this.#dispatcher.dispatch({
@@ -157,6 +170,7 @@ export class RunContinuation {
             ...(options.allowHostDocker !== undefined
                 ? { allowHostDocker: options.allowHostDocker }
                 : {}),
+            ...(options.connection ? { connection: options.connection } : {}),
             ...(options.session ? { session: options.session } : {}),
         });
         await this.#dispatcher.dispatch({

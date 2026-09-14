@@ -16,4 +16,5 @@ export {
     ConnectionStore,
     type RunnerConnectionContext,
     type RunnerConnectionSelection,
+    type StoredRunnerConnection,
 } from './store.js';

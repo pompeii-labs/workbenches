@@ -85,6 +85,10 @@ export const runCommand = defineCommand({
             description: 'Authorize a declared host Docker engine binding for this run',
             default: false,
         },
+        connection: {
+            type: 'string',
+            description: 'Use an authenticated provider connection for this run',
+        },
     },
     async run({ args, rawArgs }) {
         rejectUnknownRunOptions(rawArgs);
@@ -119,7 +123,11 @@ export const runCommand = defineCommand({
                 args['allow-host-docker']
             );
             await launchWorkbenchTui({
-                initial: { alias: args.workbench, resolved },
+                initial: {
+                    alias: args.workbench,
+                    resolved,
+                    ...(args.connection ? { connection: args.connection } : {}),
+                },
                 environment: {
                     ...process.env,
                     ...workbenchEnvironment.bind(resolved.workbench, overrides),
@@ -166,6 +174,7 @@ export const runCommand = defineCommand({
                         allowHostDocker: args['allow-host-docker'],
                         reference: args.workbench,
                         home,
+                        ...(args.connection ? { connection: args.connection } : {}),
                         onEvent: (event) => {
                             if (event.type !== 'run.failed') return;
                             failure = string(object(event.data)?.message);
@@ -201,6 +210,7 @@ export const runCommand = defineCommand({
                     allowHostDocker: args['allow-host-docker'],
                     reference: args.workbench,
                     home,
+                    ...(args.connection ? { connection: args.connection } : {}),
                 }).check();
                 if (!smoke.authentication.ready) {
                     throw new Error(
@@ -214,6 +224,7 @@ export const runCommand = defineCommand({
                     reference: args.workbench,
                     workspaces,
                     allowHostDocker: args['allow-host-docker'],
+                    ...(args.connection ? { connection: args.connection } : {}),
                 });
                 await dispatcher.dispatch({
                     id: stored.id,
@@ -232,6 +243,7 @@ export const runCommand = defineCommand({
                 reference: args.workbench,
                 workspaces,
                 allowHostDocker: args['allow-host-docker'],
+                ...(args.connection ? { connection: args.connection } : {}),
             });
             const renderer = createEventRenderer({
                 mode: args.json ? 'json' : args.final ? 'final' : 'human',
@@ -279,6 +291,7 @@ const runOptions = new Set([
     '--env',
     '--workspace',
     '--allow-host-docker',
+    '--connection',
 ]);
 
 function rejectUnknownRunOptions(rawArgs: string[]): void {

@@ -126,6 +126,27 @@ describe('native runner authentication', () => {
         expect(inspected).toBeTrue();
     });
 
+    test('uses an explicit authenticated connection without changing the locked model', async () => {
+        const workbench = fixture('opencode');
+        workbench.manifest.model = {
+            id: 'openai/gpt-5.6-terra',
+            routes: [{ provider: 'openai' }, { provider: 'openrouter' }],
+        };
+        const connection = inspector(workbench, {
+            runner: runner('opencode'),
+            runtime: runtime('● OpenAI oauth\n● OpenRouter api\n'),
+        });
+
+        await expect(connection.require('openrouter')).resolves.toMatchObject({
+            canonicalModel: 'openai/gpt-5.6-terra',
+            provider: 'openrouter',
+            nativeProvider: 'openrouter',
+        });
+        await expect(connection.require('anthropic')).rejects.toThrow(
+            'Connection anthropic is not authenticated for openai/gpt-5.6-terra'
+        );
+    });
+
     test('accepts an unknown config-backed provider without inventing credentials', async () => {
         const workbench = fixture('opencode');
         workbench.manifest.model = {

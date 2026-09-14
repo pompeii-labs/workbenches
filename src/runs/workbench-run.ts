@@ -34,6 +34,7 @@ export interface WorkbenchRunOptions {
     onLaunch?: () => Promise<void> | void;
     reference?: string;
     home?: string;
+    connection?: string;
 }
 
 export interface WorkbenchRunDependencies {
@@ -122,7 +123,7 @@ export class WorkbenchRun {
                 ...(this.options.home
                     ? { store: new ConnectionStore(this.options.home) }
                     : {}),
-            }).require();
+            }).require(this.options.connection);
             const invocation = runner.build(runtime, this.options.task, configuration);
 
             if (this.options.dryRun) {

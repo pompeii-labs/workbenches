@@ -21,6 +21,7 @@ export {
     type RunnerAuthenticationStatus,
     type RunnerConnectionContext,
     type RunnerConnectionSelection,
+    type StoredRunnerConnection,
 } from './connections/index.js';
 export {
     type AuthenticatedModelRoute,

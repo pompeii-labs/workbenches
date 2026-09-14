@@ -65,6 +65,11 @@ export const resumeCommand = defineCommand({
             description: 'Authorize a declared host Docker engine binding for this run',
             default: false,
         },
+        connection: {
+            type: 'string',
+            description:
+                'Use an authenticated provider connection for the next execution',
+        },
     },
     async run({ args, rawArgs }) {
         if (args.prompt !== undefined && args.task !== undefined) {
@@ -98,7 +103,10 @@ export const resumeCommand = defineCommand({
                 throw new Error('This resume mode requires a non-empty task');
             }
             await launchWorkbenchTui({
-                initial: target,
+                initial: {
+                    ...target,
+                    ...(args.connection ? { connection: args.connection } : {}),
+                },
                 environment,
                 workspaces: target.session.workspaces,
                 allowHostDocker: args['allow-host-docker'],
@@ -119,6 +127,7 @@ export const resumeCommand = defineCommand({
             ),
             workspaces: target.session.workspaces,
             allowHostDocker: args['allow-host-docker'],
+            ...(args.connection ? { connection: args.connection } : {}),
         });
         if (args.detach) {
             console.log(target.session.id);

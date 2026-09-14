@@ -266,23 +266,38 @@ saved run metadata or normalized events. Prefer `--env-file` or inherited
 environment for secrets because command-line values may be retained in shell
 history.
 
-### Connect the locked runner
+### Connect a runner environment
 
 The Workbench author selects the runner, model, allowed provider routes, and
 native runner configuration. Those choices cannot be overridden when the
-Workbench runs. Choose one of the runner's compatible connections:
+Workbench runs. Connect a runner once for each runtime where you use it:
 
 ```sh
 wb connect project-core
 wb run project-core --task "Review this migration"
 ```
 
+The Workbench argument supplies the image and allowed routes needed to open the
+native login flow. The resulting connection and default selection belong to the
+runner and runtime, not that Workbench. Compatible Workbenches automatically
+reuse them. Run `wb connect` with no argument to choose from saved Workbenches
+and manage a runner environment.
+
 If more than one compatible connection is available, `wb connect` asks which
-one this Workbench should use. Run it again to switch connections or add or
-update a runner-native login. It never injects login commands into a Workbench
-conversation. The route selection is stored in
-`~/.workbench/connections.json`; it does not change the Workbench package,
-runner, model, or credential store.
+one should be the default for that runner and runtime. A single run can select a
+different authenticated connection without changing the default:
+
+```sh
+wb run project-core --connection openrouter --task "Review this migration"
+```
+
+An override must already be authenticated and must match one of the provider
+routes allowed by the Workbench. Resolution order is the explicit
+`--connection` override, the runner/runtime default, then the first allowed
+authenticated route in manifest order. Connection defaults are stored in
+`~/.workbench/connections.json`. No login command is injected into a Workbench
+conversation, and no Workbench package, runner, model, or credential store is
+modified by selecting a default.
 
 Authentication uses the selected runner's native flow in every execution
 runtime. OpenCode opens `opencode auth login` for the selected provider. Pi has
@@ -494,8 +509,8 @@ Input and output transfers each have a 512 MiB safety limit, enforced against
 uncompressed content. `E2B_API_KEY` is used only by the host control plane and is
 never sent to the sandbox. The sandbox receives manifest-declared environment
 values for allowed model routes and the private native credential store for its
-selected runner. `wb connect` opens the runner's native authentication UI inside
-the same E2B image used for runs. OpenCode supports its API-key and headless
+selected runner. `wb connect <workbench>` opens the runner's native
+authentication UI inside the same E2B image used for runs. OpenCode supports its API-key and headless
 ChatGPT login methods there. For Pi, Workbench opens the Pi TUI and directs the
 user to its native `/login` command.
 

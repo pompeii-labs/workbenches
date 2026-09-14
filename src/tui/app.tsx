@@ -29,6 +29,7 @@ export interface TuiAppProps {
         prompt?: string;
         operation?: AuthoringOperation;
         environment?: Record<string, string | undefined>;
+        connection?: string;
     };
     resolve: (alias: string) => Promise<ResolvedWorkbenchReference>;
     searchRegistry?: (query: string) => Promise<RegistrySearchResult[]>;
@@ -46,6 +47,7 @@ export interface TuiAppProps {
         session?: StoredSession;
         environment?: Record<string, string | undefined>;
         authoring?: boolean;
+        connection?: string;
     }) => Promise<RunHandle>;
     onSessionObserved?: (id: string | undefined) => void;
     onAuthoringFinished?: (result: AuthoringOperationResult) => void;
@@ -59,6 +61,7 @@ interface ChatScreenState {
     prompt?: string;
     operation?: AuthoringOperation;
     environment?: Record<string, string | undefined>;
+    connection?: string;
 }
 
 export function WorkbenchApp(props: TuiAppProps) {
@@ -85,6 +88,9 @@ export function WorkbenchApp(props: TuiAppProps) {
                       : {}),
                   ...(props.initial.environment
                       ? { environment: props.initial.environment }
+                      : {}),
+                  ...(props.initial.connection
+                      ? { connection: props.initial.connection }
                       : {}),
               }
             : { kind: 'home' }
@@ -205,6 +211,9 @@ export function WorkbenchApp(props: TuiAppProps) {
                                         : {})}
                                     {...(current.environment
                                         ? { environment: current.environment }
+                                        : {})}
+                                    {...(current.connection
+                                        ? { connection: current.connection }
                                         : {})}
                                     start={props.start}
                                     {...(props.onSessionObserved

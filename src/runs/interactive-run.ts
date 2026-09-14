@@ -68,6 +68,7 @@ export interface InteractiveRunOptions {
     allowHostDocker?: boolean;
     session?: RunnerSessionContext;
     interactive?: boolean;
+    connection?: string;
 }
 
 export class InteractiveRun {
@@ -260,7 +261,7 @@ export class InteractiveRun {
                 ...(this.options.home
                     ? { store: new ConnectionStore(this.options.home) }
                     : {}),
-            }).require();
+            }).require(this.options.connection);
         } catch (error) {
             preparationError = error;
         }

@@ -79,6 +79,32 @@ describe('run continuation', () => {
         );
     });
 
+    test('rejects connection changes while continuing an active run', async () => {
+        const session = storedSession();
+        const active = storedRun(session.latest_run_id, 'running');
+        const continuation = fixtureContinuation({
+            session,
+            run: active,
+            handle: fakeHandle(active.id),
+            prepare: async () => {
+                throw new Error('must not prepare');
+            },
+        });
+
+        await expect(
+            continuation.submit({
+                resolved: resolvedWorkbench(),
+                session,
+                task: 'inspect migrations',
+                mode: 'foreground',
+                environment: {},
+                connection: 'openai',
+            })
+        ).rejects.toThrow(
+            'A connection override cannot change an active Workbench execution'
+        );
+    });
+
     test('starts one linked run when the previous run is complete', async () => {
         const session = storedSession();
         const completed = storedRun(session.latest_run_id, 'completed');
@@ -151,6 +177,31 @@ describe('run continuation', () => {
         ).resolves.toBe(handle);
         expect(attached).toBe(1);
         expect(prepared).toBe(0);
+    });
+
+    test('rejects a connection override while attaching to an active run', async () => {
+        const session = storedSession();
+        const active = storedRun(session.latest_run_id, 'running');
+        const continuation = fixtureContinuation({
+            session,
+            run: active,
+            handle: fakeHandle(active.id),
+            prepare: async () => {
+                throw new Error('must not prepare');
+            },
+        });
+
+        await expect(
+            continuation.open({
+                resolved: resolvedWorkbench(),
+                reference: 'fixture-core',
+                environment: {},
+                session,
+                connection: 'openai',
+            })
+        ).rejects.toThrow(
+            'A connection override cannot change an active Workbench execution'
+        );
     });
 
     test('opens a completed session as one new linked run', async () => {

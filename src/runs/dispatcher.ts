@@ -21,6 +21,7 @@ export interface PrepareRunOptions {
     allowHostDocker?: boolean;
     reference?: string;
     session?: StoredSession;
+    connection?: string;
 }
 
 export interface DispatchRunOptions {
@@ -112,6 +113,7 @@ export class RunDispatcher {
                     ...(session.native_session_id
                         ? { native_session_id: session.native_session_id }
                         : {}),
+                    ...(options.connection ? { connection: options.connection } : {}),
                 },
             });
         } catch (error) {

@@ -99,6 +99,7 @@ export class InteractiveRunWorker {
                 workspaces: request.workspaces ?? [],
                 allowHostDocker: request.allow_host_docker ?? false,
                 interactive: metadata.mode === 'interactive',
+                ...(request.connection ? { connection: request.connection } : {}),
                 ...(request.session_id
                     ? {
                           session: {
