@@ -138,16 +138,14 @@ describe('CLI integration', () => {
         expect(resume.stdout).toContain('--connection=<connection>');
     });
 
-    test('explains that connection setup needs a saved or local Workbench context', async () => {
+    test('requests a runtime directly instead of requiring a saved Workbench', async () => {
         const result = await executeCli(['connect']);
 
         expect(result.code).toBe(1);
         expect(result.stderr).toContain(
-            'No saved Workbenches are available to establish a runner connection'
+            'wb connect requires --runtime in a non-interactive terminal'
         );
-        expect(result.stderr).toContain(
-            'Pass a local Workbench path or save one first'
-        );
+        expect(result.stderr).not.toContain('saved Workbenches');
     });
 
     test('reports argument errors without dumping command help', async () => {

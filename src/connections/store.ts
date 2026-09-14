@@ -6,6 +6,7 @@ import type { ResolvedWorkbench } from '../types.js';
 export interface RunnerConnectionSelection {
     provider: string;
     nativeProvider: string;
+    authenticationMethod?: string;
 }
 
 export interface RunnerConnectionContext {
@@ -16,6 +17,7 @@ export interface RunnerConnectionContext {
 export interface StoredRunnerConnection extends RunnerConnectionContext {
     provider: string;
     nativeProvider: string;
+    authenticationMethod?: string;
     updatedAt: string;
 }
 
@@ -29,13 +31,14 @@ interface StoredRunnerConnectionV1 {
     updated_at: string;
 }
 
-interface ConnectionFileV2 {
-    version: 2;
+interface ConnectionFileV3 {
+    version: 3;
     connections: Array<{
         runner: string;
         runtime: string;
         provider: string;
         native_provider: string;
+        authentication_method?: string;
         updated_at: string;
     }>;
 }
@@ -68,6 +71,9 @@ export class ConnectionStore {
             ? {
                   provider: connection.provider,
                   nativeProvider: connection.nativeProvider,
+                  ...(connection.authenticationMethod
+                      ? { authenticationMethod: connection.authenticationMethod }
+                      : {}),
               }
             : undefined;
     }
@@ -85,6 +91,9 @@ export class ConnectionStore {
                 ...context,
                 provider: selection.provider,
                 nativeProvider: selection.nativeProvider,
+                ...(selection.authenticationMethod
+                    ? { authenticationMethod: selection.authenticationMethod }
+                    : {}),
                 updatedAt: new Date().toISOString(),
             },
         ]);
@@ -103,6 +112,7 @@ async function readConnections(home: string): Promise<StoredRunnerConnection[]> 
     if (!isRecord(value) || !Array.isArray(value.connections)) {
         throw new Error('The Workbench connection file is invalid');
     }
+    if (value.version === 3) return value.connections.map(parseConnectionV3);
     if (value.version === 2) return value.connections.map(parseConnectionV2);
     if (value.version === 1) {
         return migrateConnections(value.connections.map(parseConnectionV1));
@@ -117,13 +127,16 @@ async function writeConnections(
     await mkdir(home, { recursive: true, mode: 0o700 });
     const destination = connectionPath(home);
     const temporary = join(home, `connections.${crypto.randomUUID()}.tmp`);
-    const contents: ConnectionFileV2 = {
-        version: 2,
+    const contents: ConnectionFileV3 = {
+        version: 3,
         connections: connections.map((connection) => ({
             runner: connection.runner,
             runtime: connection.runtime,
             provider: connection.provider,
             native_provider: connection.nativeProvider,
+            ...(connection.authenticationMethod
+                ? { authentication_method: connection.authenticationMethod }
+                : {}),
             updated_at: connection.updatedAt,
         })),
     };
@@ -175,6 +188,23 @@ function parseConnectionV2(value: unknown): StoredRunnerConnection {
         provider: value.provider,
         nativeProvider: value.native_provider,
         updatedAt: value.updated_at,
+    };
+}
+
+function parseConnectionV3(value: unknown): StoredRunnerConnection {
+    const parsed = parseConnectionV2(value);
+    if (
+        isRecord(value) &&
+        value.authentication_method !== undefined &&
+        typeof value.authentication_method !== 'string'
+    ) {
+        throw new Error('The Workbench connection file is invalid');
+    }
+    return {
+        ...parsed,
+        ...(isRecord(value) && typeof value.authentication_method === 'string'
+            ? { authenticationMethod: value.authentication_method }
+            : {}),
     };
 }
 

@@ -56,7 +56,11 @@ describe('runner connection selection', () => {
         });
         expect(
             await new ConnectionStore(home).find(ConnectionStore.context(workbench))
-        ).toEqual({ provider: 'openrouter', nativeProvider: 'openrouter' });
+        ).toEqual({
+            provider: 'openrouter',
+            nativeProvider: 'openrouter',
+            authenticationMethod: 'api',
+        });
         const remembered = await new ConnectionInspector({
             workbench,
             runner: runner('opencode'),
@@ -131,6 +135,68 @@ describe('runner connection selection', () => {
             'openrouter',
         ]);
         expect(status.configuration?.provider).toBe('openrouter');
+    });
+
+    test('uses a preselected runtime authentication method without another provider prompt', async () => {
+        const home = await temporaryHome();
+        const workbench = fixture('opencode');
+        let authenticated = false;
+        let loginCommand: string[] = [];
+        const prepared = runtime('', {
+            execute: async () => ({
+                code: 0,
+                stdout: authenticated ? '● OpenAI oauth\n' : '',
+                stderr: '',
+            }),
+            interact: async (invocation) => {
+                loginCommand = invocation.command;
+                authenticated = true;
+                return 0;
+            },
+        });
+
+        const status = await configure({
+            workbench,
+            runner: runner('opencode'),
+            runtime: prepared,
+            reference: 'local/opencode/openai',
+            home,
+            choose: async () => {
+                throw new Error('connection prompt should not open');
+            },
+            chooseProvider: async () => {
+                throw new Error('provider prompt should not open');
+            },
+            authentication: {
+                provider: 'openai',
+                nativeProvider: 'openai',
+                nativeMethod: 'ChatGPT Pro/Plus (browser)',
+                authenticationMethod: 'oauth',
+                label: 'ChatGPT subscription',
+            },
+            announce: () => {},
+        });
+
+        expect(loginCommand).toEqual([
+            'opencode',
+            'auth',
+            'login',
+            '--provider',
+            'openai',
+            '--method',
+            'ChatGPT Pro/Plus (browser)',
+        ]);
+        expect(status.configuration?.provider).toBe('openai');
+        expect(
+            await new ConnectionStore(home).find({
+                runner: 'opencode',
+                runtime: 'local',
+            })
+        ).toEqual({
+            provider: 'openai',
+            nativeProvider: 'openai',
+            authenticationMethod: 'oauth',
+        });
     });
 
     test('distinguishes a Codex subscription from OpenAI API authentication', async () => {

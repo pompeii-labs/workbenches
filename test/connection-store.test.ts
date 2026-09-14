@@ -33,23 +33,26 @@ describe('runner connection preferences', () => {
         await store.save(context, {
             provider: 'openrouter',
             nativeProvider: 'openrouter',
+            authenticationMethod: 'api',
         });
 
         expect(await store.find(context)).toEqual({
             provider: 'openrouter',
             nativeProvider: 'openrouter',
+            authenticationMethod: 'api',
         });
         expect(await store.find({ runner: 'pi', runtime: 'e2b' })).toBeUndefined();
         expect((await stat(join(home, 'connections.json'))).mode & 0o777).toBe(0o600);
         const stored = await readFile(join(home, 'connections.json'), 'utf8');
         expect(JSON.parse(stored)).toMatchObject({
-            version: 2,
+            version: 3,
             connections: [
                 {
                     runner: 'pi',
                     runtime: 'local',
                     provider: 'openrouter',
                     native_provider: 'openrouter',
+                    authentication_method: 'api',
                 },
             ],
         });
@@ -100,7 +103,7 @@ describe('runner connection preferences', () => {
         expect(
             JSON.parse(await readFile(join(home, 'connections.json'), 'utf8'))
         ).toMatchObject({
-            version: 2,
+            version: 3,
             connections: [{ runner: 'opencode', runtime: 'e2b' }],
         });
     });

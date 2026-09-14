@@ -36,11 +36,13 @@ describe('native runner authentication', () => {
                 provider: 'openai',
                 nativeProvider: 'openai',
                 nativeModel: 'gpt-5.6-terra',
+                authenticationMethod: 'api',
             },
             {
                 provider: 'openai',
                 nativeProvider: 'openai-codex',
                 nativeModel: 'gpt-5.6-terra',
+                authenticationMethod: 'oauth',
             },
         ]);
     });
@@ -92,6 +94,7 @@ describe('native runner authentication', () => {
         }).inspect();
 
         expect(status.authenticatedProviders).toEqual(['openai']);
+        expect(status.connections[0]?.authenticationMethod).toBe('oauth');
     });
 
     test('uses an explicitly bound environment route without scanning native credentials', async () => {
@@ -297,6 +300,41 @@ describe('native runner authentication', () => {
 
         expect(connected).toEqual(['opencode', 'auth', 'login']);
         expect(status.configuration?.provider).toBe('openrouter');
+    });
+
+    test('passes an explicit OpenCode authentication method to native login', async () => {
+        const workbench = fixture('opencode');
+        let connected: string[] = [];
+        let authenticated = false;
+        const prepared = runtime('', {
+            execute() {
+                return Promise.resolve({
+                    code: 0,
+                    stdout: authenticated ? '● OpenAI oauth\n' : '',
+                    stderr: '',
+                });
+            },
+            interact(invocation) {
+                connected = invocation.command;
+                authenticated = true;
+                return Promise.resolve(0);
+            },
+        });
+
+        await inspector(workbench, {
+            runner: runner('opencode'),
+            runtime: prepared,
+        }).connect('openai', 'ChatGPT Pro/Plus (browser)', 'oauth');
+
+        expect(connected).toEqual([
+            'opencode',
+            'auth',
+            'login',
+            '--provider',
+            'openai',
+            '--method',
+            'ChatGPT Pro/Plus (browser)',
+        ]);
     });
 
     test('requires an authenticated route with one actionable connect command', async () => {

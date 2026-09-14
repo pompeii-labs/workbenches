@@ -160,10 +160,15 @@ export class ConnectionInspector {
         );
     }
 
-    async connect(nativeProvider?: string): Promise<RunnerAuthenticationStatus> {
+    async connect(
+        nativeProvider?: string,
+        nativeMethod?: string,
+        authenticationMethod?: string
+    ): Promise<RunnerAuthenticationStatus> {
         const command = nativeConnectCommand(
             this.#workbench.manifest.runner,
-            nativeProvider
+            nativeProvider,
+            nativeMethod
         );
         const invocation = this.#runner.native(this.#runtime, command);
         const code = await this.#runtime.interact(invocation);
@@ -181,7 +186,10 @@ export class ConnectionInspector {
         if (
             nativeProvider &&
             !after.connections.some(
-                (connection) => connection.nativeProvider === nativeProvider
+                (connection) =>
+                    connection.nativeProvider === nativeProvider &&
+                    (!authenticationMethod ||
+                        connection.authenticationMethod === authenticationMethod)
             )
         ) {
             throw new Error(
@@ -218,13 +226,25 @@ function requestedConnection(
         (connection) => connection.nativeProvider.toLowerCase() === name
     );
     if (native) {
-        return { provider: native.provider, nativeProvider: native.nativeProvider };
+        return {
+            provider: native.provider,
+            nativeProvider: native.nativeProvider,
+            ...(native.authenticationMethod
+                ? { authenticationMethod: native.authenticationMethod }
+                : {}),
+        };
     }
     const provider = connections.find(
         (connection) => connection.provider.toLowerCase() === name
     );
     return provider
-        ? { provider: provider.provider, nativeProvider: provider.nativeProvider }
+        ? {
+              provider: provider.provider,
+              nativeProvider: provider.nativeProvider,
+              ...(provider.authenticationMethod
+                  ? { authenticationMethod: provider.authenticationMethod }
+                  : {}),
+          }
         : undefined;
 }
 
@@ -250,7 +270,7 @@ async function inspectOpenCode(
               .map((route) => route.provider)
         : [];
     const directlyReady = new Set([...environmentProviders, ...configProviders]);
-    const directRoutes = authenticatedRoutesForProviders(routes, directlyReady);
+    const directRoutes = authenticatedRoutesForProviders(routes, directlyReady, 'api');
     if (
         !shouldInspectNativeConnections(
             options.discoverConnections ?? false,
@@ -271,21 +291,33 @@ async function inspectOpenCode(
             throw error;
         });
     if (!result) {
-        return authenticatedRoutesForProviders(routes, directlyReady);
+        return authenticatedRoutesForProviders(routes, directlyReady, 'api');
     }
     if (result.code !== 0) {
         if (directlyReady.size > 0) {
-            return authenticatedRoutesForProviders(routes, directlyReady);
+            return authenticatedRoutesForProviders(routes, directlyReady, 'api');
         }
         throw new Error(
             diagnostic(result, 'OpenCode credentials could not be inspected')
         );
     }
-    const credentialProviders = routes
-        .filter((route) => outputNamesProvider(result, route.provider))
-        .map((route) => route.provider);
-    const ready = new Set([...directlyReady, ...credentialProviders]);
-    return authenticatedRoutesForProviders(routes, ready);
+    const credentials = openCodeCredentials(result);
+    return uniqueAuthenticatedRoutes([
+        ...authenticatedRoutesForProviders(routes, directlyReady, 'api'),
+        ...routes.flatMap((route) => {
+            const method = credentials.get(normalizeProvider(route.provider));
+            return method
+                ? [
+                      {
+                          provider: route.provider,
+                          nativeProvider: route.provider,
+                          nativeModel: route.model,
+                          authenticationMethod: method,
+                      },
+                  ]
+                : [];
+        }),
+    ]);
 }
 
 async function inspectPi(
@@ -301,7 +333,8 @@ async function inspectPi(
 ): Promise<AuthenticatedModelRoute[]> {
     const directRoutes = authenticatedRoutesForProviders(
         routes,
-        new Set(providersFromEnvironment(routes, options.runtime.environment, router))
+        new Set(providersFromEnvironment(routes, options.runtime.environment, router)),
+        'api'
     );
     if (
         !shouldInspectNativeConnections(
@@ -343,7 +376,9 @@ function shouldInspectNativeConnections(
     return !directRoutes.some(
         (route) =>
             route.provider === preferredConnection.provider &&
-            route.nativeProvider === preferredConnection.nativeProvider
+            route.nativeProvider === preferredConnection.nativeProvider &&
+            (!preferredConnection.authenticationMethod ||
+                route.authenticationMethod === preferredConnection.authenticationMethod)
     );
 }
 
@@ -356,7 +391,8 @@ function uniqueAuthenticatedRoutes(
                 (candidate) =>
                     candidate.provider === route.provider &&
                     candidate.nativeProvider === route.nativeProvider &&
-                    candidate.nativeModel === route.nativeModel
+                    candidate.nativeModel === route.nativeModel &&
+                    candidate.authenticationMethod === route.authenticationMethod
             ) === index
     );
 }
@@ -367,6 +403,7 @@ function piRouteCandidates(route: ModelRoute): AuthenticatedModelRoute[] {
             provider: route.provider,
             nativeProvider: route.provider,
             nativeModel: route.model,
+            authenticationMethod: 'api',
         },
         ...(route.provider === 'openai'
             ? [
@@ -374,17 +411,26 @@ function piRouteCandidates(route: ModelRoute): AuthenticatedModelRoute[] {
                       provider: route.provider,
                       nativeProvider: 'openai-codex',
                       nativeModel: route.model,
+                      authenticationMethod: 'oauth',
                   },
               ]
             : []),
     ];
 }
 
-function nativeConnectCommand(runner: string, provider?: string): string[] {
+function nativeConnectCommand(
+    runner: string,
+    provider?: string,
+    method?: string
+): string[] {
     if (runner === 'opencode') {
-        return provider
-            ? ['opencode', 'auth', 'login', '--provider', provider]
-            : ['opencode', 'auth', 'login'];
+        return [
+            'opencode',
+            'auth',
+            'login',
+            ...(provider ? ['--provider', provider] : []),
+            ...(method ? ['--method', method] : []),
+        ];
     }
     if (runner === 'pi') {
         return ['pi', '--no-context-files'];
@@ -403,7 +449,8 @@ function nativeAuthenticationError(runner: string): Error {
 
 function authenticatedRoutesForProviders(
     routes: ModelRoute[],
-    providers: Set<string>
+    providers: Set<string>,
+    authenticationMethod?: string
 ): AuthenticatedModelRoute[] {
     return routes.flatMap((route) =>
         providers.has(route.provider)
@@ -412,6 +459,7 @@ function authenticatedRoutesForProviders(
                       provider: route.provider,
                       nativeProvider: route.provider,
                       nativeModel: route.model,
+                      ...(authenticationMethod ? { authenticationMethod } : {}),
                   },
               ]
             : []
@@ -431,17 +479,21 @@ function providersFromEnvironment(
     });
 }
 
-function outputNamesProvider(
-    result: { stdout: string; stderr: string },
-    provider: string
-): boolean {
-    const expected = normalizeProvider(provider);
-    return `${result.stdout}\n${result.stderr}`
+function openCodeCredentials(result: {
+    stdout: string;
+    stderr: string;
+}): Map<string, string> {
+    const credentials = new Map<string, string>();
+    for (const line of `${result.stdout}\n${result.stderr}`
         .split(/\r?\n/)
         .map((line) => stripTerminalControl(line).trim())
-        .filter((line) => line.startsWith('●'))
-        .map((line) => line.slice(1).trim().split(/\s+/).slice(0, -1).join(' '))
-        .some((label) => normalizeProvider(label) === expected);
+        .filter((line) => line.startsWith('●'))) {
+        const parts = line.slice(1).trim().split(/\s+/);
+        const method = parts.pop()?.toLowerCase();
+        const provider = normalizeProvider(parts.join(' '));
+        if (provider && method) credentials.set(provider, method);
+    }
+    return credentials;
 }
 
 function parsePiModels(value: string): Set<string> {

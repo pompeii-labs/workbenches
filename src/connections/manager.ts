@@ -48,6 +48,13 @@ export interface ConnectionManagerOptions {
     choose?: ChooseRunnerConnection;
     chooseProvider?: ChooseRunnerProvider;
     announce?: (message: string) => void;
+    authentication?: {
+        provider: string;
+        nativeProvider: string;
+        nativeMethod?: string;
+        authenticationMethod: string;
+        label: string;
+    };
 }
 
 export class ConnectionManager {
@@ -81,7 +88,16 @@ export class ConnectionManager {
         });
 
         let selection: AuthenticatedModelRoute;
-        if (status.connections.length > 0) {
+        if (this.#options.authentication) {
+            const connected = await this.#connectProvider(
+                choose,
+                chooseProvider,
+                announce,
+                this.#options.authentication
+            );
+            status = connected.status;
+            selection = connected.selection;
+        } else if (status.connections.length > 0) {
             const choice = await choose({
                 runner: this.#options.workbench.manifest.runner,
                 model: status.model,
@@ -116,6 +132,9 @@ export class ConnectionManager {
         const saved = {
             provider: selection.provider,
             nativeProvider: selection.nativeProvider,
+            ...(selection.authenticationMethod
+                ? { authenticationMethod: selection.authenticationMethod }
+                : {}),
         };
         await this.#store.save(context, saved);
         return this.#inspector.inspect({ preferredConnection: saved });
@@ -124,26 +143,51 @@ export class ConnectionManager {
     async #connectProvider(
         choose: ChooseRunnerConnection,
         chooseProvider: ChooseRunnerProvider,
-        announce: (message: string) => void
+        announce: (message: string) => void,
+        authentication?: NonNullable<ConnectionManagerOptions['authentication']>
     ): Promise<{
         status: RunnerAuthenticationStatus;
         selection: AuthenticatedModelRoute;
     }> {
         const runnerName = this.#options.workbench.manifest.runner;
-        const provider = await chooseProvider({
-            runner: runnerName,
-            runtime: this.#options.runtime.name,
-            model: this.#options.workbench.manifest.model.id,
-            providers: this.#inspector.candidates(),
-        });
+        const provider = authentication
+            ? {
+                  provider: authentication.provider,
+                  nativeProvider: authentication.nativeProvider,
+                  nativeModel:
+                      this.#options.workbench.manifest.model.routes?.[0]?.model ??
+                      this.#options.workbench.manifest.model.id,
+                  authenticationMethod: authentication.authenticationMethod,
+              }
+            : await chooseProvider({
+                  runner: runnerName,
+                  runtime: this.#options.runtime.name,
+                  model: this.#options.workbench.manifest.model.id,
+                  providers: this.#inspector.candidates(),
+              });
         announce(
-            authenticationMessage(runnerName, this.#options.runtime.name, provider)
+            authenticationMessage(
+                runnerName,
+                this.#options.runtime.name,
+                provider,
+                authentication?.label
+            )
         );
-        const status = await this.#inspector.connect(provider.nativeProvider);
+        const status = await this.#inspector.connect(
+            provider.nativeProvider,
+            authentication?.nativeMethod,
+            authentication?.authenticationMethod === 'native'
+                ? undefined
+                : authentication?.authenticationMethod
+        );
         const matching = status.connections.filter(
             (connection) =>
                 connection.provider === provider.provider &&
-                connection.nativeProvider === provider.nativeProvider
+                connection.nativeProvider === provider.nativeProvider &&
+                (!authentication?.authenticationMethod ||
+                    authentication.authenticationMethod === 'native' ||
+                    connection.authenticationMethod ===
+                        authentication.authenticationMethod)
         );
         return {
             status,
@@ -269,6 +313,13 @@ async function promptRunnerProvider(
 }
 
 function connectionLabel(connection: AuthenticatedModelRoute): string {
+    if (connection.provider === 'openai' && connection.authenticationMethod) {
+        return connection.authenticationMethod === 'oauth'
+            ? 'OpenAI · ChatGPT subscription'
+            : connection.authenticationMethod === 'api'
+              ? 'OpenAI · API key'
+              : 'OpenAI';
+    }
     if (connection.nativeProvider === 'openai-codex') {
         return 'OpenAI Codex subscription';
     }
@@ -302,22 +353,27 @@ function sameSelection(
 ): boolean {
     return (
         connection.provider === selection?.provider &&
-        connection.nativeProvider === selection.nativeProvider
+        connection.nativeProvider === selection.nativeProvider &&
+        (!selection.authenticationMethod ||
+            connection.authenticationMethod === selection.authenticationMethod)
     );
 }
 
 function authenticationMessage(
     runner: string,
     runtime: string,
-    provider: AuthenticatedModelRoute
+    provider: AuthenticatedModelRoute,
+    methodLabel?: string
 ): string {
     const hint = authenticationHint(runner, runtime, provider);
     const instructions =
         runner === 'pi'
             ? ` In Pi, run /login ${provider.nativeProvider}, finish signing in, then exit Pi to return to Workbench.`
-            : hint
-              ? ` Choose a sign-in method in the next prompt: ${hint}.`
-              : '';
+            : methodLabel
+              ? ` Continue with ${methodLabel}.`
+              : hint
+                ? ` Choose a sign-in method in the next prompt: ${hint}.`
+                : '';
     return `Opening ${runnerLabel(runner)} authentication for ${connectionLabel(provider)}.${instructions}${credentialStorageMessage(runtime)}`;
 }
 
