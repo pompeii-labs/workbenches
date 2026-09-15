@@ -68,12 +68,13 @@ export const runCommand = defineCommand({
         'env-file': {
             type: 'string',
             valueHint: 'path',
-            description: 'Load declared environment bindings from a dotenv file',
+            description:
+                'Load declared and provider environment bindings from a dotenv file',
         },
         env: {
             type: 'string',
             valueHint: 'NAME=value',
-            description: 'Set a declared environment binding (repeatable)',
+            description: 'Set a declared or provider environment binding (repeatable)',
         },
         workspace: {
             type: 'string',
@@ -202,20 +203,24 @@ export const runCommand = defineCommand({
             }
 
             if (args.detach) {
-                const smoke = await new RuntimeSmoke({
-                    workbench: resolved.workbench,
-                    workspaceDirectory: resolved.workspaceDirectory,
-                    environment,
-                    workspaces,
-                    allowHostDocker: args['allow-host-docker'],
-                    reference: args.workbench,
-                    home,
-                    ...(args.connection ? { connection: args.connection } : {}),
-                }).check();
-                if (!smoke.authentication.ready) {
-                    throw new Error(
-                        `No authenticated route is available for ${smoke.authentication.model}. Run ${smoke.authentication.connectCommand}.`
-                    );
+                // E2B preparation creates a billable sandbox. The dispatched
+                // worker performs the same preflight before startup completes.
+                if (resolved.workbench.manifest.runtime !== 'e2b') {
+                    const smoke = await new RuntimeSmoke({
+                        workbench: resolved.workbench,
+                        workspaceDirectory: resolved.workspaceDirectory,
+                        environment,
+                        workspaces,
+                        allowHostDocker: args['allow-host-docker'],
+                        reference: args.workbench,
+                        home,
+                        ...(args.connection ? { connection: args.connection } : {}),
+                    }).check();
+                    if (!smoke.authentication.ready) {
+                        throw new Error(
+                            `No authenticated route is available for ${smoke.authentication.model}. Run ${smoke.authentication.connectCommand}.`
+                        );
+                    }
                 }
                 const stored = await dispatcher.prepare({
                     resolved,

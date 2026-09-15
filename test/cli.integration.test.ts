@@ -375,6 +375,38 @@ describe('CLI integration', () => {
         expect(await readTextTree(join(home, 'runs'))).not.toContain(explicitSecret);
     });
 
+    test('accepts selected provider credentials from an environment file without a manifest declaration', async () => {
+        const fixture = await createFixture();
+        const bin = await fakeBin();
+        const home = await temporaryDirectory('workbench-provider-environment-home-');
+        const record = join(fixture.root, 'runner');
+        const environmentFile = join(fixture.root, '.env.provider');
+        const secret = 'provider-secret-not-for-output';
+        await writeFile(environmentFile, `OPENAI_API_KEY=${secret}\n`);
+
+        const result = await executeCli(
+            [
+                'run',
+                fixture.packageDirectory,
+                '--task',
+                'inspect',
+                '--env-file',
+                environmentFile,
+            ],
+            {
+                PATH: `${bin}:${process.env.PATH}`,
+                WB_TEST_RECORD: record,
+                WORKBENCH_HOME: home,
+                OPENROUTER_API_KEY: '',
+            }
+        );
+
+        expect(result.code).toBe(0);
+        expect(await readFile(`${record}.openai-key`, 'utf8')).toBe(`${secret}\n`);
+        expect(`${result.stdout}\n${result.stderr}`).not.toContain(secret);
+        expect(await readTextTree(join(home, 'runs'))).not.toContain(secret);
+    });
+
     test('binds declared sibling workspaces across smoke, run, and detached execution', async () => {
         const fixture = await createFixture({
             workspaces: {
@@ -476,7 +508,7 @@ describe('CLI integration', () => {
         );
         expect(rejected.code).toBe(1);
         expect(rejected.stderr).toContain(
-            'Environment override is not declared by fixture-core: TYPO_TOKEN'
+            'Environment override is not supported by fixture-core: TYPO_TOKEN'
         );
         expect(rejected.stderr).not.toContain('do-not-echo-this');
     });

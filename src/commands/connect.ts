@@ -92,7 +92,10 @@ export const connectCommand = defineCommand({
                 details: [
                     providerLabel(target.provider),
                     target.method.label,
-                    'Authentication will be requested by the first interactive run',
+                    target.method.authenticationMethod === 'oauth' &&
+                    target.harness === 'opencode'
+                        ? 'Authentication will be requested by the first interactive run if needed'
+                        : 'Credentials must be available when the Workbench runs',
                 ],
             });
         } finally {

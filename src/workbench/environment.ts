@@ -2,6 +2,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseEnv } from 'node:util';
 
+import { ModelCatalog } from '../models/catalog.js';
+import { ModelRouter } from '../models/routing.js';
 import type { ResolvedWorkbench } from '../types.js';
 
 const maximumEnvironmentFileBytes = 1024 * 1024;
@@ -32,15 +34,22 @@ export class WorkbenchEnvironment {
     ): Record<string, string | undefined> {
         const environment = { ...inherited };
         const declared = new Set(Object.keys(workbench.manifest.env));
-        for (const name of declared) {
+        const catalog = ModelCatalog.active();
+        const allowed = new Set([
+            ...declared,
+            ...(catalog
+                ? new ModelRouter(catalog).providerEnvironmentNames(workbench)
+                : []),
+        ]);
+        for (const name of allowed) {
             if (Object.hasOwn(overrides.file, name)) {
                 environment[name] = overrides.file[name];
             }
         }
         for (const [name, value] of overrides.explicit) {
-            if (!declared.has(name)) {
+            if (!allowed.has(name)) {
                 throw new Error(
-                    `Environment override is not declared by ${workbench.manifest.name}: ${name}`
+                    `Environment override is not supported by ${workbench.manifest.name}: ${name}`
                 );
             }
             environment[name] = value;

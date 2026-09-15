@@ -71,7 +71,7 @@ describe('Workbench environment overrides', () => {
         expect(bound.UNDECLARED).toBeUndefined();
     });
 
-    test('rejects explicit names not declared by the Workbench', () => {
+    test('rejects explicit names not supported by the Workbench', () => {
         expect(() =>
             environment.bind(
                 fixture(),
@@ -81,7 +81,24 @@ describe('Workbench environment overrides', () => {
                 },
                 {}
             )
-        ).toThrow('Environment override is not declared by fixture: TYPO_TOKEN');
+        ).toThrow('Environment override is not supported by fixture: TYPO_TOKEN');
+    });
+
+    test('accepts provider credentials for allowed model routes', () => {
+        const bound = environment.bind(
+            fixture(),
+            {
+                file: {
+                    OPENAI_API_KEY: 'from-file',
+                    ANTHROPIC_API_KEY: 'not-an-allowed-route',
+                },
+                explicit: new Map([['OPENAI_API_KEY', 'explicit']]),
+            },
+            {}
+        );
+
+        expect(bound).toEqual({ OPENAI_API_KEY: 'explicit' });
+        expect(bound.ANTHROPIC_API_KEY).toBeUndefined();
     });
 
     test('fails cleanly for missing and oversized environment files', async () => {
