@@ -72,6 +72,8 @@
             "enum": [
                 "run.started",
                 "run.ready",
+                "authentication.requested",
+                "authentication.completed",
                 "turn.started",
                 "turn.completed",
                 "output.text",

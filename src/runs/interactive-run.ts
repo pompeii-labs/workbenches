@@ -69,6 +69,7 @@ export interface InteractiveRunOptions {
     session?: RunnerSessionContext;
     interactive?: boolean;
     connection?: string;
+    allowAuthentication?: boolean;
 }
 
 export class InteractiveRun {
@@ -127,6 +128,9 @@ export class InteractiveRun {
             });
             session = await preparedRunner.startSession(preparedRuntime, {
                 configuration: prepared.configuration,
+                ...(prepared.authentication
+                    ? { authentication: prepared.authentication }
+                    : {}),
                 host: {
                     emit: async (event) => {
                         await emitter.emitDraft(event);
@@ -187,10 +191,12 @@ export class InteractiveRun {
         configuration: ResolvedRunnerConfiguration;
         preflight: PreflightResult;
         runtime: PreparedRuntime;
+        authentication?: Awaited<ReturnType<ConnectionStore['find']>>;
     }> {
         const { workbench } = this.options.resolved;
         let preparedRuntime: PreparedRuntime | undefined;
         let configuration: ResolvedRunnerConfiguration | undefined;
+        let authentication: Awaited<ReturnType<ConnectionStore['find']>>;
         let preflight: PreflightResult | undefined;
         let preparationError: unknown;
         try {
@@ -253,15 +259,65 @@ export class InteractiveRun {
                         : {}),
                 });
             preflight = await preparedRuntime.preflight();
-            configuration = await new ConnectionInspector({
+            const store = this.options.home
+                ? new ConnectionStore(this.options.home)
+                : undefined;
+            const inspector = new ConnectionInspector({
                 workbench,
                 runtime: preparedRuntime,
                 runner: preparedRunner,
                 reference: this.options.reference ?? workbench.manifest.name,
-                ...(this.options.home
-                    ? { store: new ConnectionStore(this.options.home) }
-                    : {}),
-            }).require(this.options.connection);
+                ...(store ? { store } : {}),
+            });
+            const preferred = await store?.find(ConnectionStore.context(workbench));
+            let status: Awaited<ReturnType<ConnectionInspector['inspect']>> | undefined;
+            try {
+                status = await inspector.inspect({
+                    ...(preferred ? { preferredConnection: preferred } : {}),
+                    ...(this.options.connection ? { discoverConnections: true } : {}),
+                });
+            } catch (error) {
+                if (
+                    !preferred ||
+                    !matchesRequestedConnection(preferred, this.options.connection)
+                ) {
+                    throw error;
+                }
+            }
+            const authenticated = this.options.connection
+                ? status?.connections.find((candidate) =>
+                      matchesRequestedConnection(candidate, this.options.connection)
+                  )
+                : undefined;
+            if (authenticated) {
+                configuration = inspector.configurationFor(authenticated);
+            } else if (!this.options.connection && status?.configuration) {
+                configuration = status.configuration;
+            } else if (
+                preferred &&
+                matchesRequestedConnection(preferred, this.options.connection)
+            ) {
+                if (!this.options.allowAuthentication) {
+                    throw new Error(
+                        `Authentication is required for ${preferred.provider}. Start this Workbench interactively once to finish ${preferred.nativeProvider} sign-in.`
+                    );
+                }
+                if (workbench.manifest.runner !== 'opencode') {
+                    throw new Error(
+                        `First-run authentication for ${workbench.manifest.runner} is not available inside a Workbench run yet`
+                    );
+                }
+                configuration = inspector.configurationFor(preferred);
+                authentication = preferred;
+            } else if (this.options.connection) {
+                throw new Error(
+                    `Connection ${this.options.connection} is not authenticated for ${status?.model ?? workbench.manifest.model.id} with ${workbench.manifest.runner} in the ${preparedRuntime.name} runtime. Run ${status?.connectCommand ?? `wb connect ${this.options.reference ?? workbench.manifest.name}`}.`
+                );
+            } else {
+                throw new Error(
+                    `No authenticated route is available for ${status?.model ?? workbench.manifest.model.id}. Run ${status?.connectCommand ?? `wb connect ${this.options.reference ?? workbench.manifest.name}`}.`
+                );
+            }
         } catch (error) {
             preparationError = error;
         }
@@ -276,6 +332,7 @@ export class InteractiveRun {
             configuration,
             preflight,
             runtime: preparedRuntime,
+            ...(authentication ? { authentication } : {}),
         };
     }
 
@@ -350,6 +407,18 @@ export class InteractiveRun {
     private static errorMessage(error: unknown): string {
         return error instanceof Error ? error.message : String(error);
     }
+}
+
+function matchesRequestedConnection(
+    selection: NonNullable<Awaited<ReturnType<ConnectionStore['find']>>>,
+    requested: string | undefined
+): boolean {
+    if (!requested) return true;
+    const normalized = requested.trim().toLowerCase();
+    return (
+        selection.provider.toLowerCase() === normalized ||
+        selection.nativeProvider.toLowerCase() === normalized
+    );
 }
 
 class HostedInteractiveSession implements InteractiveRunSession {

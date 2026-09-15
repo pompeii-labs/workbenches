@@ -167,6 +167,52 @@ describe('CLI integration', () => {
         expect(result.stderr).not.toContain('Path is not staged');
     });
 
+    test('configures E2B headless authentication without an E2B key or runtime work', async () => {
+        const home = await temporaryDirectory('workbench-connect-config-');
+        const result = await executeCli(
+            [
+                'connect',
+                '--runtime',
+                'e2b',
+                '--harness',
+                'opencode',
+                '--provider',
+                'openai',
+                '--method',
+                'chatgpt',
+            ],
+            {
+                WORKBENCH_HOME: home,
+                PATH: '/usr/bin:/bin',
+                E2B_API_KEY: '',
+            }
+        );
+
+        expect(result.code).toBe(0);
+        expect(result.stdout).toBe('configured\te2b\topencode\topenai\n');
+        expect(result.stderr).toBe('');
+        const homeEntries = await readdir(home);
+        expect(homeEntries).toContain('connections.json');
+        expect(homeEntries).not.toContain('runs');
+        expect(homeEntries).not.toContain('runtime-credentials');
+        expect(
+            JSON.parse(await readFile(join(home, 'connections.json'), 'utf8'))
+        ).toMatchObject({
+            version: 4,
+            connections: [
+                {
+                    runner: 'opencode',
+                    runtime: 'e2b',
+                    provider: 'openai',
+                    native_provider: 'openai',
+                    authentication_method: 'oauth',
+                    method: 'chatgpt',
+                    native_method: 'ChatGPT Pro/Plus (headless)',
+                },
+            ],
+        });
+    });
+
     test('reports argument errors without dumping command help', async () => {
         for (const arguments_ of [['unknown-command'], ['run']]) {
             const result = await executeCli(arguments_);
@@ -193,20 +239,28 @@ describe('CLI integration', () => {
         await expect(stat(record)).rejects.toThrow();
     });
 
-    test('explains how to install Pi before connecting a Pi Workbench', async () => {
+    test('configures Pi without requiring the harness to be installed', async () => {
         const fixture = await createFixture({ runner: 'pi' });
         const bin = await fakeBin();
-        const result = await executeCli(['connect', fixture.packageDirectory], {
-            PATH: `${bin}:/usr/bin:/bin`,
-        });
+        const home = await temporaryDirectory('workbench-connect-pi-');
+        const result = await executeCli(
+            [
+                'connect',
+                fixture.packageDirectory,
+                '--provider',
+                'openai',
+                '--method',
+                'chatgpt',
+            ],
+            {
+                PATH: `${bin}:/usr/bin:/bin`,
+                WORKBENCH_HOME: home,
+            }
+        );
 
-        expect(result.code).toBe(1);
-        expect(result.stderr).toContain(
-            'Pi is required for this Workbench but is not installed.'
-        );
-        expect(result.stderr).toContain(
-            'npm install -g @earendil-works/pi-coding-agent'
-        );
+        expect(result.code).toBe(0);
+        expect(result.stdout).toBe('configured\tlocal\tpi\topenai\n');
+        expect(result.stderr).toBe('');
         expect(result.stderr).not.toContain('Executable not found');
     });
 

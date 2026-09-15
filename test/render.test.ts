@@ -426,6 +426,33 @@ describe('Workbench event renderers', () => {
         expect(stdout).toBe('');
         expect(stderr).toBe('error: runner unavailable\n');
     });
+
+    test('surfaces interactive authentication instructions in final-only mode', () => {
+        let stdout = '';
+        let stderr = '';
+        const renderer = createEventRenderer({
+            mode: 'final',
+            stdout: (value) => {
+                stdout += value;
+            },
+            stderr: (value) => {
+                stderr += value;
+            },
+        });
+        renderer.render(
+            event(1, 'authentication.requested', {
+                provider: 'openai',
+                url: 'https://auth.example/device',
+                instructions: 'Enter code: TEST-CODE',
+            })
+        );
+        renderer.finish();
+
+        expect(stdout).toBe('');
+        expect(stderr).toBe(
+            'Authentication required for openai.\nhttps://auth.example/device\nEnter code: TEST-CODE\n'
+        );
+    });
 });
 
 function event(

@@ -178,21 +178,22 @@ containers created for the same local store. Preflight and other short-lived
 containers are not labeled because they execute synchronously under `--rm`.
 
 Each supported runner uses a private named Docker volume for its native
-credential store. `wb connect` selects runtime, harness, provider, and
-authentication method before running the runner's own authentication flow in an
-engine-owned image and empty temporary workspace. The login and selected
-default can be reused by any compatible Docker Workbench using that runner.
+credential store. `wb connect` only selects runtime, harness, provider, and
+authentication method; it does not start Docker or ask for credentials. The
+selected default can be reused by any compatible Docker Workbench using that
+runner. When an OpenCode credential is missing, the first foreground or TUI run
+performs its headless authentication flow inside the actual Workbench container
+and then continues that run. Detached execution requires a previously
+authenticated credential.
 Provider choices are filtered through the selected harness version's capability
 map after model-route metadata is loaded. The map also records native provider
 aliases, so a catalog provider is never presented merely because it serves a
 model and runner-specific names remain explicit. Verified metadata can supply
 versioned maps; the engine retains the map matching its pinned harness as a safe
 fallback.
-OpenCode exposes a standalone login command. Pi opens its TUI, where the user
-runs the provider-specific `/login` command shown by Workbench. A Workbench
-reference can supply a custom authentication image when required. Workbench
-packages are never given ownership of the volume, and the engine does not read
-or upload the stored token contents.
+First-run Pi authentication and interactive API-key entry are not yet supported
+by the in-run flow. Workbench packages are never given ownership of the volume,
+and the engine does not read or upload the stored token contents.
 
 Interactive runners remain inside the selected Docker runtime. Pi uses its
 native stdin RPC transport, so the container is launched with piped input.
@@ -238,13 +239,13 @@ required by the host control plane but is excluded from the runtime environment.
 The sandbox receives manifest-declared environment values for allowed model
 routes and a separately staged native credential store for the selected runner.
 
-`wb connect` selects E2B before the harness, provider, and authentication method,
-then opens the runner's native authentication flow inside an engine-owned image
-with an empty temporary workspace. It never snapshots the invoking repository.
-OpenCode uses its provider-specific login command, including API-key and
-headless ChatGPT authentication. Pi opens its TUI and tells the user which
-`/login <provider>` command to run. A Workbench reference can supply a custom
-image when required. The resulting files are synchronized to private, runtime-
+`wb connect` selects E2B before the harness, provider, and authentication method
+and persists that non-secret preference locally. It creates no sandbox, does
+not require `E2B_API_KEY`, and incurs no E2B usage. When a configured OpenCode
+credential is missing, the first real foreground or TUI run creates its normal
+sandbox, exposes the headless authorization URL and code through normalized run
+events, waits for completion, and then creates the native session in that same
+sandbox. The resulting credential files are synchronized to private, runtime-
 and runner-scoped storage beneath the Workbench data directory before the
 sandbox is destroyed. Any compatible E2B Workbench using that runner can copy
 the store into a fresh sandbox. The store is never included in the package,

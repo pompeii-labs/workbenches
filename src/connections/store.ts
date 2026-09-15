@@ -7,6 +7,8 @@ export interface RunnerConnectionSelection {
     provider: string;
     nativeProvider: string;
     authenticationMethod?: string;
+    method?: string;
+    nativeMethod?: string;
 }
 
 export interface RunnerConnectionContext {
@@ -18,6 +20,8 @@ export interface StoredRunnerConnection extends RunnerConnectionContext {
     provider: string;
     nativeProvider: string;
     authenticationMethod?: string;
+    method?: string;
+    nativeMethod?: string;
     updatedAt: string;
 }
 
@@ -31,14 +35,16 @@ interface StoredRunnerConnectionV1 {
     updated_at: string;
 }
 
-interface ConnectionFileV3 {
-    version: 3;
+interface ConnectionFileV4 {
+    version: 4;
     connections: Array<{
         runner: string;
         runtime: string;
         provider: string;
         native_provider: string;
         authentication_method?: string;
+        method?: string;
+        native_method?: string;
         updated_at: string;
     }>;
 }
@@ -74,6 +80,10 @@ export class ConnectionStore {
                   ...(connection.authenticationMethod
                       ? { authenticationMethod: connection.authenticationMethod }
                       : {}),
+                  ...(connection.method ? { method: connection.method } : {}),
+                  ...(connection.nativeMethod
+                      ? { nativeMethod: connection.nativeMethod }
+                      : {}),
               }
             : undefined;
     }
@@ -94,6 +104,10 @@ export class ConnectionStore {
                 ...(selection.authenticationMethod
                     ? { authenticationMethod: selection.authenticationMethod }
                     : {}),
+                ...(selection.method ? { method: selection.method } : {}),
+                ...(selection.nativeMethod
+                    ? { nativeMethod: selection.nativeMethod }
+                    : {}),
                 updatedAt: new Date().toISOString(),
             },
         ]);
@@ -112,6 +126,7 @@ async function readConnections(home: string): Promise<StoredRunnerConnection[]> 
     if (!isRecord(value) || !Array.isArray(value.connections)) {
         throw new Error('The Workbench connection file is invalid');
     }
+    if (value.version === 4) return value.connections.map(parseConnectionV4);
     if (value.version === 3) return value.connections.map(parseConnectionV3);
     if (value.version === 2) return value.connections.map(parseConnectionV2);
     if (value.version === 1) {
@@ -127,8 +142,8 @@ async function writeConnections(
     await mkdir(home, { recursive: true, mode: 0o700 });
     const destination = connectionPath(home);
     const temporary = join(home, `connections.${crypto.randomUUID()}.tmp`);
-    const contents: ConnectionFileV3 = {
-        version: 3,
+    const contents: ConnectionFileV4 = {
+        version: 4,
         connections: connections.map((connection) => ({
             runner: connection.runner,
             runtime: connection.runtime,
@@ -136,6 +151,10 @@ async function writeConnections(
             native_provider: connection.nativeProvider,
             ...(connection.authenticationMethod
                 ? { authentication_method: connection.authenticationMethod }
+                : {}),
+            ...(connection.method ? { method: connection.method } : {}),
+            ...(connection.nativeMethod
+                ? { native_method: connection.nativeMethod }
                 : {}),
             updated_at: connection.updatedAt,
         })),
@@ -204,6 +223,24 @@ function parseConnectionV3(value: unknown): StoredRunnerConnection {
         ...parsed,
         ...(isRecord(value) && typeof value.authentication_method === 'string'
             ? { authenticationMethod: value.authentication_method }
+            : {}),
+    };
+}
+
+function parseConnectionV4(value: unknown): StoredRunnerConnection {
+    const parsed = parseConnectionV3(value);
+    if (
+        !isRecord(value) ||
+        (value.method !== undefined && typeof value.method !== 'string') ||
+        (value.native_method !== undefined && typeof value.native_method !== 'string')
+    ) {
+        throw new Error('The Workbench connection file is invalid');
+    }
+    return {
+        ...parsed,
+        ...(typeof value.method === 'string' ? { method: value.method } : {}),
+        ...(typeof value.native_method === 'string'
+            ? { nativeMethod: value.native_method }
             : {}),
     };
 }

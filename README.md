@@ -280,40 +280,45 @@ wb connect
 wb run project-core --task "Review this migration"
 ```
 
-Workbench prepares an engine-owned authentication environment and an empty
-temporary workspace, so E2B and Docker connection setup never transfer the
-invoking repository. The resulting connection and default selection belong to
-the runner and runtime, not a Workbench. Compatible Workbenches automatically
-reuse them. The same flow can be scripted explicitly:
+`wb connect` is configuration-only. It does not launch a runner, start Docker,
+create an E2B sandbox, require an E2B key, contact a model provider, or ask for
+provider credentials. The resulting default belongs to the runner and runtime,
+not a Workbench. Compatible Workbenches automatically reuse it. The same flow
+can be scripted explicitly:
 
 ```sh
 wb connect --runtime e2b --harness opencode --provider openai --method chatgpt
 ```
 
-Passing a Workbench reference remains available when a package supplies a
-custom image or runner configuration required by its native login flow.
+Passing a Workbench reference narrows the provider choices to routes allowed by
+that package; it still performs no runtime work.
 
-If more than one compatible connection is available, `wb connect` asks which
-one should be the default for that runner and runtime. A single run can select a
-different authenticated connection without changing the default:
+`wb connect` records which compatible provider and authentication method should
+be preferred for that runner and runtime. A single run can select a different
+configured or authenticated connection without changing the default:
 
 ```sh
 wb run project-core --connection openrouter --task "Review this migration"
 ```
 
-An override must already be authenticated and must match one of the provider
-routes allowed by the Workbench. Resolution order is the explicit
+An override must match one of the provider routes allowed by the Workbench.
+Resolution order is the explicit
 `--connection` override, the runner/runtime default, then the first allowed
 authenticated route in manifest order. Connection defaults, including the
-selected authentication method when the runner reports it, are stored in
+selected authentication method, are stored in
 `~/.workbench/connections.json`. No login command is injected into a Workbench
 conversation, and no Workbench package or model is modified by selecting a
 default.
 
-Authentication uses the selected runner's native flow in every execution
-runtime. OpenCode opens `opencode auth login` for the selected provider. Pi has
-no standalone login command, so Workbench opens the Pi TUI and identifies the
-exact `/login <provider>` command to run before exiting back to Workbench.
+If the selected OpenCode credential is missing, the first foreground or TUI run
+starts the real execution runtime, asks OpenCode for the configured browser or
+headless authorization flow, displays its URL and instructions, waits for
+completion, and then continues that same run. Detached execution refuses to
+start an invisible first-time login and directs the user to run interactively
+once. First-run Pi login and interactive API-key entry are not yet implemented;
+those routes must already be available through runner credentials or declared
+provider environment.
+
 The provider menu is the intersection of providers serving catalog models and
 the selected harness version's capability map; model availability alone never
 implies that a harness supports a provider. Versioned harness maps may be
@@ -527,20 +532,17 @@ Input and output transfers each have a 512 MiB safety limit, enforced against
 uncompressed content. `E2B_API_KEY` is used only by the host control plane and is
 never sent to the sandbox. The sandbox receives manifest-declared environment
 values for allowed model routes and the private native credential store for its
-selected runner. `wb connect` opens the runner's native authentication UI
-inside an engine-owned E2B authentication image without uploading the current
-workspace. OpenCode supports its API-key and headless ChatGPT login methods
-there. For Pi, Workbench opens the Pi TUI and directs the user to its native
-`/login` command. A Workbench reference can instead supply a custom image when
-its runner setup requires one.
+selected runner. `wb connect` performs no E2B work and does not require the key.
+If a configured OpenCode credential is missing, the first real foreground or
+TUI run performs the headless ChatGPT authorization inside the sandbox that was
+created for that run, then continues the run after authorization succeeds.
 
 E2B runner credentials live beneath
 `~/.workbench/runtime-credentials/e2b/<runner>`, with private directory
 permissions. They are staged separately from packages and workspaces, then
 synchronized back before the disposable sandbox is destroyed. Existing local
 credentials are not modified if staging or startup fails. A host process crash
-before cleanup can lose a newly completed remote login, so `wb connect` reports
-success only after credential synchronization finishes.
+before cleanup can lose a newly completed remote login.
 
 Normal completion, failure, or cancellation synchronizes eligible changes and
 destroys the sandbox. The 60-minute provider timeout pauses a crash survivor

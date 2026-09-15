@@ -1,3 +1,4 @@
+import type { RunnerConnectionSelection } from '../connections/store.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
 import type { WorkbenchEventDraft } from '../runs/index.js';
 import type { ResolvedWorkbench } from '../types.js';
@@ -149,6 +150,7 @@ export interface RunnerSessionStartOptions {
     configuration: ResolvedRunnerConfiguration;
     host: RunnerSessionHost;
     session?: RunnerSessionContext;
+    authentication?: RunnerConnectionSelection;
 }
 
 export interface RunnerSessionAdapter {

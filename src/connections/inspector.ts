@@ -168,59 +168,30 @@ export class ConnectionInspector {
         );
     }
 
-    async connect(
-        nativeProvider?: string,
-        nativeMethod?: string,
-        authenticationMethod?: string
-    ): Promise<RunnerAuthenticationStatus> {
-        const command = nativeConnectCommand(
-            this.#workbench.manifest.runner,
-            nativeProvider,
-            nativeMethod
+    configurationFor(
+        selection: RunnerConnectionSelection
+    ): ResolvedRunnerConfiguration {
+        const candidate = this.candidates().find(
+            (route) =>
+                route.provider === selection.provider &&
+                route.nativeProvider === selection.nativeProvider
         );
-        const invocation = this.#runner.native(this.#runtime, command);
-        const code = await this.#runtime.interact(invocation);
-        if (code !== 0) {
+        if (!candidate) {
             throw new Error(
-                `${runnerLabel(this.#workbench.manifest.runner)} authentication exited with code ${code}`
+                `The configured ${selection.nativeProvider} connection is incompatible with ${canonicalModel(this.#workbench)}`
             );
         }
-        const after = await this.inspect({ discoverConnections: true });
-        if (!after.ready) {
-            throw new Error(
-                `${runnerLabel(this.#workbench.manifest.runner)} did not report an authenticated route for ${canonicalModel(this.#workbench)}`
-            );
-        }
-        if (
-            nativeProvider &&
-            !after.connections.some(
-                (connection) =>
-                    connection.nativeProvider === nativeProvider &&
-                    (!authenticationMethod ||
-                        connection.authenticationMethod === authenticationMethod)
-            )
-        ) {
-            throw new Error(
-                `${runnerLabel(this.#workbench.manifest.runner)} did not report a compatible ${nativeProvider} connection for ${canonicalModel(this.#workbench)}`
-            );
-        }
-        return after;
-    }
-
-    supportsNativeAuthentication(): boolean {
-        return (
-            this.#runtime.nativeAuthentication === 'persistent' &&
-            ['opencode', 'pi'].includes(this.#workbench.manifest.runner)
-        );
-    }
-
-    nativeAuthenticationError(): Error {
-        if (this.#runtime.nativeAuthentication === 'unavailable') {
-            return new Error(
-                `${runnerLabel(this.#workbench.manifest.runner)} native authentication requires persistent credential storage in the ${this.#runtime.name} runtime`
-            );
-        }
-        return nativeAuthenticationError(this.#workbench.manifest.runner);
+        const route = {
+            ...candidate,
+            ...(selection.authenticationMethod
+                ? { authenticationMethod: selection.authenticationMethod }
+                : {}),
+        };
+        return this.#router.resolve({
+            workbench: this.#workbench,
+            authenticatedRoutes: [route],
+            preferredConnection: selection,
+        });
     }
 }
 
@@ -406,35 +377,6 @@ function uniqueAuthenticatedRoutes(
     );
 }
 
-function nativeConnectCommand(
-    runner: string,
-    provider?: string,
-    method?: string
-): string[] {
-    if (runner === 'opencode') {
-        return [
-            'opencode',
-            'auth',
-            'login',
-            ...(provider ? ['--provider', provider] : []),
-            ...(method ? ['--method', method] : []),
-        ];
-    }
-    if (runner === 'pi') {
-        return ['pi', '--no-context-files'];
-    }
-    return unsupportedRunner(runner);
-}
-
-function nativeAuthenticationError(runner: string): Error {
-    if (runner === 'pi') {
-        return new Error('Pi native authentication is unavailable in this runtime');
-    }
-    return new Error(
-        `${runnerLabel(runner)} does not expose a supported command-line login operation`
-    );
-}
-
 function authenticatedRoutesForProviders(
     routes: ModelRoute[],
     providers: Set<string>,
@@ -518,10 +460,6 @@ function diagnostic(
 
 function canonicalModel(workbench: ResolvedWorkbench): string {
     return workbench.manifest.model.id;
-}
-
-function runnerLabel(runner: string): string {
-    return runner === 'opencode' ? 'OpenCode' : runner === 'pi' ? 'Pi' : runner;
 }
 
 function unsupportedRunner(runner: string): never {

@@ -34,18 +34,22 @@ describe('runner connection preferences', () => {
             provider: 'openrouter',
             nativeProvider: 'openrouter',
             authenticationMethod: 'api',
+            method: 'api-key',
+            nativeMethod: 'Enter API key',
         });
 
         expect(await store.find(context)).toEqual({
             provider: 'openrouter',
             nativeProvider: 'openrouter',
             authenticationMethod: 'api',
+            method: 'api-key',
+            nativeMethod: 'Enter API key',
         });
         expect(await store.find({ runner: 'pi', runtime: 'e2b' })).toBeUndefined();
         expect((await stat(join(home, 'connections.json'))).mode & 0o777).toBe(0o600);
         const stored = await readFile(join(home, 'connections.json'), 'utf8');
         expect(JSON.parse(stored)).toMatchObject({
-            version: 3,
+            version: 4,
             connections: [
                 {
                     runner: 'pi',
@@ -53,11 +57,12 @@ describe('runner connection preferences', () => {
                     provider: 'openrouter',
                     native_provider: 'openrouter',
                     authentication_method: 'api',
+                    method: 'api-key',
+                    native_method: 'Enter API key',
                 },
             ],
         });
         expect(stored).not.toContain('token');
-        expect(stored).not.toContain('key');
     });
 
     test('migrates the newest Workbench-scoped preference for each boundary', async () => {
@@ -103,7 +108,7 @@ describe('runner connection preferences', () => {
         expect(
             JSON.parse(await readFile(join(home, 'connections.json'), 'utf8'))
         ).toMatchObject({
-            version: 3,
+            version: 4,
             connections: [{ runner: 'opencode', runtime: 'e2b' }],
         });
     });

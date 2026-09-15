@@ -236,6 +236,12 @@ export class RunDispatcher {
                 const events = await this.store.readEvents(id);
                 if (events.some((event) => event.type === 'turn.started')) return;
             }
+            if (run.status === 'running') {
+                const events = await this.store.readEvents(id);
+                if (events.some((event) => event.type === 'authentication.requested')) {
+                    return;
+                }
+            }
             this.store.assertWorkerAlive(run);
             await Bun.sleep(25);
         }

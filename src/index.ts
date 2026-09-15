@@ -16,7 +16,6 @@ export {
 } from './catalog/index.js';
 export {
     ConnectionInspector,
-    ConnectionManager,
     ConnectionStore,
     type RunnerAuthenticationStatus,
     type RunnerConnectionContext,

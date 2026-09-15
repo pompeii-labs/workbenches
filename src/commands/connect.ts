@@ -1,8 +1,6 @@
 import { autocomplete, type Option, select } from '@clack/prompts';
 import { defineCommand } from 'citty';
-import { RunnerCredentialStore } from '../connections/credentials.js';
-import { ConnectionManager } from '../connections/manager.js';
-import { prepareConnectionSetupWorkbench } from '../connections/setup-workbench.js';
+import { ConnectionStore } from '../connections/store.js';
 import {
     type ConnectionTarget,
     connectionAuthenticationMethods,
@@ -10,16 +8,13 @@ import {
     connectionProviders,
     connectionRuntimes,
     harnessLabel,
+    providerLabel,
     runtimeLabel,
 } from '../connections/targets.js';
 import { ModelCatalog } from '../models/catalog.js';
-import { RunnerRegistry } from '../runners/registry.js';
-import type { PreparedRunner } from '../runners/runner.js';
-import { runnerSetupError } from '../runners/setup.js';
-import { RunStore } from '../runs/index.js';
-import { type PreparedRuntime, RuntimeRegistry } from '../runtimes/index.js';
+import { ModelRouter } from '../models/routing.js';
 import { workbenchHome } from '../storage.js';
-import { WorkbenchEnvironment, WorkbenchResolver } from '../workbench/index.js';
+import { WorkbenchResolver } from '../workbench/index.js';
 import { CliPresenter } from './presenter.js';
 
 export const connectCommand = defineCommand({
@@ -38,16 +33,6 @@ export const connectCommand = defineCommand({
             description:
                 'Workspace directory (saved aliases default to the current directory)',
         },
-        'env-file': {
-            type: 'string',
-            valueHint: 'path',
-            description: 'Load declared environment bindings from a dotenv file',
-        },
-        env: {
-            type: 'string',
-            valueHint: 'NAME=value',
-            description: 'Set a declared environment binding (repeatable)',
-        },
         runtime: {
             type: 'string',
             description: 'Connection runtime: local, docker, or e2b',
@@ -65,155 +50,102 @@ export const connectCommand = defineCommand({
             description: 'Authentication method for the selected provider',
         },
     },
-    async run({ args, rawArgs }) {
+    async run({ args }) {
         const output = new CliPresenter();
-        const workbenchEnvironment = new WorkbenchEnvironment();
-        const overrides = await workbenchEnvironment.load({
-            ...(args['env-file'] ? { envFile: args['env-file'] } : {}),
-            rawArgs,
-        });
         const home = workbenchHome();
-        const target = args.workbench
-            ? undefined
-            : await selectConnectionTarget({
-                  ...(args.runtime ? { runtime: args.runtime } : {}),
-                  ...(args.harness ? { harness: args.harness } : {}),
-                  ...(args.provider ? { provider: args.provider } : {}),
-                  ...(args.method ? { method: args.method } : {}),
-              });
-        const reference = target
-            ? connectionReference(target)
-            : (args.workbench as string);
-        const resolved = target
-            ? await prepareConnectionSetupWorkbench(target)
-            : await new WorkbenchResolver().resolve(reference, {
-                  home,
-                  ...(args.dir ? { workspaceDirectory: args.dir } : {}),
-              });
-        const environment = workbenchEnvironment.bind(resolved.workbench, overrides);
-        let runner: PreparedRunner | undefined;
-        let runtime: PreparedRuntime | undefined;
-        let operationError: unknown;
-        let connectedRecord: Parameters<CliPresenter['record']>[0] | undefined;
+        let cleanup = async () => {};
         try {
-            output.progress('Checking available runner connections');
-            runner = await RunnerRegistry.standard().prepare(
-                resolved.workbench,
-                environment
-            );
-            runtime = await RuntimeRegistry.standard()
-                .resolve(resolved.workbench.manifest.runtime)
-                .prepare({
-                    workbench: resolved.workbench,
-                    workspaceDirectory: resolved.workspaceDirectory,
-                    environment,
-                    assets: [
-                        {
-                            path: resolved.workspaceDirectory,
-                            access: 'read-write',
-                        },
-                        {
-                            path: resolved.workbench.packageDirectory,
-                            access: 'read-only',
-                        },
-                        ...runner.assets,
-                    ],
-                    purpose: 'connect',
-                    ...(resolved.workbench.manifest.runtime === 'e2b'
-                        ? {
-                              credentials: await new RunnerCredentialStore(
-                                  home
-                              ).prepare(
-                                  resolved.workbench.manifest.runtime,
-                                  resolved.workbench.manifest.runner
-                              ),
-                          }
+            const selection = args.workbench
+                ? await connectionTargetForWorkbench(args, home)
+                : {
+                      target: await selectConnectionTarget({
+                          ...(args.runtime ? { runtime: args.runtime } : {}),
+                          ...(args.harness ? { harness: args.harness } : {}),
+                          ...(args.provider ? { provider: args.provider } : {}),
+                          ...(args.method ? { method: args.method } : {}),
+                      }),
+                      cleanup,
+                  };
+            cleanup = selection.cleanup;
+            const { target } = selection;
+            await new ConnectionStore(home).save(
+                { runner: target.harness, runtime: target.runtime },
+                {
+                    provider: target.provider,
+                    nativeProvider: target.method.nativeProvider,
+                    authenticationMethod: target.method.authenticationMethod,
+                    method: target.method.id,
+                    ...(target.method.nativeMethod
+                        ? { nativeMethod: target.method.nativeMethod }
                         : {}),
-                    authorizations: { hostDocker: false },
-                    run: {
-                        id: RunStore.createId(),
-                        scope: RunStore.scope(home),
-                    },
-                });
-            try {
-                await runtime.preflight();
-            } catch (error) {
-                throw runnerSetupError(error, resolved.workbench);
-            }
-            const status = await new ConnectionManager({
-                workbench: resolved.workbench,
-                runtime,
-                runner,
-                reference,
-                home,
-                announce: (message) => output.message(message, 'info', 'stderr'),
-                ...(target
-                    ? {
-                          authentication: {
-                              provider: target.provider,
-                              nativeProvider: target.method.nativeProvider,
-                              ...(target.method.nativeMethod
-                                  ? { nativeMethod: target.method.nativeMethod }
-                                  : {}),
-                              authenticationMethod: target.method.authenticationMethod,
-                              label: target.method.label,
-                          },
-                      }
-                    : {}),
-            }).configure();
-            const configuration = status.configuration;
-            if (!configuration) {
-                throw new Error('The runner connection could not be resolved');
-            }
-            const connection = ConnectionManager.connectionLabel({
-                provider: configuration.provider,
-                nativeProvider: configuration.nativeProvider,
-                nativeModel: configuration.model,
-                ...(target
-                    ? {
-                          authenticationMethod: target.method.authenticationMethod,
-                      }
-                    : {}),
-            });
-            const runnerName = ConnectionManager.runnerLabel(
-                resolved.workbench.manifest.runner
+                }
             );
-            connectedRecord = {
+            const runnerName = harnessLabel(target.harness);
+            output.record({
                 machine: [
-                    'connected',
-                    resolved.workbench.manifest.runtime,
-                    resolved.workbench.manifest.runner,
-                    configuration.provider,
+                    'configured',
+                    target.runtime,
+                    target.harness,
+                    target.provider,
                 ],
-                title: `Connected ${runnerName} in ${runtimeLabel(resolved.workbench.manifest.runtime)}`,
+                title: `Configured ${runnerName} in ${runtimeLabel(target.runtime)}`,
                 details: [
-                    connection,
-                    ...(target ? [target.method.label] : []),
-                    'Available to compatible Workbenches',
+                    providerLabel(target.provider),
+                    target.method.label,
+                    'Authentication will be requested by the first interactive run',
                 ],
-            };
-        } catch (error) {
-            operationError = error;
+            });
+        } finally {
+            await cleanup();
         }
-        const results = await Promise.allSettled([
-            runtime?.cleanup(),
-            runner?.cleanup(),
-            resolved.cleanup(),
-        ]);
-        if (operationError) throw operationError;
-        const failure = results.find(
-            (result): result is PromiseRejectedResult => result.status === 'rejected'
-        );
-        if (failure) throw failure.reason;
-        if (connectedRecord) output.record(connectedRecord);
     },
 });
+
+async function connectionTargetForWorkbench(
+    args: Record<string, unknown>,
+    home: string
+): Promise<{ target: ConnectionTarget; cleanup(): Promise<void> }> {
+    const reference = String(args.workbench);
+    const resolved = await new WorkbenchResolver().resolve(reference, {
+        home,
+        ...(typeof args.dir === 'string' ? { workspaceDirectory: args.dir } : {}),
+    });
+    try {
+        const runtime = resolved.workbench.manifest.runtime;
+        const harness = resolved.workbench.manifest.runner;
+        if (!connectionRuntimes.includes(runtime as ConnectionTarget['runtime'])) {
+            throw new Error(`Unsupported connection runtime: ${runtime}`);
+        }
+        if (!connectionHarnesses.includes(harness as ConnectionTarget['harness'])) {
+            throw new Error(`Unsupported connection harness: ${harness}`);
+        }
+        const providers = [
+            ...new Set(
+                new ModelRouter()
+                    .routes(resolved.workbench)
+                    .map((route) => route.provider)
+            ),
+        ];
+        const target = await selectConnectionTarget({
+            runtime,
+            harness,
+            ...(typeof args.provider === 'string' ? { provider: args.provider } : {}),
+            ...(typeof args.method === 'string' ? { method: args.method } : {}),
+            providers,
+        });
+        return { target, cleanup: resolved.cleanup };
+    } catch (error) {
+        await resolved.cleanup();
+        throw error;
+    }
+}
 
 async function selectConnectionTarget(input: {
     runtime?: string;
     harness?: string;
     provider?: string;
     method?: string;
+    providers?: string[];
 }): Promise<ConnectionTarget> {
     const interactive = process.stdin.isTTY && process.stderr.isTTY;
     const runtime = await chooseOption({
@@ -242,7 +174,9 @@ async function selectConnectionTarget(input: {
         flag: '--harness',
     });
     const catalog = ModelCatalog.current();
-    const providers = connectionProviders(harness, catalog);
+    const providers = connectionProviders(harness, catalog).filter(
+        (candidate) => !input.providers || input.providers.includes(candidate.id)
+    );
     const provider = await chooseOption({
         ...(input.provider ? { provided: input.provider } : {}),
         values: providers.map((candidate) => candidate.id),
@@ -320,8 +254,4 @@ async function chooseOption<T extends string>(options: {
         : await select<T>(promptOptions);
     if (typeof selected === 'symbol') throw new Error('Connection setup cancelled');
     return selected;
-}
-
-function connectionReference(target: ConnectionTarget): string {
-    return `${target.runtime}/${target.harness}/${target.provider}`;
 }
