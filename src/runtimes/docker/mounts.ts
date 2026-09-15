@@ -115,7 +115,7 @@ export class DockerMountPlan {
             ...workbench,
             manifestPath: this.pathFor(workbench.manifestPath),
             packageDirectory: this.pathFor(workbench.packageDirectory),
-            repositoryDirectory: this.pathFor(workbench.repositoryDirectory),
+            repositoryDirectory: this.repositoryPathFor(workbench),
             instructionsPath: this.pathFor(workbench.instructionsPath),
             ...(workbench.runnerConfigPath
                 ? { runnerConfigPath: this.pathFor(workbench.runnerConfigPath) }
@@ -147,6 +147,14 @@ export class DockerMountPlan {
                 ...new ModelRouter().providerEnvironmentNames(workbench),
             ]),
         ];
+    }
+
+    private repositoryPathFor(workbench: ResolvedWorkbench): string {
+        const repository = resolve(workbench.repositoryDirectory);
+        if (this.mounts.some((mount) => contains(mount.hostPath, repository))) {
+            return this.pathFor(repository);
+        }
+        return this.pathFor(workbench.packageDirectory);
     }
 }
 

@@ -3,6 +3,53 @@
     "$id": "https://workbenches.dev/schemas/events/v0/workbench-event.schema.json",
     "title": "Workbench event protocol v0",
     "type": "object",
+    "$defs": {
+        "infrastructure": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider", "duration_ms", "cost"],
+            "properties": {
+                "provider": { "type": "string", "minLength": 1 },
+                "duration_ms": { "type": "number", "minimum": 0 },
+                "maximum_duration_ms": { "type": "number", "minimum": 0 },
+                "resources": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "cpu_count": { "type": "number", "minimum": 0 },
+                        "memory_mb": { "type": "number", "minimum": 0 }
+                    }
+                },
+                "cost": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["kind", "currency", "amount_usd", "source"],
+                            "properties": {
+                                "kind": { "const": "estimated" },
+                                "currency": { "const": "USD" },
+                                "amount_usd": {
+                                    "type": "number",
+                                    "minimum": 0
+                                },
+                                "source": { "type": "string", "minLength": 1 }
+                            }
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["kind", "currency"],
+                            "properties": {
+                                "kind": { "const": "unavailable" },
+                                "currency": { "const": "USD" }
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    },
     "additionalProperties": false,
     "required": [
         "protocol",
@@ -25,6 +72,8 @@
             "enum": [
                 "run.started",
                 "run.ready",
+                "authentication.requested",
+                "authentication.completed",
                 "turn.started",
                 "turn.completed",
                 "output.text",
@@ -32,6 +81,13 @@
                 "tool.completed",
                 "file.changed",
                 "input.requested",
+                "input.accepted",
+                "input.queued",
+                "input.delivered",
+                "input.rejected",
+                "question.requested",
+                "question.answered",
+                "question.rejected",
                 "usage.updated",
                 "run.completed",
                 "run.failed",
@@ -50,7 +106,10 @@
                     "data": {
                         "type": "object",
                         "required": ["text"],
-                        "properties": { "text": { "type": "string" } }
+                        "properties": {
+                            "id": { "type": "string", "minLength": 1 },
+                            "text": { "type": "string" }
+                        }
                     }
                 }
             }
@@ -69,9 +128,13 @@
                         "properties": {
                             "id": { "type": "string" },
                             "name": { "type": "string" },
+                            "title": { "type": "string" },
                             "target": { "type": "string" },
+                            "description": { "type": "string" },
                             "status": { "enum": ["completed", "failed"] },
-                            "duration_ms": { "type": "number", "minimum": 0 }
+                            "duration_ms": { "type": "number", "minimum": 0 },
+                            "error_code": { "type": "string" },
+                            "message": { "type": "string" }
                         }
                     }
                 }
@@ -93,6 +156,110 @@
                             "cache_read_tokens": { "type": "integer", "minimum": 0 },
                             "cache_write_tokens": { "type": "integer", "minimum": 0 },
                             "cost_usd": { "type": "number", "minimum": 0 }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": { "type": { "const": "question.requested" } }
+            },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["id", "questions"],
+                        "properties": {
+                            "id": { "type": "string", "minLength": 1 },
+                            "questions": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "object",
+                                    "required": [
+                                        "question",
+                                        "options",
+                                        "multiple",
+                                        "custom"
+                                    ],
+                                    "properties": {
+                                        "question": {
+                                            "type": "string",
+                                            "minLength": 1
+                                        },
+                                        "header": {
+                                            "type": "string",
+                                            "minLength": 1
+                                        },
+                                        "options": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "required": ["label"],
+                                                "properties": {
+                                                    "label": {
+                                                        "type": "string",
+                                                        "minLength": 1
+                                                    },
+                                                    "description": {
+                                                        "type": "string",
+                                                        "minLength": 1
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        "multiple": { "type": "boolean" },
+                                        "custom": { "type": "boolean" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "type": {
+                        "enum": ["question.answered", "question.rejected"]
+                    }
+                }
+            },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["id"],
+                        "properties": {
+                            "id": { "type": "string", "minLength": 1 },
+                            "answer_count": {
+                                "type": "integer",
+                                "minimum": 0
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "type": {
+                        "enum": ["run.completed", "run.failed", "run.cancelled"]
+                    }
+                }
+            },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "duration_ms": { "type": "number", "minimum": 0 },
+                            "infrastructure": {
+                                "$ref": "#/$defs/infrastructure"
+                            }
                         }
                     }
                 }

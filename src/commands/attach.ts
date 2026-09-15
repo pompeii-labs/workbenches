@@ -2,17 +2,18 @@ import { defineCommand } from 'citty';
 
 import { createEventRenderer } from '../rendering/index.js';
 import { RunStore } from '../runs/index.js';
+import { SessionLifecycle } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
 
 export const attachCommand = defineCommand({
     meta: {
         name: 'attach',
-        description: 'Replay and follow a dispatched Workbench run.',
+        description: 'Observe or replay a Workbench session.',
     },
     args: {
-        run: {
+        session: {
             type: 'positional',
-            description: 'Run ID (defaults to the latest dispatched run)',
+            description: 'Session ID (defaults to the latest session)',
             required: false,
         },
         json: {
@@ -37,7 +38,11 @@ export const attachCommand = defineCommand({
         }
         const home = workbenchHome();
         const store = new RunStore(home);
-        const initial = args.run ? await store.read(args.run) : await store.latest();
+        const lifecycle = new SessionLifecycle(home);
+        const activity = args.session
+            ? await lifecycle.resolve(args.session)
+            : await lifecycle.latest();
+        const initial = activity.run;
         const renderer = createEventRenderer({
             mode: args.json ? 'json' : args.final ? 'final' : 'human',
             ...(args.color === undefined ? {} : { color: args.color }),

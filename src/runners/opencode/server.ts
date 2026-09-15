@@ -7,6 +7,20 @@ export interface SpawnedOpenCodeServer {
     kill(): void;
 }
 
+export interface OpenCodeServerBinding {
+    hostname: string;
+    port: number;
+}
+
+export interface LaunchedOpenCodeServer {
+    process: SpawnedOpenCodeServer;
+    resolveUrl(reportedUrl: string): Promise<string>;
+}
+
+export type OpenCodeServerLauncher = (
+    buildInvocation: (binding: OpenCodeServerBinding) => RunnerInvocation
+) => LaunchedOpenCodeServer;
+
 export type OpenCodeFetch = (
     input: string | URL | Request,
     init?: RequestInit
@@ -14,16 +28,7 @@ export type OpenCodeFetch = (
 
 export interface OpenCodeServerOptions {
     workspaceDirectory: string;
-    spawn: (
-        command: string[],
-        options: {
-            cwd: string;
-            env: Record<string, string | undefined>;
-            stdin: 'ignore';
-            stdout: 'pipe';
-            stderr: 'pipe';
-        }
-    ) => SpawnedOpenCodeServer;
+    launch: OpenCodeServerLauncher;
     fetch: OpenCodeFetch;
     password: () => string;
     startupTimeoutMs: number;
@@ -45,26 +50,24 @@ export class OpenCodeServer {
     }
 
     async start(
-        buildInvocation: (password: string) => RunnerInvocation,
+        buildInvocation: (
+            password: string,
+            binding: OpenCodeServerBinding
+        ) => RunnerInvocation,
         onFailure: (error: Error) => void
     ): Promise<void> {
         const password = this.options.password();
         if (!password) throw new Error('OpenCode server password must not be empty');
         this.password = password;
-        const invocation = buildInvocation(password);
-
-        const child = this.options.spawn(invocation.command, {
-            cwd: invocation.cwd,
-            env: invocation.env,
-            stdin: 'ignore',
-            stdout: 'pipe',
-            stderr: 'pipe',
-        });
+        const launched = this.options.launch((binding) =>
+            buildInvocation(password, binding)
+        );
+        const child = launched.process;
         this.child = child;
         this.stderrLoop = readLimitedText(child.stderr, 64 * 1024);
         const ready = deferred<string>();
         this.stdoutLoop = consumeLines(child.stdout, async (line) => {
-            const url = line.match(/https?:\/\/127\.0\.0\.1:\d+/)?.[0];
+            const url = line.match(/https?:\/\/[^\s]+:\d+/)?.[0];
             if (url) ready.resolve(url);
         });
         const timeout = setTimeout(
@@ -80,7 +83,7 @@ export class OpenCodeServer {
             }
         });
         try {
-            this.url = await ready.promise;
+            this.url = await launched.resolveUrl(await ready.promise);
         } finally {
             clearTimeout(timeout);
         }
@@ -118,6 +121,30 @@ export class OpenCodeServer {
         return response.json();
     }
 
+    async authenticationMethods(): Promise<unknown> {
+        return this.requestJson('/provider/auth', { method: 'GET' });
+    }
+
+    async authorizeProvider(provider: string, method: number): Promise<unknown> {
+        return this.requestJson(
+            `/provider/${encodeURIComponent(provider)}/oauth/authorize`,
+            {
+                method: 'POST',
+                body: JSON.stringify({ method }),
+            }
+        );
+    }
+
+    async completeProviderAuthorization(
+        provider: string,
+        method: number
+    ): Promise<void> {
+        await this.request(`/provider/${encodeURIComponent(provider)}/oauth/callback`, {
+            method: 'POST',
+            body: JSON.stringify({ method }),
+        });
+    }
+
     async replyPermission(path: string, body: unknown): Promise<boolean> {
         const response = await this.authFetch(this.endpoint(path), {
             method: 'POST',
@@ -127,6 +154,20 @@ export class OpenCodeServer {
         if (!response.ok) {
             throw new Error(
                 `OpenCode permission reply failed with HTTP ${response.status}`
+            );
+        }
+        return true;
+    }
+
+    async replyQuestion(path: string, body?: unknown): Promise<boolean> {
+        const response = await this.authFetch(this.endpoint(path), {
+            method: 'POST',
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        if (response.status === 404) return false;
+        if (!response.ok) {
+            throw new Error(
+                `OpenCode question reply failed with HTTP ${response.status}`
             );
         }
         return true;
@@ -157,7 +198,11 @@ export class OpenCodeServer {
         const headers = new Headers(init.headers);
         headers.set('Authorization', `Basic ${btoa(`opencode:${this.password}`)}`);
         if (init.body) headers.set('Content-Type', 'application/json');
-        return this.options.fetch(input, { ...init, headers });
+        return this.options.fetch(input, {
+            ...init,
+            headers,
+            signal: init.signal ?? this.abort.signal,
+        });
     }
 }
 
@@ -172,6 +217,24 @@ export function spawnOpenCodeServer(
     }
 ): SpawnedOpenCodeServer {
     return Bun.spawn(command, options);
+}
+
+export function launchLocalOpenCodeServer(
+    spawn: typeof spawnOpenCodeServer = spawnOpenCodeServer
+): OpenCodeServerLauncher {
+    return (buildInvocation) => {
+        const invocation = buildInvocation({ hostname: '127.0.0.1', port: 0 });
+        return {
+            process: spawn(invocation.command, {
+                cwd: invocation.cwd,
+                env: invocation.env,
+                stdin: 'ignore',
+                stdout: 'pipe',
+                stderr: 'pipe',
+            }),
+            resolveUrl: async (reportedUrl) => reportedUrl,
+        };
+    };
 }
 
 async function consumeLines(

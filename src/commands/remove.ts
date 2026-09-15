@@ -2,6 +2,7 @@ import { defineCommand } from 'citty';
 
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
 import { workbenchHome } from '../storage.js';
+import { CliPresenter } from './presenter.js';
 
 export const removeCommand = defineCommand({
     meta: { name: 'remove', description: 'Remove a saved Workbench alias.' },
@@ -16,6 +17,9 @@ export const removeCommand = defineCommand({
         const entry = await new SavedWorkbenchCatalog(workbenchHome()).remove(
             args.alias
         );
-        console.log(`removed\t${entry.alias}`);
+        new CliPresenter().record({
+            machine: ['removed', entry.alias],
+            title: `Removed ${entry.alias}`,
+        });
     },
 });

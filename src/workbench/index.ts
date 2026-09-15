@@ -1,4 +1,8 @@
-export { WorkbenchEnvironment } from './environment.js';
+export { CredentialFilePolicy } from './credentials.js';
+export {
+    type EnvironmentOverrides,
+    WorkbenchEnvironment,
+} from './environment.js';
 export {
     WorkbenchInspection,
     WorkbenchInspector,

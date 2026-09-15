@@ -1,9 +1,9 @@
-export { OpenCodeRunner } from './opencode/runner.js';
 export {
-    OPENCODE_SESSION_DECLARATION,
     OpenCodeSessionAdapter,
     type OpenCodeSessionDependencies,
-} from './opencode/session.js';
+} from './opencode/adapter.js';
+export { OPENCODE_SESSION_DECLARATION } from './opencode/capabilities.js';
+export { OpenCodeRunner } from './opencode/runner.js';
 export { PiRunner } from './pi/runner.js';
 export {
     PI_SESSION_DECLARATION,
@@ -30,8 +30,13 @@ export {
     type RunnerPermissionDecision,
     type RunnerPermissionRequest,
     type RunnerPromptInput,
+    type RunnerQuestionOption,
+    type RunnerQuestionPrompt,
+    type RunnerQuestionRequest,
+    type RunnerQuestionResponse,
     type RunnerSession,
     type RunnerSessionAdapter,
+    type RunnerSessionContext,
     type RunnerSessionHost,
     type RunnerSessionStartOptions,
     type RunnerTurnResult,

@@ -13,6 +13,7 @@ export interface ResolvedWorkbenchReference {
     workbench: ResolvedWorkbench;
     workspaceDirectory: string;
     cleanup: () => Promise<void>;
+    source?: 'local' | 'saved' | 'system';
     registry?: CatalogRegistryReference;
 }
 
@@ -36,6 +37,7 @@ export class WorkbenchResolver {
                     workbench: await Workbench.load(saved.packagePath),
                     workspaceDirectory: resolve(options.workspaceDirectory ?? cwd),
                     cleanup: async () => {},
+                    source: 'saved',
                     ...(saved.registry ? { registry: saved.registry } : {}),
                 };
             }
@@ -61,6 +63,7 @@ export class WorkbenchResolver {
                 options.workspaceDirectory ?? workbench.repositoryDirectory
             ),
             cleanup: async () => {},
+            source: 'local',
         };
     }
 }

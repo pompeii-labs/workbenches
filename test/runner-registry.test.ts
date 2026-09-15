@@ -198,6 +198,7 @@ function preparedRuntime(
 ): PreparedRuntime {
     return {
         name,
+        nativeAuthentication: 'persistent',
         workbench,
         workspaceDirectory: '/workspace',
         environment: {
@@ -209,6 +210,11 @@ function preparedRuntime(
         execute: () => Promise.reject(new Error('unused')),
         interact: () => Promise.reject(new Error('unused')),
         launch: () => ({ exited: Promise.resolve(0) }),
+        launchSession: () => ({ exited: Promise.resolve(0) }),
+        launchService: () => ({
+            process: { exited: Promise.resolve(0) },
+            resolveUrl: async (url) => url,
+        }),
         cancel: () => {},
         cleanup: async () => {},
     };

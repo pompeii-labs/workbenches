@@ -192,10 +192,12 @@ launch.
 Runtimes expose named workspace locations through
 `WORKBENCH_WORKSPACE_<NAME>`, replacing hyphens with underscores. The local
 runtime uses resolved host paths. The Docker runtime mounts them at
-`/workspaces/<name>` and enforces the declared mount access. The local runtime
-checks host readability or writability but cannot prevent a host process from
-writing elsewhere; engines must not represent local access declarations as an
-isolation boundary.
+`/workspaces/<name>` and enforces the declared mount access. The reference E2B
+runtime copies them to `/workspaces/<name>` and synchronizes only declared
+read-write directories back to the host. The local runtime checks host
+readability or writability but cannot prevent a host process from writing
+elsewhere; engines must not represent local access declarations as an isolation
+boundary.
 
 ## Runtime selection and images
 
@@ -225,6 +227,14 @@ package-relative and defaults to `.`. Both must remain within the containing
 repository. Providers that do not accept images, including `local`, reject the
 field. Providers decide how to cache prepared images, but the observable result
 must be equivalent to preparing the declared input again.
+
+The reference Docker and E2B providers require `image`. The E2B provider accepts
+the same public OCI reference or local build object, prepares an E2B template,
+and creates a fresh hosted sandbox for each execution. It stages the primary
+workspace at `/workspace`, named workspaces at `/workspaces/<name>`, and the
+Workbench package at `/workbench`. Host credentials, repository metadata,
+ignored files, and undeclared assets are not portable package inputs and must
+not be inferred for upload.
 
 ### Host Docker engine binding
 

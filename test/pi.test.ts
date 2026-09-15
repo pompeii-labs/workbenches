@@ -96,6 +96,42 @@ describe('Pi adapter translation', () => {
         );
     });
 
+    test('uses Pi native session storage for resumable interactive runs', async () => {
+        const workbench = await fixture();
+        const config = await stagePiConfig(workbench);
+        temporaryDirectories.push(config.directory);
+
+        const first = buildPiRpcInvocation(
+            workbench,
+            {},
+            workbench.repositoryDirectory,
+            'openai/gpt-5.6-terra',
+            config.directory,
+            {
+                id: 'wb_pisession12345678901234',
+                directory: '/private/workbench/session/native',
+            }
+        );
+        const resumed = buildPiRpcInvocation(
+            workbench,
+            {},
+            workbench.repositoryDirectory,
+            'openai/gpt-5.6-terra',
+            config.directory,
+            {
+                id: 'wb_pisession12345678901234',
+                directory: '/private/workbench/session/native',
+                nativeSessionId: 'pi_native_1',
+            }
+        );
+
+        expect(first.command).toContain('--session-dir');
+        expect(first.command).toContain('/private/workbench/session/native');
+        expect(first.command).not.toContain('--no-session');
+        expect(resumed.command).toContain('--session');
+        expect(resumed.command).toContain('pi_native_1');
+    });
+
     test('links the native credential file without reading or copying it', async () => {
         const workbench = await fixture();
         const native = await mkdtemp(join(tmpdir(), 'pi-native-'));
@@ -124,6 +160,14 @@ describe('Pi adapter translation', () => {
                 'utf8'
             )
         ).toBe('# Review\n');
+    });
+
+    test('does not inject unsupported question tooling into Pi', async () => {
+        const workbench = await fixture();
+        const staged = await stagePiConfig(workbench, {});
+        temporaryDirectories.push(staged.directory);
+
+        await expect(lstat(join(staged.directory, 'extensions'))).rejects.toThrow();
     });
 
     test('fails explicitly when a Workbench declares MCP transport', async () => {

@@ -17,9 +17,13 @@ import type {
     PreparedRuntime,
     RuntimeCommandOptions,
     RuntimePrepareRequest,
+    RuntimeService,
+    RuntimeServiceBinding,
+    RuntimeSessionOptions,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
 import type { DockerClient } from './client.js';
+import { DockerManagedContainers } from './containers.js';
 import type {
     DockerCommandResult,
     DockerHostSocket,
@@ -42,6 +46,7 @@ export interface DockerRuntimeOptions {
 
 export class DockerRuntime implements PreparedRuntime {
     readonly name = 'docker';
+    readonly nativeAuthentication: 'persistent' | 'unavailable';
     readonly workbench: ResolvedWorkbench;
     readonly workspaceDirectory: string;
     readonly environment: Record<string, string | undefined>;
@@ -55,6 +60,7 @@ export class DockerRuntime implements PreparedRuntime {
     private cleaned = false;
 
     constructor(private readonly options: DockerRuntimeOptions) {
+        this.nativeAuthentication = options.credentials ? 'persistent' : 'unavailable';
         this.preparation = options.preparation;
         this.workspaceDirectory = options.mounts.pathFor(
             options.request.workspaceDirectory
@@ -93,24 +99,36 @@ export class DockerRuntime implements PreparedRuntime {
         const configuration = new WorkbenchPreflight({
             environment: this.environment,
         }).checkConfiguration(this.workbench);
-        const runnerPath = await this.findInside(this.workbench.manifest.runner);
+        const names = [
+            this.workbench.manifest.runner,
+            ...this.workbench.manifest.tools,
+            ...(this.options.hostSocket ? ['docker'] : []),
+        ];
+        const paths = await Promise.all(names.map((name) => this.findInside(name)));
+        const runnerPath = paths[0];
         if (!runnerPath) {
             throw new Error(
                 `Runner CLI is unavailable in Docker image ${this.preparation.immutableReference}: ${this.workbench.manifest.runner}`
             );
         }
-        const tools: Array<{ name: string; path: string }> = [];
-        for (const name of this.workbench.manifest.tools) {
-            const path = await this.findInside(name);
+        const tools = this.workbench.manifest.tools.map((name, index) => {
+            const path = paths[index + 1];
             if (!path) {
                 throw new Error(
                     `Required CLI tool is unavailable in Docker image ${this.preparation.immutableReference}: ${name}`
                 );
             }
-            tools.push({ name, path });
+            return { name, path };
+        });
+        if (this.options.hostSocket && !paths.at(-1)) {
+            throw new Error(
+                `Docker CLI is unavailable in Docker image ${this.preparation.immutableReference} for the declared host engine binding`
+            );
         }
-        if (this.options.hostSocket) await this.preflightHostDocker();
-        await this.preflightAssets();
+        await Promise.all([
+            this.preflightAssets(),
+            ...(this.options.hostSocket ? [this.preflightHostDocker()] : []),
+        ]);
         this.ready = true;
         return {
             runner: { name: this.workbench.manifest.runner, path: runnerPath },
@@ -178,6 +196,37 @@ export class DockerRuntime implements PreparedRuntime {
     }
 
     launch(invocation: RunnerInvocation): SpawnedRunner {
+        return this.launchSession(invocation, { stdin: 'ignore' });
+    }
+
+    launchSession(
+        invocation: RunnerInvocation,
+        options: RuntimeSessionOptions
+    ): SpawnedRunner {
+        return this.launchContainer(invocation, options).process;
+    }
+
+    launchService(
+        buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
+    ): RuntimeService {
+        const port = 4096;
+        const launched = this.launchContainer(
+            buildInvocation({ hostname: '0.0.0.0', port }),
+            { stdin: 'ignore' },
+            port
+        );
+        return {
+            process: launched.process,
+            resolveUrl: (reportedUrl) =>
+                this.resolvePublishedUrl(launched.name, port, reportedUrl),
+        };
+    }
+
+    private launchContainer(
+        invocation: RunnerInvocation,
+        options: RuntimeSessionOptions,
+        publishedPort?: number
+    ): { name: string; process: SpawnedRunner } {
         this.assertAvailable('launch');
         if (!this.ready) {
             throw new Error('Runtime preflight must succeed before launch');
@@ -196,6 +245,13 @@ export class DockerRuntime implements PreparedRuntime {
                     '--init',
                     '--name',
                     name,
+                    ...(this.options.request.run
+                        ? DockerManagedContainers.labels(this.options.request.run)
+                        : []),
+                    ...(options.stdin === 'pipe' ? ['--interactive'] : []),
+                    ...(publishedPort
+                        ? ['--publish', `127.0.0.1::${publishedPort}`]
+                        : []),
                     '--network',
                     'bridge',
                     '--read-only',
@@ -212,7 +268,7 @@ export class DockerRuntime implements PreparedRuntime {
                 {
                     cwd: process.cwd(),
                     env: process.env,
-                    stdin: 'ignore',
+                    stdin: options.stdin,
                     stdout: 'pipe',
                     stderr: 'pipe',
                 }
@@ -222,6 +278,7 @@ export class DockerRuntime implements PreparedRuntime {
             throw error;
         }
         const tracked: SpawnedRunner = {
+            ...(child.stdin ? { stdin: child.stdin } : {}),
             ...(child.stdout ? { stdout: child.stdout } : {}),
             ...(child.stderr ? { stderr: child.stderr } : {}),
             ...(child.kill ? { kill: () => child.kill?.() } : {}),
@@ -231,7 +288,7 @@ export class DockerRuntime implements PreparedRuntime {
             }),
         };
         this.active.set(name, tracked);
-        return tracked;
+        return { name, process: tracked };
     }
 
     cancel(process: SpawnedRunner): void {
@@ -267,11 +324,6 @@ export class DockerRuntime implements PreparedRuntime {
     }
 
     private async preflightHostDocker(): Promise<void> {
-        if (!(await this.findInside('docker'))) {
-            throw new Error(
-                `Docker CLI is unavailable in Docker image ${this.preparation.immutableReference} for the declared host engine binding`
-            );
-        }
         const daemon = await this.runEphemeral(
             ['docker', 'version', '--format', '{{.Server.Version}}'],
             { network: 'none', readOnly: true }
@@ -291,14 +343,18 @@ export class DockerRuntime implements PreparedRuntime {
             this.workbench.instructionsPath,
             ...this.workbench.skills.map((skill) => skill.manifestPath),
         ];
-        for (const path of paths) {
-            const result = await this.runEphemeral(
-                ['/bin/sh', '-c', 'test -r "$1"', 'workbench-preflight', path],
-                { network: 'none', readOnly: true }
-            );
-            if (result.code !== 0) {
-                throw new Error(`Required runtime asset is unreadable: ${path}`);
-            }
+        const results = await Promise.all(
+            paths.map(async (path) => ({
+                path,
+                result: await this.runEphemeral(
+                    ['/bin/sh', '-c', 'test -r "$1"', 'workbench-preflight', path],
+                    { network: 'none', readOnly: true }
+                ),
+            }))
+        );
+        const unreadable = results.find(({ result }) => result.code !== 0);
+        if (unreadable) {
+            throw new Error(`Required runtime asset is unreadable: ${unreadable.path}`);
         }
     }
 
@@ -381,11 +437,49 @@ export class DockerRuntime implements PreparedRuntime {
             '--force',
             name,
         ]);
+        if (
+            result.stderr.includes('removal of container') &&
+            result.stderr.includes('already in progress')
+        ) {
+            for (let attempt = 0; attempt < 80; attempt += 1) {
+                const inspected = await this.options.client.run([
+                    this.options.client.executable,
+                    'container',
+                    'inspect',
+                    name,
+                ]);
+                if (inspected.code !== 0) return;
+                await Bun.sleep(25);
+            }
+        }
         if (result.code !== 0 && !result.stderr.includes('No such container')) {
             throw new Error(
                 this.options.client.diagnostic(result, 'Failed to remove container')
             );
         }
+    }
+
+    private async resolvePublishedUrl(
+        name: string,
+        containerPort: number,
+        reportedUrl: string
+    ): Promise<string> {
+        const result = await this.options.client.require(
+            [this.options.client.executable, 'port', name, `${containerPort}/tcp`],
+            'Failed to resolve Docker session endpoint'
+        );
+        const address = result.stdout
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .find((line) => /^127\.0\.0\.1:\d+$/.test(line));
+        if (!address) {
+            throw new Error('Docker did not expose a loopback session endpoint');
+        }
+        const url = new URL(reportedUrl);
+        const separator = address.lastIndexOf(':');
+        url.hostname = address.slice(0, separator);
+        url.port = address.slice(separator + 1);
+        return url.toString();
     }
 
     private queueContainerRemoval(name: string): void {

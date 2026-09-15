@@ -24,6 +24,22 @@ export interface RegistryPackage {
     artifactUrl?: string;
 }
 
+export interface RegistrySearchResult {
+    reference: RegistryReference;
+    name: string;
+    summary?: string;
+    runner: string;
+    runtime: string;
+    model: string;
+    version: string;
+    sourceReference: string;
+    sourceUrl: string;
+    publisherName: string;
+    verifiedPublisher: boolean;
+    saves: number;
+    runs: number;
+}
+
 export interface RegistryClientOptions {
     fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
     apiUrl?: string;
@@ -43,6 +59,7 @@ export class RegistryClient {
     private readonly fetcher: NonNullable<RegistryClientOptions['fetch']>;
     private readonly manifestParser = new WorkbenchManifestParser();
     private readonly packageValidator = new GitHubWorkbenchSource();
+    private discoveryIndex: Promise<RegistrySearchResult[]> | undefined;
 
     constructor(options: RegistryClientOptions = {}) {
         this.apiUrl = RegistryClient.normalizeUrl(
@@ -176,6 +193,50 @@ export class RegistryClient {
                 ? { artifactUrl: parsed.latest_version.artifact_url }
                 : {}),
         };
+    }
+
+    async search(query: string): Promise<RegistrySearchResult[]> {
+        const normalized = query.trim();
+        if (normalized.length > 120) {
+            throw new Error(
+                'Workbench registry searches may not exceed 120 characters'
+            );
+        }
+        const value = await this.request<unknown>('/v1/searches', {
+            method: 'POST',
+            body: normalized ? { query: normalized } : {},
+            timeout: 10_000,
+        });
+        if (!RegistryClient.isRecord(value) || !Array.isArray(value.workbenches)) {
+            throw new Error('The Workbench registry returned malformed search results');
+        }
+        return value.workbenches.map((workbench) => this.parseSearchResult(workbench));
+    }
+
+    async discover(query: string): Promise<RegistrySearchResult[]> {
+        const index = this.discoveryIndex ?? this.loadDiscoveryIndex();
+        this.discoveryIndex = index;
+        const [direct, catalog] = await Promise.all([
+            this.search(query),
+            index.catch(() => []),
+        ]);
+        const unique = new Map<string, RegistrySearchResult>();
+        for (const workbench of [...direct, ...catalog]) {
+            unique.set(
+                `${workbench.reference.publisher}/${workbench.reference.workbench}`,
+                workbench
+            );
+        }
+        return [...unique.values()];
+    }
+
+    private async loadDiscoveryIndex(): Promise<RegistrySearchResult[]> {
+        try {
+            return await this.search('');
+        } catch (error) {
+            this.discoveryIndex = undefined;
+            throw error;
+        }
     }
 
     async fetchWorkbench(registry: RegistryPackage): Promise<RemoteWorkbenchPackage> {
@@ -325,6 +386,66 @@ export class RegistryClient {
                 executable: file.executable,
             };
         });
+    }
+
+    private parseSearchResult(value: unknown): RegistrySearchResult {
+        if (!RegistryClient.isRecord(value)) return this.malformedSearchResult();
+        const publisher = value.publisher;
+        const version = value.latest_version;
+        const metrics = value.metrics;
+        if (
+            !RegistryClient.isRecord(publisher) ||
+            !RegistryClient.isRecord(version) ||
+            !RegistryClient.isRecord(metrics) ||
+            typeof value.slug !== 'string' ||
+            typeof value.name !== 'string' ||
+            (value.summary !== null && typeof value.summary !== 'string') ||
+            typeof value.runner !== 'string' ||
+            typeof value.runtime !== 'string' ||
+            typeof value.model !== 'string' ||
+            typeof value.source_reference !== 'string' ||
+            typeof value.source_url !== 'string' ||
+            typeof publisher.slug !== 'string' ||
+            typeof publisher.name !== 'string' ||
+            typeof publisher.verified !== 'boolean' ||
+            typeof version.version !== 'string' ||
+            typeof metrics.saves !== 'number' ||
+            !Number.isSafeInteger(metrics.saves) ||
+            metrics.saves < 0 ||
+            typeof metrics.runs !== 'number' ||
+            !Number.isSafeInteger(metrics.runs) ||
+            metrics.runs < 0
+        ) {
+            return this.malformedSearchResult();
+        }
+        try {
+            const sourceUrl = new URL(value.source_url);
+            if (sourceUrl.protocol !== 'https:') return this.malformedSearchResult();
+        } catch {
+            return this.malformedSearchResult();
+        }
+        return {
+            reference: {
+                publisher: publisher.slug,
+                workbench: value.slug,
+            },
+            name: value.name,
+            ...(typeof value.summary === 'string' ? { summary: value.summary } : {}),
+            runner: value.runner,
+            runtime: value.runtime,
+            model: value.model,
+            version: version.version,
+            sourceReference: value.source_reference,
+            sourceUrl: value.source_url,
+            publisherName: publisher.name,
+            verifiedPublisher: publisher.verified,
+            saves: metrics.saves,
+            runs: metrics.runs,
+        };
+    }
+
+    private malformedSearchResult(): never {
+        throw new Error('The Workbench registry returned malformed search results');
     }
 
     private static normalizeUrl(value: string): string {

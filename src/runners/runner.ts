@@ -1,8 +1,14 @@
+import type { RunnerConnectionSelection } from '../connections/store.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
 import type { WorkbenchEventDraft } from '../runs/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../types.js';
-import type { RunnerSessionAdapter } from './session.js';
+import type {
+    RunnerSession,
+    RunnerSessionAdapter,
+    RunnerSessionContext,
+    RunnerSessionHost,
+} from './session.js';
 
 export interface RunnerSummary {
     finalText: string;
@@ -27,7 +33,18 @@ export interface PreparedRunner {
     native(runtime: PreparedRuntime, command: string[]): RunnerInvocation;
     publicInvocation(invocation: RunnerInvocation): Record<string, unknown>;
     events(): RunnerEventNormalizer;
+    startSession(
+        runtime: PreparedRuntime,
+        options: PreparedRunnerSessionOptions
+    ): Promise<RunnerSession>;
     cleanup(): Promise<void>;
+}
+
+export interface PreparedRunnerSessionOptions {
+    configuration: ResolvedRunnerConfiguration;
+    host: RunnerSessionHost;
+    session?: RunnerSessionContext;
+    authentication?: RunnerConnectionSelection;
 }
 
 export abstract class Runner {

@@ -236,7 +236,19 @@ describe('local run lifecycle', () => {
             expect.objectContaining({
                 type: 'output.text',
                 runner: 'pi',
-                data: { text: 'Pi works' },
+                data: expect.objectContaining({ text: 'Pi works' }),
+            })
+        );
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                type: 'input.delivered',
+                runner: 'pi',
+                data: {
+                    id: expect.stringMatching(/^input_wb_/),
+                    kind: 'send',
+                    text: 'inspect',
+                    images: [],
+                },
             })
         );
         expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER_REASONING');
@@ -442,6 +454,7 @@ describe('local run lifecycle', () => {
                     assets = request.assets;
                     return {
                         name: 'local',
+                        nativeAuthentication: 'persistent',
                         workbench: request.workbench,
                         workspaceDirectory: request.workspaceDirectory,
                         environment: request.environment,
@@ -459,6 +472,11 @@ describe('local run lifecycle', () => {
                             exited: Promise.resolve(0),
                             stdout: new Response('').body as ReadableStream<Uint8Array>,
                             stderr: new Response('').body as ReadableStream<Uint8Array>,
+                        }),
+                        launchSession: () => ({ exited: Promise.resolve(0) }),
+                        launchService: () => ({
+                            process: { exited: Promise.resolve(0) },
+                            resolveUrl: async (url) => url,
                         }),
                         execute: async () => ({
                             code: 0,

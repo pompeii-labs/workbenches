@@ -46,6 +46,27 @@ describe('Workbench event renderers', () => {
         expect(stderr).toBe('');
     });
 
+    test('prints only the last assistant message in final mode', () => {
+        let stdout = '';
+        const renderer = createEventRenderer({
+            mode: 'final',
+            stdout: (value) => {
+                stdout += value;
+            },
+        });
+        renderer.render(
+            event(1, 'output.text', { id: 'progress', text: 'I will inspect it.' })
+        );
+        renderer.render(event(2, 'tool.started', { id: 'read', name: 'read' }));
+        renderer.render(
+            event(3, 'output.text', { id: 'final', text: 'The issue is ' })
+        );
+        renderer.render(event(4, 'output.text', { id: 'final', text: 'resolved.' }));
+        renderer.finish();
+
+        expect(stdout).toBe('The issue is resolved.\n');
+    });
+
     test('renders a compact human activity stream and aggregates usage deltas', () => {
         let stdout = '';
         let stderr = '';
@@ -129,8 +150,17 @@ describe('Workbench event renderers', () => {
             }),
             event(4, 'file.changed', { path: 'schema.sql', operation: 'edit' }),
             event(5, 'input.requested', { message: 'Approve migration?' }),
-            event(6, 'run.failed', { message: 'permission denied' }),
-            event(7, 'run.cancelled', {}),
+            event(6, 'question.requested', {
+                id: 'question-1',
+                questions: [{ question: 'Which environment?' }],
+            }),
+            event(7, 'question.answered', {
+                id: 'question-1',
+                answer_count: 1,
+            }),
+            event(8, 'question.rejected', { id: 'question-2' }),
+            event(9, 'run.failed', { message: 'permission denied' }),
+            event(10, 'run.cancelled', {}),
         ]) {
             renderer.render(next);
         }
@@ -142,6 +172,9 @@ describe('Workbench event renderers', () => {
         expect(stdout).toContain('Permission denied');
         expect(stdout).toContain('~ edit schema.sql');
         expect(stdout).toContain('? Input required · Approve migration?');
+        expect(stdout).toContain('? Question · Which environment?');
+        expect(stdout).toContain('✓ Answer received');
+        expect(stdout).toContain('○ Question dismissed');
         expect(stderr).toContain('✗ Failed · permission denied');
         expect(stderr).toContain('■ Cancelled');
     });
@@ -392,6 +425,33 @@ describe('Workbench event renderers', () => {
 
         expect(stdout).toBe('');
         expect(stderr).toBe('error: runner unavailable\n');
+    });
+
+    test('surfaces interactive authentication instructions in final-only mode', () => {
+        let stdout = '';
+        let stderr = '';
+        const renderer = createEventRenderer({
+            mode: 'final',
+            stdout: (value) => {
+                stdout += value;
+            },
+            stderr: (value) => {
+                stderr += value;
+            },
+        });
+        renderer.render(
+            event(1, 'authentication.requested', {
+                provider: 'openai',
+                url: 'https://auth.example/device',
+                instructions: 'Enter code: TEST-CODE',
+            })
+        );
+        renderer.finish();
+
+        expect(stdout).toBe('');
+        expect(stderr).toBe(
+            'Authentication required for openai.\nhttps://auth.example/device\nEnter code: TEST-CODE\n'
+        );
     });
 });
 

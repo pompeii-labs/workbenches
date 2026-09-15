@@ -1,6 +1,7 @@
 import type {
     RunnerAdapterDeclaration,
     RunnerInput,
+    RunnerInputDelivery,
     RunnerSession,
     RunnerSessionAdapter,
     RunnerSessionStartOptions,
@@ -10,13 +11,14 @@ import { normalizeRunnerInput } from '../session.js';
 import { stagePiConfig } from './assets.js';
 import { PiEventAdapter } from './events.js';
 import { buildPiRpcInvocation } from './invocation.js';
+import { PI_PACKAGE_VERSION } from './providers.js';
 
 export const PI_SESSION_DECLARATION: RunnerAdapterDeclaration = {
     native: {
         command: 'pi',
         verified: [
             { version: '0.73.1', surfaces: ['json', 'rpc'] },
-            { version: '0.84.3', surfaces: ['json', 'rpc'] },
+            { version: PI_PACKAGE_VERSION, surfaces: ['json', 'rpc'] },
         ],
     },
     capabilities: {
@@ -26,7 +28,11 @@ export const PI_SESSION_DECLARATION: RunnerAdapterDeclaration = {
         usage: { status: 'supported' },
         permissions: {
             status: 'unsupported',
-            detail: 'Pi has no built-in permission request protocol. Permission gates require a Pi extension.',
+            detail: 'Pi does not provide a native permission request protocol.',
+        },
+        questions: {
+            status: 'unsupported',
+            detail: 'Pi does not provide a native question request protocol.',
         },
         multi_turn: { status: 'supported' },
         steering: { status: 'supported' },
@@ -35,19 +41,20 @@ export const PI_SESSION_DECLARATION: RunnerAdapterDeclaration = {
             status: 'unsupported',
             detail: 'Workbench does not yet provide a normalized image-generation tool or image output event for Pi.',
         },
+        session_resume: { status: 'supported' },
         cancellation: { status: 'supported' },
         failures: { status: 'supported' },
         unknown_events: { status: 'supported' },
     },
 };
 
-interface PiInput {
+export interface PiInput {
     write(value: string): unknown;
     flush?(): unknown;
     end?(): void | Promise<void>;
 }
 
-interface SpawnedPi {
+export interface SpawnedPi {
     exited: Promise<number>;
     stdin: PiInput;
     stdout?: ReadableStream<Uint8Array>;
@@ -69,6 +76,11 @@ export interface PiSessionDependencies {
     startupTimeoutMs?: number;
 }
 
+export interface PreparedPiSession {
+    configDirectory: string;
+    spawn: NonNullable<PiSessionDependencies['spawn']>;
+}
+
 export class PiSessionAdapter implements RunnerSessionAdapter {
     readonly runner = 'pi';
     readonly declaration = PI_SESSION_DECLARATION;
@@ -83,11 +95,33 @@ export class PiSessionAdapter implements RunnerSessionAdapter {
 
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
         const staged = await stagePiConfig(options.workbench, options.environment);
+        return this.startConfigured(
+            options,
+            {
+                configDirectory: staged.directory,
+                spawn: this.dependencies.spawn,
+            },
+            staged.cleanup
+        );
+    }
+
+    startPrepared(
+        options: RunnerSessionStartOptions,
+        prepared: PreparedPiSession
+    ): Promise<RunnerSession> {
+        return this.startConfigured(options, prepared, async () => {});
+    }
+
+    private async startConfigured(
+        options: RunnerSessionStartOptions,
+        prepared: PreparedPiSession,
+        cleanup: () => Promise<void>
+    ): Promise<RunnerSession> {
         const session = new PiRpcSession({
             ...options,
             ...this.dependencies,
-            configDirectory: staged.directory,
-            cleanup: staged.cleanup,
+            ...prepared,
+            cleanup,
         });
         try {
             await session.start();
@@ -152,7 +186,8 @@ class PiRpcSession implements RunnerSession {
             this.options.environment,
             this.options.workspaceDirectory,
             this.options.configuration.model,
-            this.options.configDirectory
+            this.options.configDirectory,
+            this.options.session
         );
         const child = this.options.spawn(invocation.command, {
             cwd: invocation.cwd,
@@ -199,12 +234,13 @@ class PiRpcSession implements RunnerSession {
         });
     }
 
-    async steer(input: RunnerInput): Promise<void> {
+    async steer(input: RunnerInput): Promise<RunnerInputDelivery> {
         if (this.failure) throw this.failure;
         if (!this.active || this.closed) {
             throw new Error('runner session is not processing a turn');
         }
         await this.command('steer', piPrompt(normalizeRunnerInput(input)));
+        return { delivered: Promise.resolve() };
     }
 
     async followUp(input: RunnerInput): Promise<void> {

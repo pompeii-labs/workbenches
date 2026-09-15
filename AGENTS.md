@@ -146,15 +146,16 @@ provider payloads.
 
 ## Run in the background
 
-Long-running tasks can be dispatched without keeping the caller attached:
+Every execution belongs to one stable Workbench session. Long-running work can
+continue without keeping the caller attached:
 
 ```sh
 wb run project-core --dir /path/to/project \
   --task "Review every migration" --detach
 ```
 
-The command prints a run ID such as `wb_...`. Use it to follow or cancel the
-run:
+The command prints a session ID such as `wb_...`. Use it to observe or stop the
+active run inside that session:
 
 ```sh
 wb attach wb_...
@@ -164,9 +165,12 @@ wb ps --all
 wb kill wb_...
 ```
 
-Without an ID, `wb attach` selects the latest dispatched run and `wb kill`
-selects the latest active detached run. Detached runs persist their normalized
-events for replay.
+`wb attach` observes or replays the session's latest run without starting new
+model work. `wb resume` starts a new run from saved native context when that
+session is resumable. Without an ID, `wb attach` selects the latest session and
+`wb kill` selects the latest active session. `wb ps` shows active and resumable
+sessions; `wb ps --all` also includes terminal one-shot history. Runs persist
+their normalized events for replay.
 
 ## Leave interactive work to the human
 
@@ -190,9 +194,12 @@ directly. Report the missing runner, tool, runtime, or environment binding so it
 can be fixed before model tokens are spent.
 
 When a Workbench has compatible credentials through more than one provider,
-use `wb connect <name>` to choose the active connection. The engine remembers
-that local choice without changing the Workbench's locked runner or model and
-without copying runner credentials into the package.
+use `wb connect` to choose the default connection for a runner and runtime.
+`wb connect <name>` uses that Workbench as the authentication environment, but
+the resulting default is reusable by every compatible Workbench on the same
+runner and runtime. A run may use `--connection <provider>` to select another
+already-authenticated allowed route. Neither form changes the Workbench's locked
+runner or model or copies runner credentials into the package.
 
 Workbench can open authentication only through a runner's documented
 command-line operation. Never inject a login command or simulated user input
@@ -295,17 +302,18 @@ wb run workbench-creator \
 
 The repository is in public pre-alpha development. The current reference engine
 supports the draft-0 manifest plus OpenCode and Pi runners. Local execution
-supports one-shot, detached, and experimental interactive sessions. Docker
-execution supports image preparation, in-container smoke checks, one-shot runs,
-and detached runs; its interactive TUI path is not yet supported. OpenCode and
-Pi have different native capabilities, which must be reported honestly rather
-than hidden behind a fallback. Other runners and hosted runtimes are part of the
-standard's extensible design but are not yet runnable through this release.
+and Docker execution support one-shot, detached, and experimental interactive
+sessions, including native context resume. Docker also supports image
+preparation and in-container smoke checks. OpenCode and Pi have different native
+capabilities, which must be reported honestly rather than hidden behind a
+fallback. Other runners and hosted runtimes are part of the standard's
+extensible design but are not yet runnable through this release.
 
 The Workbench author locks its runner, model policy, provider routes, and native
-runner configuration. Consumers connect credentials with `wb connect`; they do
-not override those author choices. Never place credential values in a manifest,
-saved run, dry-run output, or normalized event.
+runner configuration. Consumers connect credentials once per runner/runtime
+trust boundary with `wb connect`. A `--connection` run override can select only
+an authenticated route allowed by the manifest. Never place credential values in
+a manifest, saved run, dry-run output, or normalized event.
 
 For normative package semantics, read `SPEC.md`. For the normalized run and
 event contract, read `docs/EXECUTION.md`.

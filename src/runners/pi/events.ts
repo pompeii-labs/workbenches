@@ -1,4 +1,5 @@
 import type { WorkbenchEventDraft } from '../../runs/index.js';
+import { describeTool, type ToolDescription } from '../tool.js';
 
 export interface PiAdapterResult {
     events: WorkbenchEventDraft[];
@@ -10,13 +11,14 @@ export class PiEventAdapter {
     private readonly completedTools = new Set<string>();
     private readonly tools = new Map<
         string,
-        { name: string; target: string | undefined }
+        { name: string; description: ToolDescription }
     >();
     private turnCompleted = false;
     private finalText = '';
     private sessionId: string | undefined;
     private completionReason: string | undefined;
     private failureMessage: string | undefined;
+    private outputId: string | undefined;
 
     consume(value: unknown): PiAdapterResult {
         const event = record(value);
@@ -28,6 +30,7 @@ export class PiEventAdapter {
             this.sessionId ??= string(event.id);
             return this.result([]);
         }
+        if (type === 'message_start') return this.messageStart(event);
         if (type === 'message_update') return this.messageUpdate(event);
         if (type === 'message_end') return this.messageEnd(event);
         if (type === 'tool_execution_start') return this.toolStart(event);
@@ -76,7 +79,17 @@ export class PiEventAdapter {
         const text = string(update?.delta);
         if (!text) return this.result([]);
         this.finalText += text;
-        return this.result([{ type: 'output.text', data: { text } }]);
+        this.outputId ??= createOutputId();
+        return this.result([
+            { type: 'output.text', data: { id: this.outputId, text } },
+        ]);
+    }
+
+    private messageStart(event: Record<string, unknown>): PiAdapterResult {
+        if (string(record(event.message)?.role) === 'assistant') {
+            this.outputId = createOutputId();
+        }
+        return this.result([]);
     }
 
     private messageEnd(event: Record<string, unknown>): PiAdapterResult {
@@ -89,9 +102,11 @@ export class PiEventAdapter {
             this.failureMessage ??=
                 reason === 'aborted' ? 'Pi turn was aborted' : 'Pi session failed';
         }
-        return this.result(
+        const result = this.result(
             Object.keys(data).length > 1 ? [{ type: 'usage.updated', data }] : []
         );
+        this.outputId = undefined;
+        return result;
     }
 
     private toolStart(event: Record<string, unknown>): PiAdapterResult {
@@ -99,12 +114,12 @@ export class PiEventAdapter {
         if (this.startedTools.has(id)) return this.result([]);
         this.startedTools.add(id);
         const name = string(event.toolName) ?? 'tool';
-        const target = toolTarget(record(event.args));
-        this.tools.set(id, { name, target });
+        const description = describeTool(name, record(event.args), undefined);
+        this.tools.set(id, { name, description });
         return this.result([
             {
                 type: 'tool.started',
-                data: { id, name, ...(target ? { target } : {}) },
+                data: { id, name, ...description },
             },
         ]);
     }
@@ -113,13 +128,17 @@ export class PiEventAdapter {
         const id = string(event.toolCallId) ?? 'unknown';
         const started = this.tools.get(id);
         const name = string(event.toolName) ?? started?.name ?? 'tool';
-        const target = toolTarget(record(event.args)) ?? started?.target;
+        const input = record(event.args);
+        const description = input
+            ? describeTool(name, input, undefined)
+            : (started?.description ?? describeTool(name, undefined, undefined));
+        const target = description.target;
         const events: WorkbenchEventDraft[] = [];
         if (!this.startedTools.has(id)) {
             this.startedTools.add(id);
             events.push({
                 type: 'tool.started',
-                data: { id, name, ...(target ? { target } : {}) },
+                data: { id, name, ...description },
             });
         }
         if (!this.completedTools.has(id)) {
@@ -130,7 +149,7 @@ export class PiEventAdapter {
                 data: {
                     id,
                     name,
-                    ...(target ? { target } : {}),
+                    ...description,
                     status: failed ? 'failed' : 'completed',
                     ...(failed
                         ? {
@@ -159,6 +178,10 @@ export class PiEventAdapter {
     }
 }
 
+function createOutputId(): string {
+    return `output_${crypto.randomUUID()}`;
+}
+
 function usageData(usage: Record<string, unknown> | undefined) {
     const cost = record(usage?.cost);
     return compact({
@@ -174,15 +197,6 @@ function usageData(usage: Record<string, unknown> | undefined) {
 
 function messageReason(message: Record<string, unknown> | undefined) {
     return string(message?.stopReason) ?? string(message?.reason);
-}
-
-function toolTarget(input: Record<string, unknown> | undefined): string | undefined {
-    if (!input) return undefined;
-    for (const key of ['path', 'filePath']) {
-        const value = string(input[key]);
-        if (value) return value.length > 240 ? `${value.slice(0, 237)}...` : value;
-    }
-    return undefined;
 }
 
 function changedFile(name: string, target: string | undefined) {

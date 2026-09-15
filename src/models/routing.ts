@@ -20,6 +20,7 @@ export interface AuthenticatedModelRoute {
     provider: string;
     nativeProvider: string;
     nativeModel: string;
+    authenticationMethod?: string;
 }
 
 export interface ResolvedRunnerConfiguration {
@@ -81,7 +82,10 @@ export class ModelRouter {
                   (candidate) =>
                       candidate.provider === options.preferredConnection?.provider &&
                       candidate.nativeProvider ===
-                          options.preferredConnection.nativeProvider
+                          options.preferredConnection.nativeProvider &&
+                      (!options.preferredConnection.authenticationMethod ||
+                          candidate.authenticationMethod ===
+                              options.preferredConnection.authenticationMethod)
               )
             : undefined;
         const selectedRoute = preferredAuthentication

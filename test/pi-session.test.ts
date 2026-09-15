@@ -67,6 +67,7 @@ describe('Pi RPC session adapter', () => {
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         try {
@@ -121,6 +122,7 @@ describe('Pi RPC session adapter', () => {
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         try {
@@ -146,6 +148,7 @@ describe('Pi RPC session adapter', () => {
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         try {
@@ -170,6 +173,7 @@ describe('Pi RPC session adapter', () => {
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
             },
         });
         try {

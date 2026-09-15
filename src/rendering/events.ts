@@ -47,6 +47,7 @@ class JsonEventRenderer implements EventRenderer {
 
 class FinalEventRenderer implements EventRenderer {
     private answer = '';
+    private answerId = '';
     private error = '';
 
     constructor(
@@ -55,7 +56,23 @@ class FinalEventRenderer implements EventRenderer {
     ) {}
 
     render(event: WorkbenchEvent): void {
-        if (event.type === 'output.text') this.answer += text(event.data, 'text');
+        if (event.type === 'authentication.requested') {
+            const provider = text(event.data, 'provider') || 'provider';
+            const url = text(event.data, 'url');
+            const instructions = text(event.data, 'instructions');
+            this.stderr(`Authentication required for ${provider}.\n`);
+            if (url) this.stderr(`${url}\n`);
+            if (instructions) this.stderr(`${instructions}\n`);
+            return;
+        }
+        if (event.type === 'output.text') {
+            const id = text(event.data, 'id');
+            if (id && id !== this.answerId) {
+                this.answer = '';
+                this.answerId = id;
+            }
+            this.answer += text(event.data, 'text');
+        }
         if (event.type === 'run.failed') this.error = text(event.data, 'message');
     }
 
@@ -110,6 +127,25 @@ class HumanEventRenderer implements EventRenderer {
             }
             return;
         }
+        if (event.type === 'authentication.requested') {
+            this.endAnswer();
+            const provider = text(event.data, 'provider') || 'provider';
+            const url = text(event.data, 'url');
+            const instructions = text(event.data, 'instructions');
+            this.stdout(
+                `  ${colors.yellow('?')} ${colors.yellow(`Authenticate ${provider}`)}\n`
+            );
+            if (url) this.stdout(`    ${url}\n`);
+            if (instructions) this.stdout(`    ${instructions}\n`);
+            return;
+        }
+        if (event.type === 'authentication.completed') {
+            this.endAnswer();
+            this.stdout(
+                `  ${colors.green('✓')} ${colors.green('Authentication complete')}\n`
+            );
+            return;
+        }
         if (event.type === 'output.text') {
             if (!this.inAnswer) {
                 this.stdout('\n');
@@ -160,6 +196,25 @@ class HumanEventRenderer implements EventRenderer {
             this.endAnswer();
             this.stdout(
                 `  ${colors.yellow('?')} ${colors.yellow('Input required')} ${colors.dim(`· ${text(event.data, 'message') || 'Input requested'}`)}\n`
+            );
+            return;
+        }
+        if (event.type === 'question.requested') {
+            this.endAnswer();
+            this.stdout(
+                `  ${colors.yellow('?')} ${colors.yellow('Question')} ${colors.dim(`· ${questionText(event.data) || 'Answer required'}`)}\n`
+            );
+            return;
+        }
+        if (event.type === 'question.answered') {
+            this.endAnswer();
+            this.stdout(`  ${colors.green('✓')} ${colors.dim('Answer received')}\n`);
+            return;
+        }
+        if (event.type === 'question.rejected') {
+            this.endAnswer();
+            this.stdout(
+                `  ${colors.yellow('○')} ${colors.dim('Question dismissed')}\n`
             );
             return;
         }
@@ -218,6 +273,12 @@ function number(value: unknown, key: string): number | undefined {
         : undefined;
 }
 
+function questionText(value: unknown): string {
+    const questions = record(value)?.questions;
+    if (!Array.isArray(questions)) return '';
+    return text(questions[0], 'question');
+}
+
 function stringArray(value: unknown, key: string): string[] {
     const candidate = record(value)?.[key];
     return Array.isArray(candidate)
@@ -234,11 +295,16 @@ function styledToolLabel(data: unknown, workspace: string, colors: Colors): stri
     const name = text(data, 'name') || 'tool';
     const title = text(data, 'title');
     const target = text(data, 'target');
+    const description = text(data, 'description');
     const normalized = name.replaceAll('_', ' ');
     const action =
         title || `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`;
-    return target && target !== title
-        ? `${colors.bold(action)} ${colors.dim(`· ${displayTarget(target, workspace)}`)}`
+    const details = [
+        target && target !== title ? displayTarget(target, workspace) : '',
+        description,
+    ].filter(Boolean);
+    return details.length
+        ? `${colors.bold(action)} ${colors.dim(`· ${details.join(' · ')}`)}`
         : colors.bold(action);
 }
 

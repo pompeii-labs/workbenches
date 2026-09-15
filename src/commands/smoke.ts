@@ -1,5 +1,3 @@
-import { basename } from 'node:path';
-
 import { defineCommand } from 'citty';
 
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
@@ -13,6 +11,7 @@ import {
     WorkbenchSource,
     WorkbenchWorkspaces,
 } from '../workbench/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const smokeCommand = defineCommand({
     meta: {
@@ -28,12 +27,13 @@ export const smokeCommand = defineCommand({
         'env-file': {
             type: 'string',
             valueHint: 'path',
-            description: 'Load declared environment bindings from a dotenv file',
+            description:
+                'Load declared and provider environment bindings from a dotenv file',
         },
         env: {
             type: 'string',
             valueHint: 'NAME=value',
-            description: 'Set a declared environment binding (repeatable)',
+            description: 'Set a declared or provider environment binding (repeatable)',
         },
         workspace: {
             type: 'string',
@@ -91,14 +91,9 @@ export const smokeCommand = defineCommand({
         const reference = source.parse(args.source);
         const local = await source.local(reference.source);
         if (local) {
-            const workbenches = await source.discover(local.directory);
             const selected = reference.selector
-                ? workbenches.filter(
-                      (workbench) =>
-                          basename(workbench.packageDirectory) === reference.selector ||
-                          workbench.manifest.name === reference.selector
-                  )
-                : workbenches;
+                ? [await source.select(local.directory, reference.selector)]
+                : await source.discover(local.directory);
             if (selected.length === 0) throw new Error('No matching Workbenches found');
             for (const workbench of selected) {
                 const workspaces = await workbenchWorkspaces.bind({
@@ -146,6 +141,8 @@ export const smokeCommand = defineCommand({
 });
 
 async function printResult(name: string, pending: Promise<WorkbenchSmokeResult>) {
+    const output = new CliPresenter();
+    output.progress(`Checking ${name}`);
     const result = await pending;
     const disabled = result.disabledMcps.length
         ? `; optional MCPs disabled: ${result.disabledMcps.join(', ')}`
@@ -159,9 +156,28 @@ async function printResult(name: string, pending: Promise<WorkbenchSmokeResult>)
     const authentication = result.authentication.ready
         ? `; auth: ready (${result.authentication.configuration?.provider ?? 'environment'})`
         : `; auth: required (${result.authentication.connectCommand})`;
-    console.log(
-        `${result.authentication.ready ? 'ready' : 'needs-auth'}\t${name}\trunner=${result.runner.path}\ttools=${result.tools.map((tool) => tool.path).join(',') || '-'}${authentication}${workspaces}${dockerEngine}${disabled}`
-    );
+    const status = result.authentication.ready ? 'ready' : 'needs-auth';
+    output.record({
+        machine: [
+            status,
+            name,
+            `runner=${result.runner.path}`,
+            `tools=${result.tools.map((tool) => tool.path).join(',') || '-'}${authentication}${workspaces}${dockerEngine}${disabled}`,
+        ],
+        title: result.authentication.ready
+            ? `${name} is ready`
+            : `${name} needs a connection`,
+        details: [
+            result.runner.path,
+            result.tools.length > 0
+                ? `${result.tools.length} ${result.tools.length === 1 ? 'tool' : 'tools'}`
+                : 'no required tools',
+            result.authentication.ready
+                ? `auth ${result.authentication.configuration?.provider ?? 'environment'}`
+                : result.authentication.connectCommand,
+        ],
+        tone: result.authentication.ready ? 'success' : 'warning',
+    });
     if (!result.authentication.ready) process.exitCode = 1;
 }
 

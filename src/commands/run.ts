@@ -1,7 +1,7 @@
 import { defineCommand } from 'citty';
 
 import { createEventRenderer } from '../rendering/index.js';
-import { RunDispatcher, RunWorker, WorkbenchRun } from '../runs/index.js';
+import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import { launchWorkbenchTui } from '../tui.js';
@@ -10,6 +10,8 @@ import {
     WorkbenchResolver,
     WorkbenchWorkspaces,
 } from '../workbench/index.js';
+import { CliPresenter } from './presenter.js';
+import { CliRunClient } from './run-client.js';
 
 export const runCommand = defineCommand({
     meta: {
@@ -50,7 +52,7 @@ export const runCommand = defineCommand({
         detach: {
             type: 'boolean',
             alias: 'd',
-            description: 'Dispatch in the background and print only the run ID',
+            description: 'Continue in the background and print the session ID',
             default: false,
         },
         'dry-run': {
@@ -66,12 +68,13 @@ export const runCommand = defineCommand({
         'env-file': {
             type: 'string',
             valueHint: 'path',
-            description: 'Load declared environment bindings from a dotenv file',
+            description:
+                'Load declared and provider environment bindings from a dotenv file',
         },
         env: {
             type: 'string',
             valueHint: 'NAME=value',
-            description: 'Set a declared environment binding (repeatable)',
+            description: 'Set a declared or provider environment binding (repeatable)',
         },
         workspace: {
             type: 'string',
@@ -82,6 +85,10 @@ export const runCommand = defineCommand({
             type: 'boolean',
             description: 'Authorize a declared host Docker engine binding for this run',
             default: false,
+        },
+        connection: {
+            type: 'string',
+            description: 'Use an authenticated provider connection for this run',
         },
     },
     async run({ args, rawArgs }) {
@@ -100,7 +107,6 @@ export const runCommand = defineCommand({
         });
         const home = workbenchHome();
         const dispatcher = new RunDispatcher(home);
-        const worker = new RunWorker(home);
         const task = (args.task ?? args.prompt ?? '').trim();
         if (!task) {
             if (args.detach || args.json || args.final || args['dry-run']) {
@@ -118,13 +124,18 @@ export const runCommand = defineCommand({
                 args['allow-host-docker']
             );
             await launchWorkbenchTui({
-                initial: { alias: args.workbench, resolved },
+                initial: {
+                    alias: args.workbench,
+                    resolved,
+                    ...(args.connection ? { connection: args.connection } : {}),
+                },
                 environment: {
                     ...process.env,
                     ...workbenchEnvironment.bind(resolved.workbench, overrides),
                     ...workbenchWorkspaces.environment(workspaces),
                 },
                 workspaces,
+                allowHostDocker: args['allow-host-docker'],
             });
             return;
         }
@@ -151,6 +162,9 @@ export const runCommand = defineCommand({
                 ...workbenchEnvironment.bind(resolved.workbench, overrides),
             };
             if (args['dry-run']) {
+                const output = new CliPresenter();
+                let translation = '';
+                let failure: string | undefined;
                 const code = await WorkbenchRun.execute(
                     {
                         workbenchPath: resolved.workbench.packageDirectory,
@@ -161,27 +175,52 @@ export const runCommand = defineCommand({
                         allowHostDocker: args['allow-host-docker'],
                         reference: args.workbench,
                         home,
+                        ...(args.connection ? { connection: args.connection } : {}),
+                        onEvent: (event) => {
+                            if (event.type !== 'run.failed') return;
+                            failure = string(object(event.data)?.message);
+                        },
                     },
-                    { env: environment }
+                    {
+                        env: environment,
+                        write: (value) => {
+                            translation += value;
+                        },
+                    }
                 );
-                if (code !== 0) process.exitCode = code;
+                if (code !== 0) {
+                    throw new Error(failure ?? 'Workbench dry run failed');
+                }
+                if (!translation.trim()) {
+                    throw new Error('Workbench dry run returned no translation');
+                }
+                if (args.json || !output.interactive) {
+                    process.stdout.write(translation);
+                } else {
+                    renderDryRun(output, translation, resolved);
+                }
                 return;
             }
 
             if (args.detach) {
-                const smoke = await new RuntimeSmoke({
-                    workbench: resolved.workbench,
-                    workspaceDirectory: resolved.workspaceDirectory,
-                    environment,
-                    workspaces,
-                    allowHostDocker: args['allow-host-docker'],
-                    reference: args.workbench,
-                    home,
-                }).check();
-                if (!smoke.authentication.ready) {
-                    throw new Error(
-                        `No authenticated route is available for ${smoke.authentication.model}. Run ${smoke.authentication.connectCommand}.`
-                    );
+                // E2B preparation creates a billable sandbox. The dispatched
+                // worker performs the same preflight before startup completes.
+                if (resolved.workbench.manifest.runtime !== 'e2b') {
+                    const smoke = await new RuntimeSmoke({
+                        workbench: resolved.workbench,
+                        workspaceDirectory: resolved.workspaceDirectory,
+                        environment,
+                        workspaces,
+                        allowHostDocker: args['allow-host-docker'],
+                        reference: args.workbench,
+                        home,
+                        ...(args.connection ? { connection: args.connection } : {}),
+                    }).check();
+                    if (!smoke.authentication.ready) {
+                        throw new Error(
+                            `No authenticated route is available for ${smoke.authentication.model}. Run ${smoke.authentication.connectCommand}.`
+                        );
+                    }
                 }
                 const stored = await dispatcher.prepare({
                     resolved,
@@ -190,13 +229,15 @@ export const runCommand = defineCommand({
                     reference: args.workbench,
                     workspaces,
                     allowHostDocker: args['allow-host-docker'],
+                    ...(args.connection ? { connection: args.connection } : {}),
                 });
                 await dispatcher.dispatch({
                     id: stored.id,
                     cwd: resolved.workspaceDirectory,
                     environment,
+                    waitForInitialTurn: true,
                 });
-                console.log(stored.id);
+                console.log(stored.session_id ?? stored.id);
                 return;
             }
 
@@ -207,22 +248,33 @@ export const runCommand = defineCommand({
                 reference: args.workbench,
                 workspaces,
                 allowHostDocker: args['allow-host-docker'],
+                ...(args.connection ? { connection: args.connection } : {}),
             });
             const renderer = createEventRenderer({
                 mode: args.json ? 'json' : args.final ? 'final' : 'human',
                 ...(args.color === undefined ? {} : { color: args.color }),
             });
-            let code = 1;
+            const handle = dispatcher.handle(stored.id);
             try {
-                code = await worker.execute({
+                await dispatcher.dispatch({
                     id: stored.id,
+                    cwd: resolved.workspaceDirectory,
                     environment,
-                    render: (event) => renderer.render(event),
+                    waitForInitialTurn: true,
                 });
+                const client = new CliRunClient();
+                const followed = await client.follow(handle, (event) =>
+                    renderer.render(event)
+                );
+                if (followed.interrupted) {
+                    process.exitCode = 130;
+                    return;
+                }
+                if (followed.terminalStatus === 'failed') process.exitCode = 1;
+                if (followed.terminalStatus === 'cancelled') process.exitCode = 130;
             } finally {
                 renderer.finish();
             }
-            if (code !== 0) process.exitCode = code;
         } finally {
             await resolved.cleanup();
         }
@@ -244,6 +296,7 @@ const runOptions = new Set([
     '--env',
     '--workspace',
     '--allow-host-docker',
+    '--connection',
 ]);
 
 function rejectUnknownRunOptions(rawArgs: string[]): void {
@@ -263,4 +316,47 @@ function validateHostDockerAuthorization(declared: boolean, authorized: boolean)
             '--allow-host-docker requires a Workbench that declares docker.engine'
         );
     }
+}
+
+function renderDryRun(
+    output: CliPresenter,
+    source: string,
+    resolved: Awaited<ReturnType<WorkbenchResolver['resolve']>>
+): void {
+    const value = JSON.parse(source) as Record<string, unknown>;
+    const command = Array.isArray(value.command)
+        ? value.command.filter((part): part is string => typeof part === 'string')
+        : [];
+    const route = object(value.model_route);
+    output.record({
+        machine: [],
+        title: `Dry run ready for ${resolved.workbench.manifest.name}`,
+        details: [
+            resolved.workbench.manifest.runner,
+            resolved.workbench.manifest.runtime,
+        ],
+        tone: 'info',
+    });
+    output.detail('Model', string(route?.canonical) ?? 'unknown');
+    output.detail('Provider', string(route?.provider) ?? 'unknown');
+    output.detail('Workspace', string(value.cwd) ?? resolved.workspaceDirectory);
+    output.detail('Command', command.join(' ') || 'unavailable');
+    output.detail(
+        'Skills',
+        Array.isArray(value.skills) ? String(value.skills.length) : 'unknown'
+    );
+    output.detail(
+        'Workspaces',
+        Array.isArray(value.workspaces) ? String(value.workspaces.length) : 'unknown'
+    );
+}
+
+function object(value: unknown): Record<string, unknown> | undefined {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : undefined;
+}
+
+function string(value: unknown): string | undefined {
+    return typeof value === 'string' ? value : undefined;
 }

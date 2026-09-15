@@ -1,6 +1,7 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
     appendFile,
+    lstat,
     mkdir,
     open,
     readdir,
@@ -10,10 +11,12 @@ import {
     stat,
     writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { CatalogRegistryReference } from '../catalog/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
+import { RunControl } from './control.js';
 import type { WorkbenchEvent } from './events.js';
+import { RunReconciliationLease } from './reconciliation.js';
 
 export type StoredRunStatus =
     | 'dispatched'
@@ -30,8 +33,10 @@ export interface StoredRun {
     workbench_version: string;
     runner: string;
     model: string;
+    runtime?: string;
     workspace: string;
-    mode?: 'foreground' | 'detached';
+    mode?: 'foreground' | 'detached' | 'interactive';
+    execution?: 'one_shot' | 'session';
     workspaces?: WorkbenchWorkspaceBinding[];
     allow_host_docker?: boolean;
     registry?: CatalogRegistryReference;
@@ -40,6 +45,9 @@ export interface StoredRun {
     started_at?: string;
     finished_at?: string;
     pid?: number;
+    runner_session_id?: string;
+    session_id?: string;
+    resumed_from?: string;
     exit_code?: number;
 }
 
@@ -51,9 +59,17 @@ export interface StoredRunRequest {
     workspaces?: WorkbenchWorkspaceBinding[];
     allow_host_docker?: boolean;
     reference?: string;
+    session_id?: string;
+    native_session_id?: string;
+    connection?: string;
 }
 
 const terminalStatuses = new Set<StoredRunStatus>(['completed', 'failed', 'cancelled']);
+const terminalEventTypes = new Set<WorkbenchEvent['type']>([
+    'run.completed',
+    'run.failed',
+    'run.cancelled',
+]);
 
 export interface CreateStoredRunOptions {
     metadata: Omit<StoredRun, 'version' | 'id' | 'status' | 'dispatched_at'>;
@@ -68,6 +84,10 @@ export class RunStore {
         return `wb_${Date.now().toString(36)}${randomBytes(10).toString('hex')}`;
     }
 
+    static scope(home: string): string {
+        return createHash('sha256').update(resolve(home)).digest('hex').slice(0, 24);
+    }
+
     static validateId(id: string): void {
         if (!/^wb_[a-z0-9]{20,64}$/.test(id)) {
             throw new Error(`Invalid run ID: ${id}`);
@@ -76,6 +96,52 @@ export class RunStore {
 
     static isTerminal(status: StoredRunStatus): boolean {
         return terminalStatuses.has(status);
+    }
+
+    assertWorkerAlive(run: StoredRun): void {
+        if (run.pid && !this.processAlive(run.pid)) {
+            throw new Error(`Workbench run worker exited unexpectedly: ${run.id}`);
+        }
+    }
+
+    async reconcile(run: StoredRun, now = Date.now()): Promise<StoredRun> {
+        if (RunStore.isTerminal(run.status)) return run;
+        return new RunReconciliationLease(run.id, this.directory(run.id)).exclusive(
+            async () => {
+                const current = await this.read(run.id);
+                if (RunStore.isTerminal(current.status)) return current;
+                const dispatchedAt = Date.parse(current.dispatched_at);
+                const waitingForWorker =
+                    !current.pid &&
+                    Number.isFinite(dispatchedAt) &&
+                    now - dispatchedAt < 30_000;
+                if (
+                    waitingForWorker ||
+                    (current.pid && this.processAlive(current.pid))
+                ) {
+                    return current;
+                }
+                const events = await this.readEvents(current.id);
+                const last = events.at(-1);
+                if (last && terminalEventTypes.has(last.type)) {
+                    return this.update(current.id, this.terminalState(last));
+                }
+                await this.appendEvent(current.id, {
+                    protocol: 0,
+                    run_id: current.id,
+                    sequence: (last?.sequence ?? 0) + 1,
+                    timestamp: new Date(now).toISOString(),
+                    type: 'run.failed',
+                    runner: current.runner,
+                    data: { message: 'Workbench run worker exited unexpectedly' },
+                });
+                return this.update(current.id, {
+                    status: 'failed',
+                    exit_code: 1,
+                    finished_at: new Date(now).toISOString(),
+                });
+            }
+        );
     }
 
     async create(options: CreateStoredRunOptions): Promise<StoredRun> {
@@ -100,6 +166,7 @@ export class RunStore {
                 ...options.request,
             } satisfies StoredRunRequest),
             writeFile(this.eventsPath(id), '', { mode: 0o600 }),
+            new RunControl(this.home, id).initialize(),
         ]);
         return metadata;
     }
@@ -135,15 +202,16 @@ export class RunStore {
         RunStore.validateId(id);
         const path = this.requestPath(id);
         const source = await readFile(path, 'utf8').catch(() => null);
-        if (!source) throw new Error(`Detached run request is unavailable: ${id}`);
+        if (!source) throw new Error(`Workbench run request is unavailable: ${id}`);
         const value = JSON.parse(source) as Partial<StoredRunRequest>;
         if (
             value.version !== 1 ||
             typeof value.workbench_path !== 'string' ||
             typeof value.workspace !== 'string' ||
-            typeof value.task !== 'string'
+            typeof value.task !== 'string' ||
+            (value.connection !== undefined && typeof value.connection !== 'string')
         ) {
-            throw new Error(`Invalid detached run request: ${id}`);
+            throw new Error(`Invalid Workbench run request: ${id}`);
         }
         await rm(path, { force: true });
         return value as StoredRunRequest;
@@ -156,64 +224,29 @@ export class RunStore {
         });
     }
 
+    async readEvents(id: string): Promise<WorkbenchEvent[]> {
+        RunStore.validateId(id);
+        await this.read(id);
+        const source = await readFile(this.eventsPath(id), 'utf8');
+        return source
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => this.parseEvent(line, id));
+    }
+
     async latest(): Promise<StoredRun> {
         const latest = (await this.list())[0];
         if (!latest) throw new Error('No Workbench runs have been dispatched');
         return latest;
     }
 
-    async latestActiveDetached(): Promise<StoredRun> {
-        const latest = (await this.list({ detachedOnly: true, activeOnly: true }))[0];
-        if (!latest) throw new Error('No active detached Workbench runs');
-        return latest;
-    }
-
-    async requestCancellation(id: string): Promise<void> {
-        const run = await this.read(id);
-        if (run.mode !== 'detached') {
-            throw new Error(`Workbench run is not a detached run: ${id}`);
-        }
-        if (RunStore.isTerminal(run.status)) {
-            throw new Error(`Workbench run is already ${run.status}: ${id}`);
-        }
-        await writeFile(this.cancellationPath(id), 'cancel\n', { mode: 0o600 });
-    }
-
-    watchCancellation(
-        id: string,
-        cancel: () => void,
-        options: { pollMilliseconds?: number } = {}
-    ): () => void {
-        RunStore.validateId(id);
-        let stopped = false;
-        let checking = false;
-        const check = async () => {
-            if (stopped || checking) return;
-            checking = true;
-            try {
-                if (await stat(this.cancellationPath(id)).catch(() => null)) {
-                    cancel();
-                }
-            } finally {
-                checking = false;
-            }
-        };
-        void check();
-        const timer = setInterval(() => void check(), options.pollMilliseconds ?? 100);
-        return () => {
-            stopped = true;
-            clearInterval(timer);
-        };
-    }
-
-    async clearCancellation(id: string): Promise<void> {
-        RunStore.validateId(id);
-        await rm(this.cancellationPath(id), { force: true });
-    }
-
     async *follow(
         id: string,
-        options: { pollMilliseconds?: number } = {}
+        options: {
+            pollMilliseconds?: number;
+            afterSequence?: number;
+            signal?: AbortSignal;
+        } = {}
     ): AsyncGenerator<WorkbenchEvent> {
         RunStore.validateId(id);
         await this.read(id);
@@ -222,44 +255,48 @@ export class RunStore {
         let pending = '';
         const decoder = new TextDecoder();
         const pollMilliseconds = options.pollMilliseconds ?? 100;
+        const afterSequence = options.afterSequence ?? 0;
 
-        while (true) {
+        const readAvailable = async (): Promise<WorkbenchEvent[]> => {
             const details = await stat(path).catch(() => null);
-            if (details && details.size > offset) {
-                const handle = await open(path, 'r');
-                try {
-                    const bytes = new Uint8Array(details.size - offset);
-                    const result = await handle.read(bytes, 0, bytes.length, offset);
-                    offset += result.bytesRead;
-                    pending += decoder.decode(bytes.subarray(0, result.bytesRead), {
-                        stream: true,
-                    });
-                } finally {
-                    await handle.close();
-                }
-                const lines = pending.split('\n');
-                pending = lines.pop() ?? '';
-                for (const line of lines) {
-                    if (!line) continue;
-                    yield this.parseEvent(line, id);
-                }
+            if (!details || details.size <= offset) return [];
+            const handle = await open(path, 'r');
+            try {
+                const bytes = new Uint8Array(details.size - offset);
+                const result = await handle.read(bytes, 0, bytes.length, offset);
+                offset += result.bytesRead;
+                pending += decoder.decode(bytes.subarray(0, result.bytesRead), {
+                    stream: true,
+                });
+            } finally {
+                await handle.close();
             }
+            const lines = pending.split('\n');
+            pending = lines.pop() ?? '';
+            return lines
+                .filter(Boolean)
+                .map((line) => this.parseEvent(line, id))
+                .filter((event) => event.sequence > afterSequence);
+        };
+
+        while (!options.signal?.aborted) {
+            for (const event of await readAvailable()) yield event;
 
             const run = await this.read(id);
             if (RunStore.isTerminal(run.status)) {
-                if (pending.trim()) yield this.parseEvent(pending, id);
+                for (const event of await readAvailable()) yield event;
+                if (pending.trim()) {
+                    const event = this.parseEvent(pending, id);
+                    if (event.sequence > afterSequence) yield event;
+                }
                 return;
             }
-            if (run.pid && !this.processAlive(run.pid)) {
-                throw new Error(`Workbench run worker exited unexpectedly: ${id}`);
-            }
-            await this.delay(pollMilliseconds);
+            this.assertWorkerAlive(run);
+            await this.delay(pollMilliseconds, options.signal);
         }
     }
 
-    async list(
-        options: { detachedOnly?: boolean; activeOnly?: boolean } = {}
-    ): Promise<StoredRun[]> {
+    async list(): Promise<StoredRun[]> {
         const root = join(this.home, 'runs');
         const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
         const runs = await Promise.all(
@@ -269,11 +306,22 @@ export class RunStore {
         );
         return runs
             .filter((run): run is StoredRun => run !== null)
-            .filter((run) => !options.detachedOnly || run.mode === 'detached')
-            .filter((run) => !options.activeOnly || !RunStore.isTerminal(run.status))
             .toSorted((left, right) =>
                 right.dispatched_at.localeCompare(left.dispatched_at)
             );
+    }
+
+    async size(id: string): Promise<number> {
+        await this.read(id);
+        return this.directorySize(this.directory(id));
+    }
+
+    async removeTerminal(id: string): Promise<void> {
+        const run = await this.read(id);
+        if (!RunStore.isTerminal(run.status)) {
+            throw new Error(`Active Workbench run cannot be removed: ${id}`);
+        }
+        await rm(this.directory(id), { recursive: true, force: true });
     }
 
     private directory(id: string): string {
@@ -292,8 +340,15 @@ export class RunStore {
         return join(this.directory(id), 'events.ndjson');
     }
 
-    private cancellationPath(id: string): string {
-        return join(this.directory(id), 'cancel');
+    private async directorySize(path: string): Promise<number> {
+        const details = await lstat(path).catch(() => undefined);
+        if (!details) return 0;
+        if (!details.isDirectory()) return details.size;
+        const entries = await readdir(path).catch(() => []);
+        const sizes = await Promise.all(
+            entries.map((entry) => this.directorySize(join(path, entry)))
+        );
+        return sizes.reduce((total, size) => total + size, 0);
     }
 
     private async writeJson(path: string, value: unknown): Promise<void> {
@@ -316,6 +371,36 @@ export class RunStore {
         }
     }
 
+    private terminalState(
+        event: WorkbenchEvent
+    ): Pick<StoredRun, 'status' | 'exit_code' | 'finished_at'> {
+        const exitCode =
+            typeof event.data === 'object' &&
+            event.data !== null &&
+            typeof Reflect.get(event.data, 'exit_code') === 'number'
+                ? Number(Reflect.get(event.data, 'exit_code'))
+                : undefined;
+        if (event.type === 'run.completed') {
+            return {
+                status: 'completed',
+                exit_code: exitCode ?? 0,
+                finished_at: event.timestamp,
+            };
+        }
+        if (event.type === 'run.cancelled') {
+            return {
+                status: 'cancelled',
+                exit_code: exitCode ?? 130,
+                finished_at: event.timestamp,
+            };
+        }
+        return {
+            status: 'failed',
+            exit_code: exitCode ?? 1,
+            finished_at: event.timestamp,
+        };
+    }
+
     private processAlive(pid: number): boolean {
         try {
             process.kill(pid, 0);
@@ -325,7 +410,16 @@ export class RunStore {
         }
     }
 
-    private delay(milliseconds: number): Promise<void> {
-        return new Promise((resolve) => setTimeout(resolve, milliseconds));
+    private delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+        if (signal?.aborted) return Promise.resolve();
+        return new Promise((resolve) => {
+            const finish = () => {
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', finish);
+                resolve();
+            };
+            const timer = setTimeout(finish, milliseconds);
+            signal?.addEventListener('abort', finish, { once: true });
+        });
     }
 }

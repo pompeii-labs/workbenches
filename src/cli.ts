@@ -1,12 +1,14 @@
 #!/usr/bin/env bun
 
-import { defineCommand, runMain } from 'citty';
+import { defineCommand, renderUsage, runMain } from 'citty';
 import packageMetadata from '../package.json' with { type: 'json' };
 
 import { addCommand } from './commands/add.js';
 import { attachCommand } from './commands/attach.js';
 import { buildCommand } from './commands/build.js';
+import { cleanCommand } from './commands/clean.js';
 import { connectCommand } from './commands/connect.js';
+import { createCommand } from './commands/create.js';
 import { imageCommand } from './commands/image.js';
 import { initCommand } from './commands/init.js';
 import { killCommand } from './commands/kill.js';
@@ -16,6 +18,7 @@ import { logoutCommand } from './commands/logout.js';
 import { psCommand } from './commands/ps.js';
 import { publishCommand } from './commands/publish.js';
 import { removeCommand } from './commands/remove.js';
+import { resumeCommand } from './commands/resume.js';
 import { runCommand } from './commands/run.js';
 import { smokeCommand } from './commands/smoke.js';
 import { telemetryCommand } from './commands/telemetry.js';
@@ -28,7 +31,7 @@ import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
 import { RunWorker } from './runs/index.js';
 import { workbenchHome } from './storage.js';
-import { launchWorkbenchTui } from './tui.js';
+import { assertWorkbenchTuiSupported, launchWorkbenchTui } from './tui.js';
 
 const bareInvocation = import.meta.main && process.argv.length === 2;
 
@@ -43,11 +46,11 @@ export const workbenchCommand = defineCommand({
     },
     subCommands: {
         init: initCommand,
+        create: createCommand,
         image: imageCommand,
         list: listCommand,
         view: viewCommand,
         validate: validateCommand,
-        v: validateCommand,
         smoke: smokeCommand,
         telemetry: telemetryCommand,
         update: updateCommand,
@@ -58,9 +61,11 @@ export const workbenchCommand = defineCommand({
         publish: publishCommand,
         ps: psCommand,
         build: buildCommand,
+        clean: cleanCommand,
         connect: connectCommand,
         add: addCommand,
         remove: removeCommand,
+        resume: resumeCommand,
         run: runCommand,
         attach: attachCommand,
         kill: killCommand,
@@ -73,7 +78,7 @@ if (import.meta.main) {
         const id = process.argv[4];
         if (!home || !id) process.exit(2);
         await new ModelCatalog({ home }).loadCached();
-        process.exit(await new RunWorker(home).executeDetached(id));
+        process.exit(await new RunWorker(home).executeDispatched(id));
     }
     const defaultConsoleError = console.error;
     console.error = (value?: unknown, ...optional: unknown[]) => {
@@ -81,15 +86,33 @@ if (import.meta.main) {
             process.stderr.write(`error: ${value.message}\n`);
             return;
         }
+        if (typeof value === 'string' && optional.length === 0) {
+            process.stderr.write(
+                `${value.startsWith('error: ') ? value : `error: ${value}`}\n`
+            );
+            return;
+        }
         defaultConsoleError(value, ...optional);
     };
     try {
         const invocation = extractApiUrl(process.argv.slice(2));
         RegistryClient.configureApiUrl(invocation.apiUrl);
+        const explicitHelp = invocation.args.some(
+            (argument) => argument === '--help' || argument === '-h'
+        );
+        if (!explicitHelp && (bareInvocation || invocation.args[0] === 'create')) {
+            assertWorkbenchTuiSupported();
+        }
         if (usesModelCatalog(invocation.args, bareInvocation)) {
             await new ModelCatalog({ home: workbenchHome() }).refresh();
         }
-        await runMain(workbenchCommand, { rawArgs: invocation.args });
+        await runMain(workbenchCommand, {
+            rawArgs: invocation.args,
+            showUsage: async (command, parent) => {
+                if (!explicitHelp) return;
+                process.stdout.write(`${await renderUsage(command, parent)}\n\n`);
+            },
+        });
     } finally {
         console.error = defaultConsoleError;
     }
@@ -97,9 +120,16 @@ if (import.meta.main) {
 
 function usesModelCatalog(args: string[], bare: boolean): boolean {
     if (bare) return true;
-    return new Set(['build', 'connect', 'init', 'run', 'smoke', 'view']).has(
-        args[0] ?? ''
-    );
+    return new Set([
+        'build',
+        'connect',
+        'create',
+        'init',
+        'resume',
+        'run',
+        'smoke',
+        'view',
+    ]).has(args[0] ?? '');
 }
 
 export function extractApiUrl(args: string[]): {

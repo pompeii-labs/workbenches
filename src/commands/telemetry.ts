@@ -1,6 +1,7 @@
 import { defineCommand } from 'citty';
 
 import { RegistryTelemetry } from '../registry/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const telemetryCommand = defineCommand({
     meta: {
@@ -15,6 +16,7 @@ export const telemetryCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         const state = args.state ?? 'status';
         if (state !== 'on' && state !== 'off' && state !== 'status') {
             throw new Error('Telemetry state must be on, off, or status');
@@ -24,6 +26,11 @@ export const telemetryCommand = defineCommand({
             await telemetry.setEnabled(state === 'on');
         }
         const enabled = await telemetry.enabled();
-        console.log(`anonymous run reporting: ${enabled ? 'on' : 'off'}`);
+        const stateLabel = enabled ? 'on' : 'off';
+        output.record({
+            machine: [`anonymous run reporting: ${stateLabel}`],
+            title: `Anonymous run reporting is ${stateLabel}`,
+            tone: enabled ? 'success' : 'muted',
+        });
     },
 });

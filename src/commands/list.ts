@@ -6,6 +6,7 @@ import { SavedWorkbenchCatalog } from '../catalog/index.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
 import { WorkbenchSource } from '../workbench/index.js';
+import { CliPresenter } from './presenter.js';
 
 export const listCommand = defineCommand({
     meta: { name: 'list', description: 'List saved or published Workbenches.' },
@@ -22,13 +23,27 @@ export const listCommand = defineCommand({
         },
     },
     async run({ args }) {
+        const output = new CliPresenter();
         if (!args.source || args.saved) {
-            for (const entry of await new SavedWorkbenchCatalog(
-                workbenchHome()
-            ).list()) {
-                console.log(
-                    `${entry.alias}\t${entry.name}@${entry.version}\t${entry.source}#${entry.selector}`
-                );
+            const entries = await new SavedWorkbenchCatalog(workbenchHome()).list();
+            if (entries.length === 0) {
+                output.empty('No saved Workbenches. Add one with wb add <source>.');
+                return;
+            }
+            for (const entry of entries) {
+                output.record({
+                    machine: [
+                        entry.alias,
+                        `${entry.name}@${entry.version}`,
+                        `${entry.source}#${entry.selector}`,
+                    ],
+                    title: entry.alias,
+                    details: [
+                        `${entry.name}@${entry.version}`,
+                        `${entry.source}#${entry.selector}`,
+                    ],
+                    tone: 'info',
+                });
             }
             return;
         }
@@ -38,7 +53,7 @@ export const listCommand = defineCommand({
         if (local) {
             const workbenches = await source.discover(local.directory);
             if (workbenches.length === 0) {
-                console.log('No Workbenches found.');
+                output.message('No Workbenches found.');
                 return;
             }
             const selected = reference.selector
@@ -49,9 +64,19 @@ export const listCommand = defineCommand({
                   )
                 : workbenches;
             for (const workbench of selected) {
-                console.log(
-                    `${basename(workbench.packageDirectory)}\t${workbench.manifest.name}@${workbench.manifest.version}\t${workbench.manifest.description ?? ''}`
-                );
+                output.record({
+                    machine: [
+                        basename(workbench.packageDirectory),
+                        `${workbench.manifest.name}@${workbench.manifest.version}`,
+                        workbench.manifest.description ?? '',
+                    ],
+                    title: basename(workbench.packageDirectory),
+                    details: [
+                        `${workbench.manifest.name}@${workbench.manifest.version}`,
+                        workbench.manifest.description,
+                    ],
+                    tone: 'info',
+                });
             }
             return;
         }
@@ -64,13 +89,23 @@ export const listCommand = defineCommand({
               )
             : workbenches;
         if (selected.length === 0) {
-            console.log('No Workbenches found.');
+            output.message('No Workbenches found.');
             return;
         }
         for (const workbench of selected) {
-            console.log(
-                `${workbench.selector}\t${workbench.manifest.name}@${workbench.manifest.version}\t${workbench.manifest.description ?? ''}`
-            );
+            output.record({
+                machine: [
+                    workbench.selector,
+                    `${workbench.manifest.name}@${workbench.manifest.version}`,
+                    workbench.manifest.description ?? '',
+                ],
+                title: workbench.selector,
+                details: [
+                    `${workbench.manifest.name}@${workbench.manifest.version}`,
+                    workbench.manifest.description,
+                ],
+                tone: 'info',
+            });
         }
     },
 });

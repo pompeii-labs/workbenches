@@ -79,11 +79,23 @@ export function buildOpenCodeServerInvocation(
     configDirectory?: string,
     workspaceDirectory = workbench.repositoryDirectory,
     model = modelLabel(workbench.manifest.model),
-    nativeConfigFile?: string
+    nativeConfigFile?: string,
+    databasePath?: string,
+    binding: { hostname: string; port: number } = {
+        hostname: '127.0.0.1',
+        port: 0,
+    }
 ): RunnerInvocation {
     if (!password) throw new Error('OpenCode server password must not be empty');
     return {
-        command: ['opencode', 'serve', '--hostname', '127.0.0.1', '--port', '0'],
+        command: [
+            'opencode',
+            'serve',
+            '--hostname',
+            binding.hostname,
+            '--port',
+            String(binding.port),
+        ],
         cwd: workspaceDirectory,
         env: {
             ...buildOpenCodeEnvironment(
@@ -92,7 +104,8 @@ export function buildOpenCodeServerInvocation(
                 configDirectory,
                 workspaceDirectory,
                 model,
-                nativeConfigFile
+                nativeConfigFile,
+                databasePath
             ),
             OPENCODE_SERVER_PASSWORD: password,
         },
@@ -105,7 +118,8 @@ function buildOpenCodeEnvironment(
     configDirectory: string | undefined,
     workspaceDirectory: string,
     model: string,
-    nativeConfigFile: string | undefined
+    nativeConfigFile: string | undefined,
+    databasePath = ':memory:'
 ): Record<string, string | undefined> {
     if (workbench.manifest.runner !== 'opencode') {
         throw new Error(`Unsupported runner: ${workbench.manifest.runner}`);
@@ -170,6 +184,7 @@ function buildOpenCodeEnvironment(
     return {
         ...baseEnv,
         PWD: workspaceDirectory,
+        OPENCODE_DB: databasePath,
         OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
         ...(nativeConfigFile ? { OPENCODE_CONFIG: nativeConfigFile } : {}),
         ...(configDirectory ? { OPENCODE_CONFIG_DIR: configDirectory } : {}),

@@ -104,9 +104,10 @@ This repository contains `workbench`, also available as `wb`: the TypeScript
 reference engine and command-line client for the standard.
 
 The project is in public pre-alpha development. The draft-0 format, OpenCode and
-Pi adapters, local runtime, and Docker runtime for one-shot and detached
-execution are implemented. The format is not yet stable. Other runners and
-hosted runtimes are not yet supported by the reference engine.
+Pi adapters, and local, Docker, and E2B runtimes for one-shot, detached, and
+interactive execution are implemented. The format is not yet stable. Other
+runners and remote runtime providers are not yet supported by the reference
+engine.
 
 ### Install the current prerelease
 
@@ -131,21 +132,55 @@ checksum, installs `workbench` to `~/.local/bin` by default, and creates the `wb
 alias. It never invokes `sudo` or edits shell startup files. Use `--version` to
 install a specific release and `--bin-dir` to choose another destination.
 
-### Create a Workbench
+### Author a Workbench
 
-Run `init` from a repository root to create `.workbenches/<name>`:
+Run the official creator from a repository root for a native, interactive
+authoring session:
+
+```sh
+wb create migrations
+```
+
+The creator inspects the target repository and authors the complete package in
+`.workbenches/`. It receives the exact `wb` CLI build that opened the authoring
+session instead of another globally installed version. If `migrations` already
+exists in the current repository, the same command opens it for editing instead.
+The engine resolves and verifies the official creator through the Workbench
+registry and keeps its cache separate from the user's saved Workbenches.
+
+Finish an idle authoring session with `/quit` or `Ctrl+C`. The engine validates
+the candidate, checks its version and package scope, and runs `wb smoke` before
+closing the creator. A failed check leaves the creator open with the concrete
+error so it can repair the package. An active creator turn must be cancelled or
+allowed to finish before authoring can be completed.
+
+Candidates that declare environment values, named workspaces, or host Docker
+access can be verified with the same `--env-file`, repeatable `--env`, repeatable
+`--workspace`, and `--allow-host-docker` options accepted by `smoke` and `run`.
+Their values are used only for the final smoke and are never written to the
+authoring record or improvement evidence.
+
+Edit a local source package through the same authoring environment:
+
+```sh
+wb create .#migrations
+```
+
+`create` never mutates an immutable saved snapshot. Pass a local repository path
+or selector so the creator changes the source package directly.
+
+For deterministic scaffolding without a model run, use `init`:
 
 ```sh
 wb init core
 wb init migrations --runner opencode --model openai/gpt-5.6-terra
 ```
 
-This repository also publishes a `creator` Workbench containing the current
-schema and maintainer-authored package guidance. Save it once, then use it to
-design, author, review, or repair Workbenches in another repository:
+The creator remains a normal published Workbench and can also be run directly
+for automation or integration with another agent:
 
 ```sh
-wb add pompeii-labs/workbenches#creator --as workbench-creator
+wb add pompeii-labs/creator --as workbench-creator
 wb run workbench-creator \
   --dir /path/to/repository \
   --task "Inspect this repository and create a focused migrations Workbench"
@@ -231,32 +266,83 @@ saved run metadata or normalized events. Prefer `--env-file` or inherited
 environment for secrets because command-line values may be retained in shell
 history.
 
-### Connect the locked runner
+### Connect a runner environment
 
 The Workbench author selects the runner, model, allowed provider routes, and
 native runner configuration. Those choices cannot be overridden when the
-Workbench runs. Choose one of the runner's compatible connections:
+Workbench runs. Connect a runner once for each runtime where you use it. The
+default flow is independent of saved Workbenches and starts with the execution
+boundary:
 
 ```sh
-wb connect project-core
+wb connect
+# Runtime → harness → provider → authentication method
 wb run project-core --task "Review this migration"
 ```
 
-If more than one compatible connection is available, `wb connect` asks which
-one this Workbench should use. Run it again to switch connections. When the
-runner exposes a documented command-line login operation, `wb connect` can
-also open it for another provider. It never injects login commands into an
-interactive runner conversation. The selection is stored in
-`~/.workbench/connections.json`; it does not change the Workbench package,
-runner, model, or credential store.
+`wb connect` is configuration-only. It does not launch a runner, start Docker,
+create an E2B sandbox, require an E2B key, contact a model provider, or ask for
+provider credentials. The resulting default belongs to the runner and runtime,
+not a Workbench. Compatible Workbenches automatically reuse it. The same flow
+can be scripted explicitly:
 
-Local Workbenches use the runner's normal local credential store. OpenCode
-exposes a command-line login operation, so Docker Workbenches can retain its
-native credentials in a private Docker volume. Pi currently exposes credential
-inspection but not command-line login. Configure Pi before local runs. A Docker
-Pi Workbench must declare its provider environment and receive it through
-`--env-file` or `--env` on each command. The CLI checks only whether an allowed
-provider is ready. It does not read, upload, or rewrite provider tokens.
+```sh
+wb connect --runtime e2b --harness opencode --provider openai --method chatgpt
+```
+
+Passing a Workbench reference narrows the provider choices to routes allowed by
+that package; it still performs no runtime work.
+
+`wb connect` records which compatible provider and authentication method should
+be preferred for that runner and runtime. A single run can select a different
+configured or authenticated connection without changing the default:
+
+```sh
+wb run project-core --connection openrouter --task "Review this migration"
+```
+
+An override must match one of the provider routes allowed by the Workbench.
+Resolution order is the explicit
+`--connection` override, the runner/runtime default, then the first allowed
+authenticated route in manifest order. Connection defaults, including the
+selected authentication method, are stored in
+`~/.workbench/connections.json`. No login command is injected into a Workbench
+conversation, and no Workbench package or model is modified by selecting a
+default.
+
+If the selected OpenCode credential is missing, the first foreground or TUI run
+starts the real execution runtime, asks OpenCode for the configured browser or
+headless authorization flow, displays its URL and instructions, waits for
+completion, and then continues that same run. Detached execution refuses to
+start an invisible first-time login and directs the user to run interactively
+once. First-run Pi login and interactive API-key entry are not yet implemented;
+those routes must already be available through runner credentials or declared
+provider environment.
+
+The provider menu is the intersection of providers serving catalog models and
+the selected harness version's capability map; model availability alone never
+implies that a harness supports a provider. Versioned harness maps may be
+delivered with the verified model metadata, with an engine-bundled map for the
+pinned harness version as the offline and compatibility fallback. Runtime-specific
+constraints, such as browser versus headless authentication, remain enforced by
+the engine.
+
+Local Workbenches use the runner's normal local credential store. Docker keeps
+each runner's native credentials in a private named volume. E2B keeps each
+runner's native credentials beneath the private Workbench data directory,
+copies that store only into fresh E2B sandboxes using that runner, and
+synchronizes changes back during orderly cleanup. The E2B control key and native
+provider credentials are separate: `E2B_API_KEY` stays on the host, while the
+runner's provider credential must exist inside the sandbox so the runner can
+authenticate. Credentials are never written to the Workbench package, workspace,
+run records, normalized events, or artifacts.
+
+Environment-backed provider routes remain supported through inherited
+environment, `--env-file`, or `--env`. The CLI checks whether an allowed route
+is ready but does not interpret or rewrite provider tokens. Because some runners
+keep all provider logins in one native file, an E2B sandbox receives the native
+store for that runner rather than a parsed provider-specific subset. Treat the
+sandbox provider and Workbench image as part of the credential trust boundary.
 
 Pi is distributed separately by the Pi project and must be installed in the
 selected runtime:
@@ -275,13 +361,15 @@ wb run project-core --dir ./app --workspace api=../api \
 
 Required bindings fail before runner launch. Inside a local run, the resolved
 paths are exposed as `WORKBENCH_WORKSPACE_API` and
-`WORKBENCH_WORKSPACE_SCHEMAS`. Docker uses the same names with deterministic
-container paths such as `/workspaces/api`; read-only declarations are enforced
-by Docker mounts. Local access declarations are preflight checks, not an
-operating-system sandbox.
+`WORKBENCH_WORKSPACE_SCHEMAS`. Docker and E2B use the same names with
+deterministic paths such as `/workspaces/api`. Docker enforces read-only
+declarations at the mount boundary. E2B stages isolated copies and only
+synchronizes declared read-write directories back to the host. Local access
+declarations are preflight checks, not an operating-system sandbox.
 
 Use `--dry-run` to inspect the translated runner invocation without executing
-it:
+it. An interactive terminal shows a concise summary; `--json` or piped output
+returns the complete translation:
 
 ```sh
 wb run project-core --task "Review this migration" --dry-run
@@ -370,8 +458,13 @@ expose a numeric host user and group, containers run under that identity so
 workspace writes retain host ownership. Docker Desktop still mediates bind
 mounts through its virtual machine, so filesystem performance and permission
 details can differ from native Linux. Images must tolerate a read-only root and
-write caches beneath the provided temporary `HOME`; interactive Docker sessions
-are not supported in execution protocol draft 0.
+write caches beneath the provided temporary `HOME`.
+
+Interactive Docker sessions keep the runner inside the container. Pi uses its
+native stdin RPC transport. OpenCode's native HTTP service listens inside the
+container and is published only to a dynamically assigned host loopback port.
+Native session files live in the Workbench session's private host directory and
+are mounted read-write so a later container can resume the same native context.
 
 If the Workbench itself must use the host Docker engine, it must declare that
 high-risk requirement:
@@ -399,29 +492,143 @@ Host-engine runs preserve host workspace paths inside the Workbench container
 so nested Docker and Compose bind mounts resolve correctly. Other Docker engine
 modes and non-Unix contexts are rejected rather than silently substituted.
 
-### Detach, attach, and cancel
+### Run in E2B
+
+An E2B Workbench uses the same image declaration as Docker and requires an E2B
+API key on the host:
+
+```yaml
+runtime: e2b
+image:
+  build: ./Dockerfile.workbench
+  context: .
+```
+
+```sh
+E2B_API_KEY=... wb build project-core
+E2B_API_KEY=... wb smoke project-core
+E2B_API_KEY=... wb run project-core --task "Review this migration"
+```
+
+The image can be a public OCI reference or a Workbench-local Dockerfile. The
+reference engine builds and caches an E2B template for that image, then creates
+a fresh sandbox for each execution. Use versioned image tags or digests because
+an existing template identity is reused. Images must include the selected
+runner, every declared tool, `git`, and GNU `tar` with `--null` support.
+
+Before launch, the engine snapshots only the declared runtime assets. The
+primary workspace is staged at `/workspace`, named workspaces at
+`/workspaces/<name>`, and the Workbench package at `/workbench`. Gitignored
+workspace files, repository metadata, common credential stores, dependency
+trees, and common secret-bearing files such as `.env` are excluded. Read-only
+assets are copied into the sandbox and are never synchronized back. A separately
+staged asset nested beneath a writable directory is excluded from that parent
+snapshot. Read-write directories are compared with their original host state at
+cleanup, and remote edits, additions, and deletions are applied only if the same
+host files did not change during the run. Read-write single-file assets are
+rejected.
+
+Input and output transfers each have a 512 MiB safety limit, enforced against
+uncompressed content. `E2B_API_KEY` is used only by the host control plane and is
+never sent to the sandbox. The sandbox receives manifest-declared environment
+values for allowed model routes and the private native credential store for its
+selected runner. `wb connect` performs no E2B work and does not require the key.
+If a configured OpenCode credential is missing, the first real foreground or
+TUI run performs the headless ChatGPT authorization inside the sandbox that was
+created for that run, then continues the run after authorization succeeds.
+
+E2B runner credentials live beneath
+`~/.workbench/runtime-credentials/e2b/<runner>`, with private directory
+permissions. They are staged separately from packages and workspaces, then
+synchronized back before the disposable sandbox is destroyed. Existing local
+credentials are not modified if staging or startup fails. A host process crash
+before cleanup can lose a newly completed remote login.
+
+Normal completion, failure, or cancellation synchronizes eligible changes and
+destroys the sandbox. The 60-minute provider timeout pauses a crash survivor
+without preserving its memory. `wb clean` can find managed E2B sandboxes in the
+same scoped Workbench data store and removes only those whose run is terminal,
+or whose run is missing and whose sandbox is paused, and only when `--apply` is
+passed. A running sandbox with no matching local run is protected because it
+may belong to another host using the same scoped store. Prepared E2B templates
+are cached and are outside the `wb clean` contract.
+
+The provider does not automatically retry template builds, sandbox creation,
+command starts, transfers, or synchronization because an ambiguous remote
+outcome could duplicate billable work or replay a mutation. Cleanup is still
+attempted after failure. Terminal run events include E2B duration, CPU and memory
+shape, and a clearly marked infrastructure cost estimate when sandbox metadata
+is available. This stays separate from model tokens and model cost in
+`usage.updated`.
+
+E2B is copy-based rather than mount-based. A resumed Workbench session runs in a
+fresh sandbox after its native session state and runner credential store are
+copied in. If the host dies before result collection, the lease and
+`wb clean --apply` bound the surviving sandbox, but draft 0 does not recover a
+portable result bundle from it. Direct synchronization is the current
+compatibility behavior; explicit portable apply and export behavior is being
+specified separately.
+
+### Sessions and background work
 
 ```sh
 wb run project-core --task "Perform the migration" --detach
 # wb_...
 
 wb attach wb_...
-wb attach              # latest dispatched run
+wb attach              # latest session
 wb attach wb_... --json
-wb ps                  # active detached runs
-wb ps --all            # detached run history
+wb ps                  # active and resumable sessions
+wb ps --all            # all session history
 wb kill wb_...
-wb kill                # latest active detached run
+wb kill                # latest active session
+wb resume wb_...       # open or attach the terminal client
+wb resume wb_... "Review the latest change"
+wb resume wb_... --task "Run the checks" --detach
+wb resume wb_... --allow-host-docker # reauthorize a declared host engine
+wb clean                            # preview terminal history older than 30 days
+wb clean --older-than 7d --apply
 ```
 
-Detached runs persist their normalized events. Attaching replays existing
-events before following new ones. Cancellation cooperatively terminates the
-runner and records a terminal `run.cancelled` event.
+Every execution belongs to one stable Workbench session. The first run shares
+its `wb_...` ID with the session; later resumes create internal runs while the
+session ID stays fixed. Detachment only controls whether the current terminal is
+watching the active run. A session can also have a user-defined display name.
+Names make interactive surfaces easier to scan, but the stable ID remains the
+only automation and resume key.
+
+Attaching observes or replays the latest run without taking control or starting
+model work. Resuming without a task opens the terminal client. If the latest run
+is active, the terminal attaches to that exact runner process. If it is closed,
+Workbench starts a new internal run from the runner's saved native context.
+
+Resuming with a task sends one non-interactive continuation through the same
+session. It joins an active run's follow-up queue or starts a linked internal run
+when the previous one is closed. `--detach` returns the stable session ID while
+that continuation runs in the background. Killing cooperatively terminates the
+active run without deleting the session or its resumable context.
+
+Run and session data is never removed by `wb clean` until `--apply` is passed.
+The default policy selects terminal, non-resumable sessions and obsolete run
+history older than 30 days. Active runs are never eligible. Native resumable
+context and its latest run are protected unless `--include-sessions` is also
+passed. To explicitly clear all terminal history, including resumable context,
+use `wb clean --older-than 0s --include-sessions --apply`. `--json` returns the
+same preview or result as a stable machine-readable report, including byte
+counts and protected resources.
+
+Durable Docker runner containers and E2B sandboxes carry Workbench ownership
+metadata scoped to the current data directory. Normal exits destroy them.
+`wb clean` detects scoped resources whose run is terminal. It also detects
+Docker containers whose run is missing and paused E2B sandboxes whose run is
+missing. Removal still requires `--apply`. It does not remove images, build
+caches, E2B templates, runner credential volumes, or unrelated runtime
+resources.
 
 ### Interactive client
 
 Running `wb`, `workbench`, or `wb run <name>` without a task opens the
-experimental terminal client:
+terminal client:
 
 ```sh
 wb
@@ -429,18 +636,87 @@ wb run project-core
 ```
 
 The OpenCode interactive adapter currently supports multi-turn context,
-streaming, image input, cancellation, tool events, and explicit permission
-decisions for the local runtime. OpenCode's server interface does not currently
-provide native mid-turn steering. The Pi adapter supports multi-turn context,
-streaming, image input, steering at Pi's next legal model boundary, follow-up
-input, cancellation, and tool events. Pi does not provide a native permission
-request protocol or MCP transport.
+streaming, image input, cancellation, tool events, explicit permission decisions,
+native questions, and native mid-turn steering in local, Docker, and E2B
+runtimes. The Pi adapter supports multi-turn context, streaming, image input,
+steering at Pi's next legal model boundary, follow-up input, cancellation, and
+tool events. Pi does not provide native question or permission request
+protocols, or native MCP transport.
 
-The terminal client does not yet expose image attachment or steering controls.
-Those operations are available through the normalized runner session boundary.
+Questions use one runner-neutral contract for choices, free-form answers, and
+multi-select prompts when the selected runner exposes a native question protocol.
+The terminal client pauses on a normalized question and returns the response
+through that native protocol. Question prompts are part of the normalized event
+stream. The raw answer control message remains transient and is not written as
+event data. A runner can still reference the answer in later assistant output.
+OpenCode can submit a batch of prompts and multi-select choices.
+
+While a response is active, submitting another message steers the current turn.
+The message stays visibly queued until the runner confirms delivery. `Ctrl+C`
+cancels an active turn without closing the session. For image-capable runners,
+drag a PNG, JPEG, GIF, or WebP file into the composer, or paste its local path.
+Attachment bytes remain transient and are not copied into normalized events.
 Image generation and normalized image output are not implemented yet.
-Interactive sessions are not durable, and Docker Workbenches currently require
-a one-shot task: interactive sessions cannot yet be detached or recovered.
+
+Type `/` or press `Ctrl+K` to browse local terminal commands. The initial command
+set covers Workbench, runtime, model, capability, session, and staged attachment
+details; attachment and transcript clearing; turn cancellation; themes; and clean
+exit.
+Commands are handled by Workbench and are never sent to the runner as prompts.
+`/theme` includes the Workbench default, Flexoki, GitHub, Catppuccin, and Night
+Owl themes. The adapted themes are attributed in `NOTICE`.
+
+Use `/rename <name>` to give the current session a durable display name. The
+name appears in `/resume`, the active chat header, and `wb ps` without changing
+the Workbench package, native runner session, or stable `wb_...` ID. When the
+terminal client exits a native resumable session, it restores the terminal and
+prints the stable ID with a copyable `wb resume <id>` command. It does not print
+a resume handoff for a failed start or a runner without native resume support.
+
+Use `/improve [feedback]` from an idle local Workbench session to open the
+official creator with bounded, normalized evidence from that session. Feedback
+is optional. With plain `/improve`, the creator diagnoses improvements from the
+conversation, tool activity, and run outcome, and you can steer it normally in
+the creator session. The creator edits the source package, not the immutable
+package already loaded by the active run. Run evidence is treated as untrusted
+data, and the authoring record captures the creator version and digest, source
+session, package digests, and changed files. The same flow is available outside
+the terminal client:
+
+```sh
+wb create --from wb_... \
+  --feedback "The migration path missed our rollback convention"
+```
+
+Changes apply only to future runs. New sessions remain pinned to the exact
+package content they started with and will refuse to resume if that source was
+modified in place.
+
+Session-capable runs use one background session worker whether they begin in the
+terminal client, foreground CLI output, or detached mode. Normalized
+events survive a client disconnect. Another terminal client can take control of
+the same live runner, while `wb attach` can observe it without taking control.
+Exiting the terminal client detaches it; an active turn and queued follow-ups
+continue, then the unattended worker closes while its native context remains
+resumable. User prompts, permission decisions, and question answers are transient
+control messages, not durable run history.
+
+Supported sessions can be reopened with `wb resume <session-or-run-id>` or from
+the TUI's `/resume` browser. The browser is scoped to the active workspace. On a
+bare invocation that is the current working directory; an explicit `--dir` or
+resumed session preserves its recorded workspace. An active session is
+reattached instead of duplicated. A closed session creates a new durable run
+linked to the same stable session. Workbench keeps a small private session index
+and a disposable transcript presentation cache. The selected runner remains the
+source of truth for model context: OpenCode resumes from its session database and
+Pi resumes from its session file. Docker mounts native state into each new
+container. E2B copies native state into each new sandbox and synchronizes it back
+on orderly cleanup. A session remains locked to its original
+Workbench version, runner, model, runtime, workspace, and workspace bindings.
+Docker credentials remain in the runner's private named volume. E2B runner
+credentials persist in private runtime storage independently of native session
+state. A Workbench that declares host Docker access must be explicitly
+reauthorized with `--allow-host-docker` for each resumed run.
 
 ## Source and authorization boundaries
 
@@ -456,12 +732,13 @@ Dry runs, saved package metadata, and normalized events do not expose those
 values.
 
 For `runtime: local`, declared tools must exist on the host. For `runtime:
-docker`, declared tools and the runner must exist inside the resolved image;
-host installations do not satisfy the requirement. Only manifest-declared
-environment values and credential variables for the selected model provider are
-bound into the container. Their values do not appear in Docker command
-arguments or the environment of the host Docker client process. Preflight
-failure stops execution before model tokens are spent.
+docker` or `runtime: e2b`, declared tools and the runner must exist inside the
+resolved image; host installations do not satisfy the requirement. Only
+manifest-declared environment values, credential variables for the selected
+model provider, and the selected runner's private native credential store are
+bound into the execution environment. `E2B_API_KEY` remains host-only. Secret
+values do not appear in Docker command arguments or durable Workbench metadata.
+Preflight failure stops execution before model tokens are spent.
 
 ## Specification and documentation
 
@@ -485,12 +762,25 @@ bun install --frozen-lockfile
 bun run check
 bun run test:coverage
 bun run test:docker
+bun run test:docker:sessions
+bun run test:e2b
+bun run test:e2b:sessions
 bun run build
 ```
 
 `test:docker` requires a running Docker daemon and network access to pull its
 pinned fixture image. It exercises the real container boundary; the default
 test suite uses deterministic provider doubles and does not require Docker.
+`test:docker:sessions` additionally runs real multi-turn and native-resume probes
+for OpenCode and Pi. It requires previously connected runner credentials and
+makes model-provider requests.
+
+`test:e2b` requires `E2B_API_KEY`, builds a real E2B template, exercises remote
+streaming, PTY input, workspace synchronization, cross-sandbox credential
+persistence, and sandbox destruction.
+`test:e2b:sessions` additionally starts OpenCode in two fresh sandboxes and
+verifies native session resume. It requires a supported model-provider key and
+makes model-provider requests.
 
 `bun run check` runs type checking, Biome, and the unit and integration suite.
 The compiled `dist/workbench` binary is self-contained and does not require Bun
