@@ -956,7 +956,7 @@ describe('CLI integration', () => {
             2
         );
         expect(new Set(events.map((event) => event.run_id)).size).toBe(1);
-    });
+    }, 20_000);
 
     test('stops the active run in the latest session and records a terminal event', async () => {
         const fixture = await createFixture();

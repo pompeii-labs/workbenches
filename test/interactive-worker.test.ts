@@ -1013,6 +1013,7 @@ function workerFor(
         registry: new RunnerRegistry([new InteractiveWorkerTestRunner(adapter)]),
         runtimeRegistry: new RuntimeRegistry([
             new LocalRuntimeProvider({
+                findExecutable: (name) => `/bin/${name}`,
                 spawn: () => ({
                     exited: Promise.resolve(0),
                     stdout: new Blob(['No credentials found\n']).stream(),
