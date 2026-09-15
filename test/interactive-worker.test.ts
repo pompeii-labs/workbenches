@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { ConnectionStore } from '../src/connections/store.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import { type PreparedRunner, Runner } from '../src/runners/runner.js';
 import {
@@ -20,6 +21,7 @@ import {
     StoredRunHandle,
     type WorkbenchEvent,
 } from '../src/runs/index.js';
+import { LocalRuntimeProvider, RuntimeRegistry } from '../src/runtimes/index.js';
 import { SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { supportedRunnerDeclaration } from './runner-adapter-contract.js';
@@ -35,6 +37,70 @@ afterEach(async () => {
 });
 
 describe('interactive run worker', () => {
+    test('passes a configured unauthenticated connection into a foreground runner session', async () => {
+        const home = await temporaryHome();
+        await new ConnectionStore(home).save(
+            { runner: 'opencode', runtime: 'local' },
+            {
+                provider: 'openai',
+                nativeProvider: 'openai',
+                authenticationMethod: 'oauth',
+                method: 'chatgpt',
+                nativeMethod: 'ChatGPT Pro/Plus (headless)',
+            }
+        );
+        const stored = await fixtureRun(home, {
+            mode: 'foreground',
+            task: 'authenticated task',
+        });
+        const adapter = new ControlledAdapter({ autoComplete: true });
+
+        await expect(
+            workerFor(home, stored.id, adapter).execute({ environment: {} })
+        ).resolves.toBe(0);
+        expect(adapter.authentication).toEqual({
+            provider: 'openai',
+            nativeProvider: 'openai',
+            authenticationMethod: 'oauth',
+            method: 'chatgpt',
+            nativeMethod: 'ChatGPT Pro/Plus (headless)',
+        });
+        expect(adapter.prompts).toEqual(['authenticated task']);
+    });
+
+    test('does not start an invisible authentication flow for a detached run', async () => {
+        const home = await temporaryHome();
+        await new ConnectionStore(home).save(
+            { runner: 'opencode', runtime: 'local' },
+            {
+                provider: 'openai',
+                nativeProvider: 'openai',
+                authenticationMethod: 'oauth',
+                method: 'chatgpt',
+                nativeMethod: 'ChatGPT Pro/Plus (headless)',
+            }
+        );
+        const stored = await fixtureRun(home, {
+            mode: 'detached',
+            task: 'must wait for authentication',
+        });
+        const adapter = new ControlledAdapter({ autoComplete: true });
+
+        await expect(
+            workerFor(home, stored.id, adapter).execute({ environment: {} })
+        ).resolves.toBe(1);
+        expect(adapter.starts).toBe(0);
+        expect(await new RunStore(home).readEvents(stored.id)).toContainEqual(
+            expect.objectContaining({
+                type: 'run.failed',
+                data: {
+                    message:
+                        'Authentication is required for openai. Start this Workbench interactively once to finish openai sign-in.',
+                },
+            })
+        );
+    });
+
     test('executes an initial detached task as a resumable native session', async () => {
         const home = await temporaryHome();
         const stored = await fixtureRun(home, {
@@ -774,6 +840,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
     cancellations = 0;
     starts = 0;
     session: RunnerSessionStartOptions['session'];
+    authentication: RunnerSessionStartOptions['authentication'];
     private host?: RunnerSessionStartOptions['host'];
     private releaseFirst?: () => void;
     private readonly promptWaiters: Array<() => void> = [];
@@ -815,6 +882,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
         this.starts += 1;
         this.host = options.host;
         this.session = options.session;
+        this.authentication = options.authentication;
         await this.options.startAfter;
         return {
             id: 'native-session-1',
@@ -920,6 +988,9 @@ class InteractiveWorkerTestRunner extends Runner {
                     workspaceDirectory: runtime.workspaceDirectory,
                     environment: runtime.environment,
                     configuration: options.configuration,
+                    ...(options.authentication
+                        ? { authentication: options.authentication }
+                        : {}),
                     host: options.host,
                     ...(options.session ? { session: options.session } : {}),
                 }),
@@ -940,6 +1011,16 @@ function workerFor(
         loadWorkbench: async () => workbench(),
         findExecutable: (name) => `/bin/${name}`,
         registry: new RunnerRegistry([new InteractiveWorkerTestRunner(adapter)]),
+        runtimeRegistry: new RuntimeRegistry([
+            new LocalRuntimeProvider({
+                findExecutable: (name) => `/bin/${name}`,
+                spawn: () => ({
+                    exited: Promise.resolve(0),
+                    stdout: new Blob(['No credentials found\n']).stream(),
+                    stderr: new Blob([]).stream(),
+                }),
+            }),
+        ]),
         now: () => new Date('2026-09-01T12:00:00.000Z'),
         ...(reportLaunch ? { reportLaunch } : {}),
     });

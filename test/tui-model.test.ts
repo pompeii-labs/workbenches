@@ -195,6 +195,44 @@ describe('TUI transcript model', () => {
         expect(state).toMatchObject({ busy: true, status: 'Working' });
     });
 
+    test('surfaces interactive authentication before normal session startup', () => {
+        let state = reduceTranscript(
+            emptyTranscript(),
+            event(1, 'authentication.requested', {
+                provider: 'openai',
+                native_provider: 'openai',
+                url: 'https://auth.example/device',
+                instructions: 'Enter code: TEST-CODE',
+            })
+        );
+
+        expect(state).toMatchObject({
+            busy: true,
+            status: 'Needs authentication',
+        });
+        expect(state.items.at(-1)).toEqual({
+            id: 'authentication-1',
+            kind: 'notice',
+            text: 'Authenticate openai\nhttps://auth.example/device\nEnter code: TEST-CODE',
+            tone: 'muted',
+        });
+
+        state = reduceTranscript(
+            state,
+            event(2, 'authentication.completed', {
+                provider: 'openai',
+                native_provider: 'openai',
+            })
+        );
+        expect(state).toMatchObject({ busy: true, status: 'Starting' });
+        expect(state.items.at(-1)).toEqual({
+            id: 'authentication-complete-2',
+            kind: 'notice',
+            text: 'Authentication complete',
+            tone: 'muted',
+        });
+    });
+
     test('distinguishes an interrupted turn from a completed turn', () => {
         const thinking = addUserMessage(emptyTranscript(), 'Stop this turn');
         const interrupted = reduceTranscript(

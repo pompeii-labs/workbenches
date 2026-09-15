@@ -257,11 +257,28 @@ describe('durable Workbench runs', () => {
         expect(run).toMatchObject({
             runner: 'pi',
             model: 'manifest/model',
+            runtime: 'local',
         });
         const request = await store.takeRequest(run.id);
         expect(request.reference).toBe('publisher/project#core');
         expect(JSON.stringify(request)).not.toContain('authenticated');
         expect(JSON.stringify(request)).not.toContain('provider');
+    });
+
+    test('carries a named connection override across the detached worker boundary', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const resolved = await fixtureReference(home, 'opencode');
+        const run = await new RunDispatcher(home).prepare({
+            resolved,
+            task: 'inspect',
+            mode: 'detached',
+            connection: 'openai-codex',
+        });
+
+        expect(await store.takeRequest(run.id)).toMatchObject({
+            connection: 'openai-codex',
+        });
     });
 
     test('links every interactive execution to one stable native session', async () => {

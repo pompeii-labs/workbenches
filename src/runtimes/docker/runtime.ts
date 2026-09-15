@@ -46,6 +46,7 @@ export interface DockerRuntimeOptions {
 
 export class DockerRuntime implements PreparedRuntime {
     readonly name = 'docker';
+    readonly nativeAuthentication: 'persistent' | 'unavailable';
     readonly workbench: ResolvedWorkbench;
     readonly workspaceDirectory: string;
     readonly environment: Record<string, string | undefined>;
@@ -59,6 +60,7 @@ export class DockerRuntime implements PreparedRuntime {
     private cleaned = false;
 
     constructor(private readonly options: DockerRuntimeOptions) {
+        this.nativeAuthentication = options.credentials ? 'persistent' : 'unavailable';
         this.preparation = options.preparation;
         this.workspaceDirectory = options.mounts.pathFor(
             options.request.workspaceDirectory

@@ -255,6 +255,43 @@ export function reduceTranscript(
         };
     }
     if (event.type === 'run.ready') return { ...state, status: 'Ready' };
+    if (event.type === 'authentication.requested') {
+        const provider = field(event.data, 'provider') || 'provider';
+        const url = field(event.data, 'url');
+        const instructions = field(event.data, 'instructions');
+        return {
+            ...state,
+            busy: true,
+            status: 'Needs authentication',
+            items: [
+                ...state.items,
+                {
+                    id: `authentication-${event.sequence}`,
+                    kind: 'notice',
+                    text: [`Authenticate ${provider}`, url, instructions]
+                        .filter(Boolean)
+                        .join('\n'),
+                    tone: 'muted',
+                },
+            ],
+        };
+    }
+    if (event.type === 'authentication.completed') {
+        return {
+            ...state,
+            busy: true,
+            status: 'Starting',
+            items: [
+                ...state.items,
+                {
+                    id: `authentication-complete-${event.sequence}`,
+                    kind: 'notice',
+                    text: 'Authentication complete',
+                    tone: 'muted',
+                },
+            ],
+        };
+    }
     if (event.type === 'turn.started') {
         return { ...state, busy: true, status: 'Thinking' };
     }

@@ -21,12 +21,14 @@ export interface PrepareRunOptions {
     allowHostDocker?: boolean;
     reference?: string;
     session?: StoredSession;
+    connection?: string;
 }
 
 export interface DispatchRunOptions {
     id: string;
     cwd: string;
     environment?: Record<string, string | undefined>;
+    waitForInitialTurn?: boolean;
 }
 
 export class RunDispatcher {
@@ -85,6 +87,7 @@ export class RunDispatcher {
                     workbench_version: workbench.manifest.version,
                     runner: workbench.manifest.runner,
                     model: modelLabel(workbench.manifest.model),
+                    runtime: workbench.manifest.runtime,
                     workspace: options.resolved.workspaceDirectory,
                     mode: options.mode,
                     execution,
@@ -110,6 +113,7 @@ export class RunDispatcher {
                     ...(session.native_session_id
                         ? { native_session_id: session.native_session_id }
                         : {}),
+                    ...(options.connection ? { connection: options.connection } : {}),
                 },
             });
         } catch (error) {
@@ -184,7 +188,10 @@ export class RunDispatcher {
             throw error;
         }
         try {
-            await this.waitUntilStarted(options.id);
+            await this.waitUntilStarted(
+                options.id,
+                options.waitForInitialTurn ?? false
+            );
             return pid;
         } catch (error) {
             await this.store
@@ -195,10 +202,16 @@ export class RunDispatcher {
         }
     }
 
-    private async waitUntilStarted(id: string): Promise<void> {
+    private async waitUntilStarted(
+        id: string,
+        waitForInitialTurn: boolean
+    ): Promise<void> {
         const started = Date.now();
-        while (Date.now() - started < 15_000) {
+        let startupTimeout = 15_000;
+        while (Date.now() - started < startupTimeout) {
             const run = await this.store.read(id);
+            startupTimeout =
+                run.runtime === 'docker' || run.runtime === 'e2b' ? 5 * 60_000 : 15_000;
             if (RunStore.isTerminal(run.status)) {
                 if (run.status === 'completed') return;
                 const events = await this.store.readEvents(id);
@@ -219,7 +232,15 @@ export class RunDispatcher {
                     run.execution !== 'session' ||
                     Boolean(run.runner_session_id))
             ) {
-                return;
+                if (!waitForInitialTurn || run.execution !== 'session') return;
+                const events = await this.store.readEvents(id);
+                if (events.some((event) => event.type === 'turn.started')) return;
+            }
+            if (run.status === 'running') {
+                const events = await this.store.readEvents(id);
+                if (events.some((event) => event.type === 'authentication.requested')) {
+                    return;
+                }
             }
             this.store.assertWorkerAlive(run);
             await Bun.sleep(25);

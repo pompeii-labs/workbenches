@@ -18,6 +18,7 @@ export async function launchWorkbenchTui(
             prompt?: string;
             operation?: AuthoringOperation;
             environment?: Record<string, string | undefined>;
+            connection?: string;
         };
         environment?: Record<string, string | undefined>;
         workspaces?: WorkbenchWorkspaceBinding[];

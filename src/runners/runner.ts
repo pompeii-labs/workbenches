@@ -1,3 +1,4 @@
+import type { RunnerConnectionSelection } from '../connections/store.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
 import type { WorkbenchEventDraft } from '../runs/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../runtimes/contracts.js';
@@ -43,6 +44,7 @@ export interface PreparedRunnerSessionOptions {
     configuration: ResolvedRunnerConfiguration;
     host: RunnerSessionHost;
     session?: RunnerSessionContext;
+    authentication?: RunnerConnectionSelection;
 }
 
 export abstract class Runner {

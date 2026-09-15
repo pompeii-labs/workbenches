@@ -56,6 +56,15 @@ class FinalEventRenderer implements EventRenderer {
     ) {}
 
     render(event: WorkbenchEvent): void {
+        if (event.type === 'authentication.requested') {
+            const provider = text(event.data, 'provider') || 'provider';
+            const url = text(event.data, 'url');
+            const instructions = text(event.data, 'instructions');
+            this.stderr(`Authentication required for ${provider}.\n`);
+            if (url) this.stderr(`${url}\n`);
+            if (instructions) this.stderr(`${instructions}\n`);
+            return;
+        }
         if (event.type === 'output.text') {
             const id = text(event.data, 'id');
             if (id && id !== this.answerId) {
@@ -116,6 +125,25 @@ class HumanEventRenderer implements EventRenderer {
                     `  ${colors.yellow('○')} ${colors.yellow(`MCP unavailable · ${disabled.join(', ')}`)} ${colors.dim('(optional)')}\n`
                 );
             }
+            return;
+        }
+        if (event.type === 'authentication.requested') {
+            this.endAnswer();
+            const provider = text(event.data, 'provider') || 'provider';
+            const url = text(event.data, 'url');
+            const instructions = text(event.data, 'instructions');
+            this.stdout(
+                `  ${colors.yellow('?')} ${colors.yellow(`Authenticate ${provider}`)}\n`
+            );
+            if (url) this.stdout(`    ${url}\n`);
+            if (instructions) this.stdout(`    ${instructions}\n`);
+            return;
+        }
+        if (event.type === 'authentication.completed') {
+            this.endAnswer();
+            this.stdout(
+                `  ${colors.green('✓')} ${colors.green('Authentication complete')}\n`
+            );
             return;
         }
         if (event.type === 'output.text') {

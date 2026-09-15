@@ -202,6 +202,7 @@ describe('runner-neutral interactive host', () => {
     });
 
     test('keeps the declared runtime alive for the native session lifecycle', async () => {
+        const events: WorkbenchEvent[] = [];
         const adapter = new FakeAdapter();
         const provider = new CapturingRuntimeProvider();
         const resolved = reference();
@@ -213,7 +214,7 @@ describe('runner-neutral interactive host', () => {
             resolved,
             session: { id: 'wb_runtime_lifecycle', directory: nativeDirectory },
             allowHostDocker: true,
-            onEvent: () => {},
+            onEvent: (event) => void events.push(event),
             dependencies: {
                 ...dependencies(adapter),
                 runtimeRegistry: new RuntimeRegistry([provider]),
@@ -234,6 +235,17 @@ describe('runner-neutral interactive host', () => {
 
         await session.close();
         expect(provider.cleanupCount).toBe(1);
+        expect(provider.infrastructureCount).toBe(1);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.completed',
+            data: {
+                infrastructure: {
+                    provider: 'docker',
+                    duration_ms: 2_500,
+                    cost: { kind: 'unavailable', currency: 'USD' },
+                },
+            },
+        });
     });
 });
 
@@ -338,12 +350,14 @@ class CapturingRuntimeProvider implements RuntimeProvider {
     readonly name = 'docker';
     request: RuntimePrepareRequest | undefined;
     cleanupCount = 0;
+    infrastructureCount = 0;
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
         this.request = request;
         const runtimeWorkbench = structuredClone(request.workbench);
         return {
             name: this.name,
+            nativeAuthentication: 'persistent',
             workbench: runtimeWorkbench,
             workspaceDirectory: '/runtime/workspace',
             environment: request.environment,
@@ -372,6 +386,14 @@ class CapturingRuntimeProvider implements RuntimeProvider {
                 resolveUrl: async (url) => url,
             }),
             cancel: () => {},
+            infrastructure: async () => {
+                this.infrastructureCount += 1;
+                return {
+                    provider: 'docker',
+                    duration_ms: 2_500,
+                    cost: { kind: 'unavailable', currency: 'USD' },
+                };
+            },
             cleanup: async () => {
                 this.cleanupCount += 1;
             },

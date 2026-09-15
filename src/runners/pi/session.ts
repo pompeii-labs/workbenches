@@ -11,13 +11,14 @@ import { normalizeRunnerInput } from '../session.js';
 import { stagePiConfig } from './assets.js';
 import { PiEventAdapter } from './events.js';
 import { buildPiRpcInvocation } from './invocation.js';
+import { PI_PACKAGE_VERSION } from './providers.js';
 
 export const PI_SESSION_DECLARATION: RunnerAdapterDeclaration = {
     native: {
         command: 'pi',
         verified: [
             { version: '0.73.1', surfaces: ['json', 'rpc'] },
-            { version: '0.84.3', surfaces: ['json', 'rpc'] },
+            { version: PI_PACKAGE_VERSION, surfaces: ['json', 'rpc'] },
         ],
     },
     capabilities: {

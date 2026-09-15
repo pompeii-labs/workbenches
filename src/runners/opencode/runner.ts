@@ -135,6 +135,9 @@ class PreparedOpenCodeRunner implements PreparedRunner {
                 ),
                 configuration: options.configuration,
                 host: options.host,
+                ...(options.authentication
+                    ? { authentication: options.authentication }
+                    : {}),
                 ...(options.session ? { session: options.session } : {}),
             },
             {

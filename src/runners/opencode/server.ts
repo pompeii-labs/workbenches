@@ -121,6 +121,30 @@ export class OpenCodeServer {
         return response.json();
     }
 
+    async authenticationMethods(): Promise<unknown> {
+        return this.requestJson('/provider/auth', { method: 'GET' });
+    }
+
+    async authorizeProvider(provider: string, method: number): Promise<unknown> {
+        return this.requestJson(
+            `/provider/${encodeURIComponent(provider)}/oauth/authorize`,
+            {
+                method: 'POST',
+                body: JSON.stringify({ method }),
+            }
+        );
+    }
+
+    async completeProviderAuthorization(
+        provider: string,
+        method: number
+    ): Promise<void> {
+        await this.request(`/provider/${encodeURIComponent(provider)}/oauth/callback`, {
+            method: 'POST',
+            body: JSON.stringify({ method }),
+        });
+    }
+
     async replyPermission(path: string, body: unknown): Promise<boolean> {
         const response = await this.authFetch(this.endpoint(path), {
             method: 'POST',

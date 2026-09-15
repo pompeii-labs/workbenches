@@ -1,6 +1,10 @@
 export {
     ModelCatalog,
+    type ModelCatalogAuthenticationMethod,
     type ModelCatalogFetch,
+    type ModelCatalogHarness,
+    type ModelCatalogHarnessProviderRoute,
+    type ModelCatalogHarnessVersion,
     type ModelCatalogModel,
     type ModelCatalogProvider,
     type ModelCatalogResult,

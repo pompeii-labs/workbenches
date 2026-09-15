@@ -194,9 +194,12 @@ directly. Report the missing runner, tool, runtime, or environment binding so it
 can be fixed before model tokens are spent.
 
 When a Workbench has compatible credentials through more than one provider,
-use `wb connect <name>` to choose the active connection. The engine remembers
-that local choice without changing the Workbench's locked runner or model and
-without copying runner credentials into the package.
+use `wb connect` to choose the default connection for a runner and runtime.
+`wb connect <name>` uses that Workbench as the authentication environment, but
+the resulting default is reusable by every compatible Workbench on the same
+runner and runtime. A run may use `--connection <provider>` to select another
+already-authenticated allowed route. Neither form changes the Workbench's locked
+runner or model or copies runner credentials into the package.
 
 Workbench can open authentication only through a runner's documented
 command-line operation. Never inject a login command or simulated user input
@@ -307,9 +310,10 @@ fallback. Other runners and hosted runtimes are part of the standard's
 extensible design but are not yet runnable through this release.
 
 The Workbench author locks its runner, model policy, provider routes, and native
-runner configuration. Consumers connect credentials with `wb connect`; they do
-not override those author choices. Never place credential values in a manifest,
-saved run, dry-run output, or normalized event.
+runner configuration. Consumers connect credentials once per runner/runtime
+trust boundary with `wb connect`. A `--connection` run override can select only
+an authenticated route allowed by the manifest. Never place credential values in
+a manifest, saved run, dry-run output, or normalized event.
 
 For normative package semantics, read `SPEC.md`. For the normalized run and
 event contract, read `docs/EXECUTION.md`.

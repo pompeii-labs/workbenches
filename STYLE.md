@@ -41,8 +41,9 @@ core ownership model is:
 - `Runtime` defines the execution-environment contract. Concrete runtimes own
   preparation, process execution, isolation, and cleanup.
 - `WorkbenchRun` owns one run lifecycle and normalized event stream.
-- `ConnectionManager` owns local provider-route selection without owning
-  credential values.
+- `ConnectionStore` owns non-secret runtime, harness, provider, and
+  authentication-method preferences. Authentication itself belongs to the
+  selected runner session inside the real execution runtime.
 - `ModelCatalog` owns verified metadata retrieval and local caching.
 
 Use pure functions for parsing, formatting, schema validation, and small

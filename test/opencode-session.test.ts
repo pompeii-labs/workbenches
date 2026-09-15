@@ -86,6 +86,55 @@ describe('OpenCode interactive server adapter', () => {
         }
     });
 
+    test('completes configured headless authentication in the run server before creating a session', async () => {
+        const server = new FakeOpenCodeServer();
+        const events: WorkbenchEventDraft[] = [];
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            authentication: {
+                provider: 'openai',
+                nativeProvider: 'openai',
+                authenticationMethod: 'oauth',
+                method: 'chatgpt',
+                nativeMethod: 'ChatGPT Pro/Plus (headless)',
+            },
+            host: {
+                emit: async (event) => void events.push(event),
+                requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+
+        expect(server.authenticationRequests).toEqual([
+            'methods',
+            'authorize:openai:0',
+            'callback:openai:0',
+        ]);
+        expect(server.createdSessions).toBe(1);
+        expect(events).toEqual([
+            {
+                type: 'authentication.requested',
+                data: {
+                    provider: 'openai',
+                    native_provider: 'openai',
+                    url: 'https://auth.example/device',
+                    instructions: 'Enter code: TEST-CODE',
+                },
+            },
+            {
+                type: 'authentication.completed',
+                data: {
+                    provider: 'openai',
+                    native_provider: 'openai',
+                },
+            },
+        ]);
+        await session.close();
+    });
+
     test('translates structured image input to native file parts', async () => {
         const server = new FakeOpenCodeServer();
         const events: WorkbenchEventDraft[] = [];
@@ -819,6 +868,7 @@ class FakeOpenCodeServer {
         path: string;
         body?: Record<string, unknown>;
     }> = [];
+    readonly authenticationRequests: string[] = [];
     createdSessions = 0;
     resumedSessions = 0;
     aborts = 0;
@@ -1112,6 +1162,37 @@ class FakeOpenCodeServer {
         expect(init.headers && new Headers(init.headers).get('Authorization')).toBe(
             `Basic ${btoa('opencode:test-password')}`
         );
+        if (url.pathname === '/provider/auth' && init.method === 'GET') {
+            this.authenticationRequests.push('methods');
+            return Response.json({
+                openai: [
+                    {
+                        type: 'oauth',
+                        label: 'ChatGPT Pro/Plus (headless)',
+                    },
+                ],
+            });
+        }
+        if (
+            url.pathname === '/provider/openai/oauth/authorize' &&
+            init.method === 'POST'
+        ) {
+            const body = JSON.parse(String(init.body)) as { method: number };
+            this.authenticationRequests.push(`authorize:openai:${body.method}`);
+            return Response.json({
+                method: 'auto',
+                url: 'https://auth.example/device',
+                instructions: 'Enter code: TEST-CODE',
+            });
+        }
+        if (
+            url.pathname === '/provider/openai/oauth/callback' &&
+            init.method === 'POST'
+        ) {
+            const body = JSON.parse(String(init.body)) as { method: number };
+            this.authenticationRequests.push(`callback:openai:${body.method}`);
+            return Response.json({});
+        }
         if (url.pathname === '/session' && init.method === 'POST') {
             this.createdSessions += 1;
             if (this.stallSessionCreation) {

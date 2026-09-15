@@ -53,17 +53,23 @@ export const resumeCommand = defineCommand({
         'env-file': {
             type: 'string',
             valueHint: 'path',
-            description: 'Load declared environment bindings from a dotenv file',
+            description:
+                'Load declared and provider environment bindings from a dotenv file',
         },
         env: {
             type: 'string',
             valueHint: 'NAME=value',
-            description: 'Set a declared environment binding (repeatable)',
+            description: 'Set a declared or provider environment binding (repeatable)',
         },
         'allow-host-docker': {
             type: 'boolean',
             description: 'Authorize a declared host Docker engine binding for this run',
             default: false,
+        },
+        connection: {
+            type: 'string',
+            description:
+                'Use an authenticated provider connection for the next execution',
         },
     },
     async run({ args, rawArgs }) {
@@ -98,7 +104,10 @@ export const resumeCommand = defineCommand({
                 throw new Error('This resume mode requires a non-empty task');
             }
             await launchWorkbenchTui({
-                initial: target,
+                initial: {
+                    ...target,
+                    ...(args.connection ? { connection: args.connection } : {}),
+                },
                 environment,
                 workspaces: target.session.workspaces,
                 allowHostDocker: args['allow-host-docker'],
@@ -119,6 +128,7 @@ export const resumeCommand = defineCommand({
             ),
             workspaces: target.session.workspaces,
             allowHostDocker: args['allow-host-docker'],
+            ...(args.connection ? { connection: args.connection } : {}),
         });
         if (args.detach) {
             console.log(target.session.id);

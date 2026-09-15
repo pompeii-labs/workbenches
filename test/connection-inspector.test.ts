@@ -36,11 +36,13 @@ describe('native runner authentication', () => {
                 provider: 'openai',
                 nativeProvider: 'openai',
                 nativeModel: 'gpt-5.6-terra',
+                authenticationMethod: 'api',
             },
             {
                 provider: 'openai',
                 nativeProvider: 'openai-codex',
                 nativeModel: 'gpt-5.6-terra',
+                authenticationMethod: 'oauth',
             },
         ]);
     });
@@ -92,6 +94,7 @@ describe('native runner authentication', () => {
         }).inspect();
 
         expect(status.authenticatedProviders).toEqual(['openai']);
+        expect(status.connections[0]?.authenticationMethod).toBe('oauth');
     });
 
     test('uses an explicitly bound environment route without scanning native credentials', async () => {
@@ -126,6 +129,27 @@ describe('native runner authentication', () => {
         expect(inspected).toBeTrue();
     });
 
+    test('uses an explicit authenticated connection without changing the locked model', async () => {
+        const workbench = fixture('opencode');
+        workbench.manifest.model = {
+            id: 'openai/gpt-5.6-terra',
+            routes: [{ provider: 'openai' }, { provider: 'openrouter' }],
+        };
+        const connection = inspector(workbench, {
+            runner: runner('opencode'),
+            runtime: runtime('● OpenAI oauth\n● OpenRouter api\n'),
+        });
+
+        await expect(connection.require('openrouter')).resolves.toMatchObject({
+            canonicalModel: 'openai/gpt-5.6-terra',
+            provider: 'openrouter',
+            nativeProvider: 'openrouter',
+        });
+        await expect(connection.require('anthropic')).rejects.toThrow(
+            'Connection anthropic is not authenticated for openai/gpt-5.6-terra'
+        );
+    });
+
     test('accepts an unknown config-backed provider without inventing credentials', async () => {
         const workbench = fixture('opencode');
         workbench.manifest.model = {
@@ -149,57 +173,6 @@ describe('native runner authentication', () => {
         });
     });
 
-    test('refuses to inject authentication commands into the Pi TUI', async () => {
-        const workbench = fixture('pi');
-        let interacted = false;
-        const prepared = runtime('', {
-            interact() {
-                interacted = true;
-                return Promise.resolve(0);
-            },
-        });
-
-        await expect(
-            inspector(workbench, {
-                runner: runner('pi'),
-                runtime: prepared,
-            }).connect()
-        ).rejects.toThrow('Pi does not expose a command-line login operation');
-        expect(interacted).toBeFalse();
-    });
-
-    test('lets the native OpenCode flow choose among multiple locked routes', async () => {
-        const workbench = fixture('opencode');
-        workbench.manifest.model = {
-            id: 'openai/gpt-5.6-terra',
-            routes: [{ provider: 'openai' }, { provider: 'openrouter' }],
-        };
-        let inspected = 0;
-        let connected: string[] = [];
-        const prepared = runtime('', {
-            execute() {
-                inspected += 1;
-                return Promise.resolve({
-                    code: 0,
-                    stdout: inspected > 0 ? '● OpenRouter api\n' : '',
-                    stderr: '',
-                });
-            },
-            interact(invocation) {
-                connected = invocation.command;
-                return Promise.resolve(0);
-            },
-        });
-
-        const status = await inspector(workbench, {
-            runner: runner('opencode'),
-            runtime: prepared,
-        }).connect();
-
-        expect(connected).toEqual(['opencode', 'auth', 'login']);
-        expect(status.configuration?.provider).toBe('openrouter');
-    });
-
     test('requires an authenticated route with one actionable connect command', async () => {
         const workbench = fixture('pi');
         await expect(
@@ -210,27 +183,6 @@ describe('native runner authentication', () => {
             }).require()
         ).rejects.toThrow(
             'No authenticated route is available for openai/gpt-5.6-terra. Run wb connect publisher/project#core.'
-        );
-    });
-
-    test('reports failed and ineffective native authentication without pretending readiness', async () => {
-        const workbench = fixture('opencode');
-        await expect(
-            inspector(workbench, {
-                runner: runner('opencode'),
-                runtime: runtime('', {
-                    interact: () => Promise.resolve(9),
-                }),
-            }).connect()
-        ).rejects.toThrow('OpenCode authentication exited with code 9');
-
-        await expect(
-            inspector(workbench, {
-                runner: runner('opencode'),
-                runtime: runtime('provider model\n'),
-            }).connect()
-        ).rejects.toThrow(
-            'OpenCode did not report an authenticated route for openai/gpt-5.6-terra'
         );
     });
 });
@@ -294,6 +246,7 @@ function runtime(
 ): PreparedRuntime {
     return {
         name: 'local',
+        nativeAuthentication: 'persistent',
         workbench: fixture('pi'),
         workspaceDirectory: '/repo',
         environment: {},

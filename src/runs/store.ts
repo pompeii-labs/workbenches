@@ -33,6 +33,7 @@ export interface StoredRun {
     workbench_version: string;
     runner: string;
     model: string;
+    runtime?: string;
     workspace: string;
     mode?: 'foreground' | 'detached' | 'interactive';
     execution?: 'one_shot' | 'session';
@@ -60,6 +61,7 @@ export interface StoredRunRequest {
     reference?: string;
     session_id?: string;
     native_session_id?: string;
+    connection?: string;
 }
 
 const terminalStatuses = new Set<StoredRunStatus>(['completed', 'failed', 'cancelled']);
@@ -206,7 +208,8 @@ export class RunStore {
             value.version !== 1 ||
             typeof value.workbench_path !== 'string' ||
             typeof value.workspace !== 'string' ||
-            typeof value.task !== 'string'
+            typeof value.task !== 'string' ||
+            (value.connection !== undefined && typeof value.connection !== 'string')
         ) {
             throw new Error(`Invalid Workbench run request: ${id}`);
         }

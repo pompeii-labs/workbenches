@@ -22,11 +22,18 @@ export interface RuntimeAsset {
     workspace?: string;
 }
 
+export interface RuntimeCredentialBinding {
+    runtime: string;
+    runner: string;
+    directory: string;
+}
+
 export interface RuntimePrepareRequest {
     workbench: ResolvedWorkbench;
     workspaceDirectory: string;
     environment: Record<string, string | undefined>;
     assets: RuntimeAsset[];
+    credentials?: RuntimeCredentialBinding;
     authorizations?: { hostDocker: boolean };
     purpose?: 'build' | 'connect' | 'run';
     run?: { id: string; scope: string };
@@ -57,6 +64,27 @@ export interface RuntimeService {
     resolveUrl(reportedUrl: string): Promise<string>;
 }
 
+export interface RuntimeInfrastructureMetadata {
+    provider: string;
+    duration_ms: number;
+    maximum_duration_ms?: number;
+    resources?: {
+        cpu_count?: number;
+        memory_mb?: number;
+    };
+    cost:
+        | {
+              kind: 'estimated';
+              currency: 'USD';
+              amount_usd: number;
+              source: string;
+          }
+        | {
+              kind: 'unavailable';
+              currency: 'USD';
+          };
+}
+
 export interface RuntimePreparation {
     kind: 'host' | 'image';
     reference?: string;
@@ -73,6 +101,7 @@ export interface PreparedRuntime {
     readonly environment: Record<string, string | undefined>;
     readonly workspaces: WorkbenchWorkspaceBinding[];
     readonly preparation?: RuntimePreparation;
+    readonly nativeAuthentication: 'persistent' | 'unavailable';
     pathFor(hostPath: string): string;
     preflight(): Promise<PreflightResult>;
     execute(
@@ -89,6 +118,8 @@ export interface PreparedRuntime {
         buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
     ): RuntimeService;
     cancel(process: SpawnedRunner): void;
+    infrastructure?(): Promise<RuntimeInfrastructureMetadata | undefined>;
+    synchronize?(): Promise<void>;
     cleanup(): Promise<void>;
 }
 

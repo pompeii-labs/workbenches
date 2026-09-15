@@ -1,9 +1,11 @@
+import { RunnerCredentialStore } from '../connections/credentials.js';
 import {
     ConnectionInspector,
     type RunnerAuthenticationStatus,
 } from '../connections/inspector.js';
 import { ConnectionStore } from '../connections/store.js';
 import { RunnerRegistry } from '../runners/registry.js';
+import { RunStore } from '../runs/store.js';
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
 import { type PreflightResult, WorkbenchWorkspaces } from '../workbench/index.js';
 import type { PreparedRuntime } from './contracts.js';
@@ -22,6 +24,7 @@ export interface RuntimeSmokeOptions {
     registry?: RuntimeRegistry;
     reference?: string;
     home?: string;
+    connection?: string;
 }
 
 export class RuntimeSmoke {
@@ -75,6 +78,25 @@ export class RuntimeSmoke {
                     authorizations: {
                         hostDocker: this.options.allowHostDocker ?? false,
                     },
+                    ...(this.options.workbench.manifest.runtime === 'e2b' &&
+                    this.options.home
+                        ? {
+                              credentials: await new RunnerCredentialStore(
+                                  this.options.home
+                              ).prepare(
+                                  this.options.workbench.manifest.runtime,
+                                  this.options.workbench.manifest.runner
+                              ),
+                          }
+                        : {}),
+                    ...(this.options.home
+                        ? {
+                              run: {
+                                  id: RunStore.createId(),
+                                  scope: RunStore.scope(this.options.home),
+                              },
+                          }
+                        : {}),
                 });
             const preflight = await runtime.preflight();
             const authentication = await new ConnectionInspector({
@@ -87,7 +109,12 @@ export class RuntimeSmoke {
                 ...(this.options.home
                     ? { store: new ConnectionStore(this.options.home) }
                     : {}),
-            }).inspect();
+            }).inspect({
+                ...(this.options.connection ? { discoverConnections: true } : {}),
+                ...(this.options.connection
+                    ? { connection: this.options.connection }
+                    : {}),
+            });
             result = { ...preflight, authentication };
         } catch (error) {
             operationError = error;

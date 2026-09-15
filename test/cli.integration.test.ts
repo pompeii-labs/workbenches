@@ -128,6 +128,89 @@ describe('CLI integration', () => {
         expect(create.stdout).toContain('--env=<NAME=value>');
         expect(create.stdout).toContain('--workspace=<NAME=path>');
         expect(create.stdout).toContain('--allow-host-docker');
+
+        const run = await executeCli(['run', '--help']);
+        expect(run.code).toBe(0);
+        expect(run.stdout).toContain('--connection=<connection>');
+
+        const resume = await executeCli(['resume', '--help']);
+        expect(resume.code).toBe(0);
+        expect(resume.stdout).toContain('--connection=<connection>');
+    });
+
+    test('requests a runtime directly instead of requiring a saved Workbench', async () => {
+        const result = await executeCli(['connect']);
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(
+            'wb connect requires --runtime in a non-interactive terminal'
+        );
+        expect(result.stderr).not.toContain('saved Workbenches');
+    });
+
+    test('rejects providers unsupported by the selected harness before preparing a runtime', async () => {
+        const result = await executeCli([
+            'connect',
+            '--runtime',
+            'docker',
+            '--harness',
+            'pi',
+            '--provider',
+            'wafer.ai',
+            '--method',
+            'api-key',
+        ]);
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain('Invalid --provider value wafer.ai');
+        expect(result.stderr).not.toContain('Docker daemon');
+        expect(result.stderr).not.toContain('Path is not staged');
+    });
+
+    test('configures E2B headless authentication without an E2B key or runtime work', async () => {
+        const home = await temporaryDirectory('workbench-connect-config-');
+        const result = await executeCli(
+            [
+                'connect',
+                '--runtime',
+                'e2b',
+                '--harness',
+                'opencode',
+                '--provider',
+                'openai',
+                '--method',
+                'chatgpt',
+            ],
+            {
+                WORKBENCH_HOME: home,
+                PATH: '/usr/bin:/bin',
+                E2B_API_KEY: '',
+            }
+        );
+
+        expect(result.code).toBe(0);
+        expect(result.stdout).toBe('configured\te2b\topencode\topenai\n');
+        expect(result.stderr).toBe('');
+        const homeEntries = await readdir(home);
+        expect(homeEntries).toContain('connections.json');
+        expect(homeEntries).not.toContain('runs');
+        expect(homeEntries).not.toContain('runtime-credentials');
+        expect(
+            JSON.parse(await readFile(join(home, 'connections.json'), 'utf8'))
+        ).toMatchObject({
+            version: 4,
+            connections: [
+                {
+                    runner: 'opencode',
+                    runtime: 'e2b',
+                    provider: 'openai',
+                    native_provider: 'openai',
+                    authentication_method: 'oauth',
+                    method: 'chatgpt',
+                    native_method: 'ChatGPT Pro/Plus (headless)',
+                },
+            ],
+        });
     });
 
     test('reports argument errors without dumping command help', async () => {
@@ -156,20 +239,28 @@ describe('CLI integration', () => {
         await expect(stat(record)).rejects.toThrow();
     });
 
-    test('explains how to install Pi before connecting a Pi Workbench', async () => {
+    test('configures Pi without requiring the harness to be installed', async () => {
         const fixture = await createFixture({ runner: 'pi' });
         const bin = await fakeBin();
-        const result = await executeCli(['connect', fixture.packageDirectory], {
-            PATH: `${bin}:/usr/bin:/bin`,
-        });
+        const home = await temporaryDirectory('workbench-connect-pi-');
+        const result = await executeCli(
+            [
+                'connect',
+                fixture.packageDirectory,
+                '--provider',
+                'openai',
+                '--method',
+                'chatgpt',
+            ],
+            {
+                PATH: `${bin}:/usr/bin:/bin`,
+                WORKBENCH_HOME: home,
+            }
+        );
 
-        expect(result.code).toBe(1);
-        expect(result.stderr).toContain(
-            'Pi is required for this Workbench but is not installed.'
-        );
-        expect(result.stderr).toContain(
-            'npm install -g @earendil-works/pi-coding-agent'
-        );
+        expect(result.code).toBe(0);
+        expect(result.stdout).toBe('configured\tlocal\tpi\topenai\n');
+        expect(result.stderr).toBe('');
         expect(result.stderr).not.toContain('Executable not found');
     });
 
@@ -284,6 +375,38 @@ describe('CLI integration', () => {
         expect(await readTextTree(join(home, 'runs'))).not.toContain(explicitSecret);
     });
 
+    test('accepts selected provider credentials from an environment file without a manifest declaration', async () => {
+        const fixture = await createFixture();
+        const bin = await fakeBin();
+        const home = await temporaryDirectory('workbench-provider-environment-home-');
+        const record = join(fixture.root, 'runner');
+        const environmentFile = join(fixture.root, '.env.provider');
+        const secret = 'provider-secret-not-for-output';
+        await writeFile(environmentFile, `OPENAI_API_KEY=${secret}\n`);
+
+        const result = await executeCli(
+            [
+                'run',
+                fixture.packageDirectory,
+                '--task',
+                'inspect',
+                '--env-file',
+                environmentFile,
+            ],
+            {
+                PATH: `${bin}:${process.env.PATH}`,
+                WB_TEST_RECORD: record,
+                WORKBENCH_HOME: home,
+                OPENROUTER_API_KEY: '',
+            }
+        );
+
+        expect(result.code).toBe(0);
+        expect(await readFile(`${record}.openai-key`, 'utf8')).toBe(`${secret}\n`);
+        expect(`${result.stdout}\n${result.stderr}`).not.toContain(secret);
+        expect(await readTextTree(join(home, 'runs'))).not.toContain(secret);
+    });
+
     test('binds declared sibling workspaces across smoke, run, and detached execution', async () => {
         const fixture = await createFixture({
             workspaces: {
@@ -385,7 +508,7 @@ describe('CLI integration', () => {
         );
         expect(rejected.code).toBe(1);
         expect(rejected.stderr).toContain(
-            'Environment override is not declared by fixture-core: TYPO_TOKEN'
+            'Environment override is not supported by fixture-core: TYPO_TOKEN'
         );
         expect(rejected.stderr).not.toContain('do-not-echo-this');
     });
@@ -646,7 +769,7 @@ describe('CLI integration', () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-active-resume-');
         const record = join(fixture.root, 'runner');
-        const bin = await fakeBin([], { delay: 250 });
+        const bin = await fakeBin([], { delay: 2_000 });
         const environment = {
             PATH: `${bin}:${process.env.PATH}`,
             WORKBENCH_HOME: home,
@@ -668,6 +791,7 @@ describe('CLI integration', () => {
         expect(continued.stdout).toBe('fixture response\n');
         expect(await readFile(`${record}.args`, 'utf8')).toBe('second task\n');
 
+        await waitForRunEventCount(home, sessionId, 'turn.started', 2, 15_000);
         const replayed = await executeCli(['attach', sessionId, '--json'], environment);
         const events = replayed.stdout
             .trim()
@@ -680,12 +804,12 @@ describe('CLI integration', () => {
         expect(new Set(events.map((event) => event.run_id))).toEqual(
             new Set([sessionId])
         );
-    });
+    }, 20_000);
 
     test('queues a detached continuation onto the active native session', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-detached-resume-');
-        const bin = await fakeBin([], { delay: 250 });
+        const bin = await fakeBin([], { delay: 2_000 });
         const environment = {
             PATH: `${bin}:${process.env.PATH}`,
             WORKBENCH_HOME: home,
@@ -705,6 +829,7 @@ describe('CLI integration', () => {
         expect(continued.stderr).toBe('');
         expect(continued.stdout).toBe(`${sessionId}\n`);
 
+        await waitForRunEventCount(home, sessionId, 'turn.completed', 2, 15_000);
         const attached = await executeCli(['attach', sessionId, '--json'], environment);
         const events = attached.stdout
             .trim()
@@ -717,7 +842,7 @@ describe('CLI integration', () => {
             run_id: sessionId,
             type: 'run.completed',
         });
-    });
+    }, 20_000);
 
     test('continues a completed session as a new linked native run', async () => {
         const fixture = await createFixture({
@@ -831,7 +956,7 @@ describe('CLI integration', () => {
             2
         );
         expect(new Set(events.map((event) => event.run_id)).size).toBe(1);
-    });
+    }, 20_000);
 
     test('stops the active run in the latest session and records a terminal event', async () => {
         const fixture = await createFixture();
@@ -1402,6 +1527,23 @@ async function waitForActiveSession(home: string): Promise<string> {
         await Bun.sleep(25);
     }
     throw new Error('Timed out waiting for an active Workbench session');
+}
+
+async function waitForRunEventCount(
+    home: string,
+    runId: string,
+    type: string,
+    count: number,
+    timeoutMilliseconds = 5_000
+): Promise<void> {
+    const store = new RunStore(home);
+    const started = Date.now();
+    while (Date.now() - started < timeoutMilliseconds) {
+        const events = await store.readEvents(runId);
+        if (events.filter((event) => event.type === type).length >= count) return;
+        await Bun.sleep(25);
+    }
+    throw new Error(`Timed out waiting for ${count} ${type} events`);
 }
 
 async function temporaryDirectory(prefix: string) {

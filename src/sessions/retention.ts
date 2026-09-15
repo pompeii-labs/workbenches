@@ -1,5 +1,5 @@
 import { RunStore, type StoredRun } from '../runs/store.js';
-import type { ManagedDockerContainer } from '../runtimes/index.js';
+import type { ManagedDockerContainer, ManagedE2BSandbox } from '../runtimes/index.js';
 import { SessionStore, type StoredSession } from './store.js';
 
 export interface SessionRetentionPolicy {
@@ -18,6 +18,7 @@ export interface SessionRetentionReview {
     sessions: CleanupStorageItem[];
     runs: CleanupStorageItem[];
     containers: ManagedDockerContainer[];
+    sandboxes: ManagedE2BSandbox[];
     activeRuns: string[];
     protectedResumableSessions: string[];
     reconciledRuns: string[];
@@ -28,12 +29,14 @@ export interface SessionRetentionResult extends SessionRetentionReview {
     removedSessions: string[];
     removedRuns: string[];
     removedContainers: string[];
+    removedSandboxes: string[];
     skipped: string[];
     removedBytes: number;
 }
 
 export interface SessionRetentionDependencies {
     containers?: ManagedContainerStorage;
+    sandboxes?: ManagedSandboxStorage;
 }
 
 export interface ManagedContainerStorage {
@@ -41,15 +44,22 @@ export interface ManagedContainerStorage {
     remove(container: ManagedDockerContainer): Promise<void>;
 }
 
+export interface ManagedSandboxStorage {
+    list(): Promise<ManagedE2BSandbox[]>;
+    remove(sandbox: ManagedE2BSandbox): Promise<void>;
+}
+
 export class SessionRetention {
     readonly #runs: RunStore;
     readonly #sessions: SessionStore;
     readonly #containers: ManagedContainerStorage | undefined;
+    readonly #sandboxes: ManagedSandboxStorage | undefined;
 
     constructor(home: string, dependencies: SessionRetentionDependencies = {}) {
         this.#runs = new RunStore(home);
         this.#sessions = new SessionStore(home);
         this.#containers = dependencies.containers;
+        this.#sandboxes = dependencies.sandboxes;
     }
 
     async review(policy: SessionRetentionPolicy): Promise<SessionRetentionReview> {
@@ -81,7 +91,7 @@ export class SessionRetention {
             return !session || session.latest_run_id !== run.id;
         });
 
-        const [sessionItems, runItems, containers] = await Promise.all([
+        const [sessionItems, runItems, containers, sandboxes] = await Promise.all([
             Promise.all(
                 selectedSessions.map(async (session) => ({
                     id: session.id,
@@ -95,6 +105,7 @@ export class SessionRetention {
                 }))
             ),
             this.staleContainers(new Map(runs.map((run) => [run.id, run]))),
+            this.staleSandboxes(new Map(runs.map((run) => [run.id, run]))),
         ]);
         return {
             before: policy.before.toISOString(),
@@ -102,6 +113,7 @@ export class SessionRetention {
             sessions: sessionItems,
             runs: runItems,
             containers,
+            sandboxes,
             activeRuns: runs
                 .filter((run) => !RunStore.isTerminal(run.status))
                 .map((run) => run.id),
@@ -132,6 +144,7 @@ export class SessionRetention {
         const removedSessions: string[] = [];
         const removedRuns: string[] = [];
         const removedContainers: string[] = [];
+        const removedSandboxes: string[] = [];
         const skipped: string[] = [];
         let removedBytes = 0;
         const runBytes = new Map(review.runs.map((run) => [run.id, run.bytes]));
@@ -200,12 +213,20 @@ export class SessionRetention {
                 skipped.push(container.id);
             }
         }
+        for (const sandbox of review.sandboxes) {
+            if (await this.removeSandbox(sandbox)) {
+                removedSandboxes.push(sandbox.id);
+            } else {
+                skipped.push(sandbox.id);
+            }
+        }
 
         return {
             ...review,
             removedSessions,
             removedRuns,
             removedContainers,
+            removedSandboxes,
             skipped: [...new Set(skipped)],
             removedBytes,
         };
@@ -254,6 +275,17 @@ export class SessionRetention {
         return true;
     }
 
+    private async removeSandbox(sandbox: ManagedE2BSandbox): Promise<boolean> {
+        if (!this.#sandboxes) return false;
+        const run = await this.#runs.read(sandbox.runId).catch(() => undefined);
+        if (!run && sandbox.state === 'running') return false;
+        if (run && !RunStore.isTerminal((await this.#runs.reconcile(run)).status)) {
+            return false;
+        }
+        await this.#sandboxes.remove(sandbox);
+        return true;
+    }
+
     private async staleContainers(
         runs: Map<string, StoredRun>
     ): Promise<ManagedDockerContainer[]> {
@@ -261,6 +293,16 @@ export class SessionRetention {
         return (await this.#containers.list()).filter((container) => {
             const run = runs.get(container.runId);
             return !run || RunStore.isTerminal(run.status);
+        });
+    }
+
+    private async staleSandboxes(
+        runs: Map<string, StoredRun>
+    ): Promise<ManagedE2BSandbox[]> {
+        if (!this.#sandboxes) return [];
+        return (await this.#sandboxes.list()).filter((sandbox) => {
+            const run = runs.get(sandbox.runId);
+            return run ? RunStore.isTerminal(run.status) : sandbox.state === 'paused';
         });
     }
 
