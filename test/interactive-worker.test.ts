@@ -21,6 +21,7 @@ import {
     StoredRunHandle,
     type WorkbenchEvent,
 } from '../src/runs/index.js';
+import { LocalRuntimeProvider, RuntimeRegistry } from '../src/runtimes/index.js';
 import { SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { supportedRunnerDeclaration } from './runner-adapter-contract.js';
@@ -54,7 +55,9 @@ describe('interactive run worker', () => {
         });
         const adapter = new ControlledAdapter({ autoComplete: true });
 
-        await expect(workerFor(home, stored.id, adapter).execute({})).resolves.toBe(0);
+        await expect(
+            workerFor(home, stored.id, adapter).execute({ environment: {} })
+        ).resolves.toBe(0);
         expect(adapter.authentication).toEqual({
             provider: 'openai',
             nativeProvider: 'openai',
@@ -83,7 +86,9 @@ describe('interactive run worker', () => {
         });
         const adapter = new ControlledAdapter({ autoComplete: true });
 
-        await expect(workerFor(home, stored.id, adapter).execute({})).resolves.toBe(1);
+        await expect(
+            workerFor(home, stored.id, adapter).execute({ environment: {} })
+        ).resolves.toBe(1);
         expect(adapter.starts).toBe(0);
         expect(await new RunStore(home).readEvents(stored.id)).toContainEqual(
             expect.objectContaining({
@@ -1006,6 +1011,15 @@ function workerFor(
         loadWorkbench: async () => workbench(),
         findExecutable: (name) => `/bin/${name}`,
         registry: new RunnerRegistry([new InteractiveWorkerTestRunner(adapter)]),
+        runtimeRegistry: new RuntimeRegistry([
+            new LocalRuntimeProvider({
+                spawn: () => ({
+                    exited: Promise.resolve(0),
+                    stdout: new Blob(['No credentials found\n']).stream(),
+                    stderr: new Blob([]).stream(),
+                }),
+            }),
+        ]),
         now: () => new Date('2026-09-01T12:00:00.000Z'),
         ...(reportLaunch ? { reportLaunch } : {}),
     });
