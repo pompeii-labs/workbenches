@@ -1406,7 +1406,7 @@ describe.serial('Workbench TUI', () => {
         const prompt = findPrompt(setup.renderer.root);
         prompt.setText('Review the release configuration');
         prompt.submit();
-        await Bun.sleep(20);
+        await waitForSessionName(store, session.id, 'Review the release configuration');
         await setup.flush();
 
         expect((await store.read(session.id)).name).toBe(
@@ -2199,6 +2199,18 @@ function fakeHandle(
         close: () => control(),
         cancel: () => control(),
     };
+}
+
+async function waitForSessionName(
+    store: SessionStore,
+    id: string,
+    expected: string
+): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((await store.read(id)).name === expected) return;
+        await Bun.sleep(10);
+    }
+    expect((await store.read(id)).name).toBe(expected);
 }
 
 function handleAwaitingReady(
