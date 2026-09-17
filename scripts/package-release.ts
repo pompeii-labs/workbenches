@@ -20,13 +20,22 @@ await Promise.all([
     copyFile(join(root, 'NOTICE'), join(staging, 'NOTICE')),
 ]);
 await run([join(staging, 'workbench'), '--help'], root);
+await run([process.execPath, 'test', 'test/release.test.ts'], root, {
+    ...process.env,
+    WORKBENCH_TEST_BINARY: join(staging, 'workbench'),
+});
 await run(['tar', '-czf', archive, '-C', release, target.name], root);
 
 console.log(archive);
 
-async function run(command: string[], cwd: string): Promise<void> {
+async function run(
+    command: string[],
+    cwd: string,
+    env: Record<string, string | undefined> = process.env
+): Promise<void> {
     const child = Bun.spawn(command, {
         cwd,
+        env,
         stdin: 'ignore',
         stdout: 'ignore',
         stderr: 'inherit',

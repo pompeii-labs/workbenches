@@ -7,6 +7,8 @@ const result = await Bun.build({
     plugins: [solidPlugin],
     compile: {
         outfile: './dist/workbench',
+        autoloadBunfig: false,
+        autoloadDotenv: false,
     },
 });
 
