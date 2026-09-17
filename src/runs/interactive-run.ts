@@ -31,7 +31,7 @@ import type {
     ResolvedWorkbenchReference,
 } from '../workbench/index.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
-import { publishRunOutcome } from './outcome-events.js';
+import { publishRunOutcome } from './outcomes.js';
 import { RunStore } from './store.js';
 
 export interface InteractiveRunSession {

@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { OutcomeStore, WorkspaceSnapshot } from '../src/outcomes/index.js';
+import { OutcomeStore, WorkspaceSnapshot } from '../../src/outcomes/index.js';
 
 const temporaryDirectories: string[] = [];
 

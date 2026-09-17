@@ -2,11 +2,11 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OutcomeLifecycle, OutcomeStore } from '../src/outcomes/index.js';
-import type { PreparedRuntime } from '../src/runtimes/contracts.js';
-import { DockerRuntimeProvider } from '../src/runtimes/docker/provider.js';
-import { LocalRuntimeProvider } from '../src/runtimes/local.js';
-import type { ResolvedWorkbench } from '../src/types.js';
+import { OutcomeLifecycle, OutcomeStore } from '../../src/outcomes/index.js';
+import type { PreparedRuntime } from '../../src/runtimes/contracts.js';
+import { DockerRuntimeProvider } from '../../src/runtimes/docker/provider.js';
+import { LocalRuntimeProvider } from '../../src/runtimes/local.js';
+import type { ResolvedWorkbench } from '../../src/types.js';
 
 const directories: string[] = [];
 const runtimes: PreparedRuntime[] = [];

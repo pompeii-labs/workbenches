@@ -1,9 +1,9 @@
 import { lstat, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { outcomeArtifactPath } from './artifact-paths.js';
 import type { RunOutcome } from './contracts.js';
 import { outcomeStorageDirectory } from './directories.js';
 import { processIsAlive } from './lease.js';
+import { outcomeArtifactPath } from './paths.js';
 import { outcomeArtifactName } from './presentation.js';
 
 /** Called under the shared storage lease; never reaps a live writer's files. */

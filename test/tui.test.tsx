@@ -1974,7 +1974,8 @@ describe.serial('Workbench TUI', () => {
     test('renames the current session and uses the name in session surfaces', async () => {
         const home = await mkdtemp(join(tmpdir(), 'workbench-tui-rename-'));
         temporaryDirectories.push(home);
-        const session = await new SessionStore(home).create({
+        const store = new SessionStore(home);
+        const session = await store.create({
             id: 'wb_tuirenamesession123456789',
             workbench: 'workbench-creator',
             workbench_version: '0.1.3',
@@ -2014,12 +2015,10 @@ describe.serial('Workbench TUI', () => {
         let prompt = findPrompt(setup.renderer.root);
         prompt.setText('/rename Release review');
         prompt.submit();
-        await Bun.sleep(10);
+        await waitForSessionName(store, session.id, 'Release review');
         await setup.flush();
 
-        expect((await new SessionStore(home).read(session.id)).name).toBe(
-            'Release review'
-        );
+        expect((await store.read(session.id)).name).toBe('Release review');
         expect(setup.captureCharFrame()).toContain('Release review · creator');
 
         prompt = findPrompt(setup.renderer.root);

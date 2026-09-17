@@ -26,7 +26,7 @@ import { E2BOutcomeCollector } from './collector.js';
 import type { E2BClient, E2BCommand, E2BSandbox } from './contracts.js';
 import { prepareE2BDirectories } from './directories.js';
 import { e2bPricingSource, estimateE2BCost } from './infrastructure.js';
-import { captureE2BNativeState } from './native-state.js';
+import { captureE2BNativeState } from './native.js';
 import type { E2BPathPlan } from './paths.js';
 import { E2BOutcomeRecovery } from './recovery.js';
 import { e2bMetadata } from './sdk.js';

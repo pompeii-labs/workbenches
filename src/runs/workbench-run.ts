@@ -19,7 +19,7 @@ import type {
 } from '../types.js';
 import { Workbench, WorkbenchWorkspaces } from '../workbench/index.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
-import { publishRunOutcome } from './outcome-events.js';
+import { publishRunOutcome } from './outcomes.js';
 import { RunnerOutput } from './runner-output.js';
 import { RunStore } from './store.js';
 

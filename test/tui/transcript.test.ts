@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { WorkbenchEvent } from '../src/runs/events.js';
-import { RunStore } from '../src/runs/store.js';
-import { SessionTranscript } from '../src/tui/session-transcript.js';
+import type { WorkbenchEvent } from '../../src/runs/events.js';
+import { RunStore } from '../../src/runs/store.js';
+import { SessionTranscript } from '../../src/tui/session-transcript.js';
 
 const homes: string[] = [];
 const sessionId = 'wb_historysession123456789012';

@@ -62,10 +62,15 @@ should be split by owned responsibility before more behavior is added. A
 production file may not exceed 700 lines. Generated files and declarative
 schemas are the only exceptions and must live outside handwritten source.
 
-Use PascalCase for classes and types, camelCase for functions and values, and
-kebab-case for filenames. Prefer precise product language over generic names
-such as `manager`, `helper`, or `utils` unless the named class genuinely owns
-that responsibility.
+Use PascalCase for classes and types and camelCase for functions and values.
+New filenames must not contain dashes. Prefer a short concept name inside its
+owning domain, such as `outcomes/paths.ts` or `test/outcomes/store.test.ts`.
+Do not repeat context already established by the directory. Existing dashed
+filenames are legacy; leave unrelated files alone. CI checks newly added and
+renamed files against this rule.
+
+Prefer precise product language over generic names such as `manager`, `helper`,
+or `utils` unless the named class genuinely owns that responsibility.
 
 ## Commands
 

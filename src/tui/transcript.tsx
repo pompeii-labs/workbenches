@@ -5,7 +5,7 @@ import { type Accessor, For, Match, Show, Switch } from 'solid-js';
 import { sanitizeMarkdown } from '../rendering/index.js';
 import { ActivityIndicator } from './activity.js';
 import type { TranscriptDisplayItem } from './model.js';
-import { OutcomeCard } from './outcome-card.js';
+import { OutcomeCard } from './outcome.js';
 import { useTheme } from './theme/index.js';
 
 export function Transcript(props: {

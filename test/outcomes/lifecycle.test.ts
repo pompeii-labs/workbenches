@@ -6,8 +6,8 @@ import {
     OutcomeLifecycle,
     OutcomeOutput,
     OutcomeStore,
-} from '../src/outcomes/index.js';
-import type { PreparedRuntime } from '../src/runtimes/contracts.js';
+} from '../../src/outcomes/index.js';
+import type { PreparedRuntime } from '../../src/runtimes/contracts.js';
 
 const directories: string[] = [];
 const lifecycles: OutcomeLifecycle[] = [];

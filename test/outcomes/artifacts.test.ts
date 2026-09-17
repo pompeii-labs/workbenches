@@ -19,8 +19,8 @@ import {
     OutcomeStore,
     parseRunOutcome,
     type RunOutcome,
-} from '../src/outcomes/index.js';
-import { RunStore } from '../src/runs/store.js';
+} from '../../src/outcomes/index.js';
+import { RunStore } from '../../src/runs/store.js';
 
 const homes: string[] = [];
 const sessionId = 'wb_artifactsession1234567890';

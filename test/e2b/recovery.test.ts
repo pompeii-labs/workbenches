@@ -2,19 +2,19 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OutcomeStore } from '../src/outcomes/store.js';
-import { RunStore } from '../src/runs/store.js';
+import { OutcomeStore } from '../../src/outcomes/store.js';
+import { RunStore } from '../../src/runs/store.js';
+import {
+    type E2BRecoveryRecord,
+    parseE2BRecoveryRecord,
+} from '../../src/runtimes/e2b/checkpoint.js';
 import type {
     E2BClient,
     E2BManagedSandbox,
     E2BSandbox,
-} from '../src/runtimes/e2b/contracts.js';
-import { E2BOutcomeRecovery } from '../src/runtimes/e2b/recovery.js';
-import {
-    type E2BRecoveryRecord,
-    parseE2BRecoveryRecord,
-} from '../src/runtimes/e2b/recovery-record.js';
-import { SessionRetention } from '../src/sessions/retention.js';
+} from '../../src/runtimes/e2b/contracts.js';
+import { E2BOutcomeRecovery } from '../../src/runtimes/e2b/recovery.js';
+import { SessionRetention } from '../../src/sessions/retention.js';
 
 const directories: string[] = [];
 afterEach(async () => {

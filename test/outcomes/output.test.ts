@@ -12,8 +12,8 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { OutcomeOutput, OutcomeStore } from '../src/outcomes/index.js';
-import { RunStore } from '../src/runs/store.js';
+import { OutcomeOutput, OutcomeStore } from '../../src/outcomes/index.js';
+import { RunStore } from '../../src/runs/store.js';
 
 const outputs: OutcomeOutput[] = [];
 const directories: string[] = [];

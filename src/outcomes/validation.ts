@@ -1,6 +1,4 @@
 import { isAbsolute, posix } from 'node:path';
-
-import { assertArtifactPaths, safeArtifactPath } from './artifact-paths.js';
 import type {
     DeclaredOutcome,
     OutcomeApplicationReceipt,
@@ -16,6 +14,7 @@ import type {
     OutcomeWorkspace,
     RunOutcome,
 } from './contracts.js';
+import { assertArtifactPaths, safeArtifactPath } from './paths.js';
 
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const identifierPattern = /^[a-z][a-z0-9_]{2,127}$/;

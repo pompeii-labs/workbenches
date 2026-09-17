@@ -3,10 +3,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { OutcomeStore, type RunOutcome } from '../src/outcomes/index.js';
-import { RunStore } from '../src/runs/index.js';
+import { OutcomeStore, type RunOutcome } from '../../src/outcomes/index.js';
+import { RunStore } from '../../src/runs/index.js';
 
-const projectDirectory = resolve(import.meta.dir, '..');
+const projectDirectory = resolve(import.meta.dir, '..', '..');
 const cliPath = join(projectDirectory, 'src', 'cli.ts');
 const temporaryDirectories: string[] = [];
 

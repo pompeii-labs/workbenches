@@ -1,6 +1,6 @@
 {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "$id": "https://workbenches.dev/schemas/outcomes/v1/workbench-outcome.schema.json",
+    "$id": "https://workbenches.dev/schemas/outcomes/v1/outcome.schema.json",
     "title": "Workbench Run Outcome",
     "description": "The canonical serialized shape of a durable, runtime-independent run result. Hosts also validate unique child IDs and paths, matching statistics, safe symlink targets, credential-free web links, and referenced content.",
     "type": "object",

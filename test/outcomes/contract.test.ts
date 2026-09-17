@@ -9,7 +9,7 @@ import {
     parseDeclaredOutcome,
     parseOutcomeApplicationReceipt,
     parseRunOutcome,
-} from '../src/outcomes/index.js';
+} from '../../src/outcomes/index.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const ajv = new Ajv2020({ allErrors: true });
@@ -18,7 +18,7 @@ ajv.addFormat('uri', fullFormats.uri);
 
 async function schemaValidator(name: string) {
     const source = await readFile(
-        join(import.meta.dir, '..', 'schemas', 'outcomes', 'v1', name),
+        join(import.meta.dir, '..', '..', 'schemas', 'outcomes', 'v1', name),
         'utf8'
     );
     const schema = JSON.parse(source);
@@ -101,7 +101,7 @@ function validOutcome(): Record<string, unknown> {
 
 describe('run outcome contract', () => {
     test('validates outbox-only turn snapshots at both contract boundaries', async () => {
-        const validate = await schemaValidator('workbench-outcome.schema.json');
+        const validate = await schemaValidator('outcome.schema.json');
         const snapshot = {
             ...validOutcome(),
             completeness: 'partial',
@@ -127,7 +127,7 @@ describe('run outcome contract', () => {
     });
 
     test('validates original artifact paths independently of display names at both boundaries', async () => {
-        const validate = await schemaValidator('workbench-outcome.schema.json');
+        const validate = await schemaValidator('outcome.schema.json');
         const candidate = parseRunOutcome(validOutcome());
         const artifact = candidate.artifacts[0];
         if (!artifact) throw new Error('Expected artifact fixture');
@@ -257,7 +257,7 @@ describe('run outcome contract', () => {
     });
 
     test('accepts canonical outcomes in the published JSON Schema, including one-character paths', async () => {
-        const validate = await schemaValidator('workbench-outcome.schema.json');
+        const validate = await schemaValidator('outcome.schema.json');
         const candidate = parseRunOutcome(validOutcome());
         const entry = candidate.changesets[0]?.entries[0];
         if (!entry) throw new Error('Expected changeset fixture');
@@ -282,7 +282,7 @@ describe('run outcome contract', () => {
     });
 
     test('rejects non-RFC-3339 and impossible calendar timestamps at both boundaries', async () => {
-        const validate = await schemaValidator('workbench-outcome.schema.json');
+        const validate = await schemaValidator('outcome.schema.json');
         for (const timestamp of [
             '09/15/2026Z',
             '2026-02-30T12:00:00Z',
@@ -319,7 +319,7 @@ describe('run outcome contract', () => {
     test('validates the outbox example in the public contract and its schema identity', async () => {
         const validate = await schemaValidator('outbox.schema.json');
         const docs = await readFile(
-            join(import.meta.dir, '..', 'docs', 'OUTCOMES.md'),
+            join(import.meta.dir, '..', '..', 'docs', 'OUTCOMES.md'),
             'utf8'
         );
         const example = docs.match(/```json\n([\s\S]*?)\n```/)?.[1];
@@ -338,16 +338,17 @@ describe('run outcome contract', () => {
                 join(
                     import.meta.dir,
                     '..',
+                    '..',
                     'schemas',
                     'outcomes',
                     'v1',
-                    'workbench-outcome.schema.json'
+                    'outcome.schema.json'
                 ),
                 'utf8'
             )
         ) as Record<string, unknown>;
         expect(schema.$id).toBe(
-            'https://workbenches.dev/schemas/outcomes/v1/workbench-outcome.schema.json'
+            'https://workbenches.dev/schemas/outcomes/v1/outcome.schema.json'
         );
     });
 });

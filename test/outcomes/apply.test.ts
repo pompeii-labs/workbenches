@@ -21,7 +21,7 @@ import {
     OutcomeStore,
     type RunOutcome,
     WorkspaceSnapshot,
-} from '../src/outcomes/index.js';
+} from '../../src/outcomes/index.js';
 
 const temporaryDirectories: string[] = [];
 

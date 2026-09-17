@@ -8,18 +8,18 @@ import {
     runtimeContext,
     stageRunnerContext,
     withRunnerContext,
-} from '../src/runners/context.js';
-import { stageOpenCodeSkills } from '../src/runners/opencode/assets.js';
+} from '../../src/runners/context.js';
+import { stageOpenCodeSkills } from '../../src/runners/opencode/assets.js';
 import {
     buildOpenCodeInvocation,
     buildOpenCodeServerInvocation,
-} from '../src/runners/opencode/invocation.js';
-import { stagePiConfig } from '../src/runners/pi/assets.js';
+} from '../../src/runners/opencode/invocation.js';
+import { stagePiConfig } from '../../src/runners/pi/assets.js';
 import {
     buildPiInvocation,
     buildPiRpcInvocation,
-} from '../src/runners/pi/invocation.js';
-import type { ResolvedWorkbench } from '../src/types.js';
+} from '../../src/runners/pi/invocation.js';
+import type { ResolvedWorkbench } from '../../src/types.js';
 
 const directories: string[] = [];
 

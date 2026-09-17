@@ -11,8 +11,8 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { assertArtifactPaths, outcomeArtifactPath } from './artifact-paths.js';
 import type { RunOutcome } from './contracts.js';
+import { assertArtifactPaths, outcomeArtifactPath } from './paths.js';
 import type { OutcomeStore } from './store.js';
 import { assertSafeOutcomePath } from './validation.js';
 

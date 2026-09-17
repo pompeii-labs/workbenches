@@ -6,8 +6,8 @@ import {
     OutcomeLifecycle,
     OutcomeStore,
     type RunOutcome,
-} from '../src/outcomes/index.js';
-import type { PreparedRuntime } from '../src/runtimes/contracts.js';
+} from '../../src/outcomes/index.js';
+import type { PreparedRuntime } from '../../src/runtimes/contracts.js';
 
 const directories: string[] = [];
 afterEach(async () => {

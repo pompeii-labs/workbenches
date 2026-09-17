@@ -41,3 +41,17 @@ jobs:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - run: bunx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }}
+      - name: Check new filenames
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+          status=0
+          while IFS= read -r -d '' path; do
+            case "${path##*/}" in
+              *-*) printf 'New filenames must not contain dashes: %s\n' "$path"; status=1 ;;
+            esac
+          done < <(git diff --name-only --diff-filter=AR -z "$BASE_SHA" "$HEAD_SHA")
+          exit "$status"

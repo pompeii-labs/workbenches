@@ -12,7 +12,7 @@ import type {
 import { normalizeRunnerInput } from '../session.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
-import { isOutboxPermission } from './outbox-permission.js';
+import { isOutboxPermission } from './outbox.js';
 import { OpenCodeQuestion } from './question.js';
 import type { OpenCodeFetch, OpenCodeServerLauncher } from './server.js';
 import { OpenCodeServer } from './server.js';

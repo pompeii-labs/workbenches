@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { isOutboxPermission } from '../src/runners/opencode/outbox-permission.js';
+import { isOutboxPermission } from '../../../src/runners/opencode/outbox.js';
 
 describe('OpenCode engine-owned outbox permissions', () => {
     test('allows only directory scopes within the selected outbox', () => {

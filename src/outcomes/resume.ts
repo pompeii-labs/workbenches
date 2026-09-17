@@ -2,10 +2,10 @@ import { chmod, copyFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { RunStore } from '../runs/store.js';
-import { assertArtifactPaths, outcomeArtifactPath } from './artifact-paths.js';
 import { verifyBlob } from './content.js';
 import type { OutcomeArtifact } from './contracts.js';
 import type { OutcomeOutput } from './output.js';
+import { assertArtifactPaths, outcomeArtifactPath } from './paths.js';
 import { OutcomeStore } from './store.js';
 
 const maximumRestoredBytes = 512 * 1_024 * 1_024;

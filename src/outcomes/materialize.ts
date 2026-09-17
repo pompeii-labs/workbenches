@@ -1,11 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { chmod, copyFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-
-import { assertArtifactPaths, outcomeArtifactPath } from './artifact-paths.js';
 import { validExistingBlob, verifyBlob } from './content.js';
 import type { RunOutcome } from './contracts.js';
 import { outcomeStorageDirectory } from './directories.js';
+import { assertArtifactPaths, outcomeArtifactPath } from './paths.js';
 import type { OutcomeStorageQuota } from './quota.js';
 import type { OutcomeStore } from './store.js';
 

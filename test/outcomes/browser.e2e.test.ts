@@ -4,8 +4,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { OutcomeExporter, OutcomeOutput, OutcomeStore } from '../src/outcomes/index.js';
-import { RunStore } from '../src/runs/store.js';
+import {
+    OutcomeExporter,
+    OutcomeOutput,
+    OutcomeStore,
+} from '../../src/outcomes/index.js';
+import { RunStore } from '../../src/runs/store.js';
 
 test.skipIf(process.env.WORKBENCH_OUTCOME_BROWSER_E2E !== '1')(
     'a real headless browser loads sibling SVG and CSS from original, revised, and exported artifact links',

@@ -11,8 +11,8 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { E2BAssetSnapshot } from '../src/runtimes/e2b/snapshot.js';
-import { E2BStateStore } from '../src/runtimes/e2b/state.js';
+import { E2BAssetSnapshot } from '../../src/runtimes/e2b/snapshot.js';
+import { E2BStateStore } from '../../src/runtimes/e2b/state.js';
 
 const directories: string[] = [];
 const snapshots: E2BAssetSnapshot[] = [];

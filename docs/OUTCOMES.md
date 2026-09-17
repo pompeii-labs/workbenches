@@ -191,7 +191,7 @@ repair relative links. Escaping, duplicate, case-colliding and file/directory
 conflicting artifact paths fail validation.
 
 The manifest schema is
-[workbench-outcome.schema.json](../schemas/outcomes/v1/workbench-outcome.schema.json).
+[outcome.schema.json](../schemas/outcomes/v1/outcome.schema.json).
 
 ### Changesets
 

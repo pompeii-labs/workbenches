@@ -5,13 +5,13 @@ import { outcomeStorageDirectory } from '../../outcomes/directories.js';
 import { OutcomeStorageLease, processIsAlive } from '../../outcomes/lease.js';
 import { OutcomeStore } from '../../outcomes/store.js';
 import { RunStore } from '../../runs/store.js';
-import { E2BOutcomeCollector } from './collector.js';
-import type { E2BClient, E2BSandbox } from './contracts.js';
-import { captureE2BNativeState } from './native-state.js';
 import {
     parseE2BRecoveryRecord,
     type E2BRecoveryRecord as RecoveryRecord,
-} from './recovery-record.js';
+} from './checkpoint.js';
+import { E2BOutcomeCollector } from './collector.js';
+import type { E2BClient, E2BSandbox } from './contracts.js';
+import { captureE2BNativeState } from './native.js';
 import { E2BAssetSnapshot } from './snapshot.js';
 
 export interface E2BRecoveryReview {

@@ -17,7 +17,7 @@ import {
     type OutcomeContentDescriptor,
     OutcomeStore,
     type RunOutcome,
-} from '../src/outcomes/index.js';
+} from '../../src/outcomes/index.js';
 
 const temporaryDirectories: string[] = [];
 
