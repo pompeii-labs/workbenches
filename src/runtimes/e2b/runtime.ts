@@ -1,7 +1,5 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-
+import { dirname } from 'node:path';
+import type { OutcomeStore, RuntimeOutcomeCollection } from '../../outcomes/index.js';
 import type {
     ResolvedWorkbench,
     RunnerInvocation,
@@ -24,13 +22,16 @@ import type {
     RuntimeSessionOptions,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
+import { E2BOutcomeCollector } from './collector.js';
 import type { E2BClient, E2BCommand, E2BSandbox } from './contracts.js';
-import { e2bPricingSource, estimateE2BCost, formatBytes } from './infrastructure.js';
+import { prepareE2BDirectories } from './directories.js';
+import { e2bPricingSource, estimateE2BCost } from './infrastructure.js';
+import { captureE2BNativeState } from './native-state.js';
 import type { E2BPathPlan } from './paths.js';
+import { E2BOutcomeRecovery } from './recovery.js';
 import { e2bMetadata } from './sdk.js';
 import { definedEnvironment, gitExcludePattern, quote, shellCommand } from './shell.js';
 import { E2BAssetSnapshot } from './snapshot.js';
-import { downloadE2BFile } from './streams.js';
 import { terminalDimensions } from './terminal.js';
 
 interface E2BRuntimeOptions {
@@ -70,7 +71,12 @@ export class E2BRuntime implements PreparedRuntime {
     private readonly snapshotBaselines = new Map<number, string>();
     private ready = false;
     private cleaned = false;
-    private synchronizationAttempted = false;
+    private outcomeCollection: Promise<RuntimeOutcomeCollection> | undefined;
+    private outcomeCollectionFailed = false;
+    private statePersistence: Promise<void> | undefined;
+    private readonly persistedState = new Set<number>();
+    private recovery: E2BOutcomeRecovery | undefined;
+    private outcomeFinalized = false;
     private sandboxStartedAt: number | undefined;
     private finalInfrastructure: RuntimeInfrastructureMetadata | undefined;
 
@@ -121,12 +127,12 @@ export class E2BRuntime implements PreparedRuntime {
         );
         if (!paths[0]) {
             throw new Error(
-                `Git is unavailable in E2B image ${this.preparation.immutableReference}; E2B workspace synchronization requires git`
+                `Git is unavailable in E2B image ${this.preparation.immutableReference}; E2B workspace outcome collection requires git`
             );
         }
         if (!paths[1]) {
             throw new Error(
-                `Tar is unavailable in E2B image ${this.preparation.immutableReference}; E2B workspace synchronization requires tar`
+                `Tar is unavailable in E2B image ${this.preparation.immutableReference}; E2B workspace outcome collection requires tar`
             );
         }
         const tarCapabilities = await sandbox.run('tar --help 2>&1');
@@ -135,7 +141,7 @@ export class E2BRuntime implements PreparedRuntime {
             !`${tarCapabilities.stdout}\n${tarCapabilities.stderr}`.includes('--null')
         ) {
             throw new Error(
-                `GNU tar is unavailable in E2B image ${this.preparation.immutableReference}; E2B workspace synchronization requires tar --null support`
+                `GNU tar is unavailable in E2B image ${this.preparation.immutableReference}; E2B workspace outcome collection requires tar --null support`
             );
         }
         const runnerPath = paths[2];
@@ -353,10 +359,38 @@ export class E2BRuntime implements PreparedRuntime {
         return this.measureInfrastructure();
     }
 
-    async synchronize(): Promise<void> {
-        if (this.synchronizationAttempted || !this.sandbox) return;
-        this.synchronizationAttempted = true;
-        await this.synchronizeSnapshots(this.sandbox);
+    async collectOutcome(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+        if (!this.outcomeCollection) {
+            this.outcomeCollection = this.persistNativeState()
+                .then(() => this.collectSnapshots(store))
+                .catch((error) => {
+                    this.outcomeCollection = undefined;
+                    this.outcomeCollectionFailed = true;
+                    if (this.recovery)
+                        throw new Error(
+                            `${error instanceof Error ? error.message : String(error)}. Recover with: wb outcome ${this.options.run.id} --recover`,
+                            { cause: error }
+                        );
+                    throw error;
+                });
+        }
+        const outcome = await this.outcomeCollection;
+        this.outcomeCollectionFailed = false;
+        return outcome;
+    }
+
+    async finalizeOutcome(): Promise<void> {
+        this.outcomeFinalized = true;
+        await this.recovery?.discard();
+    }
+
+    collectOutput(store: OutcomeStore) {
+        return new E2BOutcomeCollector({
+            sandbox: this.requireReady(),
+            snapshots: this.snapshots,
+            baselines: this.snapshotBaselines,
+            maximumTransferBytes: this.options.maximumTransferBytes,
+        }).collectOutput(store);
     }
 
     async cleanup(): Promise<void> {
@@ -367,15 +401,28 @@ export class E2BRuntime implements PreparedRuntime {
         }
         this.active.clear();
         const failures: unknown[] = [];
-        if (!this.synchronizationAttempted && this.sandbox) {
-            await this.synchronize().catch((error) => failures.push(error));
-        }
+        await this.persistNativeState().catch((error) => {
+            this.outcomeCollectionFailed = true;
+            failures.push(error);
+        });
         if (this.sandbox) {
             this.finalInfrastructure = await this.measureInfrastructure();
         }
-        await this.sandbox?.kill().catch((error) => failures.push(error));
+        const retainRecovery = Boolean(this.recovery && !this.outcomeFinalized);
+        if (retainRecovery && this.sandbox) {
+            await this.recovery
+                ?.retain(this.sandbox, this.persistedState)
+                .catch((error) => failures.push(error));
+        } else if (!this.outcomeCollectionFailed) {
+            await this.sandbox?.kill().catch((error) => failures.push(error));
+        }
         const snapshotCleanup = await Promise.allSettled(
-            this.snapshots.map((snapshot) => snapshot.cleanup())
+            this.snapshots
+                .filter(
+                    (snapshot) =>
+                        !retainRecovery || snapshot.binding.kind !== 'workspace'
+                )
+                .map((snapshot) => snapshot.cleanup())
         );
         for (const result of snapshotCleanup) {
             if (result.status === 'rejected') failures.push(result.reason);
@@ -384,15 +431,41 @@ export class E2BRuntime implements PreparedRuntime {
         if (failures[0]) throw failures[0];
     }
 
+    private persistNativeState(): Promise<void> {
+        if (!this.sandbox) return Promise.resolve();
+        if (!this.statePersistence) {
+            this.statePersistence = captureE2BNativeState(
+                this.sandbox,
+                this.snapshots,
+                this.options.maximumTransferBytes,
+                this.persistedState,
+                (completed) => this.recovery?.progress(completed) ?? Promise.resolve()
+            ).catch((error) => {
+                this.statePersistence = undefined;
+                throw error;
+            });
+        }
+        return this.statePersistence;
+    }
+
     private async ensureSandbox(): Promise<E2BSandbox> {
         if (this.sandbox) return this.sandbox;
         const snapshots: E2BAssetSnapshot[] = [];
         let transferred = 0;
         try {
+            if (this.options.request.outcome?.home) {
+                const recovery = new E2BOutcomeRecovery(
+                    this.options.request.outcome.home,
+                    this.options.run
+                );
+                await recovery.prepare();
+                this.recovery = recovery;
+            }
             for (const binding of this.options.paths.bindings) {
                 const snapshot = await E2BAssetSnapshot.create(
                     binding,
-                    this.options.maximumTransferBytes - transferred
+                    this.options.maximumTransferBytes - transferred,
+                    binding.kind === 'workspace' ? this.recovery?.directory : undefined
                 );
                 transferred += snapshot.bytes;
                 snapshots.push(snapshot);
@@ -406,6 +479,12 @@ export class E2BRuntime implements PreparedRuntime {
             this.sandboxStartedAt = this.options.now().getTime();
             this.snapshots = snapshots;
             await this.stageSnapshots(sandbox, snapshots);
+            await this.recovery?.checkpoint(
+                sandbox,
+                snapshots,
+                this.snapshotBaselines,
+                this.options.maximumTransferBytes
+            );
             return sandbox;
         } catch (error) {
             await this.sandbox?.kill().catch(() => {});
@@ -414,6 +493,8 @@ export class E2BRuntime implements PreparedRuntime {
             await Promise.allSettled(snapshots.map((snapshot) => snapshot.cleanup()));
             this.snapshots = [];
             this.snapshotBaselines.clear();
+            await this.recovery?.discard().catch(() => {});
+            this.recovery = undefined;
             throw error;
         }
     }
@@ -423,8 +504,14 @@ export class E2BRuntime implements PreparedRuntime {
         snapshots: E2BAssetSnapshot[]
     ): Promise<void> {
         const home = this.environment.HOME ?? '/tmp/workbench-home';
-        const createdHome = await sandbox.run(`mkdir -p ${quote(home)}`);
-        requireSuccess(createdHome, 'Failed to create the E2B runtime home');
+        await prepareE2BDirectories(sandbox, [
+            home,
+            ...snapshots.map((snapshot) =>
+                snapshot.sourceIsDirectory
+                    ? snapshot.binding.runtimePath
+                    : dirname(snapshot.binding.runtimePath)
+            ),
+        ]);
         for (const [index, snapshot] of snapshots.entries()) {
             const remoteArchive = `/tmp/workbench-input-${index}.tar.gz`;
             await sandbox.upload(remoteArchive, Bun.file(snapshot.archive).stream());
@@ -442,7 +529,8 @@ export class E2BRuntime implements PreparedRuntime {
                   ];
             if (
                 snapshot.binding.access === 'read-write' &&
-                snapshot.sourceIsDirectory
+                snapshot.sourceIsDirectory &&
+                snapshot.binding.kind !== 'outcome'
             ) {
                 command.push(
                     `git -C ${quote(target)} init -q`,
@@ -469,7 +557,8 @@ export class E2BRuntime implements PreparedRuntime {
             );
             if (
                 snapshot.binding.access === 'read-write' &&
-                snapshot.sourceIsDirectory
+                snapshot.sourceIsDirectory &&
+                snapshot.binding.kind !== 'outcome'
             ) {
                 const baseline = result.stdout.trim().split(/\s+/).at(-1) ?? '';
                 if (!/^[a-f0-9]{40,64}$/.test(baseline)) {
@@ -482,101 +571,13 @@ export class E2BRuntime implements PreparedRuntime {
         }
     }
 
-    private async synchronizeSnapshots(sandbox: E2BSandbox): Promise<void> {
-        const directory = await mkdtemp(join(tmpdir(), 'workbench-e2b-sync-'));
-        let transferred = 0;
-        let materialized = 0;
-        const applications: Array<
-            Awaited<ReturnType<E2BAssetSnapshot['prepareApplication']>>
-        > = [];
-        try {
-            for (const [index, snapshot] of this.snapshots.entries()) {
-                if (
-                    snapshot.binding.access !== 'read-write' ||
-                    !snapshot.sourceIsDirectory
-                ) {
-                    continue;
-                }
-                const baseline = this.snapshotBaselines.get(index);
-                if (!baseline) {
-                    throw new Error(
-                        `E2B workspace baseline is unavailable: ${snapshot.binding.hostPath}`
-                    );
-                }
-                const root = snapshot.binding.runtimePath;
-                const remoteArchive = `/tmp/workbench-output-${index}.tar.gz`;
-                const remoteChanged = `/tmp/workbench-changed-${index}`;
-                const remoteDeleted = `/tmp/workbench-deleted-${index}`;
-                const command = [
-                    `git -C ${quote(root)} add -A`,
-                    `git -C ${quote(root)} diff --cached --name-only --diff-filter=ACMRTUXB -z ${quote(baseline)} > ${quote(remoteChanged)}`,
-                    `git -C ${quote(root)} diff --cached --name-only --diff-filter=D -z ${quote(baseline)} > ${quote(remoteDeleted)}`,
-                    `tar -C ${quote(root)} --null --files-from=${quote(remoteChanged)} --ignore-failed-read -czf ${quote(remoteArchive)}`,
-                ].join(' && ');
-                requireSuccess(
-                    await sandbox.run(command),
-                    `Failed to collect E2B workspace changes: ${snapshot.binding.hostPath}`
-                );
-                const reportedSizes = await Promise.all([
-                    sandbox.fileSize(remoteArchive),
-                    sandbox.fileSize(remoteDeleted),
-                ]);
-                if (
-                    transferred + reportedSizes[0] + reportedSizes[1] >
-                    this.options.maximumTransferBytes
-                ) {
-                    throw new Error(
-                        `E2B output exceeds the ${formatBytes(this.options.maximumTransferBytes)} transfer safety limit`
-                    );
-                }
-                const localArchive = join(directory, `output-${index}.tar.gz`);
-                const localDeleted = join(directory, `deleted-${index}`);
-                transferred += await downloadE2BFile(
-                    sandbox,
-                    remoteArchive,
-                    localArchive,
-                    this.options.maximumTransferBytes - transferred,
-                    this.options.maximumTransferBytes
-                );
-                const deletionBytes = await downloadE2BFile(
-                    sandbox,
-                    remoteDeleted,
-                    localDeleted,
-                    this.options.maximumTransferBytes - transferred,
-                    this.options.maximumTransferBytes
-                );
-                transferred += deletionBytes;
-                materialized += deletionBytes;
-                if (materialized > this.options.maximumTransferBytes) {
-                    throw new Error(
-                        `E2B output exceeds the ${formatBytes(this.options.maximumTransferBytes)} transfer safety limit`
-                    );
-                }
-                const deletions = (await readFile(localDeleted))
-                    .toString('utf8')
-                    .split('\0')
-                    .filter(Boolean);
-                const application = await snapshot.prepareApplication(
-                    localArchive,
-                    deletions,
-                    this.options.maximumTransferBytes - materialized,
-                    this.options.maximumTransferBytes
-                );
-                materialized += application.bytes;
-                applications.push(application);
-                await sandbox
-                    .run(
-                        `rm -f ${quote(remoteArchive)} ${quote(remoteChanged)} ${quote(remoteDeleted)}`
-                    )
-                    .catch(() => {});
-            }
-            for (const application of applications) await application.apply();
-        } finally {
-            await Promise.allSettled(
-                applications.map((application) => application.cleanup())
-            );
-            await rm(directory, { recursive: true, force: true });
-        }
+    private collectSnapshots(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+        return new E2BOutcomeCollector({
+            sandbox: this.requireReady(),
+            snapshots: this.snapshots,
+            baselines: this.snapshotBaselines,
+            maximumTransferBytes: this.options.maximumTransferBytes,
+        }).collect(store);
     }
 
     private async preflightAssets(sandbox: E2BSandbox): Promise<void> {

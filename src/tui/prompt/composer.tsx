@@ -3,8 +3,10 @@ import {
     type PasteEvent,
     type TextareaRenderable,
 } from '@opentui/core';
+import { useKeyboard } from '@opentui/solid';
 import { createMemo, createSignal, For, onCleanup, Show } from 'solid-js';
 import type { TuiCommand, TuiCommandRegistry } from '../commands/registry.js';
+import { useDialog } from '../dialog/index.js';
 import type { QueuedTranscriptInput } from '../model.js';
 import { useTheme } from '../theme/index.js';
 import type { PromptImageAttachment } from './attachments.js';
@@ -18,6 +20,7 @@ export interface ComposerRef {
 export interface ComposerProps {
     busy: boolean;
     disabled: boolean;
+    placeholder?: string;
     acceptsImages: boolean;
     queued: QueuedTranscriptInput[];
     attachments: PromptImageAttachment[];
@@ -33,6 +36,7 @@ export interface ComposerProps {
 
 export function Composer(props: ComposerProps) {
     const { theme } = useTheme();
+    const dialog = useDialog();
     const [value, setValue] = createSignal('');
     const [selected, setSelected] = createSignal(0);
     let input: TextareaRenderable | undefined;
@@ -40,6 +44,27 @@ export function Composer(props: ComposerProps) {
 
     onCleanup(() => {
         if (focusTimer) clearTimeout(focusTimer);
+    });
+
+    useKeyboard((key) => {
+        if (
+            key.sequence !== '/' ||
+            key.ctrl ||
+            key.meta ||
+            key.option ||
+            key.super ||
+            key.hyper ||
+            key.defaultPrevented ||
+            props.disabled ||
+            dialog.active() ||
+            !input ||
+            input.isDestroyed ||
+            input.focused
+        )
+            return;
+        key.preventDefault();
+        input.focus();
+        input.insertText('/');
     });
 
     const commandQuery = createMemo(() => {
@@ -226,11 +251,12 @@ export function Composer(props: ComposerProps) {
                     minHeight={1}
                     maxHeight={8}
                     placeholder={
-                        props.disabled
+                        props.placeholder ??
+                        (props.disabled
                             ? 'Connecting to Workbench...'
                             : props.busy
                               ? 'Steer the current turn...'
-                              : 'Ask anything, or type / for commands'
+                              : 'Ask anything, or type / for commands')
                     }
                     placeholderColor={theme.textMuted}
                     textColor={theme.text}

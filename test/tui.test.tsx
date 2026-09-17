@@ -1,14 +1,22 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { InputRenderable, Renderable, TextareaRenderable } from '@opentui/core';
+import { fileURLToPath } from 'node:url';
+import {
+    type InputRenderable,
+    type Renderable,
+    type TextareaRenderable,
+    TextRenderable,
+} from '@opentui/core';
 import { testRender } from '@opentui/solid';
 import type {
     AuthoringOperation,
     AuthoringOperationResult,
 } from '../src/authoring/index.js';
 import type { CatalogEntry } from '../src/catalog/index.js';
+import { OutcomeLifecycle } from '../src/outcomes/lifecycle.js';
+import { OutcomeStore } from '../src/outcomes/store.js';
 import type { RegistrySearchResult } from '../src/registry/index.js';
 import type { RunnerInput } from '../src/runners/session.js';
 import type {
@@ -18,6 +26,7 @@ import type {
     RunHandle,
     WorkbenchEvent,
 } from '../src/runs/index.js';
+import { RunStore } from '../src/runs/store.js';
 import { SessionStore, type StoredSession } from '../src/sessions/index.js';
 import { Transcript, WorkbenchApp } from '../src/tui/app.js';
 import { ChatHeader } from '../src/tui/chat-header.js';
@@ -576,7 +585,12 @@ describe.serial('Workbench TUI', () => {
 
         const prompt = findPrompt(setup.renderer.root);
         expect(setup.captureCharFrame()).toContain('Connecting to Workbench...');
+        expect(setup.captureCharFrame()).toContain('Starting OpenCode...');
         expect(setup.captureCharFrame()).not.toContain('Ready when you are.');
+        prompt.blur();
+        await setup.mockInput.typeText('/');
+        expect(prompt.focused).toBe(false);
+        expect(prompt.plainText).toBe('');
         prompt.setText('do not send yet');
         prompt.submit();
         await setup.flush();
@@ -587,10 +601,57 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
         expect(setup.captureCharFrame()).not.toContain('Connecting to Workbench...');
         expect(setup.captureCharFrame()).toContain('Ready when you are.');
+        expect(setup.captureCharFrame()).not.toContain('Starting OpenCode...');
         prompt.submit();
         await setup.flush();
         expect(sent).toBe(1);
     });
+
+    for (const [runtime, runner, label] of [
+        ['local', 'opencode', 'Starting OpenCode...'],
+        ['local', 'pi', 'Starting Pi...'],
+        ['docker', 'opencode', 'Starting Docker container...'],
+        ['e2b', 'opencode', 'Starting E2B sandbox...'],
+    ] as const) {
+        test(`shows animated startup feedback while provisioning ${runner} on ${runtime}`, async () => {
+            const starting = deferred<RunHandle>();
+            const resolved = resolvedWorkbench('creator', runner);
+            resolved.workbench.manifest.runtime = runtime;
+            const setup = await testRender(
+                () => (
+                    <ThemeProvider controller={themes}>
+                        <WorkbenchApp
+                            home="/tmp/workbench-tui-tests"
+                            entries={[]}
+                            initial={{ alias: 'creator', resolved }}
+                            resolve={async () => resolved}
+                            start={() => starting.promise}
+                        />
+                    </ThemeProvider>
+                ),
+                { width: 100, height: 28 }
+            );
+            renderers.push(setup.renderer);
+            await setup.flush();
+            const first = setup.captureCharFrame();
+            expect(first).toContain(label);
+            expect(first).toContain('0s');
+            expect(first).not.toContain('Ready when you are.');
+            await Bun.sleep(100);
+            await setup.flush();
+            expect(setup.captureCharFrame()).not.toBe(first);
+            if (runtime === 'e2b') {
+                await Bun.sleep(1_000);
+                await setup.flush();
+                expect(setup.captureCharFrame()).toContain('1s');
+            }
+            starting.resolve(fakeHandle(() => {}));
+            await Bun.sleep(10);
+            await setup.flush();
+            expect(setup.captureCharFrame()).not.toContain(label);
+            expect(setup.captureCharFrame()).toContain('Ready when you are.');
+        });
+    }
 
     test('restores input readiness after reattaching beyond the ready event', async () => {
         const home = await mkdtemp(join(tmpdir(), 'workbench-tui-reattach-'));
@@ -645,6 +706,148 @@ describe.serial('Workbench TUI', () => {
 
         expect(setup.captureCharFrame()).toContain('Ready when you are.');
         expect(setup.captureCharFrame()).not.toContain('Connecting to Workbench...');
+    });
+
+    test('reattaches with canonical history after a cache was overwritten and continues streamed text once', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-tui-history-'));
+        temporaryDirectories.push(home);
+        const runs = new RunStore(home);
+        const handle = fakeHandle(() => {});
+        const stableId = 'wb_historyreattach123456789012';
+        const session = await new SessionStore(home).create({
+            ...recentSession('reports'),
+            id: stableId,
+            latest_run_id: handle.runId,
+        });
+        const metadata = {
+            workbench: 'reports',
+            workbench_version: '0.1.0',
+            runner: 'opencode',
+            model: 'openai/gpt-5.4-mini',
+            runtime: 'e2b',
+            workspace: '/workspace',
+            session_id: stableId,
+        };
+        const request = {
+            workbench_path: '/package',
+            workspace: '/workspace',
+            task: '',
+        };
+        const original = await runs.create({ metadata, request });
+        await runs.update(original.id, {
+            status: 'completed',
+            dispatched_at: '2026-09-17T00:00:00.000Z',
+        });
+        await runs.create({ id: handle.runId, metadata, request });
+        await runs.update(handle.runId, {
+            status: 'running',
+            dispatched_at: '2026-09-17T01:00:00.000Z',
+        });
+        for (const [runId, drafts] of [
+            [
+                original.id,
+                [
+                    event(1, 'run.ready', {}),
+                    event(2, 'input.delivered', {
+                        id: 'old-input',
+                        kind: 'send',
+                        text: 'Make the original report',
+                    }),
+                    event(3, 'output.text', {
+                        id: 'old-reply',
+                        text: 'Original report created',
+                    }),
+                ],
+            ],
+            [
+                handle.runId,
+                [
+                    event(1, 'run.ready', {}),
+                    event(2, 'input.delivered', {
+                        id: 'new-input',
+                        kind: 'send',
+                        text: 'Revise that report',
+                    }),
+                    event(3, 'turn.started', {}),
+                    event(4, 'output.text', { id: 'native-reply', text: 'Version ' }),
+                ],
+            ],
+        ] as Array<[string, WorkbenchEvent[]]>) {
+            for (const next of drafts)
+                await runs.appendEvent(runId, { ...next, run_id: runId });
+        }
+        const cache = new SessionTranscript(home, stableId);
+        cache.schedule(
+            [
+                {
+                    id: 'error-2',
+                    kind: 'notice',
+                    tone: 'error',
+                    text: 'OpenCode request failed with HTTP 404',
+                },
+            ],
+            { runId: original.id, sequence: 3 }
+        );
+        await cache.flush();
+        let afterSequence: number | undefined;
+        const reattached: RunHandle = {
+            ...handle,
+            observe: (options) =>
+                (async function* () {
+                    afterSequence = options?.afterSequence;
+                    yield {
+                        ...event(5, 'output.text', { id: 'native-reply', text: 'two' }),
+                        run_id: handle.runId,
+                    };
+                    await new Promise<never>(() => {});
+                })(),
+        };
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home={home}
+                        entries={[]}
+                        initial={{
+                            alias: 'reports',
+                            session,
+                            resolved: resolvedWorkbench('reports', 'opencode'),
+                        }}
+                        resolve={async () => resolvedWorkbench('reports', 'opencode')}
+                        start={async () => reattached}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 40 }
+        );
+        renderers.push(setup.renderer);
+        // Restored Markdown waits for asynchronous syntax parsing; streamed
+        // text can render immediately. Wait for both actual replies.
+        for (let attempt = 0; attempt < 80; attempt++) {
+            await setup.flush();
+            const frame = setup.captureCharFrame();
+            if (
+                frame.includes('Original report created') &&
+                frame.includes('Version two')
+            )
+                break;
+            await Bun.sleep(25);
+        }
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain('Make the original report');
+        expect(frame).toContain('Original report created');
+        expect(frame).toContain('Revise that report');
+        expect(frame).toContain('Version two');
+        expect(frame).not.toContain('HTTP 404');
+        expect(frame).not.toContain('Connecting to Workbench');
+        expect(afterSequence).toBe(4);
+        await Bun.sleep(150);
+        const saved = await new SessionTranscript(home, stableId).load();
+        expect(saved.filter((item) => item.kind === 'user')).toHaveLength(2);
+        expect(saved.filter((item) => item.kind === 'assistant')).toHaveLength(2);
+        expect(saved.find((item) => item.id === 'native-reply')).toMatchObject({
+            text: 'Version two',
+        });
     });
 
     test('renders the canonical model label in an interactive session header', async () => {
@@ -717,6 +920,302 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
         expect(setup.captureCharFrame()).not.toContain('Themes');
         expect(findPrompt(setup.renderer.root).isDestroyed).toBeFalse();
+    });
+
+    test('recovers composer focus with one slash without stealing dialog input', async () => {
+        const resolved = resolvedWorkbench('creator', 'opencode');
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{ alias: 'creator', resolved }}
+                        resolve={async () => resolved}
+                        start={async () => fakeHandle(() => {})}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+        const prompt = findPrompt(setup.renderer.root);
+        prompt.blur();
+        expect(prompt.focused).toBe(false);
+        await setup.mockInput.typeText('/');
+        await setup.flush();
+        expect(prompt.focused, 'slash recovers a blurred prompt').toBe(true);
+        expect(prompt.plainText).toBe('/');
+        expect(setup.captureCharFrame()).toContain('/rename');
+
+        prompt.setText('');
+        await setup.mockInput.typeText('/');
+        expect(prompt.plainText).toBe('/');
+
+        prompt.setText('Keep this draft ');
+        prompt.gotoBufferEnd();
+        prompt.blur();
+        await setup.mockInput.typeText('/');
+        expect(prompt.plainText).toBe('Keep this draft /');
+        expect(prompt.focused, 'slash preserves an existing draft').toBe(true);
+        expect(setup.renderer.currentFocusedRenderable).toBe(prompt);
+
+        prompt.setText('/help');
+        prompt.submit();
+        await setup.flush();
+        expect(prompt.focused).toBe(false);
+        await setup.mockInput.typeText('/');
+        await setup.flush();
+        expect(prompt.focused).toBe(false);
+        expect(prompt.plainText).toBe('');
+        setup.mockInput.pressEscape();
+        await Bun.sleep(100);
+        await setup.flush();
+        expect(prompt.isDestroyed, 'closing the dialog keeps chat mounted').toBe(false);
+        expect(setup.captureCharFrame()).not.toContain('Command palette');
+        expect(prompt.focused, 'closing the dialog restores the prompt').toBe(true);
+    });
+
+    test('opens durable files and links from /outcome after the run finishes without a model turn', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-tui-outcome-'));
+        temporaryDirectories.push(home);
+        const store = new OutcomeStore(home);
+        const content = await store.putBytes('original report', 'text/html');
+        const outcome = await store.commit(
+            {
+                version: 1,
+                id: OutcomeStore.createId(),
+                run_id: 'wb_1234567890abcdefghij',
+                created_at: new Date().toISOString(),
+                completeness: 'complete',
+                summary: 'Research finished',
+                changesets: [],
+                artifacts: [{ id: 'artifact_report', name: 'Report.html', content }],
+                links: [
+                    {
+                        id: 'link_pr',
+                        label: 'Pull request',
+                        uri: 'https://example.com/pull/1',
+                        kind: 'pull_request',
+                    },
+                ],
+                warnings: [],
+            },
+            'pending'
+        );
+        await store.close();
+        let sent = 0;
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home={home}
+                        entries={[]}
+                        initial={{
+                            alias: 'probe',
+                            resolved: resolvedWorkbench('probe', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened');
+                        }}
+                        start={async () =>
+                            fakeHandle(
+                                () => sent++,
+                                event(1, 'outcome.available', {
+                                    outcome_id: outcome.id,
+                                    completeness: 'complete',
+                                    application_state: 'pending',
+                                    changesets: 0,
+                                    artifacts: 1,
+                                    links: 1,
+                                    warnings: 0,
+                                }),
+                                event(2, 'run.completed', { exit_code: 0 })
+                            )
+                        }
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 36 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(20);
+        await setup.flush();
+        const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('/outcome');
+        prompt.submit();
+        await Bun.sleep(20);
+        await setup.flush();
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain('Run outcome');
+        expect(frame).toContain('Report.html');
+        expect(frame).toContain('Pull request');
+        expect(frame).toContain('Apply explicitly');
+        const links = renderedLinks(setup.renderer.root);
+        const file = links.find((link) => link.text === 'Report.html');
+        expect(file?.uri).toStartWith('file://');
+        if (!file) throw new Error('Artifact hyperlink was not rendered');
+        expect(await readFile(fileURLToPath(file.uri), 'utf8')).toBe('original report');
+        expect(links.find((link) => link.text === 'Pull request')?.uri).toBe(
+            'https://example.com/pull/1'
+        );
+        expect(sent).toBe(0);
+    });
+
+    test('opens live result links before session shutdown and preserves both revisions through replay', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-tui-live-results-'));
+        temporaryDirectories.push(home);
+        const lifecycle = await OutcomeLifecycle.create({
+            home,
+            runId: 'wb_1234567890abcdefghij',
+        });
+        const report = join(lifecycle.output.directory, 'Report.html');
+        await writeFile(report, '<h1>First report</h1>');
+        const first = await lifecycle.checkpoint(undefined, 1);
+        await writeFile(report, '<h1>Revised report</h1>');
+        const second = await lifecycle.checkpoint(undefined, 2);
+        if (!first || !second) throw new Error('Missing fixture revisions');
+        const next = deferred<void>();
+        const done = deferred<void>();
+        let sent = 0;
+        const available = (sequence: number, id: string, turn: number) =>
+            event(sequence, 'outcome.available', {
+                outcome_id: id,
+                completeness: 'partial',
+                application_state: 'present',
+                turn_index: turn,
+                changesets: 0,
+                artifacts: 1,
+                links: 0,
+                warnings: 0,
+            });
+        const handle = fakeHandle(() => sent++);
+        handle.observe = () =>
+            (async function* () {
+                yield event(0, 'run.ready', {});
+                yield available(1, first.id, 1);
+                yield event(2, 'turn.completed', { index: 1 });
+                await next.promise;
+                yield available(3, second.id, 2);
+                yield event(4, 'turn.completed', { index: 2 });
+                await done.promise;
+            })();
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home={home}
+                        entries={[]}
+                        initial={{
+                            alias: 'probe',
+                            resolved: resolvedWorkbench('probe', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('Not opened');
+                        }}
+                        start={async () => handle}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 120, height: 40 }
+        );
+        renderers.push(setup.renderer);
+        try {
+            const waitForLinks = async (count: number) => {
+                for (let attempt = 0; attempt < 200; attempt++) {
+                    await Bun.sleep(5);
+                    await setup.flush();
+                    const links = renderedLinks(setup.renderer.root).filter(
+                        (link) => link.text === 'Report.html'
+                    );
+                    if (links.length === count) return links;
+                }
+                throw new Error(`Expected ${count} live artifact links`);
+            };
+            const original = (await waitForLinks(1))[0];
+            if (!original) throw new Error('Missing original link');
+            expect(setup.captureCharFrame()).toContain('Results saved · turn 1');
+            expect(setup.captureCharFrame()).not.toContain('Partial outcome available');
+            expect(await readFile(fileURLToPath(original.uri), 'utf8')).toBe(
+                '<h1>First report</h1>'
+            );
+            next.resolve();
+            const links = await waitForLinks(2);
+            expect(links.map((link) => link.uri)).toContain(original.uri);
+            const revision = links.find((link) => link.uri !== original.uri);
+            if (!revision) throw new Error('Missing revised link');
+            expect(await readFile(fileURLToPath(revision.uri), 'utf8')).toBe(
+                '<h1>Revised report</h1>'
+            );
+            expect(await readFile(fileURLToPath(original.uri), 'utf8')).toBe(
+                '<h1>First report</h1>'
+            );
+            const prompt = findPrompt(setup.renderer.root);
+            prompt.setText('/outcome');
+            prompt.submit();
+            for (
+                let attempt = 0;
+                attempt < 100 && !setup.captureCharFrame().includes('Results · turn 2');
+                attempt++
+            ) {
+                await Bun.sleep(5);
+                await setup.flush();
+            }
+            expect(setup.captureCharFrame()).toContain('Results · turn 2');
+            expect(setup.captureCharFrame()).toContain('session can continue');
+            expect(setup.captureCharFrame()).not.toContain('Apply explicitly');
+            expect(sent).toBe(0);
+            const transcript = new SessionTranscript(home, handle.runId);
+            for (
+                let attempt = 0;
+                attempt < 100 &&
+                (await transcript.load()).filter((item) => item.kind === 'outcome')
+                    .length !== 2;
+                attempt++
+            )
+                await Bun.sleep(5);
+            const saved = (await transcript.load()).filter(
+                (item) => item.kind === 'outcome'
+            );
+            expect(saved.map((item) => item.turnIndex)).toEqual([1, 2]);
+            // Replay each saved card after its staging outbox has been removed.
+            await lifecycle.cleanup();
+            const replay = await testRender(
+                () => (
+                    <ThemeProvider controller={themes}>
+                        <box flexDirection="column">
+                            {saved.map((item) => (
+                                <Transcript
+                                    item={item}
+                                    home={home}
+                                    assistantLabel="probe"
+                                    streaming={false}
+                                />
+                            ))}
+                        </box>
+                    </ThemeProvider>
+                ),
+                { width: 120, height: 30 }
+            );
+            renderers.push(replay.renderer);
+            for (
+                let attempt = 0;
+                attempt < 200 && renderedLinks(replay.renderer.root).length !== 2;
+                attempt++
+            ) {
+                await Bun.sleep(5);
+                await replay.flush();
+            }
+            expect(renderedLinks(replay.renderer.root).map((link) => link.uri)).toEqual(
+                links.map((link) => link.uri)
+            );
+        } finally {
+            next.resolve();
+            done.resolve();
+            await lifecycle.cleanup();
+        }
     });
 
     test('opens the creator from improve and submits the prepared evidence task', async () => {
@@ -1924,6 +2423,43 @@ describe.serial('Workbench TUI', () => {
         expect(setup.captureCharFrame()).toContain('Second streamed line.');
     });
 
+    test('renders a compact durable outcome card with explicit application state', async () => {
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <box width="100%" height="100%">
+                        <Transcript
+                            assistantLabel="fixture"
+                            streaming={false}
+                            item={{
+                                id: 'outcome-card',
+                                kind: 'outcome',
+                                outcomeId: 'wbo_1234567890abcdefghij',
+                                applicationState: 'pending',
+                                completeness: 'complete',
+                                changesets: 1,
+                                artifacts: 2,
+                                links: 1,
+                                warnings: 0,
+                                summary: 'Created a research report.',
+                            }}
+                        />
+                    </box>
+                </ThemeProvider>
+            ),
+            { width: 90, height: 12 }
+        );
+        renderers.push(setup.renderer);
+        await setup.flush();
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain('Outcome ready');
+        expect(frame).toContain('pending');
+        expect(frame).toContain('Created a research report.');
+        expect(frame).toContain('1 changeset · 2 artifacts · 1 link');
+        expect(frame).toContain('/outcome');
+        expect(frame).toContain('wbo_1234567890abcdefghij');
+    });
+
     test('renders every tool action and keeps failure details visible', async () => {
         const setup = await testRender(
             () => (
@@ -2274,6 +2810,19 @@ function findPrompt(root: Renderable): TextareaRenderable {
     const prompt = findPromptOrUndefined(root);
     if (prompt) return prompt;
     throw new Error('Prompt textarea was not rendered');
+}
+
+function renderedLinks(root: Renderable): Array<{ text: string; uri: string }> {
+    const links =
+        root instanceof TextRenderable
+            ? root.textNode
+                  .toChunks()
+                  .flatMap((chunk) =>
+                      chunk.link ? [{ text: chunk.text, uri: chunk.link.url }] : []
+                  )
+            : [];
+    for (const child of root.getChildren()) links.push(...renderedLinks(child));
+    return links;
 }
 
 function findInput(root: Renderable, id: string): InputRenderable {

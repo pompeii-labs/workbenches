@@ -12,10 +12,25 @@ export interface ToolTranscriptItem {
     status: 'running' | 'completed' | 'failed';
 }
 
+export interface OutcomeTranscriptItem {
+    id: string;
+    kind: 'outcome';
+    outcomeId: string;
+    applicationState: 'pending' | 'present' | 'applied';
+    completeness: 'complete' | 'partial';
+    turnIndex?: number;
+    changesets: number;
+    artifacts: number;
+    links: number;
+    warnings: number;
+    summary?: string;
+}
+
 export type TranscriptItem =
     | { id: string; kind: 'user'; text: string; images?: string[] }
     | { id: string; kind: 'assistant'; text: string }
     | ToolTranscriptItem
+    | OutcomeTranscriptItem
     | { id: string; kind: 'notice'; text: string; tone: 'muted' | 'error' };
 
 export type TranscriptDisplayItem =
@@ -376,6 +391,64 @@ export function reduceTranscript(
             ...(cost === undefined ? {} : { costUsd: cost }),
         };
     }
+    if (event.type === 'outcome.available') {
+        const outcomeId = field(event.data, 'outcome_id');
+        const applicationState = field(event.data, 'application_state');
+        const completeness = field(event.data, 'completeness');
+        if (
+            !outcomeId ||
+            !['pending', 'present', 'applied'].includes(applicationState) ||
+            !['complete', 'partial'].includes(completeness)
+        ) {
+            return state;
+        }
+        const summary = field(event.data, 'summary');
+        const turnIndex = numeric(event.data, 'turn_index');
+        return {
+            ...state,
+            items: [
+                ...state.items.filter(
+                    (item) => item.kind !== 'outcome' || item.outcomeId !== outcomeId
+                ),
+                {
+                    id: `outcome-${outcomeId}`,
+                    kind: 'outcome',
+                    outcomeId,
+                    applicationState: applicationState as
+                        | 'pending'
+                        | 'present'
+                        | 'applied',
+                    completeness: completeness as 'complete' | 'partial',
+                    ...(turnIndex !== undefined &&
+                    Number.isSafeInteger(turnIndex) &&
+                    turnIndex > 0
+                        ? { turnIndex }
+                        : {}),
+                    changesets: numeric(event.data, 'changesets') ?? 0,
+                    artifacts: numeric(event.data, 'artifacts') ?? 0,
+                    links: numeric(event.data, 'links') ?? 0,
+                    warnings: numeric(event.data, 'warnings') ?? 0,
+                    ...(summary ? { summary } : {}),
+                },
+            ],
+        };
+    }
+    if (event.type === 'outcome.failed') {
+        return {
+            ...state,
+            items: [
+                ...state.items,
+                {
+                    id: `outcome-failed-${event.run_id}-${event.sequence}`,
+                    kind: 'notice',
+                    tone: 'error',
+                    text:
+                        field(event.data, 'message') ||
+                        'Could not save returned results.',
+                },
+            ],
+        };
+    }
     if (event.type === 'turn.completed') {
         const interrupted = field(event.data, 'reason') === 'cancelled';
         if (state.interruptionPending) {
@@ -413,6 +486,9 @@ export function reduceTranscript(
                 },
             ],
         };
+    }
+    if (event.type === 'run.completed') {
+        return { ...state, busy: false, status: 'Completed' };
     }
     if (event.type === 'run.cancelled') {
         return {
@@ -463,6 +539,9 @@ export function reduceTranscriptDuringCancellation(
         event.type === 'turn.completed' ||
         event.type === 'run.failed' ||
         event.type === 'run.cancelled' ||
+        event.type === 'run.completed' ||
+        event.type === 'outcome.available' ||
+        event.type === 'outcome.failed' ||
         event.type === 'usage.updated'
     ) {
         return reduceTranscript(state, event);

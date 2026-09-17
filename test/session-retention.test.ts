@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
+import { OutcomeStore } from '../src/outcomes/index.js';
 import { RunStore, type StoredRunStatus } from '../src/runs/index.js';
 import type {
     ManagedDockerContainer,
@@ -24,6 +24,78 @@ afterEach(async () => {
 });
 
 describe('Workbench session retention', () => {
+    test('removes linked outcomes while retaining content referenced by surviving history', async () => {
+        const home = await temporaryHome();
+        const runs = new RunStore(home);
+        const sessions = new SessionStore(home);
+        const outcomes = new OutcomeStore(home);
+        const old = RunStore.createId();
+        const retained = RunStore.createId();
+        await fixtureSession(sessions, old, old);
+        await fixtureRun(runs, old, old, 'completed');
+        await fixtureSession(sessions, retained, retained);
+        await fixtureRun(runs, retained, retained, 'running', process.pid);
+        const shared = await outcomes.putBytes('shared', 'text/plain');
+        const disposable = await outcomes.putBytes('disposable', 'text/plain');
+        const oldOutcome = OutcomeStore.createId();
+        const retainedOutcome = OutcomeStore.createId();
+        for (const [runId, outcomeId, content] of [
+            [old, oldOutcome, disposable],
+            [retained, retainedOutcome, shared],
+        ] as const) {
+            await outcomes.commit(
+                {
+                    version: 1,
+                    id: outcomeId,
+                    run_id: runId,
+                    created_at: new Date().toISOString(),
+                    completeness: 'complete',
+                    changesets: [],
+                    links: [],
+                    warnings: [],
+                    artifacts: [
+                        { id: 'artifact_shared', name: 'shared.txt', content: shared },
+                        { id: 'artifact_result', name: 'result.txt', content },
+                    ],
+                },
+                'present'
+            );
+            await runs.update(runId, { outcome_id: outcomeId });
+        }
+        const baseRunBytes = await runs.size(old);
+        const checkpoint = await outcomes.commit(
+            {
+                version: 1,
+                id: OutcomeStore.createId(),
+                run_id: old,
+                created_at: new Date().toISOString(),
+                completeness: 'partial',
+                turn_index: 1,
+                changesets: [],
+                artifacts: [
+                    { id: 'artifact_result', name: 'result.txt', content: disposable },
+                ],
+                links: [],
+                warnings: [],
+            },
+            'present'
+        );
+        await outcomes.close();
+        expect(await runs.size(old)).toBe(
+            baseRunBytes + (await outcomes.metadataSize(checkpoint.id))
+        );
+        await Bun.sleep(2);
+        const retention = new SessionRetention(home);
+        const policy = { before: new Date() };
+        const review = await retention.review(policy);
+        const result = await retention.apply(policy);
+        expect(result.removedBytes).toBe(review.bytes);
+        await expect(outcomes.read(oldOutcome)).rejects.toThrow('does not exist');
+        await expect(outcomes.read(checkpoint.id)).rejects.toThrow('does not exist');
+        expect(await outcomes.read(retainedOutcome)).toBeDefined();
+        expect(await outcomes.blob(shared)).toBeString();
+        await expect(outcomes.blob(disposable)).rejects.toThrow('unavailable');
+    });
     test('keeps terminal history newer than the cutoff', async () => {
         const home = await temporaryHome();
         const runs = new RunStore(home);

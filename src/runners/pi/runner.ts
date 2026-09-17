@@ -1,6 +1,7 @@
 import { ModelRouter, type ResolvedRunnerConfiguration } from '../../models/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
+import { type RunnerContextFiles, remapRunnerContext } from '../context.js';
 import {
     assertRunnerConfiguration,
     type PreparedRunner,
@@ -38,17 +39,20 @@ class PreparedPiRunner implements PreparedRunner {
     readonly #stagedDirectory: string;
     readonly #workbench: ResolvedWorkbench;
     readonly #session: PiSessionAdapter;
+    readonly #context: RunnerContextFiles;
 
     private constructor(options: {
         workbench: ResolvedWorkbench;
         stagedDirectory: string;
         cleanup: () => Promise<void>;
         session: PiSessionAdapter;
+        context: RunnerContextFiles;
     }) {
         this.#workbench = options.workbench;
         this.#stagedDirectory = options.stagedDirectory;
         this.#cleanup = options.cleanup;
         this.#session = options.session;
+        this.#context = options.context;
         this.assets = [{ path: options.stagedDirectory, access: 'read-write' }];
     }
 
@@ -65,6 +69,7 @@ class PreparedPiRunner implements PreparedRunner {
             stagedDirectory: staged.directory,
             cleanup: staged.cleanup,
             session,
+            context: staged.context,
         });
     }
 
@@ -84,7 +89,8 @@ class PreparedPiRunner implements PreparedRunner {
             ),
             runtime.workspaceDirectory,
             configuration.model,
-            runtime.pathFor(this.#stagedDirectory)
+            runtime.pathFor(this.#stagedDirectory),
+            remapRunnerContext(this.#context, (path) => runtime.pathFor(path))
         );
     }
 
@@ -132,6 +138,9 @@ class PreparedPiRunner implements PreparedRunner {
                 ...(options.session ? { session: options.session } : {}),
             },
             {
+                context: remapRunnerContext(this.#context, (path) =>
+                    runtime.pathFor(path)
+                ),
                 configDirectory: runtime.pathFor(this.#stagedDirectory),
                 spawn: (command, spawnOptions): SpawnedPi => {
                     const process = runtime.launchSession(

@@ -2,6 +2,7 @@ import { join } from 'node:path';
 
 import { modelLabel } from '../../models/index.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
+import { type RunnerContextFiles, withRunnerContext } from '../context.js';
 import type { RunnerSessionContext } from '../session.js';
 
 export function buildPiInvocation(
@@ -10,7 +11,8 @@ export function buildPiInvocation(
     baseEnv: Record<string, string | undefined> = process.env,
     workspaceDirectory = workbench.repositoryDirectory,
     model = modelLabel(workbench.manifest.model),
-    configDirectory?: string
+    configDirectory?: string,
+    context?: RunnerContextFiles
 ): RunnerInvocation {
     validatePiWorkbench(workbench);
     const normalizedTask = task.trim();
@@ -32,11 +34,15 @@ export function buildPiInvocation(
         normalizedTask,
     ];
     const env = buildPiEnvironment(baseEnv, workspaceDirectory, configDirectory);
-    return {
-        command: piCredentialCommand(command, env, configDirectory),
-        cwd: workspaceDirectory,
-        env,
-    };
+    return withRunnerContext(
+        {
+            command: piCredentialCommand(command, env, configDirectory),
+            cwd: workspaceDirectory,
+            env,
+        },
+        workbench,
+        context
+    );
 }
 
 export function buildPiRpcInvocation(
@@ -45,7 +51,8 @@ export function buildPiRpcInvocation(
     workspaceDirectory = workbench.repositoryDirectory,
     model = modelLabel(workbench.manifest.model),
     configDirectory?: string,
-    session?: RunnerSessionContext
+    session?: RunnerSessionContext,
+    context?: RunnerContextFiles
 ): RunnerInvocation {
     validatePiWorkbench(workbench);
     const route = splitModelRoute(model);
@@ -70,11 +77,15 @@ export function buildPiRpcInvocation(
         ...piSkillArguments(workbench, configDirectory),
     ];
     const env = buildPiEnvironment(baseEnv, workspaceDirectory, configDirectory);
-    return {
-        command: piCredentialCommand(command, env, configDirectory),
-        cwd: workspaceDirectory,
-        env,
-    };
+    return withRunnerContext(
+        {
+            command: piCredentialCommand(command, env, configDirectory),
+            cwd: workspaceDirectory,
+            env,
+        },
+        workbench,
+        context
+    );
 }
 
 function piSkillArguments(

@@ -14,6 +14,7 @@ import type {
     E2BPreparedTemplate,
     E2BPty,
     E2BPtyOptions,
+    E2BRunOptions,
     E2BSandbox,
     E2BSandboxInfo,
     E2BTemplateSource,
@@ -102,6 +103,12 @@ export class E2BSdkClient implements E2BClient {
     async killSandbox(id: string): Promise<void> {
         await this.#client.Sandbox.kill(id);
     }
+
+    async connectSandbox(id: string, timeoutMilliseconds: number): Promise<E2BSandbox> {
+        return new SdkSandbox(
+            await this.#client.Sandbox.connect(id, { timeoutMs: timeoutMilliseconds })
+        );
+    }
 }
 
 export function e2bMetadata(run: {
@@ -128,12 +135,17 @@ class SdkSandbox implements E2BSandbox {
         return this.sandbox.sandboxId;
     }
 
+    async pause(): Promise<void> {
+        await this.sandbox.pause({ keepMemory: false });
+    }
+
     async run(
         command: string,
-        options: Omit<E2BCommandOptions, 'stdin'> = {}
+        options: E2BRunOptions = {}
     ): Promise<{ code: number; stdout: string; stderr: string }> {
         try {
             const result = await this.sandbox.commands.run(command, {
+                ...(options.user ? { user: options.user } : {}),
                 ...(options.cwd ? { cwd: options.cwd } : {}),
                 ...(options.env ? { envs: options.env } : {}),
                 ...(options.onStdout ? { onStdout: options.onStdout } : {}),

@@ -3,25 +3,22 @@ import {
     createReadStream as readStream,
     createWriteStream as writeStream,
 } from 'node:fs';
-import {
-    chmod,
-    copyFile,
-    lstat,
-    mkdir,
-    mkdtemp,
-    readdir,
-    readlink,
-    rm,
-    symlink,
-} from 'node:fs/promises';
+import { lstat, mkdtemp, readdir, readlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { createGunzip, createGzip } from 'node:zlib';
+import { createGzip } from 'node:zlib';
 
 import tar from 'tar-stream';
 
+import type { OutcomeChangeset, OutcomeWorkspace } from '../../outcomes/contracts.js';
+import type { OutcomeStore } from '../../outcomes/store.js';
+import { WorkspaceSnapshot } from '../../outcomes/workspace.js';
+import { extractArchive } from './archive.js';
 import type { E2BAssetBinding } from './paths.js';
+import { type E2BStateSource, E2BStateStore } from './state.js';
+
+export { extractArchive } from './archive.js';
 
 export interface E2BSnapshotEntry {
     path: string;
@@ -32,10 +29,20 @@ export interface E2BSnapshotEntry {
     size: number;
 }
 
-export interface E2BSnapshotApplication {
+export interface E2BSnapshotOutcome {
     readonly bytes: number;
-    apply(): Promise<void>;
+    collect(store: OutcomeStore): Promise<OutcomeChangeset | undefined>;
     cleanup(): Promise<void>;
+}
+
+export interface E2BRecoverySnapshot {
+    binding: E2BAssetBinding;
+    archive?: string;
+    excludedPaths: string[];
+    syncExcludedPaths: string[];
+    sourceIsDirectory: boolean;
+    gitRevision?: string;
+    stateVersion?: string;
 }
 
 export class E2BAssetSnapshot {
@@ -47,27 +54,56 @@ export class E2BAssetSnapshot {
         readonly syncExcludedPaths: string[],
         readonly bytes: number,
         readonly sourceIsDirectory: boolean,
-        private readonly temporaryDirectory: string
+        readonly gitRevision: string | undefined,
+        private readonly temporaryDirectory: string | undefined,
+        private readonly stateSource?: E2BStateSource
     ) {}
 
     static async create(
         binding: E2BAssetBinding,
-        maximumBytes: number
+        maximumBytes: number,
+        persistentDirectory?: string
     ): Promise<E2BAssetSnapshot> {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), 'workbench-e2b-'));
+        if (binding.kind === 'state' || binding.kind === 'credentials') {
+            return new E2BStateStore(binding.hostPath).withSource((source) =>
+                E2BAssetSnapshot.createFrom(binding, maximumBytes, source)
+            );
+        }
+        return E2BAssetSnapshot.createFrom(
+            binding,
+            maximumBytes,
+            undefined,
+            persistentDirectory
+        );
+    }
+
+    private static async createFrom(
+        binding: E2BAssetBinding,
+        maximumBytes: number,
+        stateSource?: E2BStateSource,
+        persistentDirectory?: string
+    ): Promise<E2BAssetSnapshot> {
+        const temporaryDirectory = await mkdtemp(
+            join(persistentDirectory ?? tmpdir(), 'workbench-e2b-')
+        );
         const archive = join(temporaryDirectory, 'asset.tar.gz');
+        const sourcePath = stateSource?.directory ?? binding.hostPath;
         try {
-            const source = await lstat(binding.hostPath);
+            const source = await lstat(sourcePath);
             const excludedPaths: string[] = [];
             const syncExcludedPaths = binding.excludedHostPaths.map((path) =>
                 normalizeArchivePath(relative(binding.hostPath, path))
             );
             excludedPaths.push(...syncExcludedPaths);
             const paths = source.isDirectory()
-                ? await selectedPaths(binding, excludedPaths, syncExcludedPaths)
+                ? await selectedPaths(
+                      { ...binding, hostPath: sourcePath },
+                      excludedPaths,
+                      syncExcludedPaths
+                  )
                 : ['.workbench-file'];
             const entries = source.isDirectory()
-                ? await describeEntries(binding.hostPath, paths, binding.hostPath)
+                ? await describeEntries(sourcePath, paths, sourcePath)
                 : new Map([
                       [
                           '.workbench-file',
@@ -87,12 +123,7 @@ export class E2BAssetSnapshot {
                     `E2B transfer exceeds the ${formatBytes(maximumBytes)} safety limit: ${binding.hostPath} is ${formatBytes(bytes)}`
                 );
             }
-            await writeArchive(
-                binding.hostPath,
-                archive,
-                entries,
-                source.isDirectory()
-            );
+            await writeArchive(sourcePath, archive, entries, source.isDirectory());
             return new E2BAssetSnapshot(
                 binding,
                 archive,
@@ -101,7 +132,11 @@ export class E2BAssetSnapshot {
                 syncExcludedPaths,
                 bytes,
                 source.isDirectory(),
-                temporaryDirectory
+                binding.kind === 'workspace'
+                    ? await currentGitRevision(binding.hostPath)
+                    : undefined,
+                temporaryDirectory,
+                stateSource
             );
         } catch (error) {
             await rm(temporaryDirectory, { recursive: true, force: true });
@@ -109,109 +144,117 @@ export class E2BAssetSnapshot {
         }
     }
 
-    async prepareApplication(
+    async persistState(archive: string, maximumBytes: number): Promise<number> {
+        if (!this.stateSource) throw new Error('Snapshot is not managed native state');
+        return new E2BStateStore(this.binding.hostPath).install(
+            archive,
+            this.stateSource.version,
+            maximumBytes
+        );
+    }
+
+    recoverySnapshot(directory: string): E2BRecoverySnapshot {
+        return {
+            binding: this.binding,
+            excludedPaths: this.excludedPaths,
+            syncExcludedPaths: this.syncExcludedPaths,
+            sourceIsDirectory: this.sourceIsDirectory,
+            ...(this.binding.kind === 'workspace'
+                ? { archive: relative(directory, this.archive) }
+                : {}),
+            ...(this.gitRevision ? { gitRevision: this.gitRevision } : {}),
+            ...(this.stateSource ? { stateVersion: this.stateSource.version } : {}),
+        };
+    }
+
+    static fromRecovery(
+        record: E2BRecoverySnapshot,
+        directory: string
+    ): E2BAssetSnapshot {
+        return new E2BAssetSnapshot(
+            record.binding,
+            record.archive ? join(directory, record.archive) : '',
+            new Map(),
+            record.excludedPaths,
+            record.syncExcludedPaths,
+            0,
+            record.sourceIsDirectory,
+            record.gitRevision,
+            undefined,
+            record.stateVersion
+                ? { directory: record.binding.hostPath, version: record.stateVersion }
+                : undefined
+        );
+    }
+
+    async prepareOutcome(
         archive: string,
         deletions: string[],
-        maximumBytes = Number.POSITIVE_INFINITY,
+        workspace: OutcomeWorkspace,
+        maximumBytes = 512 * 1_024 * 1_024,
         reportedMaximumBytes = maximumBytes
-    ): Promise<E2BSnapshotApplication> {
+    ): Promise<E2BSnapshotOutcome> {
         if (!this.sourceIsDirectory) {
-            throw new Error('E2B file assets cannot be synchronized');
+            throw new Error('E2B file assets cannot produce workspace outcomes');
         }
-        const extracted = await mkdtemp(join(tmpdir(), 'workbench-e2b-output-'));
+        const materialized = await mkdtemp(join(tmpdir(), 'workbench-e2b-outcome-'));
+        let baseline: WorkspaceSnapshot | undefined;
         try {
+            await extractArchive(this.archive, materialized);
+            baseline = await WorkspaceSnapshot.create(materialized, {
+                workspace,
+                maximumBytes,
+            });
             const bytes = await extractArchive(
                 archive,
-                extracted,
+                materialized,
                 maximumBytes,
                 reportedMaximumBytes
             );
-            const changed = await describeEntries(
-                extracted,
-                await walk(extracted, '', false),
-                extracted
-            );
-            const conflicts: string[] = [];
-            for (const [path, remote] of changed) {
-                if (this.protectedOutputPath(path)) continue;
-                await validateHostDestination(this.binding.hostPath, path);
-                const baseline = this.entries.get(path);
-                const current = await describeOptional(
-                    join(this.binding.hostPath, path),
-                    path,
-                    this.binding.hostPath
-                );
-                if (conflictsWith(baseline, current, remote)) {
-                    conflicts.push(path);
-                }
+            for (const path of await walk(materialized, '', false)) {
+                if (this.protectedOutputPath(path))
+                    await rm(join(materialized, path), { force: true });
             }
             for (const path of deletions) {
                 validateRelativePath(path);
                 if (this.protectedOutputPath(path)) continue;
-                await validateHostDestination(this.binding.hostPath, path);
-                const baseline = this.entries.get(path);
-                if (!baseline) continue;
-                const current = await describeOptional(
-                    join(this.binding.hostPath, path),
-                    path,
-                    this.binding.hostPath
-                );
-                if (current && !sameEntry(current, baseline)) conflicts.push(path);
+                await rm(join(materialized, path), { recursive: true, force: true });
             }
-            if (conflicts.length > 0) {
-                throw new Error(
-                    `E2B workspace changed locally during the run; remote changes were not applied to: ${[...new Set(conflicts)].toSorted().join(', ')}`
-                );
-            }
+            const captured = baseline;
             let cleaned = false;
             return {
                 bytes,
-                apply: async () => {
-                    for (const [path, remote] of changed) {
-                        if (this.protectedOutputPath(path)) continue;
-                        await validateHostDestination(this.binding.hostPath, path);
-                        await installEntry(
-                            join(extracted, path),
-                            join(this.binding.hostPath, path),
-                            remote,
-                            this.binding.hostPath
-                        );
-                    }
-                    for (const path of deletions) {
-                        if (this.protectedOutputPath(path)) continue;
-                        const baseline = this.entries.get(path);
-                        if (!baseline) continue;
-                        await validateHostDestination(this.binding.hostPath, path);
-                        await rm(join(this.binding.hostPath, path), {
-                            recursive: true,
-                            force: true,
-                        });
-                    }
+                collect: async (store) => {
+                    const changeset = await captured.collect(store);
+                    if (!changeset || !this.gitRevision) return changeset;
+                    return {
+                        ...changeset,
+                        base: {
+                            ...changeset.base,
+                            git_revision: this.gitRevision,
+                        },
+                    };
                 },
                 cleanup: async () => {
                     if (cleaned) return;
                     cleaned = true;
-                    await rm(extracted, { recursive: true, force: true });
+                    await Promise.allSettled([
+                        captured.cleanup(),
+                        rm(materialized, { recursive: true, force: true }),
+                    ]);
                 },
             };
         } catch (error) {
-            await rm(extracted, { recursive: true, force: true });
+            await baseline?.cleanup().catch(() => undefined);
+            await rm(materialized, { recursive: true, force: true });
             throw error;
         }
     }
 
-    async apply(archive: string, deletions: string[]): Promise<void> {
-        if (!this.sourceIsDirectory) return;
-        const application = await this.prepareApplication(archive, deletions);
-        try {
-            await application.apply();
-        } finally {
-            await application.cleanup();
-        }
-    }
-
     cleanup(): Promise<void> {
-        return rm(this.temporaryDirectory, { recursive: true, force: true });
+        return this.temporaryDirectory
+            ? rm(this.temporaryDirectory, { recursive: true, force: true })
+            : Promise.resolve();
     }
 
     private protectedOutputPath(path: string): boolean {
@@ -343,23 +386,6 @@ async function describeEntries(
     return entries;
 }
 
-async function describeOptional(
-    absolutePath: string,
-    path: string,
-    symlinkRoot: string
-): Promise<E2BSnapshotEntry | undefined> {
-    return describeEntry(absolutePath, path, symlinkRoot).catch((error) => {
-        if (
-            error instanceof Error &&
-            'code' in error &&
-            (error as NodeJS.ErrnoException).code === 'ENOENT'
-        ) {
-            return undefined;
-        }
-        throw error;
-    });
-}
-
 async function describeEntry(
     absolutePath: string,
     path: string,
@@ -425,96 +451,23 @@ async function writeArchive(
     await writing;
 }
 
-export async function extractArchive(
-    archive: string,
-    destination: string,
-    maximumBytes = Number.POSITIVE_INFINITY,
-    reportedMaximumBytes = maximumBytes
-): Promise<number> {
-    const extract = tar.extract();
-    let bytes = 0;
-    extract.on('entry', (header, stream, next) => {
-        void (async () => {
-            const name = normalizeArchivePath(header.name);
-            validateRelativePath(name);
-            bytes += header.type === 'file' ? (header.size ?? 0) : 0;
-            if (bytes > maximumBytes) {
-                stream.resume();
-                throw new Error(
-                    `E2B output exceeds the ${formatBytes(reportedMaximumBytes)} transfer safety limit`
-                );
-            }
-            const path = join(destination, name);
-            await mkdir(dirname(path), { recursive: true });
-            if (header.type === 'directory') {
-                await mkdir(path, { recursive: true });
-                stream.resume();
-            } else if (header.type === 'symlink') {
-                const link = header.linkname;
-                if (!link) throw new Error(`E2B archive symlink is missing: ${name}`);
-                validateSymlink(dirname(path), link, path, destination);
-                await rm(path, { recursive: true, force: true });
-                await symlink(link, path);
-                stream.resume();
-            } else if (header.type === 'file') {
-                await rm(path, { recursive: true, force: true });
-                await pipeline(stream, writeStream(path, { mode: header.mode }));
-                await chmod(path, header.mode ?? 0o644);
-            } else {
-                stream.resume();
-                throw new Error(`Unsupported E2B archive entry: ${name}`);
-            }
-        })().then(
-            () => next(),
-            (error) => extract.destroy(error as Error)
-        );
-    });
-    await pipeline(readStream(archive), createGunzip(), extract);
-    return bytes;
-}
-
-async function installEntry(
-    source: string,
-    destination: string,
-    entry: E2BSnapshotEntry,
-    root: string
-): Promise<void> {
-    await mkdir(dirname(destination), { recursive: true });
-    await rm(destination, { recursive: true, force: true });
-    if (entry.type === 'symlink') {
-        const link = entry.link as string;
-        validateSymlink(dirname(destination), link, destination, root);
-        await symlink(link, destination);
-        return;
-    }
-    await copyFile(source, destination);
-    await chmod(destination, entry.mode);
-}
-
-function conflictsWith(
-    baseline: E2BSnapshotEntry | undefined,
-    current: E2BSnapshotEntry | undefined,
-    remote: E2BSnapshotEntry
-): boolean {
-    if (!baseline) return Boolean(current && !sameEntry(current, remote));
-    if (current && sameEntry(current, baseline)) return false;
-    if (!current) return !sameEntry(remote, baseline);
-    return !sameEntry(current, remote);
-}
-
-function sameEntry(left: E2BSnapshotEntry, right: E2BSnapshotEntry): boolean {
-    return (
-        left.type === right.type &&
-        left.mode === right.mode &&
-        left.digest === right.digest &&
-        left.link === right.link
-    );
-}
-
 async function digestFile(path: string): Promise<string> {
     const hash = createHash('sha256');
     for await (const chunk of readStream(path)) hash.update(chunk);
     return `sha256:${hash.digest('hex')}`;
+}
+
+async function currentGitRevision(root: string): Promise<string | undefined> {
+    const child = Bun.spawn(['git', 'rev-parse', 'HEAD'], {
+        cwd: root,
+        stdin: 'ignore',
+        stdout: 'pipe',
+        stderr: 'ignore',
+    });
+    const output = await new Response(child.stdout).text();
+    if ((await child.exited) !== 0) return undefined;
+    const revision = output.trim();
+    return /^[a-f0-9]{40,64}$/.test(revision) ? revision : undefined;
 }
 
 function validateRelativePath(path: string): void {
@@ -525,34 +478,6 @@ function validateRelativePath(path: string): void {
         path.split('/').some((segment) => segment === '..' || segment === '')
     ) {
         throw new Error(`Unsafe E2B archive path: ${path}`);
-    }
-}
-
-async function validateHostDestination(root: string, path: string): Promise<void> {
-    validateRelativePath(path);
-    const rootEntry = await lstat(root);
-    if (rootEntry.isSymbolicLink() || !rootEntry.isDirectory()) {
-        throw new Error(`E2B workspace root became unsafe during the run: ${root}`);
-    }
-    let parent = root;
-    for (const segment of path.split('/').slice(0, -1)) {
-        parent = join(parent, segment);
-        const entry = await lstat(parent).catch((error) => {
-            if (
-                error instanceof Error &&
-                'code' in error &&
-                (error as NodeJS.ErrnoException).code === 'ENOENT'
-            ) {
-                return undefined;
-            }
-            throw error;
-        });
-        if (!entry) return;
-        if (entry.isSymbolicLink() || !entry.isDirectory()) {
-            throw new Error(
-                `E2B workspace destination has an unsafe parent: ${join(root, path)}`
-            );
-        }
     }
 }
 
@@ -578,9 +503,16 @@ function protectedWorkspacePath(path: string): boolean {
     const segments = path.split('/');
     if (
         segments.some((segment) =>
-            ['.git', '.hg', '.svn', '.ssh', '.aws', '.gnupg', 'node_modules'].includes(
-                segment
-            )
+            [
+                '.git',
+                '.hg',
+                '.svn',
+                '.ssh',
+                '.aws',
+                '.gnupg',
+                '.workbench-state',
+                'node_modules',
+            ].includes(segment)
         )
     ) {
         return true;

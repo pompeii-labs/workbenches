@@ -20,6 +20,10 @@ export interface E2BCommandOptions {
     onStderr?: (data: string) => void | Promise<void>;
 }
 
+export type E2BRunOptions = Omit<E2BCommandOptions, 'stdin'> & {
+    user?: 'root';
+};
+
 export interface E2BCommand {
     readonly pid: number;
     wait(): Promise<RuntimeCommandResult>;
@@ -53,10 +57,7 @@ export interface E2BSandboxInfo {
 
 export interface E2BSandbox {
     readonly id: string;
-    run(
-        command: string,
-        options?: Omit<E2BCommandOptions, 'stdin'>
-    ): Promise<RuntimeCommandResult>;
+    run(command: string, options?: E2BRunOptions): Promise<RuntimeCommandResult>;
     start(command: string, options?: E2BCommandOptions): Promise<E2BCommand>;
     startPty(command: string, options: E2BPtyOptions): Promise<E2BPty>;
     upload(path: string, data: ReadableStream<Uint8Array>): Promise<void>;
@@ -64,6 +65,7 @@ export interface E2BSandbox {
     fileSize(path: string): Promise<number>;
     info(): Promise<E2BSandboxInfo>;
     host(port: number): string;
+    pause?(): Promise<void>;
     kill(): Promise<void>;
 }
 
@@ -85,6 +87,7 @@ export interface E2BClient {
     }): Promise<E2BSandbox>;
     listManaged(scope: string): Promise<E2BManagedSandbox[]>;
     killSandbox(id: string): Promise<void>;
+    connectSandbox?(id: string, timeoutMilliseconds: number): Promise<E2BSandbox>;
 }
 
 export interface E2BRuntimeDependencies {

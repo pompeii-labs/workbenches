@@ -1,3 +1,8 @@
+import {
+    HostOutcomeCapture,
+    type OutcomeStore,
+    type RuntimeOutcomeCollection,
+} from '../outcomes/index.js';
 import type { RunnerInvocation, SpawnedRunner } from '../types.js';
 import {
     type PreflightResult,
@@ -59,7 +64,10 @@ export class LocalRuntimeProvider implements RuntimeProvider {
                 'image is not supported with the local runtime'
             );
         }
-        return new LocalRuntime(request, this.dependencies);
+        const outcome = request.outcome
+            ? await HostOutcomeCapture.create(request)
+            : undefined;
+        return new LocalRuntime(request, this.dependencies, outcome);
     }
 }
 
@@ -77,7 +85,8 @@ export class LocalRuntime implements PreparedRuntime {
 
     constructor(
         request: RuntimePrepareRequest,
-        private readonly dependencies: Required<LocalRuntimeDependencies>
+        private readonly dependencies: Required<LocalRuntimeDependencies>,
+        private readonly outcome?: HostOutcomeCapture
     ) {
         this.workbench = request.workbench;
         this.workspaceDirectory = request.workspaceDirectory;
@@ -95,6 +104,9 @@ export class LocalRuntime implements PreparedRuntime {
         this.environment = {
             ...request.environment,
             ...this.workspaceBindings.environment(this.workspaces),
+            ...(request.outcome
+                ? { WORKBENCH_OUTPUT_DIR: request.outcome.directory }
+                : {}),
         };
     }
 
@@ -194,8 +206,19 @@ export class LocalRuntime implements PreparedRuntime {
         }
     }
 
+    async collectOutcome(
+        store: OutcomeStore
+    ): Promise<RuntimeOutcomeCollection | undefined> {
+        return this.outcome?.collect(store);
+    }
+
     async cleanup(): Promise<void> {
         this.cleaned = true;
+        await this.outcome?.cleanup();
+    }
+
+    collectOutput(store: OutcomeStore) {
+        return this.outcome?.collectOutput(store) ?? Promise.resolve(undefined);
     }
 
     private assertAvailable(phase: 'preflight' | 'launch'): void {
@@ -213,12 +236,24 @@ export class LocalRuntime implements PreparedRuntime {
         options: Parameters<NonNullable<LocalRuntimeDependencies['spawn']>>[1]
     ): SpawnedRunner {
         const child = Bun.spawn(command, options);
+        let forceTermination: ReturnType<typeof setTimeout> | undefined;
+        const exited = child.exited.finally(() => clearTimeout(forceTermination));
         return {
-            exited: child.exited,
+            exited,
             ...(child.stdin ? { stdin: child.stdin } : {}),
             ...(child.stdout ? { stdout: child.stdout } : {}),
             ...(child.stderr ? { stderr: child.stderr } : {}),
-            kill: () => child.kill(),
+            kill: () => {
+                if (child.exitCode !== null) return;
+                child.kill('SIGTERM');
+                if (forceTermination) return;
+                // Native harnesses can handle SIGTERM without exiting. Do not
+                // leave session shutdown and final result capture waiting forever.
+                forceTermination = setTimeout(() => {
+                    if (child.exitCode === null) child.kill('SIGKILL');
+                }, 2_000);
+                forceTermination.unref();
+            },
         };
     }
 

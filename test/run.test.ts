@@ -156,11 +156,11 @@ describe('local run lifecycle', () => {
         );
 
         expect(code).toBe(7);
-        expect(command[0]).toBe('opencode');
+        expect(command).toContain('opencode');
         expect(command.at(-1)).toBe('inspect');
         expect(cwd).toBe(fixture.root);
         expect(JSON.parse(config)).toMatchObject({
-            instructions: ['.workbenches/core/instructions.md'],
+            instructions: [expect.stringContaining('/.workbench-context/system.md')],
         });
         expect(launches).toBe(1);
         expect(launchCompleted).toBeTrue();
@@ -222,7 +222,9 @@ describe('local run lifecycle', () => {
         );
 
         expect(code).toBe(0);
-        expect(command.slice(0, 3)).toEqual(['pi', '--mode', 'json']);
+        expect(command.slice(command.indexOf('pi'), command.indexOf('pi') + 3)).toEqual(
+            ['pi', '--mode', 'json']
+        );
         expect(command.at(-1)).toBe('inspect');
         expect(events[0]).toMatchObject({
             type: 'run.started',

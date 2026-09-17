@@ -1,0 +1,54 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://workbenches.dev/schemas/outcomes/v1/outbox.schema.json",
+    "title": "Workbench Outbox Declaration",
+    "description": "Optional metadata for files and links returned by a Workbench run. File existence, unique normalized artifact paths, and URL safety require host validation.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["version"],
+    "properties": {
+        "version": { "const": 1 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 16384 },
+        "artifacts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path"],
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4096,
+                        "description": "Safe outbox-relative path; the engine normalizes platform separators and rejects escaping paths and control characters."
+                    },
+                    "name": { "type": "string", "minLength": 1, "maxLength": 512 },
+                    "description": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4096
+                    },
+                    "media_type": { "type": "string", "minLength": 1, "maxLength": 255 }
+                }
+            }
+        },
+        "links": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["label", "uri"],
+                "properties": {
+                    "label": { "type": "string", "minLength": 1, "maxLength": 512 },
+                    "uri": {
+                        "type": "string",
+                        "format": "uri",
+                        "pattern": "^https?://",
+                        "maxLength": 8192
+                    },
+                    "kind": { "enum": ["pull_request", "preview", "external"] }
+                }
+            }
+        }
+    }
+}

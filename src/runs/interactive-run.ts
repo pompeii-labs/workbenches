@@ -2,6 +2,11 @@ import { RunnerCredentialStore } from '../connections/credentials.js';
 import { ConnectionInspector } from '../connections/inspector.js';
 import { ConnectionStore } from '../connections/store.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
+import {
+    type OutcomeCompleteness,
+    OutcomeLifecycle,
+    type RunOutcome,
+} from '../outcomes/index.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import {
@@ -26,6 +31,7 @@ import type {
     ResolvedWorkbenchReference,
 } from '../workbench/index.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
+import { publishRunOutcome } from './outcome-events.js';
 import { RunStore } from './store.js';
 
 export interface InteractiveRunSession {
@@ -49,6 +55,7 @@ export interface InteractiveRunDependencies {
     registry?: RunnerRegistry;
     runtimeRegistry?: RuntimeRegistry;
     now?: () => Date;
+    captureOutcomes?: boolean;
 }
 
 export interface InteractiveRunOptions {
@@ -74,6 +81,7 @@ export interface InteractiveRunOptions {
 
 export class InteractiveRun {
     private readonly dependencies: InteractiveRunDependencies;
+    private outcomeLifecycle: OutcomeLifecycle | undefined;
 
     private constructor(private readonly options: InteractiveRunOptions) {
         this.dependencies = options.dependencies ?? {};
@@ -97,6 +105,26 @@ export class InteractiveRun {
         let preparedRunner: PreparedRunner | undefined;
         let preparedRuntime: PreparedRuntime | undefined;
         try {
+            this.outcomeLifecycle =
+                this.options.home && this.dependencies.captureOutcomes !== false
+                    ? await OutcomeLifecycle.create({
+                          home: this.options.home,
+                          runId: emitter.runId,
+                          ...(this.options.session?.nativeSessionId
+                              ? { resumeSessionId: this.options.session.id }
+                              : {}),
+                          ...(this.dependencies.now
+                              ? { now: this.dependencies.now }
+                              : {}),
+                          onAvailable: (outcome, applicationState) =>
+                              publishRunOutcome(
+                                  this.options.home,
+                                  emitter,
+                                  outcome,
+                                  applicationState
+                              ),
+                      })
+                    : undefined;
             preparedRunner = await registry.prepare(workbench, environment);
             const prepared = await this.prepare(
                 preparedRunner,
@@ -165,10 +193,17 @@ export class InteractiveRun {
                 session,
                 emitter,
                 this.options.interactive ?? false,
+                (completeness) =>
+                    this.outcomeLifecycle?.collect(preparedRuntime, completeness),
+                (turn) => this.outcomeLifecycle?.checkpoint(preparedRuntime, turn),
                 () => this.cleanup(preparedRuntime, preparedRunner)
             );
         } catch (error) {
             await session?.close().catch(() => undefined);
+            const outcomeId = await this.outcomeLifecycle
+                ?.collect(preparedRuntime, 'partial')
+                .then((outcome) => outcome?.id)
+                .catch(() => undefined);
             const infrastructure = await this.cleanup(
                 preparedRuntime,
                 preparedRunner
@@ -176,6 +211,7 @@ export class InteractiveRun {
             await emitter
                 .emit('run.failed', {
                     message: InteractiveRun.errorMessage(error),
+                    ...(outcomeId ? { outcome_id: outcomeId } : {}),
                     ...(infrastructure ? { infrastructure } : {}),
                 })
                 .catch(() => undefined);
@@ -231,6 +267,7 @@ export class InteractiveRun {
                                   {
                                       path: this.options.session.directory,
                                       access: 'read-write' as const,
+                                      state: true,
                                   },
                               ]
                             : []),
@@ -254,6 +291,16 @@ export class InteractiveRun {
                               run: {
                                   id: runId,
                                   scope: RunStore.scope(this.options.home),
+                              },
+                          }
+                        : {}),
+                    ...(this.outcomeLifecycle
+                        ? {
+                              outcome: {
+                                  directory: this.outcomeLifecycle.output.directory,
+                                  ...(this.options.home
+                                      ? { home: this.options.home }
+                                      : {}),
                               },
                           }
                         : {}),
@@ -343,6 +390,7 @@ export class InteractiveRun {
         const results = await Promise.allSettled([
             runtime?.cleanup(),
             runner?.cleanup(),
+            this.outcomeLifecycle?.cleanup(),
         ]);
         const infrastructure = await runtime?.infrastructure?.().catch(() => undefined);
         const failure = results.find(
@@ -432,13 +480,22 @@ class HostedInteractiveSession implements InteractiveRunSession {
     private cancellationRequested = false;
     private activeTurn: Promise<void> | undefined;
     private releasePromise:
-        | Promise<RuntimeInfrastructureMetadata | undefined>
+        | Promise<{
+              infrastructure?: RuntimeInfrastructureMetadata;
+              outcomeId?: string;
+          }>
         | undefined;
 
     constructor(
         runner: RunnerSession,
         emitter: RunEvents,
         private readonly interactive: boolean,
+        private readonly collectOutcome: (
+            completeness: OutcomeCompleteness
+        ) => Promise<RunOutcome | undefined> | undefined,
+        private readonly checkpoint: (
+            turn: number
+        ) => Promise<RunOutcome | undefined> | undefined,
         private readonly cleanup: () => Promise<
             RuntimeInfrastructureMetadata | undefined
         >
@@ -526,6 +583,16 @@ class HostedInteractiveSession implements InteractiveRunSession {
         });
         try {
             const result = await this.runner.prompt(task);
+            if (!this.cancellationRequested && result.reason !== 'cancelled') {
+                try {
+                    await this.checkpoint(turn);
+                } catch (error) {
+                    await this.emitter.emit('outcome.failed', {
+                        turn_index: turn,
+                        message: `Could not save returned results: ${error instanceof Error ? error.message : String(error)}`,
+                    });
+                }
+            }
             await this.emitter.emit('turn.completed', {
                 index: turn,
                 reason: this.cancellationRequested
@@ -544,10 +611,15 @@ class HostedInteractiveSession implements InteractiveRunSession {
             }
             this.terminal = true;
             this.closed = true;
-            const infrastructure = await this.releaseResources().catch(() => undefined);
+            const released = await this.releaseResources('partial').catch(
+                () => undefined
+            );
             await this.emitter.emit('run.failed', {
                 message: error instanceof Error ? error.message : String(error),
-                ...(infrastructure ? { infrastructure } : {}),
+                ...(released?.outcomeId ? { outcome_id: released.outcomeId } : {}),
+                ...(released?.infrastructure
+                    ? { infrastructure: released.infrastructure }
+                    : {}),
             });
             throw error;
         }
@@ -561,12 +633,17 @@ class HostedInteractiveSession implements InteractiveRunSession {
         if (this.working) await this.cancelTurn();
         this.closed = true;
         try {
-            const infrastructure = await this.releaseResources();
+            const released = await this.releaseResources(
+                type === 'run.completed' ? 'complete' : 'partial'
+            );
             if (!this.terminal) {
                 this.terminal = true;
                 await this.emitter.emit(type, {
                     ...data,
-                    ...(infrastructure ? { infrastructure } : {}),
+                    ...(released.outcomeId ? { outcome_id: released.outcomeId } : {}),
+                    ...(released.infrastructure
+                        ? { infrastructure: released.infrastructure }
+                        : {}),
                 });
             }
         } catch (error) {
@@ -580,7 +657,10 @@ class HostedInteractiveSession implements InteractiveRunSession {
         }
     }
 
-    private releaseResources(): Promise<RuntimeInfrastructureMetadata | undefined> {
+    private releaseResources(completeness: OutcomeCompleteness): Promise<{
+        infrastructure?: RuntimeInfrastructureMetadata;
+        outcomeId?: string;
+    }> {
         if (this.releasePromise) return this.releasePromise;
         this.releasePromise = (async () => {
             let failure: unknown;
@@ -589,6 +669,12 @@ class HostedInteractiveSession implements InteractiveRunSession {
             } catch (error) {
                 failure = error;
             }
+            let outcomeId: string | undefined;
+            try {
+                outcomeId = (await this.collectOutcome(completeness))?.id;
+            } catch (error) {
+                failure ??= error;
+            }
             let infrastructure: RuntimeInfrastructureMetadata | undefined;
             try {
                 infrastructure = await this.cleanup();
@@ -596,7 +682,10 @@ class HostedInteractiveSession implements InteractiveRunSession {
                 failure ??= error;
             }
             if (failure) throw failure;
-            return infrastructure;
+            return {
+                ...(infrastructure ? { infrastructure } : {}),
+                ...(outcomeId ? { outcomeId } : {}),
+            };
         })();
         return this.releasePromise;
     }

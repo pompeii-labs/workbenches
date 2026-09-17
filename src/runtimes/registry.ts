@@ -1,3 +1,5 @@
+import type { OutcomeStore, RuntimeOutcomeCollection } from '../outcomes/index.js';
+import type { CollectedOutput } from '../outcomes/output.js';
 import type {
     ResolvedWorkbench,
     RunnerInvocation,
@@ -194,12 +196,26 @@ class GuardedRuntime implements PreparedRuntime {
         }
     }
 
-    async synchronize(): Promise<void> {
+    async collectOutcome(
+        store: OutcomeStore
+    ): Promise<RuntimeOutcomeCollection | undefined> {
         try {
-            await this.runtime.synchronize?.();
+            return await this.runtime.collectOutcome?.(store);
         } catch (error) {
-            throw RuntimeError.from(this.name, 'cleanup', error);
+            throw RuntimeError.from(this.name, 'collect', error);
         }
+    }
+
+    async collectOutput(store: OutcomeStore): Promise<CollectedOutput | undefined> {
+        try {
+            return await this.runtime.collectOutput?.(store);
+        } catch (error) {
+            throw RuntimeError.from(this.name, 'collect', error);
+        }
+    }
+
+    async finalizeOutcome(): Promise<void> {
+        await this.runtime.finalizeOutcome?.();
     }
 
     async cleanup(): Promise<void> {

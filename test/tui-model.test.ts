@@ -13,6 +13,41 @@ import {
 } from '../src/tui/model.js';
 
 describe('TUI transcript model', () => {
+    test('preserves a durable outcome card during cancellation and completion', () => {
+        let state = interruptTranscript(
+            addUserMessage(emptyTranscript(), 'Make a report')
+        );
+        const available = event(2, 'outcome.available', {
+            outcome_id: 'wbo_1234567890abcdefghij',
+            application_state: 'pending',
+            completeness: 'partial',
+            changesets: 1,
+            artifacts: 2,
+            links: 1,
+            warnings: 1,
+            summary: 'Saved partial results.',
+        });
+        state = reduceTranscriptDuringCancellation(state, available);
+        expect(state.items.at(-1)).toEqual({
+            id: 'outcome-wbo_1234567890abcdefghij',
+            kind: 'outcome',
+            outcomeId: 'wbo_1234567890abcdefghij',
+            applicationState: 'pending',
+            completeness: 'partial',
+            changesets: 1,
+            artifacts: 2,
+            links: 1,
+            warnings: 1,
+            summary: 'Saved partial results.',
+        });
+        state = reduceTranscript(state, available);
+        expect(state.items.filter((item) => item.kind === 'outcome')).toHaveLength(1);
+        expect(reduceTranscript(state, event(3, 'run.completed', {}))).toMatchObject({
+            busy: false,
+            status: 'Completed',
+        });
+    });
+
     test('groups consecutive tool activity without hiding failures', () => {
         const grouped = groupTranscriptItems([
             { id: 'user-1', kind: 'user', text: 'Inspect this' },

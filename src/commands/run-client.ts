@@ -55,14 +55,29 @@ export class CliRunClient {
         handle: RunHandle,
         inputId: string,
         render: (event: WorkbenchEvent) => void,
-        afterSequence = 0
+        afterSequence = 0,
+        waitForRunEnd = false
     ): Promise<FollowRunResult> {
         const view = new InputEventView(inputId, afterSequence === 0);
+        let completed = false;
         return this.follow(handle, render, {
             afterSequence,
-            include: (event) => view.includes(event),
-            until: (event) => completedInput(event, inputId),
-        });
+            include: (event) => {
+                if (completedInput(event, inputId)) completed = true;
+                return (
+                    (waitForRunEnd &&
+                        (event.type === 'outcome.available' ||
+                            event.type === 'run.completed')) ||
+                    view.includes(event)
+                );
+            },
+            ...(waitForRunEnd
+                ? {}
+                : { until: (event: WorkbenchEvent) => completedInput(event, inputId) }),
+        }).then((result) => ({
+            ...result,
+            reachedBoundary: result.reachedBoundary || completed,
+        }));
     }
 }
 

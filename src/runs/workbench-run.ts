@@ -2,6 +2,7 @@ import { RunnerCredentialStore } from '../connections/credentials.js';
 import { ConnectionInspector } from '../connections/inspector.js';
 import { ConnectionStore } from '../connections/store.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
+import { type OutcomeCompleteness, OutcomeLifecycle } from '../outcomes/index.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import {
@@ -18,6 +19,7 @@ import type {
 } from '../types.js';
 import { Workbench, WorkbenchWorkspaces } from '../workbench/index.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
+import { publishRunOutcome } from './outcome-events.js';
 import { RunnerOutput } from './runner-output.js';
 import { RunStore } from './store.js';
 
@@ -60,6 +62,7 @@ export class WorkbenchRun {
     private readonly write: (value: string) => void;
     private readonly runtimeRegistry: RuntimeRegistry;
     private startedAt = 0;
+    private outcomeLifecycle: OutcomeLifecycle | undefined;
 
     constructor(
         private readonly options: WorkbenchRunOptions,
@@ -100,6 +103,23 @@ export class WorkbenchRun {
         let runner: PreparedRunner | undefined;
         let runtime: PreparedRuntime | undefined;
         try {
+            this.outcomeLifecycle =
+                this.options.home && !this.options.dryRun
+                    ? await OutcomeLifecycle.create({
+                          home: this.options.home,
+                          runId: events.runId,
+                          ...(this.dependencies.now
+                              ? { now: this.dependencies.now }
+                              : {}),
+                          onAvailable: (outcome, applicationState) =>
+                              publishRunOutcome(
+                                  this.options.home,
+                                  events,
+                                  outcome,
+                                  applicationState
+                              ),
+                      })
+                    : undefined;
             runner = await RunnerRegistry.standard().prepare(
                 workbench,
                 this.environment
@@ -111,7 +131,8 @@ export class WorkbenchRun {
                         workbench,
                         runner.assets,
                         workspaces,
-                        events.runId
+                        events.runId,
+                        this.outcomeLifecycle?.output
                     )
                 );
             const preflight = await runtime.preflight();
@@ -183,15 +204,22 @@ export class WorkbenchRun {
                 return 130;
             }
             const message = error instanceof Error ? error.message : String(error);
+            const outcomeId = await this.collectOutcome(
+                runtime,
+                events,
+                'partial'
+            ).catch(() => undefined);
             const infrastructure = await this.infrastructure(runtime);
             await events.emit('run.failed', {
                 message: RunnerOutput.redact(message, workbench, this.environment),
                 duration_ms: this.duration(),
+                ...(outcomeId ? { outcome_id: outcomeId } : {}),
                 ...(infrastructure ? { infrastructure } : {}),
             });
             return 1;
         } finally {
             await this.cleanup(runtime, runner);
+            await this.outcomeLifecycle?.cleanup();
         }
     }
 
@@ -229,10 +257,12 @@ export class WorkbenchRun {
                     this.environment
                 );
                 const infrastructure = await this.infrastructure(runtime);
+                const outcomeId = await this.collectOutcome(runtime, events, 'partial');
                 await events.emit('run.failed', {
                     message: `${runner.failureLabel} exited with code ${result.code}${detail ? `: ${detail}` : ''}`,
                     exit_code: result.code,
                     duration_ms: this.duration(),
+                    ...(outcomeId ? { outcome_id: outcomeId } : {}),
                     ...(infrastructure ? { infrastructure } : {}),
                 });
                 return result.code;
@@ -240,11 +270,12 @@ export class WorkbenchRun {
             if (!result.summary.turnCompleted) {
                 await events.emit('turn.completed', { reason: 'process-exit' });
             }
-            await runtime.synchronize?.();
+            const outcomeId = await this.collectOutcome(runtime, events, 'complete');
             const infrastructure = await this.infrastructure(runtime);
             await events.emit('run.completed', {
                 exit_code: 0,
                 duration_ms: this.duration(),
+                ...(outcomeId ? { outcome_id: outcomeId } : {}),
                 ...(infrastructure ? { infrastructure } : {}),
             });
             return 0;
@@ -289,7 +320,8 @@ export class WorkbenchRun {
         workbench: ResolvedWorkbench,
         runnerAssets: RuntimeAsset[],
         workspaces: WorkbenchWorkspaceBinding[],
-        runId: string
+        runId: string,
+        output?: OutcomeLifecycle['output']
     ) {
         const workspace =
             this.options.workspaceDirectory ?? workbench.repositoryDirectory;
@@ -323,6 +355,14 @@ export class WorkbenchRun {
             ...(this.options.home
                 ? { run: { id: runId, scope: RunStore.scope(this.options.home) } }
                 : {}),
+            ...(output
+                ? {
+                      outcome: {
+                          directory: output.directory,
+                          ...(this.options.home ? { home: this.options.home } : {}),
+                      },
+                  }
+                : {}),
         };
     }
 
@@ -339,10 +379,12 @@ export class WorkbenchRun {
         events: RunEvents,
         runtime?: PreparedRuntime
     ): Promise<void> {
+        const outcomeId = await this.collectOutcome(runtime, events, 'partial');
         const infrastructure = await this.infrastructure(runtime);
         await events.emit('run.cancelled', {
             reason: 'requested',
             duration_ms: this.duration(),
+            ...(outcomeId ? { outcome_id: outcomeId } : {}),
             ...(infrastructure ? { infrastructure } : {}),
         });
     }
@@ -355,6 +397,14 @@ export class WorkbenchRun {
 
     private duration(): number {
         return Date.now() - this.startedAt;
+    }
+
+    private async collectOutcome(
+        runtime: PreparedRuntime | undefined,
+        _events: RunEvents,
+        completeness: OutcomeCompleteness
+    ): Promise<string | undefined> {
+        return (await this.outcomeLifecycle?.collect(runtime, completeness))?.id;
     }
 
     private async cleanup(

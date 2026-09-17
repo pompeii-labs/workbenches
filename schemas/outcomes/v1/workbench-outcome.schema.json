@@ -1,0 +1,267 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://workbenches.dev/schemas/outcomes/v1/workbench-outcome.schema.json",
+    "title": "Workbench Run Outcome",
+    "description": "The canonical serialized shape of a durable, runtime-independent run result. Hosts also validate unique child IDs and paths, matching statistics, safe symlink targets, credential-free web links, and referenced content.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "version",
+        "id",
+        "run_id",
+        "created_at",
+        "completeness",
+        "changesets",
+        "artifacts",
+        "links",
+        "warnings"
+    ],
+    "properties": {
+        "version": { "const": 1 },
+        "id": { "type": "string", "pattern": "^wbo_[a-z0-9]{20,64}$" },
+        "run_id": { "type": "string", "pattern": "^wb_[a-z0-9]{20,64}$" },
+        "created_at": { "type": "string", "format": "date-time", "pattern": "Z$" },
+        "completeness": { "enum": ["complete", "partial"] },
+        "turn_index": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 16384 },
+        "changesets": { "type": "array", "items": { "$ref": "#/$defs/changeset" } },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+        "links": { "type": "array", "items": { "$ref": "#/$defs/link" } },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/warning" } }
+    },
+    "allOf": [
+        {
+            "if": { "required": ["turn_index"] },
+            "then": {
+                "properties": {
+                    "completeness": { "const": "partial" },
+                    "changesets": { "type": "array", "maxItems": 0 }
+                }
+            }
+        }
+    ],
+    "$defs": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{2,127}$" },
+        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "relativePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^(?![a-zA-Z]:)(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\\\u0000-\\u001f\\u007f-\\u009f]).*[^/]$"
+        },
+        "mode": { "type": "integer", "minimum": 0, "maximum": 511 },
+        "content": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["digest", "media_type", "size_bytes"],
+            "properties": {
+                "digest": { "$ref": "#/$defs/digest" },
+                "media_type": { "type": "string", "minLength": 1, "maxLength": 255 },
+                "size_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                }
+            }
+        },
+        "fileFingerprint": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "digest", "mode", "size_bytes"],
+            "properties": {
+                "kind": { "const": "file" },
+                "digest": { "$ref": "#/$defs/digest" },
+                "mode": { "$ref": "#/$defs/mode" },
+                "size_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                }
+            }
+        },
+        "symlinkFingerprint": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "mode", "target"],
+            "properties": {
+                "kind": { "const": "symlink" },
+                "mode": { "$ref": "#/$defs/mode" },
+                "target": { "type": "string", "minLength": 1, "maxLength": 4096 }
+            }
+        },
+        "fingerprint": {
+            "oneOf": [
+                { "$ref": "#/$defs/fileFingerprint" },
+                { "$ref": "#/$defs/symlinkFingerprint" }
+            ]
+        },
+        "fileState": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "content", "mode"],
+            "properties": {
+                "kind": { "const": "file" },
+                "content": { "$ref": "#/$defs/content" },
+                "mode": { "$ref": "#/$defs/mode" }
+            }
+        },
+        "symlinkState": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "mode", "target"],
+            "properties": {
+                "kind": { "const": "symlink" },
+                "mode": { "$ref": "#/$defs/mode" },
+                "target": { "type": "string", "minLength": 1, "maxLength": 4096 }
+            }
+        },
+        "state": {
+            "oneOf": [
+                { "$ref": "#/$defs/fileState" },
+                { "$ref": "#/$defs/symlinkState" }
+            ]
+        },
+        "changeAdd": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "operation", "after"],
+            "properties": {
+                "path": { "$ref": "#/$defs/relativePath" },
+                "operation": { "const": "add" },
+                "after": { "$ref": "#/$defs/state" }
+            }
+        },
+        "changeModify": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "operation", "before", "after"],
+            "properties": {
+                "path": { "$ref": "#/$defs/relativePath" },
+                "operation": { "const": "modify" },
+                "before": { "$ref": "#/$defs/fingerprint" },
+                "after": { "$ref": "#/$defs/state" }
+            }
+        },
+        "changeDelete": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "operation", "before"],
+            "properties": {
+                "path": { "$ref": "#/$defs/relativePath" },
+                "operation": { "const": "delete" },
+                "before": { "$ref": "#/$defs/fingerprint" }
+            }
+        },
+        "change": {
+            "oneOf": [
+                { "$ref": "#/$defs/changeAdd" },
+                { "$ref": "#/$defs/changeModify" },
+                { "$ref": "#/$defs/changeDelete" }
+            ]
+        },
+        "workspace": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["kind"],
+                    "properties": { "kind": { "const": "primary" } }
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["kind", "name"],
+                    "properties": {
+                        "kind": { "const": "named" },
+                        "name": { "type": "string", "minLength": 1, "maxLength": 128 }
+                    }
+                }
+            ]
+        },
+        "changeset": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "workspace", "base", "entries", "stats"],
+            "properties": {
+                "id": { "$ref": "#/$defs/id" },
+                "workspace": { "$ref": "#/$defs/workspace" },
+                "base": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["snapshot_digest"],
+                    "properties": {
+                        "snapshot_digest": { "$ref": "#/$defs/digest" },
+                        "git_revision": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 255
+                        }
+                    }
+                },
+                "entries": { "type": "array", "items": { "$ref": "#/$defs/change" } },
+                "review": { "$ref": "#/$defs/content" },
+                "stats": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "additions",
+                        "modifications",
+                        "deletions",
+                        "binary_files"
+                    ],
+                    "properties": {
+                        "additions": { "type": "integer", "minimum": 0 },
+                        "modifications": { "type": "integer", "minimum": 0 },
+                        "deletions": { "type": "integer", "minimum": 0 },
+                        "binary_files": { "type": "integer", "minimum": 0 }
+                    }
+                }
+            }
+        },
+        "artifact": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "name", "content"],
+            "properties": {
+                "id": { "$ref": "#/$defs/id" },
+                "name": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "path": {
+                    "$ref": "#/$defs/relativePath",
+                    "not": {
+                        "anyOf": [
+                            { "const": "outcome.json" },
+                            { "type": "string", "pattern": "^\\s*$" }
+                        ]
+                    }
+                },
+                "content": { "$ref": "#/$defs/content" },
+                "description": { "type": "string", "minLength": 1, "maxLength": 4096 }
+            }
+        },
+        "link": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "label", "uri"],
+            "properties": {
+                "id": { "$ref": "#/$defs/id" },
+                "label": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "uri": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https?://",
+                    "maxLength": 8192
+                },
+                "kind": { "enum": ["pull_request", "preview", "external"] }
+            }
+        },
+        "warning": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message"],
+            "properties": {
+                "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "message": { "type": "string", "minLength": 1, "maxLength": 4096 }
+            }
+        }
+    }
+}

@@ -13,6 +13,7 @@ import {
 } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { CatalogRegistryReference } from '../catalog/index.js';
+import { OutcomeStore } from '../outcomes/store.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import { RunControl } from './control.js';
 import type { WorkbenchEvent } from './events.js';
@@ -49,6 +50,7 @@ export interface StoredRun {
     session_id?: string;
     resumed_from?: string;
     exit_code?: number;
+    outcome_id?: string;
 }
 
 export interface StoredRunRequest {
@@ -313,13 +315,26 @@ export class RunStore {
 
     async size(id: string): Promise<number> {
         await this.read(id);
-        return this.directorySize(this.directory(id));
+        const outcomes = new OutcomeStore(this.home);
+        const metadata = await Promise.all(
+            (await outcomes.listByRun(id)).map((outcome) =>
+                outcomes.metadataSize(outcome.id)
+            )
+        );
+        return (
+            (await this.directorySize(this.directory(id))) +
+            metadata.reduce((sum, bytes) => sum + bytes, 0)
+        );
     }
 
     async removeTerminal(id: string): Promise<void> {
         const run = await this.read(id);
         if (!RunStore.isTerminal(run.status)) {
             throw new Error(`Active Workbench run cannot be removed: ${id}`);
+        }
+        const outcomes = new OutcomeStore(this.home);
+        for (const outcome of await outcomes.list()) {
+            if (outcome.run_id === id) await outcomes.remove(outcome.id);
         }
         await rm(this.directory(id), { recursive: true, force: true });
     }

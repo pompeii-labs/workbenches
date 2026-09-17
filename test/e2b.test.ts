@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { OutcomeStore } from '../src/outcomes/index.js';
 import type {
     E2BClient,
     E2BCommand,
@@ -10,12 +11,15 @@ import type {
     E2BPreparedTemplate,
     E2BPty,
     E2BPtyOptions,
+    E2BRunOptions,
     E2BSandbox,
     E2BSandboxInfo,
     E2BTemplateSource,
 } from '../src/runtimes/e2b/contracts.js';
+import { e2bIdentityCommand } from '../src/runtimes/e2b/directories.js';
 import { E2BManagedSandboxes } from '../src/runtimes/e2b/managed.js';
 import { E2BRuntimeProvider } from '../src/runtimes/e2b/provider.js';
+import { E2BAssetSnapshot } from '../src/runtimes/e2b/snapshot.js';
 import { RuntimeRegistry } from '../src/runtimes/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { runtimeProviderContract } from './runtime-provider-contract.js';
@@ -77,6 +81,57 @@ describe('E2B runtime provider', () => {
                 'dev.workbenches.scope': run.scope,
             });
             expect(client.createOptions[0]?.timeoutMilliseconds).toBe(3_600_000);
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('provisions staging paths for non-root users without elevating the harness', async () => {
+        const client = new FakeClient();
+        const runtime = await new E2BRuntimeProvider({ client }).prepare(
+            request(await fixture())
+        );
+        try {
+            await runtime.preflight();
+            const setup = client.sandbox.runs.find(
+                (run) => run.options.user === 'root'
+            );
+            expect(setup?.command).toContain("chown '1000:1000' '/workspace'");
+            expect(setup?.command).toContain("test ! -L '/workspace'");
+            expect(setup?.command).toContain("chmod 700 '/workspace'");
+            expect(client.sandbox.runs.filter((run) => run.options.user)).toHaveLength(
+                1
+            );
+            const process = runtime.launchSession(
+                {
+                    command: ['opencode', 'run', 'hello'],
+                    cwd: runtime.workspaceDirectory,
+                    env: {},
+                },
+                { stdin: 'pipe' }
+            );
+            await expect(process.exited).resolves.toBe(0);
+            expect(
+                Reflect.get(client.sandbox.started[0]?.options ?? {}, 'user')
+            ).toBeUndefined();
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('refuses malformed user identities before privileged directory setup', async () => {
+        const client = new FakeClient();
+        client.sandbox.runtimeIdentity = '1000:1000; touch /unsafe';
+        const runtime = await new E2BRuntimeProvider({ client }).prepare(
+            request(await fixture())
+        );
+        try {
+            await expect(runtime.preflight()).rejects.toThrow(
+                'Invalid E2B runtime user identity'
+            );
+            expect(client.sandbox.runs.some((run) => run.options.user)).toBeFalse();
+            expect(client.sandbox.started).toHaveLength(0);
+            expect(client.sandbox.killed).toBeTrue();
         } finally {
             await runtime.cleanup();
         }
@@ -367,6 +422,101 @@ describe('E2B runtime provider', () => {
         }
     });
 
+    test('collects declared remote artifacts without materializing them into the host output directory', async () => {
+        const resolved = await fixture();
+        const outputDirectory = await mkdtemp(join(tmpdir(), 'workbench-e2b-output-'));
+        const remoteOutput = await mkdtemp(
+            join(tmpdir(), 'workbench-e2b-remote-output-')
+        );
+        const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-outcomes-'));
+        temporaryDirectories.push(outputDirectory, remoteOutput, home);
+        await writeFile(join(remoteOutput, 'report.txt'), 'remote artifact');
+        await writeFile(
+            join(remoteOutput, 'outcome.json'),
+            JSON.stringify({
+                version: 1,
+                summary: 'Remote work complete',
+                artifacts: [{ path: 'report.txt', name: 'Report' }],
+            })
+        );
+        const remoteSnapshot = await E2BAssetSnapshot.create(
+            {
+                hostPath: remoteOutput,
+                runtimePath: '/outbox',
+                access: 'read-write',
+                excludedHostPaths: [],
+                kind: 'outcome',
+            },
+            1024 * 1024
+        );
+        const client = new FakeClient();
+        client.sandbox.artifactDownload = new Uint8Array(
+            await readFile(remoteSnapshot.archive)
+        );
+        const runtime = await RuntimeRegistry.standard({ e2b: { client } })
+            .resolve('e2b')
+            .prepare({
+                ...request(resolved),
+                outcome: { directory: outputDirectory },
+            });
+        try {
+            await runtime.preflight();
+            expect(runtime.environment.WORKBENCH_OUTPUT_DIR).toBe('/outbox');
+            const store = new OutcomeStore(home);
+            const before = client.sandbox.runs.length;
+            const first = await runtime.collectOutput?.(store);
+            expect(first?.artifacts[0]?.name).toBe('Report');
+            expect(client.sandbox.killed).toBeFalse();
+            expect(
+                client.sandbox.runs
+                    .slice(before)
+                    .some((call) => call.command.includes('git -C'))
+            ).toBeFalse();
+            await writeFile(
+                join(remoteOutput, 'report.txt'),
+                'remote artifact revised'
+            );
+            const revision = await E2BAssetSnapshot.create(
+                remoteSnapshot.binding,
+                1024 * 1024
+            );
+            try {
+                client.sandbox.artifactDownload = new Uint8Array(
+                    await readFile(revision.archive)
+                );
+                const second = await runtime.collectOutput?.(store);
+                expect(second?.artifacts[0]?.content.digest).not.toBe(
+                    first?.artifacts[0]?.content.digest
+                );
+            } finally {
+                await revision.cleanup();
+            }
+            const collected = await runtime.collectOutcome?.(store);
+            expect(collected).toMatchObject({
+                application_state: 'pending',
+                summary: 'Remote work complete',
+                artifacts: [{ name: 'Report' }],
+            });
+            const artifact = collected?.artifacts[0];
+            if (!artifact) throw new Error('Expected a collected artifact');
+            expect(await readFile(await store.blob(artifact.content), 'utf8')).toBe(
+                'remote artifact revised'
+            );
+            const original = first?.artifacts[0];
+            if (!original) throw new Error('Expected original remote artifact');
+            expect(await readFile(await store.blob(original.content), 'utf8')).toBe(
+                'remote artifact'
+            );
+            await store.close();
+            await expect(
+                readFile(join(outputDirectory, 'report.txt'))
+            ).rejects.toMatchObject({ code: 'ENOENT' });
+        } finally {
+            await runtime.cleanup();
+            await remoteSnapshot.cleanup();
+        }
+    });
+
     test('rejects read-write file assets because they cannot be synchronized', async () => {
         const resolved = await fixture();
         const file = join(resolved.repositoryDirectory, 'state.json');
@@ -391,11 +541,13 @@ describe('E2B runtime provider', () => {
             client,
             maxTransferBytes: 4_096,
         }).prepare(request(resolved));
+        const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-outcomes-'));
+        temporaryDirectories.push(home);
         try {
             await runtime.preflight();
-            await expect(runtime.synchronize?.()).rejects.toThrow(
-                'E2B output exceeds the 4.0 KiB transfer safety limit'
-            );
+            await expect(
+                runtime.collectOutcome?.(new OutcomeStore(home))
+            ).rejects.toThrow('E2B output exceeds the 4.0 KiB transfer safety limit');
             expect(
                 await readFile(join(resolved.repositoryDirectory, 'source.txt'), 'utf8')
             ).toBe('baseline');
@@ -413,11 +565,13 @@ describe('E2B runtime provider', () => {
             client,
             maxTransferBytes: 64,
         }).prepare(request(resolved));
+        const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-outcomes-'));
+        temporaryDirectories.push(home);
         try {
             await runtime.preflight();
-            await expect(runtime.synchronize?.()).rejects.toThrow(
-                'E2B output exceeds the 64 B transfer safety limit'
-            );
+            await expect(
+                runtime.collectOutcome?.(new OutcomeStore(home))
+            ).rejects.toThrow('E2B output exceeds the 64 B transfer safety limit');
             expect(
                 await readFile(join(resolved.repositoryDirectory, 'source.txt'), 'utf8')
             ).toBe('baseline');
@@ -500,11 +654,14 @@ class FakeClient implements E2BClient {
 class FakeSandbox implements E2BSandbox {
     readonly id = 'sandbox-fixture';
     readonly started: Array<{ command: string; options: E2BCommandOptions }> = [];
+    readonly runs: Array<{ command: string; options: E2BRunOptions }> = [];
+    runtimeIdentity = '1000:1000';
     readonly ptyStarted: Array<{ command: string; options: E2BPtyOptions }> = [];
     readonly uploads = new Map<number, Uint8Array>();
     deletedOutput = new Uint8Array();
     outputSize: number | undefined;
     outputDownload: Uint8Array | undefined;
+    artifactDownload: Uint8Array | undefined;
     input = '';
     readonly ptyInputs: Uint8Array[] = [];
     readonly ptyResizes: Array<{ columns: number; rows: number }> = [];
@@ -521,8 +678,11 @@ class FakeSandbox implements E2BSandbox {
     readonly missingCommands = new Set<string>();
 
     async run(
-        command: string
+        command: string,
+        options: E2BRunOptions = {}
     ): Promise<{ code: number; stdout: string; stderr: string }> {
+        this.runs.push({ command, options });
+        if (command === e2bIdentityCommand) return result(0, this.runtimeIdentity);
         if (command === 'tar --help 2>&1') {
             return result(0, 'Usage: tar [OPTION...]\n      --null');
         }
@@ -575,22 +735,30 @@ class FakeSandbox implements E2BSandbox {
     }
 
     download(path: string): Promise<ReadableStream<Uint8Array>> {
+        if (path.includes('workbench-artifacts')) {
+            return Promise.resolve(
+                new Blob([this.artifactDownload ?? new Uint8Array()]).stream()
+            );
+        }
         if (path.includes('deleted')) {
             return Promise.resolve(new Blob([this.deletedOutput]).stream());
         }
         if (this.outputDownload) {
             return Promise.resolve(new Blob([this.outputDownload]).stream());
         }
-        const index = Number(path.match(/output-(\d+)/)?.[1] ?? 0);
+        const index = Number(path.match(/(?:output|native-state)-(\d+)/)?.[1] ?? 0);
         return Promise.resolve(
             new Blob([this.uploads.get(index) ?? new Uint8Array()]).stream()
         );
     }
 
     async fileSize(path: string): Promise<number> {
+        if (path.includes('workbench-artifacts')) {
+            return this.artifactDownload?.byteLength ?? 0;
+        }
         if (path.includes('deleted')) return this.deletedOutput.byteLength;
         if (this.outputSize !== undefined) return this.outputSize;
-        const index = Number(path.match(/output-(\d+)/)?.[1] ?? 0);
+        const index = Number(path.match(/(?:output|native-state)-(\d+)/)?.[1] ?? 0);
         return this.uploads.get(index)?.byteLength ?? 0;
     }
 

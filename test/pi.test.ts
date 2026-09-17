@@ -88,7 +88,12 @@ describe('Pi adapter translation', () => {
         const staged = await stagePiConfig(workbench, {});
         temporaryDirectories.push(staged.directory);
 
-        expect(await readFile(join(staged.directory, 'APPEND_SYSTEM.md'), 'utf8')).toBe(
+        const instructions = await readFile(
+            join(staged.directory, 'APPEND_SYSTEM.md'),
+            'utf8'
+        );
+        expect(instructions).toStartWith('<workbench_context>');
+        expect(instructions).toEndWith(
             '# Package settings\n\n# Workbench instructions\n'
         );
         expect(await readFile(join(staged.directory, 'models.json'), 'utf8')).toBe(

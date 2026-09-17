@@ -1,6 +1,9 @@
 node_modules/
 dist/
 coverage/
+.codex/
+.testing/
+benchmarks/
 .workbenches/*-draft/
 docs/.scratch/
 .env

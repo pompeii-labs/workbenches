@@ -47,6 +47,13 @@ export class DockerMountPlan {
                 access: asset.access,
             });
         }
+        if (request.outcome) {
+            unique.set(resolve(request.outcome.directory), {
+                hostPath: resolve(request.outcome.directory),
+                runtimePath: '/outbox',
+                access: 'read-write',
+            });
+        }
         if (hostSocket) {
             unique.set(resolve(hostSocket.path), {
                 hostPath: resolve(hostSocket.path),

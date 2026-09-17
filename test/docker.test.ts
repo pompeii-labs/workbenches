@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { OutcomeOutput } from '../src/outcomes/output.js';
 import { RunStore } from '../src/runs/index.js';
 import { DockerBuildContext } from '../src/runtimes/docker/build-context.js';
 import { DockerCredentialVolume } from '../src/runtimes/docker/credentials.js';
@@ -34,6 +35,44 @@ afterEach(async () => {
 });
 
 describe('Docker runtime provider', () => {
+    test('maps only the per-run outbox, not sibling run metadata, into the container', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/core:0.1.0' });
+        const home = await mkdtemp(join(tmpdir(), 'outbox-docker-test-'));
+        temporaryDirectories.push(home);
+        const output = await OutcomeOutput.create(home, RunStore.createId());
+        let spawnedCommand: string[] = [];
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock([]),
+            spawn(command) {
+                spawnedCommand = command;
+                return { exited: Promise.resolve(0), kill() {} };
+            },
+        }).prepare({ ...request(fixture), outcome: { directory: output.directory } });
+        try {
+            expect(runtime.environment.WORKBENCH_OUTPUT_DIR).toBe('/outbox');
+            expect(runtime.pathFor(join(output.directory, 'report.html'))).toBe(
+                '/outbox/report.html'
+            );
+            expect(() =>
+                runtime.pathFor(join(dirname(output.directory), 'run.json'))
+            ).toThrow('Path is not staged');
+            await runtime.preflight();
+            runtime.launch({
+                command: ['opencode', 'run', 'inspect'],
+                cwd: runtime.workspaceDirectory,
+                env: runtime.environment,
+            });
+            expect(spawnedCommand).toContain(`${output.directory}:/outbox`);
+            expect(spawnedCommand).not.toContain(
+                `${dirname(output.directory)}:/outbox`
+            );
+        } finally {
+            await runtime.cleanup();
+            await output.cleanup();
+        }
+    });
+
     test('labels durable run containers without exposing the Workbench home', async () => {
         const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
         const run = {

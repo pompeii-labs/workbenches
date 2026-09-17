@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import type { RunnerContextFiles } from '../context.js';
 import type {
     RunnerInput,
     RunnerInputDelivery,
@@ -11,6 +12,7 @@ import type {
 import { normalizeRunnerInput } from '../session.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
+import { isOutboxPermission } from './outbox-permission.js';
 import { OpenCodeQuestion } from './question.js';
 import type { OpenCodeFetch, OpenCodeServerLauncher } from './server.js';
 import { OpenCodeServer } from './server.js';
@@ -35,6 +37,7 @@ interface AlwaysPermission {
 }
 
 export interface OpenCodeServerSessionOptions extends RunnerSessionStartOptions {
+    context?: RunnerContextFiles;
     fetch: OpenCodeFetch;
     password: () => string;
     startupTimeoutMs: number;
@@ -87,7 +90,8 @@ export class OpenCodeServerSession implements RunnerSession {
                     this.options.session
                         ? join(this.options.session.directory, 'opencode.sqlite')
                         : undefined,
-                    binding
+                    binding,
+                    this.options.context
                 ),
             (error) => this.fail(error)
         );
@@ -397,8 +401,18 @@ export class OpenCodeServerSession implements RunnerSession {
         const id = string(properties.id);
         const action = string(properties.permission);
         const sessionId = string(properties.sessionID);
-        if (!id || !action || !sessionId) return;
+        if (!id || !action || sessionId !== this.nativeSessionId) return;
         const resources = stringArray(properties.patterns);
+        if (
+            isOutboxPermission(
+                action,
+                resources,
+                this.options.environment.WORKBENCH_OUTPUT_DIR
+            )
+        ) {
+            await this.replyPermission(id, 'allow_once');
+            return;
+        }
         if (this.isAlwaysAllowed(action, resources)) return;
         const always = stringArray(properties.always);
         const decision = await Promise.race([

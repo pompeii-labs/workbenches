@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { afterAll, afterEach, describe, expect, test } from 'bun:test';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -27,6 +27,10 @@ import type { ResolvedWorkbench } from '../src/types.js';
 import { supportedRunnerDeclaration } from './runner-adapter-contract.js';
 
 const temporaryDirectories: string[] = [];
+const instructionDirectory = await mkdtemp(join(tmpdir(), 'worker-instructions-'));
+const instructionsPath = join(instructionDirectory, 'instructions.md');
+await writeFile(instructionsPath, 'Follow the user task.\n');
+afterAll(() => rm(instructionDirectory, { recursive: true, force: true }));
 
 afterEach(async () => {
     await Promise.all(
@@ -1022,6 +1026,7 @@ function workerFor(
             }),
         ]),
         now: () => new Date('2026-09-01T12:00:00.000Z'),
+        captureOutcomes: false,
         ...(reportLaunch ? { reportLaunch } : {}),
     });
 }
@@ -1074,7 +1079,7 @@ function workbench(): ResolvedWorkbench {
         manifestPath: '/repo/.workbenches/core/workbench.yml',
         packageDirectory: '/repo/.workbenches/core',
         repositoryDirectory: '/repo',
-        instructionsPath: '/repo/.workbenches/core/instructions.md',
+        instructionsPath,
         skills: [],
         manifest: {
             spec: 0,

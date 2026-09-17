@@ -144,7 +144,8 @@ export const resumeCommand = defineCommand({
                 continuation.handle,
                 continuation.inputId,
                 (event) => renderer.render(event),
-                continuation.afterSequence
+                continuation.afterSequence,
+                continuation.receipt === undefined
             );
         } finally {
             renderer.finish();

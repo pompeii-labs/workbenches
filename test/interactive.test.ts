@@ -1,4 +1,8 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { OutcomeStore } from '../src/outcomes/store.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import { type PreparedRunner, Runner } from '../src/runners/runner.js';
 import {
@@ -19,7 +23,94 @@ import type { ResolvedWorkbench, SpawnedRunner } from '../src/types.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 import { supportedRunnerDeclaration } from './runner-adapter-contract.js';
 
+const instructionDirectory = await mkdtemp(join(tmpdir(), 'interactive-instructions-'));
+const instructionsPath = join(instructionDirectory, 'instructions.md');
+await writeFile(instructionsPath, 'Follow the user task.\n');
+afterAll(() => rm(instructionDirectory, { recursive: true, force: true }));
+
 describe('runner-neutral interactive host', () => {
+    test('saves results before each turn completes and keeps the session alive after a collection error', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-live-interactive-'));
+        const events: WorkbenchEvent[] = [];
+        const adapter = new FakeAdapter();
+        const session = await InteractiveRun.start({
+            home,
+            resolved: { ...reference(), workspaceDirectory: instructionDirectory },
+            onEvent: (event) => void events.push(event),
+            dependencies: dependencies(adapter),
+        });
+        const store = new OutcomeStore(home);
+        const outbox = adapter.startOptions?.environment.WORKBENCH_OUTPUT_DIR;
+        if (!outbox) throw new Error('Missing interactive outbox');
+        try {
+            await writeFile(join(outbox, 'report.txt'), 'first');
+            await session.send('first', 'input-first');
+            const first = events.find((event) => event.type === 'outcome.available');
+            expect(first?.data).toMatchObject({
+                turn_index: 1,
+                artifacts: 1,
+                application_state: 'present',
+            });
+            expect(
+                events.findIndex((event) => event.type === 'outcome.available')
+            ).toBeLessThan(
+                events.findIndex((event) => event.type === 'turn.completed')
+            );
+            expect(adapter.closes).toBe(0);
+            expect(session.busy).toBeFalse();
+            await writeFile(join(outbox, 'outcome.json'), '{');
+            await session.send('second');
+            expect(
+                events.find((event) => event.type === 'outcome.failed')?.data
+            ).toMatchObject({ turn_index: 2 });
+            expect(events.some((event) => event.type === 'run.failed')).toBeFalse();
+            expect(adapter.closes).toBe(0);
+            await writeFile(join(outbox, 'outcome.json'), '{"version":1}');
+            await writeFile(join(outbox, 'report.txt'), 'revised');
+            await session.send('third');
+            expect(
+                events.filter((event) => event.type === 'outcome.available')
+            ).toHaveLength(2);
+            const snapshots = await store.listByRun(session.runId);
+            expect(snapshots.map((outcome) => outcome.turn_index)).toEqual([3, 1]);
+            await session.close();
+            expect((await store.findFinalByRun(session.runId))?.completeness).toBe(
+                'complete'
+            );
+        } finally {
+            await session.close().catch(() => {});
+            await rm(home, { recursive: true, force: true });
+        }
+    });
+
+    test('does not publish an interrupted turn as finished results', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-live-cancel-'));
+        const events: WorkbenchEvent[] = [];
+        const adapter = new FakeAdapter({ waitForCancellation: true });
+        const session = await InteractiveRun.start({
+            home,
+            resolved: { ...reference(), workspaceDirectory: instructionDirectory },
+            onEvent: (event) => void events.push(event),
+            dependencies: dependencies(adapter),
+        });
+        try {
+            const outbox = adapter.startOptions?.environment.WORKBENCH_OUTPUT_DIR;
+            if (!outbox) throw new Error('Missing outbox');
+            await writeFile(join(outbox, 'unfinished.txt'), 'unfinished');
+            const turn = session.send('wait');
+            await adapter.started;
+            await session.cancelTurn();
+            await turn;
+            expect(
+                events.some((event) => event.type === 'outcome.available')
+            ).toBeFalse();
+            expect(session.busy).toBeFalse();
+            expect(adapter.closes).toBe(0);
+        } finally {
+            await session.cancel();
+            await rm(home, { recursive: true, force: true });
+        }
+    });
     test('normalizes runner permission requests and returns the host decision', async () => {
         const events: WorkbenchEvent[] = [];
         const decisions: string[] = [];
@@ -226,6 +317,7 @@ describe('runner-neutral interactive host', () => {
         expect(provider.request?.assets).toContainEqual({
             path: nativeDirectory,
             access: 'read-write',
+            state: true,
         });
         expect(adapter.startOptions?.session).toEqual({
             id: 'wb_runtime_lifecycle',
@@ -460,7 +552,7 @@ function reference(): ResolvedWorkbenchReference {
             manifestPath: '/repo/.workbenches/core/workbench.yml',
             packageDirectory: '/repo/.workbenches/core',
             repositoryDirectory: '/repo',
-            instructionsPath: '/repo/.workbenches/core/instructions.md',
+            instructionsPath,
             skills: [],
             manifest: {
                 spec: 0,

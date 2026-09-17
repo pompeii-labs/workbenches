@@ -307,7 +307,7 @@ describe('CLI integration', () => {
         const config = JSON.parse(await readFile(`${record}.config`, 'utf8'));
         expect(config).toMatchObject({
             model: 'openrouter/openai/gpt-5.6-terra',
-            instructions: ['.workbenches/core/instructions.md'],
+            instructions: [expect.stringContaining('/.workbench-context/system.md')],
         });
         expect(result.stdout).toContain('● fixture-core');
         expect(result.stdout).toContain(
@@ -623,6 +623,7 @@ describe('CLI integration', () => {
             'output.text',
             'usage.updated',
             'turn.completed',
+            'outcome.available',
             'run.completed',
         ]);
         expect(events.every((event) => event.protocol === 0)).toBeTrue();
@@ -1139,7 +1140,8 @@ describe('CLI integration', () => {
         const runId = events[0]?.run_id;
         expect(runId).toMatch(/^wb_[a-z0-9]{20,64}$/);
         expect(commands).toContain('--workdir /workspace');
-        expect(commands).toContain('--entrypoint opencode');
+        expect(commands).toContain('--entrypoint /bin/sh');
+        expect(commands).toContain('workbench-context opencode serve');
         expect(commands).toContain('--env-file');
         expect(commands).toContain('dev.workbenches.managed=true');
         expect(commands).toContain(`dev.workbenches.run=${runId}`);
@@ -1353,7 +1355,9 @@ describe('CLI integration', () => {
         expect(translated.code).toBe(0);
         const invocation = JSON.parse(translated.stdout);
         expect(invocation.cwd).toBe(await realpath(workspace));
-        expect(invocation.opencode_config.instructions[0]).toContain(home);
+        expect(invocation.opencode_config.instructions[0]).toContain(
+            '/.workbench-context/system.md'
+        );
 
         const removed = await executeCli(['remove', 'fixture-saved'], environment);
         expect(removed.code).toBe(0);
@@ -1750,11 +1754,16 @@ async function fakeDocker() {
             '      last="$argument"',
             '    done',
             '    if test "$entrypoint" = "/bin/sh"; then',
+            '      case " $* " in',
+            '        *" workbench-context opencode "*) entrypoint="opencode" ;;',
+            '        *)',
             '      test "$last" = "$WB_DOCKER_MISSING" && exit 127',
             '      case "$*" in',
             '        *"command -v"*) printf "/usr/local/bin/%s\\n" "$last" ;;',
             '      esac',
             '      exit 0',
+            '          ;;',
+            '      esac',
             '    fi',
             '    if test "$entrypoint" = "opencode"; then',
             '      case " $* " in',

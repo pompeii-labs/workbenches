@@ -23,10 +23,11 @@ import type {
 import type { RunHandle } from '../runs/index.js';
 import { SessionStore, type StoredSession } from '../sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
-import { ActivityIndicator, usageLabel } from './activity.js';
+import { ActivityIndicator, startupLabel, usageLabel } from './activity.js';
 import { ChatHeader } from './chat-header.js';
 import { SessionCommands } from './commands/session.js';
 import { useDialog } from './dialog/index.js';
+import { showTranscriptOutcome } from './dialog/outcome.js';
 import {
     addUserMessage,
     emptyTranscript,
@@ -112,6 +113,7 @@ export function ChatScreen(props: ChatScreenProps) {
     const [storedTranscript, setStoredTranscript] = createSignal<SessionTranscript>();
     const [eventCursor, setEventCursor] = createSignal<TranscriptCursor>();
     let session: RunHandle | undefined;
+    let restoredReady = true;
     const observation = new AbortController();
     const cancellation = new TurnCancellation();
     const history = new PromptHistory(props.home);
@@ -257,6 +259,8 @@ export function ChatScreen(props: ChatScreenProps) {
             setState((current) => ({ ...current, status: 'Ready' }));
         }
     };
+    const showOutcome = () =>
+        showTranscriptOutcome(props.home, state(), dialog, setError);
     const cancelTurn = (): Promise<void> => {
         if (cancellation.pending) return Promise.resolve();
         const active = session;
@@ -287,6 +291,10 @@ export function ChatScreen(props: ChatScreenProps) {
     const submit = async (value: string) => {
         const task = value.trim();
         if (!task || !session || permission() || question()) return;
+        if (terminal()) {
+            setError('This run has finished. Use /resume to continue its session.');
+            return;
+        }
         const steering = state().busy;
         const queuedId = steering ? crypto.randomUUID() : undefined;
         const images = attachments();
@@ -375,15 +383,13 @@ export function ChatScreen(props: ChatScreenProps) {
         try {
             if (props.session) {
                 const transcript = new SessionTranscript(props.home, props.session.id);
+                const restored = await transcript.restore();
+                restoredReady = restored.ready !== false;
+                setState(
+                    restored.state ?? { ...emptyTranscript(), items: restored.items }
+                );
+                if (restored.cursor) setEventCursor(restored.cursor);
                 setStoredTranscript(transcript);
-                const [items, cursor] = await Promise.all([
-                    transcript.load(),
-                    transcript.cursor(),
-                ]);
-                if (items.length > 0) {
-                    setState((current) => ({ ...current, items }));
-                }
-                if (cursor) setEventCursor(cursor);
             }
             session = await props.start({
                 resolved: props.resolved,
@@ -402,7 +408,7 @@ export function ChatScreen(props: ChatScreenProps) {
             const cursor = eventCursor();
             const resumingObservedRun = cursor?.runId === session.runId;
             const afterSequence = resumingObservedRun ? cursor.sequence : undefined;
-            if (resumingObservedRun) {
+            if (resumingObservedRun && restoredReady) {
                 setSessionReady(true);
                 composer?.focus();
             }
@@ -471,7 +477,7 @@ export function ChatScreen(props: ChatScreenProps) {
         }
     });
     useKeyboard((key) => {
-        if (dialog.active()) return;
+        if (key.defaultPrevented || dialog.active()) return;
         const pendingQuestion = question();
         if (pendingQuestion) {
             if (key.ctrl && key.name === 'c') {
@@ -518,6 +524,14 @@ export function ChatScreen(props: ChatScreenProps) {
     const manifest = props.resolved.workbench.manifest;
     const transcript = createMemo(() => groupTranscriptItems(state().items));
     const activityStatus = createMemo(() => {
+        if (!sessionReady() && !error()) {
+            return startupLabel(
+                manifest.runtime,
+                manifest.runner,
+                state().status,
+                Boolean(props.session)
+            );
+        }
         if (!state().busy || permission() || question()) return;
         if (state().status === 'Responding') return;
         const latest = transcript().at(-1);
@@ -549,6 +563,7 @@ export function ChatScreen(props: ChatScreenProps) {
             attachments,
             clearAttachments: () => setAttachments([]),
             improve,
+            showOutcome,
             cancelTurn,
             exit: () => close(false),
             showError: setError,
@@ -570,23 +585,14 @@ export function ChatScreen(props: ChatScreenProps) {
                 paddingY={1}
             >
                 <Show
-                    when={state().items.length === 0 && !error()}
+                    when={state().items.length === 0 && sessionReady() && !error()}
                     fallback={<box height={0} />}
                 >
                     <box flexDirection="column" paddingTop={2}>
-                        <Show
-                            when={sessionReady()}
-                            fallback={
-                                <text fg={theme.muted}>
-                                    Starting {manifest.name}...
-                                </text>
-                            }
-                        >
-                            <text fg={theme.muted}>Ready when you are.</text>
-                            <text fg={theme.faint}>
-                                This session keeps its context across every turn.
-                            </text>
-                        </Show>
+                        <text fg={theme.muted}>Ready when you are.</text>
+                        <text fg={theme.faint}>
+                            This session keeps its context across every turn.
+                        </text>
                     </box>
                 </Show>
                 <Index each={transcript()} fallback={<box height={0} />}>
@@ -595,6 +601,7 @@ export function ChatScreen(props: ChatScreenProps) {
                             item={item()}
                             assistantLabel={manifest.name}
                             workspace={props.resolved.workspaceDirectory}
+                            home={props.home}
                             streaming={
                                 item().kind === 'assistant' &&
                                 state().busy &&
@@ -606,7 +613,10 @@ export function ChatScreen(props: ChatScreenProps) {
                 <Show when={activityStatus()}>
                     {(status: () => string) => (
                         <box marginTop={1}>
-                            <ActivityIndicator label={status()} />
+                            <ActivityIndicator
+                                label={status()}
+                                elapsed={!sessionReady()}
+                            />
                         </box>
                     )}
                 </Show>
@@ -633,7 +643,13 @@ export function ChatScreen(props: ChatScreenProps) {
                                     composer = value;
                                 }}
                                 busy={state().busy}
-                                disabled={!sessionReady()}
+                                disabled={!sessionReady() && !terminal()}
+                                {...(terminal()
+                                    ? {
+                                          placeholder:
+                                              'Run finished. Type /outcome to inspect results, or /resume to continue',
+                                      }
+                                    : {})}
                                 acceptsImages={imageInput.status !== 'unsupported'}
                                 queued={state().queued}
                                 attachments={attachments()}

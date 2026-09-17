@@ -39,6 +39,14 @@ export class CliPresenter {
         return this.#interactive;
     }
 
+    link(label: string, uri: string): string {
+        const safeLabel = label.replace(/\p{Cc}/gu, ' ');
+        const safeUri = uri.replace(/\p{Cc}/gu, '');
+        if (!this.#interactive || process.env.TERM === 'dumb')
+            return `${safeLabel} · ${safeUri}`;
+        return `\x1b]8;;${safeUri}\x1b\\${safeLabel}\x1b]8;;\x1b\\`;
+    }
+
     record(record: CliRecord): void {
         const write = record.stream === 'stderr' ? this.#stderr : this.#stdout;
         if (!this.#interactive) {

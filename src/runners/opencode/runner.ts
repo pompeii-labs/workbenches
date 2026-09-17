@@ -2,6 +2,7 @@ import { lstat } from 'node:fs/promises';
 import { ModelRouter, type ResolvedRunnerConfiguration } from '../../models/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
+import { type RunnerContextFiles, remapRunnerContext } from '../context.js';
 import {
     assertRunnerConfiguration,
     type PreparedRunner,
@@ -33,6 +34,7 @@ class PreparedOpenCodeRunner implements PreparedRunner {
     readonly #stagedDirectory: string | undefined;
     readonly #workbench: ResolvedWorkbench;
     readonly #session: OpenCodeSessionAdapter;
+    readonly #context: RunnerContextFiles;
 
     private constructor(options: {
         workbench: ResolvedWorkbench;
@@ -40,12 +42,14 @@ class PreparedOpenCodeRunner implements PreparedRunner {
         nativeConfigFile?: string;
         cleanup: () => Promise<void>;
         session: OpenCodeSessionAdapter;
+        context: RunnerContextFiles;
     }) {
         this.#workbench = options.workbench;
         this.#stagedDirectory = options.stagedDirectory;
         this.#nativeConfigFile = options.nativeConfigFile;
         this.#cleanup = options.cleanup;
         this.#session = options.session;
+        this.#context = options.context;
         this.assets = [
             ...(options.stagedDirectory
                 ? [{ path: options.stagedDirectory, access: 'read-write' as const }]
@@ -72,6 +76,7 @@ class PreparedOpenCodeRunner implements PreparedRunner {
             ...(nativeConfigFile ? { nativeConfigFile } : {}),
             cleanup: staged?.cleanup ?? (async () => {}),
             session,
+            context: staged.context,
         });
     }
 
@@ -92,7 +97,10 @@ class PreparedOpenCodeRunner implements PreparedRunner {
             this.#stagedDirectory ? runtime.pathFor(this.#stagedDirectory) : undefined,
             runtime.workspaceDirectory,
             configuration.model,
-            this.#nativeConfigFile ? runtime.pathFor(this.#nativeConfigFile) : undefined
+            this.#nativeConfigFile
+                ? runtime.pathFor(this.#nativeConfigFile)
+                : undefined,
+            remapRunnerContext(this.#context, (path) => runtime.pathFor(path))
         );
     }
 
@@ -141,6 +149,12 @@ class PreparedOpenCodeRunner implements PreparedRunner {
                 ...(options.session ? { session: options.session } : {}),
             },
             {
+                // Cloud proxy setup and cold native session loading share this
+                // bounded readiness budget, not the ten-second local deadline.
+                ...(runtime.name === 'e2b' ? { startupTimeoutMs: 60_000 } : {}),
+                context: remapRunnerContext(this.#context, (path) =>
+                    runtime.pathFor(path)
+                ),
                 ...(this.#stagedDirectory
                     ? { configDirectory: runtime.pathFor(this.#stagedDirectory) }
                     : {}),

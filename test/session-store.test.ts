@@ -323,6 +323,20 @@ describe('interactive session storage', () => {
             runId: sessionId,
             sequence: 8,
         });
+        const card = {
+            id: 'outcome-card',
+            kind: 'outcome' as const,
+            outcomeId: 'wbo_1234567890abcdefghij',
+            applicationState: 'pending' as const,
+            completeness: 'complete' as const,
+            changesets: 1,
+            artifacts: 2,
+            links: 0,
+            warnings: 0,
+        };
+        transcript.schedule([card], { runId: sessionId, sequence: 9 });
+        await transcript.flush();
+        expect(await transcript.load()).toEqual([card]);
         await writeFile(store.transcriptPath(sessionId), '{broken', {
             mode: 0o600,
         });

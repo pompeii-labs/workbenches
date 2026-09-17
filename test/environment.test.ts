@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
+import { E2BPathPlan } from '../src/runtimes/e2b/paths.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { WorkbenchEnvironment } from '../src/workbench/index.js';
 
@@ -82,6 +82,41 @@ describe('Workbench environment overrides', () => {
                 {}
             )
         ).toThrow('Environment override is not supported by fixture: TYPO_TOKEN');
+    });
+
+    test('binds E2B provisioning overrides on the host but never forwards them into the sandbox', () => {
+        const workbench = fixture();
+        workbench.manifest.runtime = 'e2b';
+        for (const overrides of [
+            {
+                file: { E2B_API_KEY: 'fixture-host-only-key' },
+                explicit: new Map<string, string>(),
+            },
+            { file: {}, explicit: new Map([['E2B_API_KEY', 'fixture-host-only-key']]) },
+        ]) {
+            const bound = environment.bind(workbench, overrides, {});
+            expect(bound.E2B_API_KEY).toBe('fixture-host-only-key');
+            const paths = new E2BPathPlan({
+                workbench,
+                workspaceDirectory: '/repo',
+                environment: bound,
+                assets: [],
+            });
+            expect(paths.environment()).not.toHaveProperty('E2B_API_KEY');
+            expect(JSON.stringify(paths.environment())).not.toContain(
+                'fixture-host-only-key'
+            );
+        }
+        expect(() =>
+            environment.bind(
+                fixture(),
+                {
+                    file: {},
+                    explicit: new Map([['E2B_API_KEY', 'fixture-host-only-key']]),
+                },
+                {}
+            )
+        ).toThrow('Environment override is not supported');
     });
 
     test('accepts provider credentials for allowed model routes', () => {

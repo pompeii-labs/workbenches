@@ -1,4 +1,5 @@
 import { lstat } from 'node:fs/promises';
+import type { RunnerContextFiles } from '../context.js';
 
 import type {
     RunnerSession,
@@ -33,8 +34,10 @@ export interface OpenCodeSessionDependencies {
 }
 
 export interface PreparedOpenCodeSession {
+    context?: RunnerContextFiles;
     configDirectory?: string;
     nativeConfigFile?: string;
+    startupTimeoutMs?: number;
     launch: OpenCodeServerLauncher;
 }
 
@@ -64,6 +67,7 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
         return this.startConfigured(
             options,
             {
+                context: staged.context,
                 ...(staged?.directory ? { configDirectory: staged.directory } : {}),
                 ...(nativeConfigFile ? { nativeConfigFile } : {}),
                 launch: launchLocalOpenCodeServer(this.dependencies.spawn),
@@ -84,16 +88,20 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
         prepared: PreparedOpenCodeSession,
         cleanup: () => Promise<void>
     ): Promise<RunnerSession> {
+        const startupTimeoutMs =
+            prepared.startupTimeoutMs ?? this.dependencies.startupTimeoutMs;
         const session = new OpenCodeServerSession({
             ...options,
             ...this.dependencies,
             ...prepared,
+            startupTimeoutMs,
             cleanup,
         });
         try {
             await this.withTimeout(
                 session.start(),
-                'OpenCode session did not become ready in time'
+                'OpenCode session did not become ready in time',
+                startupTimeoutMs
             );
             return session;
         } catch (error) {
@@ -109,16 +117,17 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
         return path && (await lstat(path)).isFile() ? path : undefined;
     }
 
-    private async withTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+    private async withTimeout<T>(
+        promise: Promise<T>,
+        message: string,
+        timeoutMs: number
+    ): Promise<T> {
         let timeout: ReturnType<typeof setTimeout> | undefined;
         try {
             return await Promise.race([
                 promise,
                 new Promise<T>((_, reject) => {
-                    timeout = setTimeout(
-                        () => reject(new Error(message)),
-                        this.dependencies.startupTimeoutMs
-                    );
+                    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
                 }),
             ]);
         } finally {
