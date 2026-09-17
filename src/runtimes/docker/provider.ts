@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { HostOutcomeCapture } from '../../outcomes/index.js';
 import type {
     PreparedRuntime,
     RuntimePrepareRequest,
@@ -64,6 +65,7 @@ export class DockerRuntimeProvider implements RuntimeProvider {
             : undefined;
         const image = await new DockerImageManager(client).prepare(request);
         let stateDirectory: string | undefined;
+        let outcome: HostOutcomeCapture | undefined;
         try {
             const credentials =
                 request.purpose === 'build'
@@ -77,6 +79,9 @@ export class DockerRuntimeProvider implements RuntimeProvider {
             await credentials?.prepare();
             const mounts = new DockerMountPlan(request, hostSocket);
             await mounts.verify();
+            outcome = request.outcome
+                ? await HostOutcomeCapture.create(request)
+                : undefined;
             const directory = await mkdtemp(
                 join(tmpdir(), 'workbench-docker-runtime-')
             );
@@ -89,6 +94,7 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                 ...(credentials ? { credentials } : {}),
                 preparation: image.preparation,
                 stateDirectory: directory,
+                ...(outcome ? { outcome } : {}),
                 cleanupPreparation: async () => {
                     await Promise.all([
                         image.cleanup(),
@@ -105,6 +111,7 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                 ...(stateDirectory
                     ? [rm(stateDirectory, { recursive: true, force: true })]
                     : []),
+                ...(outcome ? [outcome.cleanup()] : []),
             ]);
             throw error;
         }

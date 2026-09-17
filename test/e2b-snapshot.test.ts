@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { OutcomeApplier, OutcomeStore } from '../src/outcomes/index.js';
 import type { E2BAssetBinding } from '../src/runtimes/e2b/paths.js';
 import { E2BAssetSnapshot } from '../src/runtimes/e2b/snapshot.js';
 
@@ -17,6 +18,40 @@ afterEach(async () => {
 });
 
 describe('E2B workspace snapshots', () => {
+    for (const direction of ['fileToDirectory', 'directoryToFile']) {
+        test(`collects and applies ${direction} replacements`, async () => {
+            const local = await temporaryDirectory();
+            const remote = await temporaryDirectory();
+            const before = direction === 'fileToDirectory' ? local : remote;
+            const after = direction === 'fileToDirectory' ? remote : local;
+            await writeFile(join(before, 'module'), 'file');
+            await mkdir(join(after, 'module'));
+            await writeFile(join(after, 'module', 'index.ts'), 'nested');
+            const baseline = await E2BAssetSnapshot.create(binding(local), 1024 * 1024);
+            const output = await E2BAssetSnapshot.create(
+                binding(remote, 'asset'),
+                1024 * 1024
+            );
+            try {
+                await applyPending(baseline, output.archive, [
+                    direction === 'fileToDirectory' ? 'module' : 'module/index.ts',
+                ]);
+                expect(
+                    await readFile(
+                        join(
+                            local,
+                            'module',
+                            ...(direction === 'fileToDirectory' ? ['index.ts'] : [])
+                        ),
+                        'utf8'
+                    )
+                ).toBe(direction === 'fileToDirectory' ? 'nested' : 'file');
+            } finally {
+                await baseline.cleanup();
+                await output.cleanup();
+            }
+        });
+    }
     test('excludes ignored files, repository metadata, and common secrets', async () => {
         const directory = await temporaryDirectory();
         await writeFile(join(directory, '.gitignore'), 'ignored.txt\n');
@@ -150,7 +185,7 @@ describe('E2B workspace snapshots', () => {
         try {
             expect([...snapshot.entries.keys()]).toEqual(['visible.txt']);
             expect(snapshot.syncExcludedPaths).toEqual(['.workbenches/current']);
-            await snapshot.apply(output.archive, []);
+            await applyPending(snapshot, output.archive, []);
             expect(await readFile(join(directory, 'visible.txt'), 'utf8')).toBe(
                 'changed'
             );
@@ -176,13 +211,57 @@ describe('E2B workspace snapshots', () => {
             1024 * 1024
         );
         try {
-            await baseline.apply(output.archive, ['deleted.txt']);
+            await applyPending(baseline, output.archive, ['deleted.txt']);
             expect(await readFile(join(local, 'edited.txt'), 'utf8')).toBe('after');
             expect(await readFile(join(local, 'added.txt'), 'utf8')).toBe('new');
             await expect(readFile(join(local, 'deleted.txt'))).rejects.toMatchObject({
                 code: 'ENOENT',
             });
         } finally {
+            await baseline.cleanup();
+            await output.cleanup();
+        }
+    });
+
+    test('captures remote edits as a pending changeset without mutating the host', async () => {
+        const local = await temporaryDirectory();
+        const remote = await temporaryDirectory();
+        const home = await temporaryDirectory();
+        await writeFile(join(local, 'edited.txt'), 'before');
+        await writeFile(join(local, 'deleted.txt'), 'delete me');
+        await writeFile(join(remote, 'edited.txt'), 'after');
+        await writeFile(join(remote, 'added.txt'), 'new');
+        const baseline = await E2BAssetSnapshot.create(binding(local), 1024 * 1024);
+        const output = await E2BAssetSnapshot.create(
+            binding(remote, 'asset'),
+            1024 * 1024
+        );
+        const capture = await baseline.prepareOutcome(
+            output.archive,
+            ['deleted.txt'],
+            { kind: 'primary' },
+            1024 * 1024
+        );
+        try {
+            const changeset = await capture.collect(new OutcomeStore(home));
+            expect(changeset).toMatchObject({
+                workspace: { kind: 'primary' },
+                stats: { additions: 1, modifications: 1, deletions: 1 },
+                entries: [
+                    { path: 'added.txt', operation: 'add' },
+                    { path: 'deleted.txt', operation: 'delete' },
+                    { path: 'edited.txt', operation: 'modify' },
+                ],
+            });
+            expect(await readFile(join(local, 'edited.txt'), 'utf8')).toBe('before');
+            expect(await readFile(join(local, 'deleted.txt'), 'utf8')).toBe(
+                'delete me'
+            );
+            await expect(readFile(join(local, 'added.txt'))).rejects.toMatchObject({
+                code: 'ENOENT',
+            });
+        } finally {
+            await capture.cleanup();
             await baseline.cleanup();
             await output.cleanup();
         }
@@ -197,7 +276,7 @@ describe('E2B workspace snapshots', () => {
         const output = await E2BAssetSnapshot.create(binding(remote, 'asset'), 1024);
         try {
             await expect(
-                baseline.prepareApplication(output.archive, [], 8)
+                baseline.prepareOutcome(output.archive, [], { kind: 'primary' }, 8)
             ).rejects.toThrow('E2B output exceeds the 8 B transfer safety limit');
             expect(await readFile(join(local, 'unchanged.txt'), 'utf8')).toBe(
                 'baseline'
@@ -225,8 +304,8 @@ describe('E2B workspace snapshots', () => {
             1024 * 1024
         );
         try {
-            await expect(baseline.apply(output.archive, [])).rejects.toThrow(
-                'workspace changed locally during the run'
+            await expect(applyPending(baseline, output.archive, [])).rejects.toThrow(
+                'conflicts with current workspace'
             );
             expect(await readFile(join(local, 'conflict.txt'), 'utf8')).toBe(
                 'host edit'
@@ -255,8 +334,8 @@ describe('E2B workspace snapshots', () => {
         await rm(join(local, 'nested'), { recursive: true });
         await symlink(outside, join(local, 'nested'));
         try {
-            await expect(baseline.apply(output.archive, [])).rejects.toThrow(
-                'workspace destination has an unsafe parent'
+            await expect(applyPending(baseline, output.archive, [])).rejects.toThrow(
+                'destination has an unsafe parent'
             );
             expect(await readFile(join(outside, 'value.txt'), 'utf8')).toBe('outside');
         } finally {
@@ -265,6 +344,41 @@ describe('E2B workspace snapshots', () => {
         }
     });
 });
+
+async function applyPending(
+    snapshot: E2BAssetSnapshot,
+    archive: string,
+    deletions: string[]
+): Promise<void> {
+    const home = await temporaryDirectory();
+    const store = new OutcomeStore(home);
+    const capture = await snapshot.prepareOutcome(archive, deletions, {
+        kind: 'primary',
+    });
+    try {
+        const changeset = await capture.collect(store);
+        const outcome = await store.commit(
+            {
+                version: 1,
+                id: OutcomeStore.createId(),
+                run_id: 'wb_1234567890abcdefghij',
+                created_at: new Date().toISOString(),
+                completeness: 'complete',
+                changesets: changeset ? [changeset] : [],
+                artifacts: [],
+                links: [],
+                warnings: [],
+            },
+            'pending'
+        );
+        await new OutcomeApplier(store).apply(outcome, {
+            primary: snapshot.binding.hostPath,
+        });
+    } finally {
+        await capture.cleanup();
+        await store.close();
+    }
+}
 
 function binding(
     hostPath: string,

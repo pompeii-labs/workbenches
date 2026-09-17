@@ -1,3 +1,4 @@
+import type { RunnerContextFiles } from '../context.js';
 import type {
     RunnerAdapterDeclaration,
     RunnerInput,
@@ -77,6 +78,7 @@ export interface PiSessionDependencies {
 }
 
 export interface PreparedPiSession {
+    context?: RunnerContextFiles;
     configDirectory: string;
     spawn: NonNullable<PiSessionDependencies['spawn']>;
 }
@@ -98,6 +100,7 @@ export class PiSessionAdapter implements RunnerSessionAdapter {
         return this.startConfigured(
             options,
             {
+                context: staged.context,
                 configDirectory: staged.directory,
                 spawn: this.dependencies.spawn,
             },
@@ -153,6 +156,7 @@ class PiRpcSession implements RunnerSession {
         Required<PiSessionDependencies> & {
             configuration: RunnerSessionStartOptions['configuration'];
             configDirectory: string;
+            context?: RunnerContextFiles;
             cleanup: () => Promise<void>;
         };
     private readonly responses = new Map<string, PendingResponse>();
@@ -170,6 +174,7 @@ class PiRpcSession implements RunnerSession {
             Required<PiSessionDependencies> & {
                 configuration: RunnerSessionStartOptions['configuration'];
                 configDirectory: string;
+                context?: RunnerContextFiles;
                 cleanup: () => Promise<void>;
             }
     ) {
@@ -187,7 +192,8 @@ class PiRpcSession implements RunnerSession {
             this.options.workspaceDirectory,
             this.options.configuration.model,
             this.options.configDirectory,
-            this.options.session
+            this.options.session,
+            this.options.context
         );
         const child = this.options.spawn(invocation.command, {
             cwd: invocation.cwd,

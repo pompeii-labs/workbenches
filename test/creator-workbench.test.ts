@@ -26,12 +26,12 @@ describe('creator Workbench', () => {
 
         expect(workbench.manifest).toEqual({
             spec: 0,
-            version: '0.1.4',
+            version: '0.1.6',
             name: 'workbench-creator',
             description:
                 'Design, author, review, and test repository-owned Workbenches.',
             runner: 'opencode',
-            model: { id: 'openai/gpt-5.6-terra' },
+            model: { id: 'openai/gpt-5.6-sol' },
             instructions: './instructions.md',
             skills: ['./skills/workbench-authoring'],
             tools: ['wb'],
@@ -44,9 +44,9 @@ describe('creator Workbench', () => {
         ]);
     });
 
-    test('keeps the published reference snapshot unchanged', async () => {
+    test('keeps the candidate reference snapshot pinned to its version', async () => {
         expect(await digest(join(referencesDirectory, 'spec.md'))).toBe(
-            'ba7ecf4052174e9fd4eb0801417dbc61b3394a4925140dee0551a3199b3a627b'
+            '4e1b595e86f4b4089c5828af1537f190f0864caaf11ad4c9a023b9244a615790'
         );
         expect(await digest(join(referencesDirectory, 'workbench.schema.json'))).toBe(
             '8f44c19b7cc4594fe80d5371064df05a7c46cce505e705eba8d7573762aed072'

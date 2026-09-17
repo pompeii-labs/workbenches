@@ -11,7 +11,7 @@ export interface E2BAssetBinding {
     access: 'read-only' | 'read-write';
     excludedHostPaths: string[];
     workspace?: string;
-    kind: 'workspace' | 'package' | 'asset' | 'credentials';
+    kind: 'workspace' | 'package' | 'asset' | 'credentials' | 'state' | 'outcome';
 }
 
 export class E2BPathPlan {
@@ -33,29 +33,37 @@ export class E2BPathPlan {
                       workspace: asset.workspace,
                       kind: 'workspace',
                   }
-                : hostPath === workspace
+                : asset.state
                   ? {
                         hostPath,
-                        runtimePath: '/workspace',
+                        runtimePath: `/runtime-state/${unique.size}`,
                         access: asset.access,
                         excludedHostPaths: [],
-                        kind: 'workspace',
+                        kind: 'state',
                     }
-                  : hostPath === packageDirectory
+                  : hostPath === workspace
                     ? {
                           hostPath,
-                          runtimePath: '/workbench',
+                          runtimePath: '/workspace',
                           access: asset.access,
                           excludedHostPaths: [],
-                          kind: 'package',
+                          kind: 'workspace',
                       }
-                    : {
-                          hostPath,
-                          runtimePath: `/runtime-assets/${unique.size}`,
-                          access: asset.access,
-                          excludedHostPaths: [],
-                          kind: 'asset',
-                      };
+                    : hostPath === packageDirectory
+                      ? {
+                            hostPath,
+                            runtimePath: '/workbench',
+                            access: asset.access,
+                            excludedHostPaths: [],
+                            kind: 'package',
+                        }
+                      : {
+                            hostPath,
+                            runtimePath: `/runtime-assets/${unique.size}`,
+                            access: asset.access,
+                            excludedHostPaths: [],
+                            kind: 'asset',
+                        };
             if (existing && existing.runtimePath !== binding.runtimePath) {
                 throw new Error(
                     `Runtime assets must resolve to distinct staged paths: ${hostPath}`
@@ -91,6 +99,21 @@ export class E2BPathPlan {
                 access: 'read-write',
                 excludedHostPaths: [],
                 kind: 'credentials',
+            });
+        }
+        if (request.outcome) {
+            const hostPath = resolve(request.outcome.directory);
+            if (unique.has(hostPath)) {
+                throw new Error(
+                    `Outcome storage must be separate from runtime assets: ${hostPath}`
+                );
+            }
+            unique.set(hostPath, {
+                hostPath,
+                runtimePath: '/outbox',
+                access: 'read-write',
+                excludedHostPaths: [],
+                kind: 'outcome',
             });
         }
         const bindings = [...unique.values()];
@@ -171,6 +194,7 @@ export class E2BPathPlan {
             ...(credentials && this.request.workbench.manifest.runner === 'pi'
                 ? { WORKBENCH_CREDENTIALS_DIR: credentials.runtimePath }
                 : {}),
+            ...(this.request.outcome ? { WORKBENCH_OUTPUT_DIR: '/outbox' } : {}),
             ...Object.fromEntries(
                 E2BPathPlan.environmentNames(this.request.workbench).map((name) => [
                     name,

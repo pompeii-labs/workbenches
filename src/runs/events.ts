@@ -18,6 +18,8 @@ export const WORKBENCH_EVENT_TYPES = [
     'question.answered',
     'question.rejected',
     'usage.updated',
+    'outcome.available',
+    'outcome.failed',
     'run.completed',
     'run.failed',
     'run.cancelled',

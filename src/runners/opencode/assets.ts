@@ -3,19 +3,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ResolvedWorkbench } from '../../types.js';
+import { type RunnerContextFiles, stageRunnerContext } from '../context.js';
 
-export async function stageOpenCodeSkills(
-    workbench: ResolvedWorkbench
-): Promise<{ directory: string; cleanup: () => Promise<void> } | undefined> {
+export async function stageOpenCodeSkills(workbench: ResolvedWorkbench): Promise<{
+    directory: string;
+    context: RunnerContextFiles;
+    cleanup: () => Promise<void>;
+}> {
     const config = workbench.runnerConfigPath
         ? await lstat(workbench.runnerConfigPath)
         : undefined;
     const configDirectory = config?.isDirectory()
         ? workbench.runnerConfigPath
         : undefined;
-    if (workbench.skills.length === 0 && !configDirectory) return undefined;
     const directory = await mkdtemp(join(tmpdir(), 'workbench-opencode-'));
     const skillsDirectory = join(directory, 'skills');
+    let context: RunnerContextFiles;
     try {
         if (configDirectory) {
             await cp(configDirectory, directory, {
@@ -32,6 +35,7 @@ export async function stageOpenCodeSkills(
                 })
             )
         );
+        context = await stageRunnerContext(directory, workbench);
         await chmod(directory, 0o555);
     } catch (error) {
         await rm(directory, { recursive: true, force: true });
@@ -39,6 +43,7 @@ export async function stageOpenCodeSkills(
     }
     return {
         directory,
+        context,
         cleanup: async () => {
             await chmod(directory, 0o755).catch(() => {});
             await rm(directory, { recursive: true, force: true });

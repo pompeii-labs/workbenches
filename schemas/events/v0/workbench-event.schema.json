@@ -89,6 +89,8 @@
                 "question.answered",
                 "question.rejected",
                 "usage.updated",
+                "outcome.available",
+                "outcome.failed",
                 "run.completed",
                 "run.failed",
                 "run.cancelled",
@@ -116,9 +118,71 @@
         },
         {
             "if": {
+                "properties": { "type": { "const": "outcome.available" } }
+            },
+            "then": {
                 "properties": {
-                    "type": { "enum": ["tool.started", "tool.completed"] }
+                    "data": {
+                        "type": "object",
+                        "required": [
+                            "outcome_id",
+                            "completeness",
+                            "application_state",
+                            "changesets",
+                            "artifacts",
+                            "links",
+                            "warnings"
+                        ],
+                        "properties": {
+                            "outcome_id": {
+                                "type": "string",
+                                "pattern": "^wbo_[a-z0-9]{20,64}$"
+                            },
+                            "completeness": {
+                                "enum": ["complete", "partial"]
+                            },
+                            "turn_index": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                            },
+                            "application_state": {
+                                "enum": ["pending", "present", "applied"]
+                            },
+                            "changesets": { "type": "integer", "minimum": 0 },
+                            "artifacts": { "type": "integer", "minimum": 0 },
+                            "links": { "type": "integer", "minimum": 0 },
+                            "warnings": { "type": "integer", "minimum": 0 },
+                            "summary": { "type": "string" }
+                        }
+                    }
                 }
+            }
+        },
+        {
+            "if": {
+                "properties": { "type": { "const": "outcome.failed" } }
+            },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["message", "turn_index"],
+                        "properties": {
+                            "message": { "type": "string", "minLength": 1 },
+                            "turn_index": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": { "type": { "enum": ["tool.started", "tool.completed"] } }
             },
             "then": {
                 "properties": {
@@ -133,6 +197,10 @@
                             "description": { "type": "string" },
                             "status": { "enum": ["completed", "failed"] },
                             "duration_ms": { "type": "number", "minimum": 0 },
+                            "outcome_id": {
+                                "type": "string",
+                                "pattern": "^wbo_[a-z0-9]{20,64}$"
+                            },
                             "error_code": { "type": "string" },
                             "message": { "type": "string" }
                         }

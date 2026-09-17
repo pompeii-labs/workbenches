@@ -1,12 +1,12 @@
 spec: 0
-version: 0.1.4
+version: 0.1.6
 
 name: workbench-creator
 description: Design, author, review, and test repository-owned Workbenches.
 
 runner: opencode
 model:
-  id: openai/gpt-5.6-terra
+  id: openai/gpt-5.6-sol
 
 instructions: ./instructions.md
 skills:

@@ -363,8 +363,8 @@ Required bindings fail before runner launch. Inside a local run, the resolved
 paths are exposed as `WORKBENCH_WORKSPACE_API` and
 `WORKBENCH_WORKSPACE_SCHEMAS`. Docker and E2B use the same names with
 deterministic paths such as `/workspaces/api`. Docker enforces read-only
-declarations at the mount boundary. E2B stages isolated copies and only
-synchronizes declared read-write directories back to the host. Local access
+declarations at the mount boundary. E2B stages isolated copies and returns
+declared read-write changes as pending outcomes for explicit acceptance. Local access
 declarations are preflight checks, not an operating-system sandbox.
 
 Use `--dry-run` to inspect the translated runner invocation without executing
@@ -523,10 +523,9 @@ workspace files, repository metadata, common credential stores, dependency
 trees, and common secret-bearing files such as `.env` are excluded. Read-only
 assets are copied into the sandbox and are never synchronized back. A separately
 staged asset nested beneath a writable directory is excluded from that parent
-snapshot. Read-write directories are compared with their original host state at
-cleanup, and remote edits, additions, and deletions are applied only if the same
-host files did not change during the run. Read-write single-file assets are
-rejected.
+snapshot. Remote edits, additions, modes, and deletions are collected against the
+original baseline as durable pending changesets, never automatically applied to
+the host. Read-write single-file assets are rejected.
 
 Input and output transfers each have a 512 MiB safety limit, enforced against
 uncompressed content. `E2B_API_KEY` is used only by the host control plane and is
@@ -544,8 +543,10 @@ synchronized back before the disposable sandbox is destroyed. Existing local
 credentials are not modified if staging or startup fails. A host process crash
 before cleanup can lose a newly completed remote login.
 
-Normal completion, failure, or cancellation synchronizes eligible changes and
-destroys the sandbox. The 60-minute provider timeout pauses a crash survivor
+Normal completion collects outcomes before destroying the sandbox. Failure and
+cancellation collect partial outcomes when possible. If collection fails, the
+engine retains a private recovery checkpoint and pauses the original sandbox
+when possible. The 60-minute provider timeout pauses a crash survivor
 without preserving its memory. `wb clean` can find managed E2B sandboxes in the
 same scoped Workbench data store and removes only those whose run is terminal,
 or whose run is missing and whose sandbox is paused, and only when `--apply` is
@@ -553,8 +554,13 @@ passed. A running sandbox with no matching local run is protected because it
 may belong to another host using the same scoped store. Prepared E2B templates
 are cached and are outside the `wb clean` contract.
 
+Pending recovery checkpoints protect their run history and original sandbox
+from ordinary cleanup. Use `wb outcome <run-id> --recover` to collect partial
+work from that sandbox, or `--discard-recovery` to explicitly abandon it. These
+actions require the host's E2B key but create no new sandbox or model work.
+
 The provider does not automatically retry template builds, sandbox creation,
-command starts, transfers, or synchronization because an ambiguous remote
+command starts, transfers, or native-state synchronization because an ambiguous remote
 outcome could duplicate billable work or replay a mutation. Cleanup is still
 attempted after failure. Terminal run events include E2B duration, CPU and memory
 shape, and a clearly marked infrastructure cost estimate when sandbox metadata
@@ -563,11 +569,42 @@ is available. This stays separate from model tokens and model cost in
 
 E2B is copy-based rather than mount-based. A resumed Workbench session runs in a
 fresh sandbox after its native session state and runner credential store are
-copied in. If the host dies before result collection, the lease and
-`wb clean --apply` bound the surviving sandbox, but draft 0 does not recover a
-portable result bundle from it. Direct synchronization is the current
-compatibility behavior; explicit portable apply and export behavior is being
-specified separately.
+copied in. Outcome recovery is separate from conversation resume and requires
+the original checkpoint and provider filesystem to survive. Already-collected
+outcomes can be inspected, exported, and explicitly applied without a live
+sandbox or E2B key.
+
+### Returned results
+
+Each durable execution collects changesets, artifacts, and links into an
+immutable outcome before disposable runtime cleanup. Local and Docker changes
+are already present in mounted host directories. E2B changes remain pending
+until you accept them explicitly:
+
+```sh
+wb outcome wb_...
+wb outcome wbo_... --json
+wb outcome wbo_... --export ./review-bundle
+wb outcome wbo_... --apply
+```
+
+Apply checks the producing run's workspace bindings and original fingerprints
+before changing any file. Conflicts leave host files untouched. Export creates
+a self-contained bundle and refuses an existing destination. Neither action
+requires another model turn, harness login, or E2B key.
+
+A Workbench can write reports, screenshots, images, or other files beneath
+`WORKBENCH_OUTPUT_DIR` with its harness's existing tools. An optional top-level
+`outcome.json` adds summary, artifact metadata, and HTTP/HTTPS links. Original
+artifact bytes are preserved without image resizing or transcoding. The CLI and
+TUI link to local files rather than rendering images inline; `/outcome` inspects
+results from chat. A PR link is returned data, not permission for the engine to
+publish a branch or open a PR automatically.
+
+The result store enforces per-file, per-outcome, and aggregate storage limits
+before copying bytes. Quota failures do not silently remove retained outcomes.
+See [docs/OUTCOMES.md](docs/OUTCOMES.md) for the versioned contract, outbox JSON,
+receipt states, recovery limits, and explicit cleanup behavior.
 
 ### Sessions and background work
 
@@ -744,6 +781,8 @@ Preflight failure stops execution before model tokens are spent.
 
 - [SPEC.md](SPEC.md) defines the draft-0 Workbench package.
 - [docs/EXECUTION.md](docs/EXECUTION.md) defines the draft-0 execution protocol.
+- [docs/OUTCOMES.md](docs/OUTCOMES.md) defines portable run results and explicit
+  apply, export, and recovery behavior.
 - [docs/SOURCES.md](docs/SOURCES.md) documents reference-engine source and
   workspace behavior.
 - [docs/RELEASING.md](docs/RELEASING.md) documents the versioned binary release
@@ -765,6 +804,7 @@ bun run test:docker
 bun run test:docker:sessions
 bun run test:e2b
 bun run test:e2b:sessions
+bun run test:outcomes:harnesses
 bun run build
 ```
 
@@ -776,11 +816,25 @@ for OpenCode and Pi. It requires previously connected runner credentials and
 makes model-provider requests.
 
 `test:e2b` requires `E2B_API_KEY`, builds a real E2B template, exercises remote
-streaming, PTY input, workspace synchronization, cross-sandbox credential
-persistence, and sandbox destruction.
+streaming, PTY input, pending workspace outcomes, original-sandbox result recovery,
+cross-sandbox credential persistence, and sandbox destruction.
 `test:e2b:sessions` additionally starts OpenCode in two fresh sandboxes and
 verifies native session resume. It requires a supported model-provider key and
 makes model-provider requests.
+
+`test:outcomes:harnesses` exercises OpenCode and Pi through the public CLI on
+Local, Docker, and E2B. It requires `OPENROUTER_API_KEY`, a running Docker daemon,
+and `E2B_API_KEY`. It makes real model-provider requests and verifies tool-created
+changes in primary and named workspaces, exact binary artifact bytes, link
+metadata, outcome publication before completion, keyless inspection and export,
+explicit E2B application, and native context resume. Set
+`WORKBENCH_OUTCOME_RUNTIMES=local`, `docker`, or `e2b` to run a subset. Docker
+fixtures build native-runner images by default; existing images containing the
+corresponding runner may be reused through
+`WORKBENCH_OUTCOME_DOCKER_OPENCODE_IMAGE` and
+`WORKBENCH_OUTCOME_DOCKER_PI_IMAGE`. `WORKBENCH_OUTCOME_CLI` may point at an
+isolated compiled binary to run the same checks against release packaging.
+These overrides are test-only.
 
 `bun run check` runs type checking, Biome, and the unit and integration suite.
 The compiled `dist/workbench` binary is self-contained and does not require Bun

@@ -1,0 +1,19 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://workbenches.dev/schemas/outcomes/v1/application.schema.json",
+    "title": "Workbench Outcome Application Receipt",
+    "description": "Mutable host application metadata stored separately from an immutable run outcome.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["version", "outcome_id", "state", "updated_at"],
+    "properties": {
+        "version": { "const": 1 },
+        "outcome_id": { "type": "string", "pattern": "^wbo_[a-z0-9]{20,64}$" },
+        "state": { "enum": ["pending", "present", "applied"] },
+        "updated_at": { "type": "string", "format": "date-time", "pattern": "Z$" },
+        "applied_at": { "type": "string", "format": "date-time", "pattern": "Z$" }
+    },
+    "if": { "properties": { "state": { "const": "applied" } }, "required": ["state"] },
+    "then": { "required": ["applied_at"] },
+    "else": { "not": { "required": ["applied_at"] } }
+}

@@ -15,6 +15,7 @@ import { killCommand } from './commands/kill.js';
 import { listCommand } from './commands/list.js';
 import { loginCommand } from './commands/login.js';
 import { logoutCommand } from './commands/logout.js';
+import { outcomeCommand } from './commands/outcome.js';
 import { psCommand } from './commands/ps.js';
 import { publishCommand } from './commands/publish.js';
 import { removeCommand } from './commands/remove.js';
@@ -57,6 +58,7 @@ export const workbenchCommand = defineCommand({
         upgrade: upgradeCommand,
         login: loginCommand,
         logout: logoutCommand,
+        outcome: outcomeCommand,
         whoami: whoamiCommand,
         publish: publishCommand,
         ps: psCommand,

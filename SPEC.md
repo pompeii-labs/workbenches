@@ -193,8 +193,9 @@ Runtimes expose named workspace locations through
 `WORKBENCH_WORKSPACE_<NAME>`, replacing hyphens with underscores. The local
 runtime uses resolved host paths. The Docker runtime mounts them at
 `/workspaces/<name>` and enforces the declared mount access. The reference E2B
-runtime copies them to `/workspaces/<name>` and synchronizes only declared
-read-write directories back to the host. The local runtime checks host
+runtime copies them to `/workspaces/<name>` and returns declared read-write
+changes as pending outcomes, never applying them implicitly to the host. The
+local runtime checks host
 readability or writability but cannot prevent a host process from writing
 elsewhere; engines must not represent local access declarations as an isolation
 boundary.
@@ -274,10 +275,16 @@ The execution lifecycle is:
 
 1. Resolve and validate the Workbench package.
 2. Select the named runtime provider and prepare its environment.
-3. Mount or synchronize the primary workspace, named workspaces, and Workbench
+3. Mount or copy the primary workspace, named workspaces, and Workbench
    assets, then bind the run environment.
 4. Verify every declared tool inside that environment.
 5. Launch the runner and permit model requests only after preflight succeeds.
+
+Durable executions collect changesets, artifacts, and links through the separate
+[portable outcomes contract](docs/OUTCOMES.md). Local and Docker execution keep
+their in-place workspace behavior. Copy-based E2B execution requires explicit
+host acceptance of returned changes. Result collection does not authorize Git
+publishing or turn the package into a workflow or orchestration service.
 
 For `runtime: local`, the environment is the host process environment. The v0
 reference engine resolves each declared tool from `PATH` and rejects the run if

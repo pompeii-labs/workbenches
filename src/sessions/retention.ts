@@ -1,4 +1,9 @@
+import { OutcomeStore } from '../outcomes/store.js';
 import { RunStore, type StoredRun } from '../runs/store.js';
+import {
+    E2BOutcomeRecovery,
+    type E2BRecoveryReview,
+} from '../runtimes/e2b/recovery.js';
 import type { ManagedDockerContainer, ManagedE2BSandbox } from '../runtimes/index.js';
 import { SessionStore, type StoredSession } from './store.js';
 
@@ -21,6 +26,7 @@ export interface SessionRetentionReview {
     sandboxes: ManagedE2BSandbox[];
     activeRuns: string[];
     protectedResumableSessions: string[];
+    protectedOutcomeRecoveries: E2BRecoveryReview[];
     reconciledRuns: string[];
     bytes: number;
 }
@@ -54,10 +60,15 @@ export class SessionRetention {
     readonly #sessions: SessionStore;
     readonly #containers: ManagedContainerStorage | undefined;
     readonly #sandboxes: ManagedSandboxStorage | undefined;
+    readonly #outcomes: OutcomeStore;
 
-    constructor(home: string, dependencies: SessionRetentionDependencies = {}) {
+    constructor(
+        private readonly home: string,
+        dependencies: SessionRetentionDependencies = {}
+    ) {
         this.#runs = new RunStore(home);
         this.#sessions = new SessionStore(home);
+        this.#outcomes = new OutcomeStore(home);
         this.#containers = dependencies.containers;
         this.#sandboxes = dependencies.sandboxes;
     }
@@ -73,16 +84,31 @@ export class SessionRetention {
             runs.push(run);
             if (run.status !== original.status) reconciledRuns.push(run.id);
         }
+        const protectedOutcomeRecoveries = await E2BOutcomeRecovery.listPending(
+            this.home
+        );
+        const protectedRecoveryRuns = new Set(
+            protectedOutcomeRecoveries.map((recovery) => recovery.run_id)
+        );
 
         const sessionsById = new Map(sessions.map((session) => [session.id, session]));
         const runsBySession = this.groupRuns(runs);
-        const selectedSessions = sessions.filter((session) =>
-            this.sessionEligible(session, runsBySession.get(session.id) ?? [], policy)
+        const selectedSessions = sessions.filter(
+            (session) =>
+                !(runsBySession.get(session.id) ?? []).some((run) =>
+                    protectedRecoveryRuns.has(run.id)
+                ) &&
+                this.sessionEligible(
+                    session,
+                    runsBySession.get(session.id) ?? [],
+                    policy
+                )
         );
         const selectedSessionIds = new Set(
             selectedSessions.map((session) => session.id)
         );
         const selectedRuns = runs.filter((run) => {
+            if (protectedRecoveryRuns.has(run.id)) return false;
             if (!RunStore.isTerminal(run.status)) return false;
             if (run.session_id && selectedSessionIds.has(run.session_id)) return true;
             if (!this.oldEnough(this.runTimestamp(run), policy.before)) return false;
@@ -107,6 +133,12 @@ export class SessionRetention {
             this.staleContainers(new Map(runs.map((run) => [run.id, run]))),
             this.staleSandboxes(new Map(runs.map((run) => [run.id, run]))),
         ]);
+        const selectedRunIds = new Set(selectedRuns.map((run) => run.id));
+        const outcomeContentBytes = await this.#outcomes.reclaimableContentBytes(
+            (await this.#outcomes.list())
+                .filter((outcome) => selectedRunIds.has(outcome.run_id))
+                .map((outcome) => outcome.id)
+        );
         return {
             before: policy.before.toISOString(),
             includeResumableSessions: policy.includeResumableSessions ?? false,
@@ -131,11 +163,14 @@ export class SessionRetention {
                         )
                 )
                 .map((session) => session.id),
+            protectedOutcomeRecoveries,
             reconciledRuns,
-            bytes: [...sessionItems, ...runItems].reduce(
-                (total, item) => total + item.bytes,
-                0
-            ),
+            bytes:
+                outcomeContentBytes +
+                [...sessionItems, ...runItems].reduce(
+                    (total, item) => total + item.bytes,
+                    0
+                ),
         };
     }
 
@@ -166,7 +201,14 @@ export class SessionRetention {
                         (run) => run.session_id === session.id
                     );
                     const runs = await this.reconcile(linked);
-                    if (!this.sessionEligible(session, runs, policy)) {
+                    if (
+                        !this.sessionEligible(session, runs, policy) ||
+                        (
+                            await Promise.all(
+                                runs.map((run) => this.hasOutcomeRecovery(run.id))
+                            )
+                        ).some(Boolean)
+                    ) {
                         skipped.push(candidate.id);
                         return;
                     }
@@ -221,6 +263,9 @@ export class SessionRetention {
             }
         }
 
+        // References disappear with terminal history; shared blobs survive if still in use.
+        removedBytes += (await this.#outcomes.collectGarbage()).removed_bytes;
+
         return {
             ...review,
             removedSessions,
@@ -254,6 +299,7 @@ export class SessionRetention {
         run: StoredRun,
         policy: SessionRetentionPolicy
     ): Promise<boolean> {
+        if (await this.hasOutcomeRecovery(run.id)) return false;
         const current = await this.#runs.reconcile(run);
         if (
             !RunStore.isTerminal(current.status) ||
@@ -277,6 +323,7 @@ export class SessionRetention {
 
     private async removeSandbox(sandbox: ManagedE2BSandbox): Promise<boolean> {
         if (!this.#sandboxes) return false;
+        if (await this.hasOutcomeRecovery(sandbox.runId)) return false;
         const run = await this.#runs.read(sandbox.runId).catch(() => undefined);
         if (!run && sandbox.state === 'running') return false;
         if (run && !RunStore.isTerminal((await this.#runs.reconcile(run)).status)) {
@@ -300,10 +347,24 @@ export class SessionRetention {
         runs: Map<string, StoredRun>
     ): Promise<ManagedE2BSandbox[]> {
         if (!this.#sandboxes) return [];
-        return (await this.#sandboxes.list()).filter((sandbox) => {
+        const sandboxes = await this.#sandboxes.list();
+        const recoveries = new Set<string>();
+        for (const sandbox of sandboxes) {
+            if (await this.hasOutcomeRecovery(sandbox.runId))
+                recoveries.add(sandbox.runId);
+        }
+        return sandboxes.filter((sandbox) => {
+            if (recoveries.has(sandbox.runId)) return false;
             const run = runs.get(sandbox.runId);
             return run ? RunStore.isTerminal(run.status) : sandbox.state === 'paused';
         });
+    }
+
+    private hasOutcomeRecovery(runId: string): Promise<boolean> {
+        return new E2BOutcomeRecovery(this.home, {
+            id: runId,
+            scope: RunStore.scope(this.home),
+        }).exists();
     }
 
     private sessionEligible(

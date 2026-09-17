@@ -10,7 +10,7 @@ export const modelCatalogFixture: ModelCatalogSnapshot = {
         'anthropic/claude-sonnet-4-5': {
             routes: {
                 anthropic: 'claude-sonnet-4-5',
-                openrouter: 'anthropic/claude-sonnet-4-5',
+                openrouter: 'anthropic/claude-sonnet-4.5',
             },
         },
         'openai/gpt-5.4-mini': {

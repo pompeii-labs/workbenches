@@ -2,6 +2,7 @@ import { relative } from 'node:path';
 
 import { modelLabel } from '../../models/index.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
+import { type RunnerContextFiles, withRunnerContext } from '../context.js';
 
 export function buildOpenCodeInvocation(
     workbench: ResolvedWorkbench,
@@ -10,7 +11,8 @@ export function buildOpenCodeInvocation(
     configDirectory?: string,
     workspaceDirectory = workbench.repositoryDirectory,
     model = modelLabel(workbench.manifest.model),
-    nativeConfigFile?: string
+    nativeConfigFile?: string,
+    context?: RunnerContextFiles
 ): RunnerInvocation {
     if (!task.trim()) throw new Error('task must not be empty');
     const environment = buildOpenCodeEnvironment(
@@ -19,24 +21,30 @@ export function buildOpenCodeInvocation(
         configDirectory,
         workspaceDirectory,
         model,
-        nativeConfigFile
+        nativeConfigFile,
+        undefined,
+        context?.instructions
     );
 
-    return {
-        command: [
-            'opencode',
-            'run',
-            '--model',
-            model,
-            '--dir',
-            workspaceDirectory,
-            '--format',
-            'json',
-            task.trim(),
-        ],
-        cwd: workspaceDirectory,
-        env: environment,
-    };
+    return withRunnerContext(
+        {
+            command: [
+                'opencode',
+                'run',
+                '--model',
+                model,
+                '--dir',
+                workspaceDirectory,
+                '--format',
+                'json',
+                task.trim(),
+            ],
+            cwd: workspaceDirectory,
+            env: environment,
+        },
+        workbench,
+        context
+    );
 }
 
 export function buildOpenCodeSessionInvocation(
@@ -47,7 +55,8 @@ export function buildOpenCodeSessionInvocation(
     configDirectory?: string,
     workspaceDirectory = workbench.repositoryDirectory,
     model = modelLabel(workbench.manifest.model),
-    nativeConfigFile?: string
+    nativeConfigFile?: string,
+    context?: RunnerContextFiles
 ): RunnerInvocation {
     const invocation = buildOpenCodeInvocation(
         workbench,
@@ -56,7 +65,8 @@ export function buildOpenCodeSessionInvocation(
         configDirectory,
         workspaceDirectory,
         model,
-        nativeConfigFile
+        nativeConfigFile,
+        context
     );
     if (sessionId === undefined) return invocation;
     const normalized = sessionId.trim();
@@ -84,32 +94,38 @@ export function buildOpenCodeServerInvocation(
     binding: { hostname: string; port: number } = {
         hostname: '127.0.0.1',
         port: 0,
-    }
+    },
+    context?: RunnerContextFiles
 ): RunnerInvocation {
     if (!password) throw new Error('OpenCode server password must not be empty');
-    return {
-        command: [
-            'opencode',
-            'serve',
-            '--hostname',
-            binding.hostname,
-            '--port',
-            String(binding.port),
-        ],
-        cwd: workspaceDirectory,
-        env: {
-            ...buildOpenCodeEnvironment(
-                workbench,
-                baseEnv,
-                configDirectory,
-                workspaceDirectory,
-                model,
-                nativeConfigFile,
-                databasePath
-            ),
-            OPENCODE_SERVER_PASSWORD: password,
+    return withRunnerContext(
+        {
+            command: [
+                'opencode',
+                'serve',
+                '--hostname',
+                binding.hostname,
+                '--port',
+                String(binding.port),
+            ],
+            cwd: workspaceDirectory,
+            env: {
+                ...buildOpenCodeEnvironment(
+                    workbench,
+                    baseEnv,
+                    configDirectory,
+                    workspaceDirectory,
+                    model,
+                    nativeConfigFile,
+                    databasePath,
+                    context?.instructions
+                ),
+                OPENCODE_SERVER_PASSWORD: password,
+            },
         },
-    };
+        workbench,
+        context
+    );
 }
 
 function buildOpenCodeEnvironment(
@@ -119,7 +135,8 @@ function buildOpenCodeEnvironment(
     workspaceDirectory: string,
     model: string,
     nativeConfigFile: string | undefined,
-    databasePath = ':memory:'
+    databasePath = ':memory:',
+    instructionsPath = workbench.instructionsPath
 ): Record<string, string | undefined> {
     if (workbench.manifest.runner !== 'opencode') {
         throw new Error(`Unsupported runner: ${workbench.manifest.runner}`);
@@ -165,19 +182,24 @@ function buildOpenCodeEnvironment(
             ];
         })
     );
-    const instructionRelativePath = relative(
-        workspaceDirectory,
-        workbench.instructionsPath
-    );
+    const instructionRelativePath = relative(workspaceDirectory, instructionsPath);
     const instructionPath = instructionRelativePath.startsWith('..')
-        ? workbench.instructionsPath
+        ? instructionsPath
         : instructionRelativePath;
+    const outbox = baseEnv.WORKBENCH_OUTPUT_DIR;
+    // Approve only the engine-owned result directory. Keep all other native
+    // permission defaults and package settings intact, including tool approval.
+    const outboxPermission =
+        outbox && !/[?*\\]/.test(outbox)
+            ? { permission: { external_directory: { [`${outbox}/*`]: 'allow' } } }
+            : {};
     const config = {
         $schema: 'https://opencode.ai/config.json',
         autoupdate: false,
         share: 'disabled',
         model,
         instructions: [instructionPath],
+        ...outboxPermission,
         ...(Object.keys(mcp).length > 0 ? { mcp } : {}),
     };
 

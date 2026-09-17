@@ -41,6 +41,8 @@
         "test:docker:sessions": "WORKBENCH_DOCKER_SESSION_E2E=1 bun test --preload ./test/setup.ts test/docker.e2e.test.ts",
         "test:e2b": "WORKBENCH_E2B_E2E=1 bun test --preload ./test/setup.ts test/e2b.e2e.test.ts",
         "test:e2b:sessions": "WORKBENCH_E2B_E2E=1 WORKBENCH_E2B_SESSION_E2E=1 bun test --preload ./test/setup.ts test/e2b.e2e.test.ts",
+        "test:outcomes:harnesses": "WORKBENCH_OUTCOME_HARNESS_E2E=1 bun test --preload ./test/setup.ts test/outcomes/harness.e2e.test.ts",
+        "test:outcomes:browser": "WORKBENCH_OUTCOME_BROWSER_E2E=1 bun test --preload ./test/setup.ts test/outcomes/browser.e2e.test.ts",
         "typecheck": "tsc --noEmit"
     },
     "devDependencies": {
@@ -49,6 +51,8 @@
         "@commitlint/config-conventional": "^21.2.2",
         "@types/tar-stream": "^3.1.4",
         "@types/bun": "latest",
+        "ajv": "8.20.0",
+        "ajv-formats": "3.0.1",
         "husky": "^9.1.7",
         "typescript": "^5.9.3"
     },

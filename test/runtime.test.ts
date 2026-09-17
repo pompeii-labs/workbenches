@@ -1,4 +1,7 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
     LocalRuntimeProvider,
@@ -6,8 +9,14 @@ import {
     RuntimeRegistry,
     RuntimeSmoke,
 } from '../src/runtimes/index.js';
+import { LocalRuntime } from '../src/runtimes/local.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { runtimeProviderContract } from './runtime-provider-contract.js';
+
+const instructionDirectory = await mkdtemp(join(tmpdir(), 'runtime-instructions-'));
+const instructionsPath = join(instructionDirectory, 'instructions.md');
+await writeFile(instructionsPath, 'Follow the user task.\n');
+afterAll(() => rm(instructionDirectory, { recursive: true, force: true }));
 
 const fixture = workbench();
 const request = {
@@ -23,6 +32,41 @@ const request = {
 let cancellationCount = 0;
 
 describe('local runtime provider contract', () => {
+    test('bounds shutdown when a native process ignores graceful termination', async () => {
+        const child = LocalRuntime.spawn(
+            [
+                process.execPath,
+                '-e',
+                'process.on("SIGTERM", () => console.log("ignored")); console.log("ready"); setInterval(() => {}, 1000);',
+            ],
+            {
+                cwd: instructionDirectory,
+                env: {},
+                stdin: 'ignore',
+                stdout: 'pipe',
+                stderr: 'pipe',
+            }
+        );
+        const reader = child.stdout?.getReader();
+        try {
+            if (!reader) throw new Error('Fixture process stdout is unavailable');
+            expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+                'ready'
+            );
+            const started = Date.now();
+            child.kill?.();
+            expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+                'ignored'
+            );
+            expect(await child.exited).not.toBe(0);
+            expect(Date.now() - started).toBeLessThan(4_000);
+        } finally {
+            child.kill?.();
+            await child.exited;
+            reader?.releaseLock();
+        }
+    }, 6_000);
+
     runtimeProviderContract({
         request,
         createProvider: () =>
@@ -203,7 +247,7 @@ function workbench(): ResolvedWorkbench {
         manifestPath: '/repo/.workbenches/core/workbench.yml',
         packageDirectory: '/repo/.workbenches/core',
         repositoryDirectory: '/repo',
-        instructionsPath: '/repo/.workbenches/core/instructions.md',
+        instructionsPath,
         skills: [],
         manifest: {
             spec: 0,

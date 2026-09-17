@@ -7,19 +7,24 @@ import {
     rm,
     stat,
     symlink,
-    writeFile,
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import type { ResolvedWorkbench } from '../../types.js';
+import { type RunnerContextFiles, stageRunnerContext } from '../context.js';
 
 export async function stagePiConfig(
     workbench: ResolvedWorkbench,
     environment: Record<string, string | undefined> = process.env,
     options: { linkNativeCredentials?: boolean } = {}
-): Promise<{ directory: string; cleanup: () => Promise<void> }> {
+): Promise<{
+    directory: string;
+    context: RunnerContextFiles;
+    cleanup: () => Promise<void>;
+}> {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-pi-'));
+    let context: RunnerContextFiles;
     try {
         if (workbench.runnerConfigPath) {
             const config = await lstat(workbench.runnerConfigPath);
@@ -53,15 +58,12 @@ export async function stagePiConfig(
         }
         await mkdir(directory, { recursive: true });
         const appendPath = join(directory, 'APPEND_SYSTEM.md');
-        const [nativeInstructions, workbenchInstructions] = await Promise.all([
-            readFile(appendPath, 'utf8').catch(() => ''),
-            readFile(workbench.instructionsPath, 'utf8'),
-        ]);
-        await writeFile(
-            appendPath,
-            `${[nativeInstructions.trim(), workbenchInstructions.trim()]
-                .filter(Boolean)
-                .join('\n\n')}\n`
+        const nativeInstructions = await readFile(appendPath, 'utf8').catch(() => '');
+        context = await stageRunnerContext(
+            directory,
+            workbench,
+            nativeInstructions,
+            appendPath
         );
     } catch (error) {
         await rm(directory, { recursive: true, force: true });
@@ -69,6 +71,7 @@ export async function stagePiConfig(
     }
     return {
         directory,
+        context,
         cleanup: () => rm(directory, { recursive: true, force: true }),
     };
 }

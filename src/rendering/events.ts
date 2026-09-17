@@ -226,6 +226,31 @@ class HumanEventRenderer implements EventRenderer {
             );
             return;
         }
+        if (event.type === 'outcome.available') {
+            this.endAnswer();
+            const id = text(event.data, 'outcome_id');
+            const state = text(event.data, 'application_state');
+            const partial = text(event.data, 'completeness') === 'partial';
+            const turnIndex = number(event.data, 'turn_index') ?? 0;
+            const title =
+                turnIndex > 0
+                    ? `Results saved · turn ${turnIndex}`
+                    : partial
+                      ? 'Partial outcome saved'
+                      : 'Outcome saved';
+            this.stdout(
+                `  ${colors.cyan('◆')} ${colors.bold(title)} ${colors.dim(`· ${state} · ${number(event.data, 'changesets')} changesets · ${number(event.data, 'artifacts')} artifacts · ${number(event.data, 'links')} links`)}\n`
+            );
+            this.stdout(`    wb outcome ${id}\n`);
+            return;
+        }
+        if (event.type === 'outcome.failed') {
+            this.endAnswer();
+            this.stderr(
+                `\n${colors.red('!')} ${text(event.data, 'message') || 'Could not save returned results.'}\n`
+            );
+            return;
+        }
         if (event.type === 'run.failed') {
             this.endAnswer();
             this.stderr(

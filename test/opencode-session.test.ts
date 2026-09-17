@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { afterAll, describe, expect, test } from 'bun:test';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRouter } from '../src/models/index.js';
@@ -16,6 +16,13 @@ import {
     runnerAdapterContract,
 } from './runner-adapter-contract.js';
 
+const root = await mkdtemp(join(tmpdir(), 'opencode-session-contract-'));
+const packageDirectory = join(root, '.workbenches', 'core');
+await mkdir(packageDirectory, { recursive: true });
+const instructionsPath = join(packageDirectory, 'instructions.md');
+await writeFile(instructionsPath, '# OpenCode instructions\n');
+afterAll(() => rm(root, { recursive: true, force: true }));
+
 runnerAdapterContract({
     name: 'OpenCode',
     createHarness: () => {
@@ -29,6 +36,86 @@ runnerAdapterContract({
 });
 
 describe('OpenCode interactive server adapter', () => {
+    for (const [action, resources, allowed] of [
+        ['external_directory', ['/outbox/*'], true],
+        ['external_directory', ['/outbox/reports/*'], true],
+        ['external_directory', ['/*'], false],
+        ['external_directory', ['/outbox-other/*'], false],
+        ['external_directory', ['/outbox/../secrets/*'], false],
+        ['external_directory', ['/outbox/*', '/secrets/*'], false],
+        ['edit', ['/outbox/*'], false],
+    ] as const) {
+        test(`keeps native ${action} permission for ${resources.join(', ')} ${allowed ? 'inside the outbox contract' : 'under host control'}`, async () => {
+            const server = new FakeOpenCodeServer();
+            let requested = 0;
+            const session = await server.adapter().start({
+                workbench: workbench(),
+                workspaceDirectory: '/workspace',
+                environment: { WORKBENCH_OUTPUT_DIR: '/outbox' },
+                configuration: configuration(),
+                host: {
+                    emit: async () => {},
+                    requestPermission: async () => {
+                        requested += 1;
+                        return 'reject';
+                    },
+                    requestQuestion: async () => ({ outcome: 'rejected' }),
+                },
+            });
+            try {
+                server.onPrompt = () =>
+                    server.emit('permission.asked', {
+                        id: 'per_outbox',
+                        permission: action,
+                        patterns: resources,
+                    });
+                server.onPermissionReply = () => server.completeTurn('done');
+                await session.prompt('return a report');
+                expect(requested).toBe(allowed ? 0 : 1);
+                expect(server.permissionReplies).toEqual([
+                    { reply: allowed ? 'once' : 'reject' },
+                ]);
+            } finally {
+                await session.close();
+            }
+        });
+    }
+
+    test('does not answer outbox permission requests belonging to another native session', async () => {
+        const server = new FakeOpenCodeServer();
+        let requested = 0;
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: { WORKBENCH_OUTPUT_DIR: '/outbox' },
+            configuration: configuration(),
+            host: {
+                emit: async () => {},
+                requestPermission: async () => {
+                    requested += 1;
+                    return 'reject';
+                },
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+        try {
+            server.onPrompt = () => {
+                server.emit('permission.asked', {
+                    sessionID: 'ses_other',
+                    id: 'per_other',
+                    permission: 'external_directory',
+                    patterns: ['/outbox/*'],
+                });
+                server.completeTurn('done');
+            };
+            await session.prompt('return a report');
+            expect(requested).toBe(0);
+            expect(server.permissionReplies).toEqual([]);
+        } finally {
+            await session.close();
+        }
+    });
+
     test('bounds startup through native session creation', async () => {
         const server = new FakeOpenCodeServer();
         server.stallSessionCreation = true;
@@ -47,6 +134,35 @@ describe('OpenCode interactive server adapter', () => {
             })
         ).rejects.toThrow('OpenCode session did not become ready in time');
         expect(server.kills).toBe(1);
+    });
+
+    test('uses the prepared cloud readiness budget through native session creation and still bounds a stalled startup', async () => {
+        const server = new FakeOpenCodeServer();
+        const adapter = server.adapter();
+        const options = {
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject' as const,
+                requestQuestion: async () => ({ outcome: 'rejected' as const }),
+            },
+        };
+        server.sessionCreationDelayMs = 150;
+        const prepared = {
+            startupTimeoutMs: 500,
+            launch: () => server.launch(),
+        };
+        const session = await adapter.startPrepared(options, prepared);
+        expect(session.id).toBeDefined();
+        await session.close();
+        server.stallSessionCreation = true;
+        await expect(adapter.startPrepared(options, prepared)).rejects.toThrow(
+            'OpenCode session did not become ready in time'
+        );
+        expect(server.kills).toBe(2);
     });
 
     test('stages a packaged config directory without treating it as a config file', async () => {
@@ -876,6 +992,7 @@ class FakeOpenCodeServer {
     permissionReplyStatus = 200;
     autoIdleOnAbort = true;
     stallSessionCreation = false;
+    sessionCreationDelayMs = 0;
     spawnEnvironment: Record<string, string | undefined> = {};
     onPrompt?: (body: Record<string, unknown>) => void;
     onPermissionReply?: (body: Record<string, unknown>) => void;
@@ -1125,6 +1242,13 @@ class FakeOpenCodeServer {
         return String(this.promptBodies.at(-1)?.messageID);
     }
 
+    launch() {
+        return {
+            process: this.process(),
+            resolveUrl: async (url: string) => url,
+        };
+    }
+
     private process() {
         const stdout = new ReadableStream<Uint8Array>({
             start: (controller) => {
@@ -1195,6 +1319,8 @@ class FakeOpenCodeServer {
         }
         if (url.pathname === '/session' && init.method === 'POST') {
             this.createdSessions += 1;
+            if (this.sessionCreationDelayMs)
+                await Bun.sleep(this.sessionCreationDelayMs);
             if (this.stallSessionCreation) {
                 await new Promise<void>((_, reject) => {
                     init.signal?.addEventListener(
@@ -1329,10 +1455,10 @@ async function settled(promise: Promise<unknown>): Promise<boolean> {
 
 function workbench(): ResolvedWorkbench {
     return {
-        manifestPath: '/repo/.workbenches/core/workbench.yml',
-        packageDirectory: '/repo/.workbenches/core',
-        repositoryDirectory: '/repo',
-        instructionsPath: '/repo/.workbenches/core/instructions.md',
+        manifestPath: join(packageDirectory, 'workbench.yml'),
+        packageDirectory,
+        repositoryDirectory: root,
+        instructionsPath,
         skills: [],
         manifest: {
             spec: 0,

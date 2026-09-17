@@ -18,6 +18,7 @@ export interface SessionCommandActions {
     attachments(): Array<{ name: string; path: string }>;
     clearAttachments(): void;
     improve(feedback: string): void | Promise<void>;
+    showOutcome(): void | Promise<void>;
     cancelTurn(): void | Promise<void>;
     exit(): void | Promise<void>;
     showError(message: string): void;
@@ -101,6 +102,13 @@ export class SessionCommands {
                             ]}
                         />
                     ))
+            ),
+            this.#command(
+                'outcome',
+                'Run outcome',
+                'Inspect changes, artifacts, and links from this run',
+                'Workbench',
+                () => this.options.actions.showOutcome()
             ),
             this.#command(
                 'runtime',

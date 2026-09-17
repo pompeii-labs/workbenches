@@ -1,7 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-
+import type {
+    HostOutcomeCapture,
+    OutcomeStore,
+    RuntimeOutcomeCollection,
+} from '../../outcomes/index.js';
 import type {
     ResolvedWorkbench,
     RunnerInvocation,
@@ -41,6 +45,7 @@ export interface DockerRuntimeOptions {
     credentials?: DockerCredentialVolume;
     preparation: DockerPreparation;
     stateDirectory: string;
+    outcome?: HostOutcomeCapture;
     cleanupPreparation(): Promise<void>;
 }
 
@@ -80,6 +85,13 @@ export class DockerRuntime implements PreparedRuntime {
             ...options.mounts.containerEnvironment(),
             ...options.credentials?.environment(),
             ...this.workspaceBindings.environment(this.workspaces),
+            ...(options.request.outcome
+                ? {
+                      WORKBENCH_OUTPUT_DIR: options.mounts.pathFor(
+                          options.request.outcome.directory
+                      ),
+                  }
+                : {}),
             ...(options.hostSocket
                 ? {
                       DOCKER_HOST: 'unix:///var/run/docker.sock',
@@ -308,12 +320,25 @@ export class DockerRuntime implements PreparedRuntime {
         if (failure) throw failure;
     }
 
+    async collectOutcome(
+        store: OutcomeStore
+    ): Promise<RuntimeOutcomeCollection | undefined> {
+        return this.options.outcome?.collect(store);
+    }
+
+    collectOutput(store: OutcomeStore) {
+        return this.options.outcome?.collectOutput(store) ?? Promise.resolve(undefined);
+    }
+
     async cleanup(): Promise<void> {
         if (this.cleaned) return;
         this.cleaned = true;
         for (const name of this.active.keys()) this.queueContainerRemoval(name);
         this.active.clear();
         await Promise.all([...this.pendingRemovals]);
+        await this.options.outcome?.cleanup().catch((error) => {
+            this.cleanupErrors.push(error);
+        });
         try {
             await this.options.cleanupPreparation();
         } catch (error) {

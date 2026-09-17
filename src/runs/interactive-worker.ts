@@ -130,6 +130,9 @@ export class InteractiveRunWorker {
                         ? { runtimeRegistry: this.dependencies.runtimeRegistry }
                         : {}),
                     ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
+                    ...(this.dependencies.captureOutcomes === false
+                        ? { captureOutcomes: false }
+                        : {}),
                 },
             });
             if (

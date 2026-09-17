@@ -79,6 +79,7 @@ interface RuntimePrepareRequest {
         access: "read-only" | "read-write";
         workspace?: string;
     }>;
+    outcome?: { directory: string; home?: string };
 }
 
 interface PreparedRuntime {
@@ -109,7 +110,8 @@ interface PreparedRuntime {
               }
             | { kind: "unavailable"; currency: "USD" };
     } | undefined>;
-    synchronize?(): Promise<void>;
+    collectOutcome?(store: OutcomeStore): Promise<RuntimeOutcomeCollection | undefined>;
+    finalizeOutcome?(): Promise<void>;
     cleanup(): Promise<void>;
 }
 ```
@@ -120,21 +122,26 @@ available, binds the environment, and returns their runtime-visible locations.
 The primary workspace is read-write; immutable package assets are read-only,
 and each named workspace has its manifest-declared access. Generated runner
 state can be a separate writable ephemeral asset. Local execution uses host
-paths unchanged. Isolated providers mount or synchronize only the declared
+paths unchanged. Isolated providers mount or copy only the declared
 assets and return remapped paths.
 
 Preparation must be safe to repeat with the same inputs, including after an
 interrupted attempt. `cleanup` must be safe to call more than once. A provider
 must reject `launch` until its own preflight has succeeded. Cancellation targets
 the provider-owned process or remote job; cleanup still runs afterward.
-Providers that execute against copied writable assets implement `synchronize`.
-The engine calls it before a successful terminal event so synchronization
-failure cannot be reported as a successful run. Cleanup also attempts it once
-for failure and cancellation paths, then destroys the runtime even when
-synchronization fails.
+Durable executions supply an engine-owned outbox directory in `outcome`.
+Providers expose its runtime path as `WORKBENCH_OUTPUT_DIR` and implement
+`collectOutcome` to return changesets, artifacts, links, warnings, and their
+initial application state. The engine commits this collection to `OutcomeStore`
+before publishing `outcome.available` and ending the run. `finalizeOutcome` lets
+a provider release its private recovery checkpoint after that durable commit.
+Collection errors must not become successful empty results. Cleanup still runs;
+E2B preserves an original-sandbox recovery checkpoint rather than destroying
+uncollected work. The separate [outcomes contract](OUTCOMES.md) defines these
+data structures, explicit apply/export behavior, limits, and recovery semantics.
 
 Failures are normalized at the `resolve`, `prepare`, `mount`, `bind`,
-`preflight`, `launch`, `cancel`, or `cleanup` boundary and identify the selected
+`preflight`, `launch`, `cancel`, `collect`, or `cleanup` boundary and identify the selected
 runtime without exposing bound environment values. Runtime-native logs and
 identifiers are diagnostics, not additions to the portable Workbench event
 protocol. Providers must pass the shared runtime contract suite before being
@@ -266,19 +273,21 @@ Workspace selection uses tracked and unignored Git files when possible, with a
 filesystem walk as the non-repository fallback. Repository metadata, dependency
 trees, common credential directories, and common secret-bearing files are
 excluded. Symlinks that escape the copied root are rejected. Read-write files
-are rejected because draft 0 synchronization operates on directory snapshots.
+are rejected because workspace collection operates on directory snapshots.
 A separately staged asset nested beneath another asset is excluded from the
-parent copy and from its synchronization set.
+parent copy and its workspace changeset.
 
 Read-only assets are isolated copies, have their write permission bits removed
 as defense in depth, and are never copied back. This is not a claim that a
 privileged process inside the sandbox cannot modify its private copy.
 Read-write directories receive a synthetic Git baseline inside the sandbox.
-After execution, the provider collects changed paths and deletions, checks the
-current host files against the original baseline, and prepares every declared
-workspace update before applying any of them. A conflicting host edit or unsafe
-archive aborts synchronization before changes are applied. Input and output
-each have a 512 MiB limit based on uncompressed file content.
+After execution, the provider collects changed paths, modes, and deletions
+against that baseline. It validates returned archives and commits original-byte
+artifacts and pending workspace changesets locally. Collection never changes
+host workspace files. An explicit `wb outcome <id> --apply` checks current host
+fingerprints against the recorded baseline and refuses conflicts before changing
+any file. Input and output each have a 512 MiB limit based on uncompressed file
+content; result storage has additional limits defined in the outcomes contract.
 
 The selected image must include the runner, declared tools, Git, and GNU tar
 with `--null` support. The OpenCode service uses E2B's authenticated host mapping
@@ -286,22 +295,27 @@ for the sandbox port. Pi continues to use its piped stdin transport for normal
 sessions. Native authentication uses an E2B PTY so interactive login menus,
 terminal resize, and control input behave like a real terminal.
 
-Normal cleanup terminates active commands, attempts synchronization once,
-destroys the sandbox, and removes local transfer files. A provider lease of 60
+Normal completion collects and commits outcomes before destroying the sandbox.
+Failure and cancellation collect partial outcomes when possible. Cleanup
+terminates active commands, synchronizes private native state separately, and
+removes local transfer files. Failed outcome collection retains a private
+checkpoint and pauses the original sandbox when possible. A provider lease of 60
 minutes pauses a process-orphaned sandbox without retaining memory. Managed
 sandboxes carry the run ID and an opaque digest of the Workbench data directory.
 `wb clean` can list only sandboxes for the current key and scope. It can destroy
 only those whose run is terminal, or whose run is absent locally and whose
 sandbox is paused. A running sandbox with an absent local run is protected
-because another host may own it. Template cache entries are outside the cleanup
-contract.
+because another host may own it. A run with a pending outcome recovery checkpoint
+protects its original sandbox and local history from ordinary cleanup until
+explicit recovery or discard. Template cache entries are outside the cleanup contract.
 
 The provider does not automatically retry template builds, sandbox creation,
-command starts, transfers, or synchronization. Those boundaries can have an
+command starts, transfers, or native-state synchronization. Those boundaries can have an
 ambiguous remote outcome, so replaying them could duplicate billable work or
-apply mutations twice. A failure is terminal for that run, cleanup is still
-attempted, and `wb clean --apply` is the recovery path for a surviving labeled
-sandbox.
+replay mutations. A failure is terminal for that run and cleanup is still
+attempted. `wb outcome <run-id> --recover` explicitly collects partial work from
+the original scoped sandbox without starting new model work. `--discard-recovery`
+explicitly abandons it. Neither action implicitly applies host changes.
 
 Foreground dispatch allows isolated Docker and E2B workers up to five minutes
 to become ready so a legitimate image pull or sandbox cold start is not mistaken
@@ -316,12 +330,12 @@ not model usage, and never appears in `usage.updated`.
 The draft E2B boundary differs from local and Docker execution in several
 intentional ways. It copies selected files rather than mounting host paths,
 keeps a private Workbench-managed copy of runner credentials, creates a fresh
-sandbox when a linked session resumes, and can synchronize results only while
-the host process returns cleanly enough to collect them. A host crash can
-therefore leave a paused remote sandbox for the reaper without a recoverable
-result bundle. Direct host synchronization is the current compatibility
-behavior; portable result bundles and explicit apply or export actions are a
-separate product contract.
+sandbox when a linked session resumes, and requires explicit host acceptance of
+returned workspace changes. Recovery requires the original checkpoint and
+provider filesystem to survive. It is not a guarantee against provider data
+loss or expiration, and outcome recovery is separate from native session resume.
+Inspecting, applying, and exporting already-collected results requires no live
+sandbox or runtime key.
 
 ## Session, run, and turn boundaries
 
@@ -437,9 +451,14 @@ terminal client detaches that client rather than cancelling work. If a turn is
 active, it and all accepted follow-ups finish before the unattended worker
 closes. The stable session and native runner context remain available afterward.
 
-The TUI may keep a local transcript cache so a reopened screen has immediate visual
-history. That cache is not replayed into the model and is not the source of
-conversation context. Deleting it affects presentation only; OpenCode or Pi native
+The TUI rebuilds visual history from retained normalized events across the stable
+session's runs, including delivered user messages, assistant replies, tool
+activity, and returned results. Its local transcript cache is disposable and is
+used as a fallback when no run logs remain. Missing, incompatible, or truncated
+cache contents do not replace retained event history. Historical startup failures
+without conversation content stay in their run logs rather than appearing as a
+current chat error; failures during actual work remain labeled in the history.
+Neither the cache nor event replay is sent to the model. OpenCode or Pi native
 session state remains the resume boundary.
 
 ## Interactive terminal client
@@ -485,6 +504,7 @@ input.requested   input.accepted
 input.queued      input.delivered      input.rejected
 question.requested    question.answered    question.rejected
 usage.updated
+outcome.available
 run.completed     run.failed     run.cancelled
 runner.event
 ```
@@ -504,6 +524,12 @@ tool output in the portable event log.
 
 Exactly one of `run.completed`, `run.failed`, or `run.cancelled` terminates the
 event stream. The `result` promise resolves to the matching status.
+
+`outcome.available` refers to a locally committed immutable result. It includes
+`outcome_id`, `completeness`, `application_state`, counts of `changesets`,
+`artifacts`, `links`, and `warnings`, and an optional `summary`. It carries no
+artifact bytes or raw tool result. A terminal execution may have a partial
+outcome without being successful. See [OUTCOMES.md](OUTCOMES.md).
 
 Remote runtimes may attach an `infrastructure` object to that terminal event.
 It contains provider duration, maximum lease, resource shape, and an estimated
@@ -624,6 +650,13 @@ transition. Reconciliation is serialized per run so concurrent `ps`, `attach`,
 or cleanup processes cannot create duplicate terminal events. Cleanup then
 rechecks every candidate under the session lease before deletion. A resource
 that became active or became the latest session run is left in place.
+
+Pending E2B outcome recovery protects its original run, session history, and
+sandbox until explicit recovery or discard. Selected terminal runs carry their
+outcomes into deletion. Shared result blobs are reclaimed only after their final
+retained reference is removed, and active captures prevent unsafe collection.
+The result store enforces bounded admission before writes rather than silently
+evicting old outcomes to make room. See [OUTCOMES.md](OUTCOMES.md) for storage limits.
 
 ## Preflight boundary
 

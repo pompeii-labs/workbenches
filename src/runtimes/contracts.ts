@@ -1,3 +1,5 @@
+import type { OutcomeStore, RuntimeOutcomeCollection } from '../outcomes/index.js';
+import type { CollectedOutput } from '../outcomes/output.js';
 import type {
     ResolvedWorkbench,
     RunnerInvocation,
@@ -14,12 +16,14 @@ export type RuntimePhase =
     | 'preflight'
     | 'launch'
     | 'cancel'
+    | 'collect'
     | 'cleanup';
 
 export interface RuntimeAsset {
     path: string;
     access: 'read-only' | 'read-write';
     workspace?: string;
+    state?: boolean;
 }
 
 export interface RuntimeCredentialBinding {
@@ -37,6 +41,7 @@ export interface RuntimePrepareRequest {
     authorizations?: { hostDocker: boolean };
     purpose?: 'build' | 'connect' | 'run';
     run?: { id: string; scope: string };
+    outcome?: { directory: string; home?: string };
 }
 
 export interface RuntimeCommandOptions {
@@ -119,7 +124,10 @@ export interface PreparedRuntime {
     ): RuntimeService;
     cancel(process: SpawnedRunner): void;
     infrastructure?(): Promise<RuntimeInfrastructureMetadata | undefined>;
-    synchronize?(): Promise<void>;
+    collectOutcome?(store: OutcomeStore): Promise<RuntimeOutcomeCollection | undefined>;
+    /** Collect returned files and links without finalizing native state or workspace diffs. */
+    collectOutput?(store: OutcomeStore): Promise<CollectedOutput | undefined>;
+    finalizeOutcome?(): Promise<void>;
     cleanup(): Promise<void>;
 }
 

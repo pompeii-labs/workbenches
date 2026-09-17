@@ -4,16 +4,24 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { RunnerCredentialStore } from '../src/connections/credentials.js';
 import {
+    OutcomeApplier,
+    OutcomeLifecycle,
+    OutcomeStore,
+    type RunOutcome,
+} from '../src/outcomes/index.js';
+import {
     InteractiveRun,
     type InteractiveRunSession,
     RunStore,
     type WorkbenchEvent,
 } from '../src/runs/index.js';
 import type { PreparedRuntime } from '../src/runtimes/contracts.js';
-import type { E2BPty } from '../src/runtimes/e2b/contracts.js';
+import type { E2BPty, E2BSandbox } from '../src/runtimes/e2b/contracts.js';
 import { E2BManagedSandboxes } from '../src/runtimes/e2b/managed.js';
 import { E2BRuntimeProvider } from '../src/runtimes/e2b/provider.js';
+import { E2BOutcomeRecovery } from '../src/runtimes/e2b/recovery.js';
 import { E2BSdkClient, e2bMetadata } from '../src/runtimes/e2b/sdk.js';
+import { E2BStateStore } from '../src/runtimes/e2b/state.js';
 import { SessionRetention } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { seedModelCatalogFixture } from './model-catalog-fixture.js';
@@ -47,10 +55,149 @@ afterEach(async () => {
 });
 
 describe.skipIf(!enabled)('E2B runtime end to end', () => {
+    test('recovers interrupted collection from the original paused sandbox through the CLI', async () => {
+        const workbench = await fixture();
+        const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-recovery-home-'));
+        temporaryDirectories.push(home);
+        const apiKey = process.env.E2B_API_KEY;
+        if (!apiKey) throw new Error('E2B_API_KEY is required for this test');
+        const client = new InterruptingArtifactClient(apiKey);
+        const runs = new RunStore(home);
+        const run = await runs.create({
+            metadata: {
+                workbench: workbench.manifest.name,
+                workbench_version: workbench.manifest.version,
+                runtime: 'e2b',
+                runner: 'opencode',
+                model: workbench.manifest.model.id,
+                workspace: workbench.repositoryDirectory,
+            },
+            request: {
+                workbench_path: workbench.packageDirectory,
+                workspace: workbench.repositoryDirectory,
+                task: 'Produce files for the recovery probe',
+            },
+        });
+        const scope = RunStore.scope(home);
+        const lifecycle = await OutcomeLifecycle.create({ home, runId: run.id });
+        const runtime = await new E2BRuntimeProvider({ client }).prepare({
+            workbench,
+            workspaceDirectory: workbench.repositoryDirectory,
+            environment: process.env,
+            assets: [
+                { path: workbench.repositoryDirectory, access: 'read-write' },
+                { path: workbench.packageDirectory, access: 'read-only' },
+            ],
+            run: { id: run.id, scope },
+            outcome: { directory: lifecycle.output.directory, home },
+        });
+        activeRuntimes.add(runtime);
+        try {
+            await runtime.preflight();
+            expect(runtime.environment.WORKBENCH_OUTPUT_DIR).toBe('/outbox');
+            expect(runtime.pathFor(lifecycle.output.directory)).toBe('/outbox');
+            const child = runtime.launch({
+                command: [
+                    '/bin/sh',
+                    '-c',
+                    [
+                        'printf "remote result\\n" > recovered.txt',
+                        'printf "remote edit\\n" > delete-me.txt',
+                        'printf "\\000\\001\\377" > "$WORKBENCH_OUTPUT_DIR/original.bin"',
+                        'printf \'{"version":1,"summary":"Recovered result","links":[{"label":"Report","uri":"https://example.com/report","kind":"external"}]}\' > "$WORKBENCH_OUTPUT_DIR/outcome.json"',
+                    ].join('; '),
+                ],
+                cwd: runtime.workspaceDirectory,
+                env: runtime.environment,
+            });
+            await Promise.all([
+                new Response(child.stdout).text(),
+                new Response(child.stderr).text(),
+            ]);
+            expect(await child.exited).toBe(0);
+            await expect(lifecycle.collect(runtime, 'complete')).rejects.toThrow(
+                '--recover'
+            );
+            await runtime.cleanup();
+            activeRuntimes.delete(runtime);
+            await lifecycle.cleanup();
+            await runs.update(run.id, {
+                status: 'failed',
+                finished_at: new Date().toISOString(),
+            });
+            await expectManagedState(client, scope, run.id, 'paused', 30_000);
+            const recovery = new E2BOutcomeRecovery(home, { id: run.id, scope });
+            expect(await recovery.exists()).toBeTrue();
+            const sandboxes = E2BManagedSandboxes.connect(scope, {}, { client });
+            if (!sandboxes) throw new Error('Expected managed E2B sandbox inventory');
+            const review = await new SessionRetention(home, {
+                sandboxes,
+            }).review({ before: new Date() });
+            expect(review.sandboxes).toHaveLength(0);
+            expect(review.runs).toHaveLength(0);
+            await writeFile(
+                join(workbench.repositoryDirectory, 'delete-me.txt'),
+                'new host edit\n'
+            );
+            const cli = Bun.spawn(
+                [process.execPath, cliPath, 'outcome', run.id, '--recover', '--json'],
+                {
+                    cwd: workbench.repositoryDirectory,
+                    env: { ...process.env, WORKBENCH_HOME: home },
+                    stdout: 'pipe',
+                    stderr: 'pipe',
+                }
+            );
+            const [stdout, stderr, code] = await Promise.all([
+                new Response(cli.stdout).text(),
+                new Response(cli.stderr).text(),
+                cli.exited,
+            ]);
+            expect({ code, stderr }).toEqual({ code: 0, stderr: '' });
+            const outcome = JSON.parse(stdout).outcome as RunOutcome;
+            expect(outcome.completeness).toBe('partial');
+            expect(outcome.summary).toBe('Recovered result');
+            expect(outcome.artifacts).toHaveLength(1);
+            expect(outcome.links).toHaveLength(1);
+            const store = new OutcomeStore(home);
+            const artifact = outcome.artifacts[0];
+            if (!artifact) throw new Error('Expected recovered binary artifact');
+            expect(await readFile(await store.blob(artifact.content))).toEqual(
+                Buffer.from([0, 1, 255])
+            );
+            expect(
+                await readFile(
+                    join(workbench.repositoryDirectory, 'delete-me.txt'),
+                    'utf8'
+                )
+            ).toBe('new host edit\n');
+            await expect(
+                new OutcomeApplier(store).apply(outcome, {
+                    primary: workbench.repositoryDirectory,
+                })
+            ).rejects.toThrow('delete-me.txt');
+            expect(await recovery.exists()).toBeFalse();
+            expect((await runs.read(run.id)).outcome_id).toBe(outcome.id);
+            await expectManagedSandboxGone(client, scope, run.id);
+        } finally {
+            await lifecycle.cleanup();
+            await runtime.cleanup().catch(() => {});
+            for (const sandbox of await client.listManaged(scope))
+                await client.killSandbox(sandbox.id).catch(() => {});
+        }
+    }, 180_000);
+
     test(
-        'builds, streams, cancels, synchronizes changes, destroys its sandbox, and prunes paused orphans',
+        'builds, streams, captures and applies an outcome, destroys its sandbox, and prunes paused orphans',
         async () => {
             const workbench = await fixture();
+            const root = workbench.repositoryDirectory;
+            await writeFile(join(root, 'file-module'), 'original file\n');
+            await mkdir(join(root, 'directory-module'));
+            await writeFile(
+                join(root, 'directory-module', 'index.txt'),
+                'original child\n'
+            );
             const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-clean-home-'));
             temporaryDirectories.push(home);
             const apiKey = process.env.E2B_API_KEY;
@@ -89,14 +236,51 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                 command: [
                     '/bin/sh',
                     '-c',
-                    'test ! -e ignored.txt; test ! -e .env; printf "real e2b output\\n"; printf "remote change\\n" > e2b-output.txt; dd if=/dev/zero of=e2b-large-output.bin bs=1048576 count=8 2>/dev/null; rm -f delete-me.txt; mkdir -p .workbenches/e2b-e2e; printf "tampered\\n" > .workbenches/e2b-e2e/instructions.md; git add -A; git commit -q --no-gpg-sign -m "agent commit"',
+                    [
+                        'test ! -e ignored.txt; test ! -e .env',
+                        'printf "real e2b output\\n"',
+                        'printf "remote change\\n" > e2b-output.txt',
+                        'dd if=/dev/zero of=e2b-large-output.bin bs=1048576 count=8 2>/dev/null',
+                        'rm -f delete-me.txt file-module',
+                        'mkdir file-module; printf "new child\\n" > file-module/index.txt',
+                        'rm directory-module/index.txt; rmdir directory-module',
+                        'printf "new file\\n" > directory-module',
+                        'mkdir -p .workbenches/e2b-e2e',
+                        'printf "tampered\\n" > .workbenches/e2b-e2e/instructions.md',
+                        'git add -A; git commit -q --no-gpg-sign -m "agent commit"',
+                    ].join('; '),
                 ],
                 cwd: runtime.workspaceDirectory,
                 env: runtime.environment,
             });
             expect(await new Response(child.stdout).text()).toBe('real e2b output\n');
             await expect(child.exited).resolves.toBe(0);
-            await runtime.synchronize?.();
+            const store = new OutcomeStore(home);
+            const outcome = await commitRuntimeOutcome(runtime, store, run.id);
+            expect(await readFile(join(root, 'file-module'), 'utf8')).toBe(
+                'original file\n'
+            );
+            expect(
+                await readFile(join(root, 'directory-module', 'index.txt'), 'utf8')
+            ).toBe('original child\n');
+            await expect(
+                readFile(join(workbench.repositoryDirectory, 'e2b-output.txt'))
+            ).rejects.toMatchObject({ code: 'ENOENT' });
+            expect(
+                await readFile(
+                    join(workbench.repositoryDirectory, 'delete-me.txt'),
+                    'utf8'
+                )
+            ).toBe('delete me');
+            await new OutcomeApplier(store).apply(outcome, {
+                primary: workbench.repositoryDirectory,
+            });
+            expect(await readFile(join(root, 'file-module', 'index.txt'), 'utf8')).toBe(
+                'new child\n'
+            );
+            expect(await readFile(join(root, 'directory-module'), 'utf8')).toBe(
+                'new file\n'
+            );
             expect(
                 await readFile(
                     join(workbench.repositoryDirectory, 'e2b-output.txt'),
@@ -168,7 +352,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
     );
 
     test(
-        'preserves host changes when remote synchronization conflicts',
+        'captures remote changes without touching the host and rejects an explicit conflicting apply',
         async () => {
             const workbench = await fixture();
             await writeFile(
@@ -221,8 +405,14 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                 'host\n'
             );
 
-            await expect(runtime.synchronize?.()).rejects.toThrow(
-                'workspace changed locally during the run'
+            const store = new OutcomeStore(home);
+            const outcome = await commitRuntimeOutcome(runtime, store, run.id);
+            await expect(
+                new OutcomeApplier(store).apply(outcome, {
+                    primary: workbench.repositoryDirectory,
+                })
+            ).rejects.toThrow(
+                'Outcome conflicts with current workspace content: conflict.txt'
             );
             expect(
                 await readFile(
@@ -293,7 +483,12 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             await expectManagedSandboxGone(client, scope, firstRun.id);
             expect(
                 await readFile(
-                    join(credentials.directory, 'opencode', 'auth.json'),
+                    join(
+                        (await new E2BStateStore(credentials.directory).source())
+                            .directory,
+                        'opencode',
+                        'auth.json'
+                    ),
                     'utf8'
                 )
             ).toBe('{"fixture":"persistent"}\n');
@@ -544,6 +739,29 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
     );
 });
 
+class InterruptingArtifactClient extends E2BSdkClient {
+    private interrupted = false;
+    override async createSandbox(
+        options: Parameters<E2BSdkClient['createSandbox']>[0]
+    ): Promise<E2BSandbox> {
+        const sandbox = await super.createSandbox(options);
+        return new Proxy(sandbox, {
+            get: (target, property) => {
+                if (property === 'download')
+                    return async (path: string) => {
+                        if (!this.interrupted && path.includes('workbench-artifacts')) {
+                            this.interrupted = true;
+                            throw new Error('Injected interrupted artifact transfer');
+                        }
+                        return target.download(path);
+                    };
+                const value = Reflect.get(target, property, target);
+                return typeof value === 'function' ? value.bind(target) : value;
+            },
+        });
+    }
+}
+
 describe.skipIf(!sessionEnabled)('E2B interactive sessions end to end', () => {
     test(
         'runs and resumes a real OpenCode session in a fresh sandbox',
@@ -591,8 +809,9 @@ describe.skipIf(!sessionEnabled)('E2B interactive sessions end to end', () => {
             await first.close();
             activeSessions.delete(first);
             await expectManagedSandboxGone(client, scope, runId);
+            const savedNativeState = await new E2BStateStore(nativeDirectory).source();
             expect(
-                (await stat(join(nativeDirectory, 'opencode.sqlite'))).size
+                (await stat(join(savedNativeState.directory, 'opencode.sqlite'))).size
             ).toBeGreaterThan(0);
 
             const resumedRunId = RunStore.createId();
@@ -694,7 +913,7 @@ describe.skipIf(!sessionEnabled)('E2B CLI end to end', () => {
     );
 
     test(
-        'reconciles and cleans up after a detached worker is killed',
+        'protects detached worker crash results until explicit recovery',
         async () => {
             if (!process.env.E2B_API_KEY) {
                 throw new Error('E2B_API_KEY is required for this test');
@@ -755,9 +974,39 @@ describe.skipIf(!sessionEnabled)('E2B CLI end to end', () => {
                 await expectProcessGone(workerPid);
                 const report = await clean(home);
                 expect(report.reconciled_runs).toContain(run.id);
-                expect(report.removed.sandboxes).toHaveLength(1);
-                await expectManagedSandboxGone(client, scope, run.id);
+                expect(report.removed.sandboxes).toHaveLength(0);
+                expect(report.protected.outcome_recoveries).toContainEqual(
+                    expect.objectContaining({ run_id: run.id })
+                );
                 expect((await store.read(run.id)).status).toBe('failed');
+                const recovery = Bun.spawn(
+                    [
+                        process.execPath,
+                        cliPath,
+                        'outcome',
+                        run.id,
+                        '--recover',
+                        '--json',
+                    ],
+                    {
+                        cwd: workbench.repositoryDirectory,
+                        env: {
+                            ...process.env,
+                            WORKBENCH_HOME: home,
+                            DO_NOT_TRACK: '1',
+                        },
+                        stdout: 'pipe',
+                        stderr: 'pipe',
+                    }
+                );
+                const [recovered, recoveryError, recoveryCode] = await Promise.all([
+                    new Response(recovery.stdout).text(),
+                    new Response(recovery.stderr).text(),
+                    recovery.exited,
+                ]);
+                expect(recoveryCode, recoveryError).toBe(0);
+                expect(JSON.parse(recovered).outcome.completeness).toBe('partial');
+                await expectManagedSandboxGone(client, scope, run.id);
             } finally {
                 if (workerPid && processAlive(workerPid)) {
                     process.kill(workerPid, 'SIGKILL');
@@ -836,6 +1085,28 @@ function processAlive(pid: number): boolean {
     } catch {
         return false;
     }
+}
+
+async function commitRuntimeOutcome(
+    runtime: PreparedRuntime,
+    store: OutcomeStore,
+    runId: string
+): Promise<RunOutcome> {
+    const collected = await runtime.collectOutcome?.(store);
+    if (!collected) throw new Error('E2B runtime did not produce an outcome');
+    const outcome: RunOutcome = {
+        version: 1,
+        id: OutcomeStore.createId(),
+        run_id: runId,
+        created_at: new Date().toISOString(),
+        completeness: 'complete',
+        ...(collected.summary ? { summary: collected.summary } : {}),
+        changesets: collected.changesets,
+        artifacts: collected.artifacts,
+        links: collected.links,
+        warnings: collected.warnings,
+    };
+    return store.commit(outcome, collected.application_state);
 }
 
 async function fixture(): Promise<ResolvedWorkbench> {
@@ -948,6 +1219,7 @@ function outputText(events: WorkbenchEvent[]): string {
 async function clean(home: string): Promise<{
     reconciled_runs: string[];
     removed: { runs: string[]; sandboxes: string[] };
+    protected: { outcome_recoveries: Array<{ run_id: string }> };
 }> {
     const cleanup = Bun.spawn(
         [process.execPath, cliPath, 'clean', '--older-than=0ms', '--apply', '--json'],
@@ -971,5 +1243,6 @@ async function clean(home: string): Promise<{
     return JSON.parse(stdout) as {
         reconciled_runs: string[];
         removed: { runs: string[]; sandboxes: string[] };
+        protected: { outcome_recoveries: Array<{ run_id: string }> };
     };
 }

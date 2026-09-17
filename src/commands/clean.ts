@@ -135,6 +135,16 @@ function renderReport(
             `${report.protectedResumableSessions.length} resumable sessions protected. Use --include-sessions to select them.`
         );
     }
+    for (const recovery of report.protectedOutcomeRecoveries) {
+        output.message(
+            `Outcome recovery protected: ${recovery.run_id} (${formatBytes(recovery.bytes)}). Recover with: wb outcome ${recovery.run_id} --recover`,
+            'warning'
+        );
+        if (!recovery.active)
+            output.message(
+                `Or discard partial work explicitly: wb outcome ${recovery.run_id} --discard-recovery`
+            );
+    }
     if (result && result.skipped.length > 0) {
         output.message(
             `${result.skipped.length} items changed during cleanup and were left in place.`,
@@ -172,6 +182,7 @@ function machineReport(
         protected: {
             active_runs: report.activeRuns,
             resumable_sessions: report.protectedResumableSessions,
+            outcome_recoveries: report.protectedOutcomeRecoveries,
         },
         reconciled_runs: report.reconciledRuns,
         ...(result
