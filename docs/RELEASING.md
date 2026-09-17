@@ -10,8 +10,8 @@ package registry.
 output. Release tags use the exact version prefixed with `v`:
 
 ```text
-package version: 0.1.0-alpha.3
-tag:             v0.1.0-alpha.3
+package version: 0.1.0-alpha.4
+tag:             v0.1.0-alpha.4
 ```
 
 The release workflow rejects `0.0.0` and any tag that does not exactly match the
@@ -31,8 +31,8 @@ bun run release:package
 Commit the version change, then create and push an annotated tag:
 
 ```sh
-git tag -a v0.1.0-alpha.3 -m 'Workbench v0.1.0-alpha.3'
-git push origin main v0.1.0-alpha.3
+git tag -a v0.1.0-alpha.4 -m 'Workbench v0.1.0-alpha.4'
+git push origin main v0.1.0-alpha.4
 ```
 
 ## Release artifacts
