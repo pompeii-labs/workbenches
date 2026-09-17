@@ -1,12 +1,9 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import {
     chmod,
     copyFile,
-    lstat,
     mkdir,
     mkdtemp,
-    readlink,
     rename,
     rm,
     symlink,
@@ -14,7 +11,7 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import type {
     OutcomeChangeEntry,
@@ -22,8 +19,18 @@ import type {
     OutcomePathState,
     RunOutcome,
 } from './contracts.js';
+import {
+    fingerprint,
+    sameFingerprint,
+    sameState,
+    validateDestination,
+    validateRoot,
+    validateSymlinkTarget,
+} from './fingerprints.js';
 import type { OutcomeStore } from './store.js';
-import { assertSafeOutcomePath } from './validation.js';
+import { validateFilesystemSymlink } from './symlinks.js';
+import { OutcomeTransition } from './transitions.js';
+import { assertSafeOutcomePath, parseRunOutcome } from './validation.js';
 
 export interface OutcomeWorkspaceTargets {
     primary: string;
@@ -45,6 +52,7 @@ export class OutcomeApplier {
         outcome: RunOutcome,
         targets: OutcomeWorkspaceTargets
     ): Promise<{ applied: number; unchanged: number }> {
+        outcome = parseRunOutcome(outcome);
         return this.store.withApplicationLease(outcome.id, () =>
             this.applyExclusive(outcome, targets)
         );
@@ -59,11 +67,29 @@ export class OutcomeApplier {
             throw new Error('Outcome changes are already present in the workspace');
         }
         const operations: ApplyOperation[] = [];
+        const transitions: OutcomeTransition[] = [];
         const conflicts: string[] = [];
         for (const changeset of outcome.changesets) {
             const root = resolveWorkspace(changeset.workspace, targets);
             await validateRoot(root);
             for (const entry of changeset.entries) {
+                if (entry.after?.kind === 'symlink')
+                    await validateFilesystemSymlink(
+                        root,
+                        entry.path,
+                        entry.after.target,
+                        changeset.entries
+                    );
+            }
+            const replacements = OutcomeTransition.plan(root, changeset.entries);
+            const replaced = new Set(
+                replacements.flatMap((transition) => transition.entries)
+            );
+            for (const transition of replacements)
+                await transition.preflight(receipt.state === 'applied');
+            transitions.push(...replacements);
+            for (const entry of changeset.entries) {
+                if (replaced.has(entry)) continue;
                 const path = assertSafeOutcomePath(entry.path);
                 await validateDestination(root, path);
                 const destination = join(root, path);
@@ -95,7 +121,9 @@ export class OutcomeApplier {
         const transaction = await mkdtemp(join(tmpdir(), 'workbench-outcome-apply-'));
         const backups = new Map<string, string>();
         const applied: ApplyOperation[] = [];
+        const appliedTransitions: OutcomeTransition[] = [];
         let preserveBackups = false;
+        let failure: unknown;
         try {
             await writeFile(
                 join(transaction, 'recovery.json'),
@@ -108,6 +136,10 @@ export class OutcomeApplier {
                             operation.current?.kind === 'file'
                                 ? `backups/${index}`
                                 : null,
+                    })),
+                    transitions: transitions.map((transition) => ({
+                        destination: transition.destination,
+                        backup: transition.backup,
                     })),
                 }),
                 { mode: 0o600, flag: 'wx' }
@@ -128,14 +160,24 @@ export class OutcomeApplier {
                 await this.install(operation);
                 applied.push(operation);
             }
+            for (const transition of transitions) {
+                if (transition.skip) continue;
+                appliedTransitions.push(transition);
+                await transition.install(this.store);
+            }
             for (const operation of operations) {
                 await assertInstalled(operation);
             }
+            for (const transition of transitions) await transition.assertInstalled();
             // Receipt persistence belongs to the transaction: a failed write
             // must leave the caller's workspace at its original content.
             await this.store.markApplied(outcome.id);
         } catch (error) {
             const rollbackFailures: unknown[] = [];
+            for (const transition of appliedTransitions.toReversed())
+                await transition
+                    .rollback()
+                    .catch((cause) => rollbackFailures.push(cause));
             for (const operation of applied.toReversed()) {
                 await this.rollback(
                     operation,
@@ -144,19 +186,42 @@ export class OutcomeApplier {
             }
             if (rollbackFailures.length) {
                 preserveBackups = true;
-                throw new AggregateError(
+                failure = new AggregateError(
                     [error, ...rollbackFailures],
                     `Outcome application failed and could not fully roll back. Recovery backups remain at ${transaction}`
                 );
-            }
-            throw error;
+            } else failure = error;
         } finally {
-            if (!preserveBackups)
-                await rm(transaction, { recursive: true, force: true });
+            if (!preserveBackups) {
+                try {
+                    await Promise.all(
+                        transitions.map((transition) => transition.cleanup())
+                    );
+                } catch (error) {
+                    preserveBackups = true;
+                    failure = new AggregateError(
+                        failure === undefined ? [error] : [failure, error],
+                        `Outcome backup cleanup failed. Recovery backups remain at ${transaction}`
+                    );
+                }
+                if (!preserveBackups)
+                    await rm(transaction, { recursive: true, force: true });
+            }
         }
+        if (failure !== undefined) throw failure;
         return {
-            applied: applied.length,
-            unchanged: operations.length - applied.length,
+            applied:
+                applied.length +
+                appliedTransitions.reduce(
+                    (sum, transition) => sum + transition.entries.length,
+                    0
+                ),
+            unchanged:
+                operations.length -
+                applied.length +
+                transitions
+                    .filter((transition) => transition.skip)
+                    .reduce((sum, transition) => sum + transition.entries.length, 0),
         };
     }
 
@@ -264,96 +329,12 @@ function resolveWorkspace(
     return resolve(target);
 }
 
-async function validateRoot(root: string): Promise<void> {
-    const details = await lstat(root).catch(() => undefined);
-    if (!details || details.isSymbolicLink() || !details.isDirectory()) {
-        throw new Error(`Outcome workspace is unavailable or unsafe: ${root}`);
-    }
-}
-
-async function validateDestination(root: string, path: string): Promise<void> {
-    assertSafeOutcomePath(path);
-    let parent = root;
-    for (const segment of path.split('/').slice(0, -1)) {
-        parent = join(parent, segment);
-        const details = await lstat(parent).catch((error) => {
-            if (isNodeError(error, 'ENOENT')) return undefined;
-            throw error;
-        });
-        if (!details) return;
-        if (details.isSymbolicLink() || !details.isDirectory()) {
-            throw new Error(
-                `Outcome destination has an unsafe parent: ${join(root, path)}`
-            );
-        }
-    }
-}
-
-async function fingerprint(
-    path: string,
-    root: string,
-    displayPath: string
-): Promise<OutcomePathFingerprint | undefined> {
-    const details = await lstat(path).catch((error) => {
-        if (isNodeError(error, 'ENOENT')) return undefined;
-        throw error;
-    });
-    if (!details) return undefined;
-    if (details.isSymbolicLink()) {
-        const target = await readlink(path);
-        validateSymlinkTarget(dirname(path), target, root, displayPath);
-        return { kind: 'symlink', mode: details.mode & 0o777, target };
-    }
-    if (!details.isFile()) {
-        throw new Error(`Outcome destination is not a file: ${displayPath}`);
-    }
-    const hash = createHash('sha256');
-    for await (const chunk of createReadStream(path)) hash.update(chunk);
-    return {
-        kind: 'file',
-        digest: `sha256:${hash.digest('hex')}`,
-        mode: details.mode & 0o777,
-        size_bytes: details.size,
-    };
-}
-
 function matchesExpectedBefore(
     current: OutcomePathFingerprint | undefined,
     entry: OutcomeChangeEntry
 ): boolean {
     if (entry.operation === 'add') return current === undefined;
     return sameFingerprint(current, entry.before);
-}
-
-function sameState(
-    current: OutcomePathFingerprint | undefined,
-    after: OutcomePathState | undefined
-): boolean {
-    if (!after) return current === undefined;
-    if (!current || current.kind !== after.kind || current.mode !== after.mode) {
-        return false;
-    }
-    return current.kind === 'file' && after.kind === 'file'
-        ? current.digest === after.content.digest &&
-              current.size_bytes === after.content.size_bytes
-        : current.kind === 'symlink' && after.kind === 'symlink'
-          ? current.target === after.target
-          : false;
-}
-
-function sameFingerprint(
-    left: OutcomePathFingerprint | undefined,
-    right: OutcomePathFingerprint | undefined
-): boolean {
-    if (!left || !right) return left === right;
-    if (left.kind !== right.kind || left.mode !== right.mode) {
-        return false;
-    }
-    return left.kind === 'file' && right.kind === 'file'
-        ? left.digest === right.digest && left.size_bytes === right.size_bytes
-        : left.kind === 'symlink' && right.kind === 'symlink'
-          ? left.target === right.target
-          : false;
 }
 
 async function copyCurrent(
@@ -370,25 +351,6 @@ async function copyCurrent(
     }
     validateSymlinkTarget(dirname(destination), state.target, root, destination);
     await symlink(state.target, destination);
-}
-
-function validateSymlinkTarget(
-    parent: string,
-    target: string,
-    root: string,
-    displayPath: string
-): void {
-    if (isAbsolute(target) || !contains(root, resolve(parent, target))) {
-        throw new Error(`Escaping symlink is not allowed in outcome: ${displayPath}`);
-    }
-}
-
-function contains(parent: string, child: string): boolean {
-    const suffix = relative(resolve(parent), resolve(child));
-    return (
-        suffix === '' ||
-        (!suffix.startsWith(`..${sep}`) && suffix !== '..' && !isAbsolute(suffix))
-    );
 }
 
 function isNodeError(error: unknown, code: string): boolean {

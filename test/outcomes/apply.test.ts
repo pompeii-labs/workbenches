@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import {
     chmod,
     lstat,
@@ -22,6 +22,7 @@ import {
     type RunOutcome,
     WorkspaceSnapshot,
 } from '../../src/outcomes/index.js';
+import { OutcomeTransition } from '../../src/outcomes/transitions.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -86,7 +87,254 @@ async function pendingOutcome(): Promise<{
     }
 }
 
+async function pendingReplacement(direction: string) {
+    const root = await temporaryDirectory();
+    const home = await temporaryDirectory();
+    const path = join(root, 'module');
+    const before = async () => {
+        if (direction === 'fileToDirectory') await writeFile(path, 'before\n');
+        else {
+            await mkdir(path);
+            await chmod(path, 0o750);
+            await writeFile(join(path, 'index.ts'), 'before\n');
+        }
+    };
+    await before();
+    const snapshot = await WorkspaceSnapshot.create(root, {
+        workspace: { kind: 'primary' },
+    });
+    const store = new OutcomeStore(home);
+    try {
+        await rm(path, { recursive: true });
+        if (direction === 'fileToDirectory') {
+            await mkdir(path);
+            await writeFile(join(path, 'index.ts'), 'after\n');
+        } else await writeFile(path, 'after\n');
+        const changeset = await snapshot.collect(store);
+        if (!changeset) throw new Error('Expected replacement changeset');
+        const outcome = await store.commit(
+            {
+                version: 1,
+                id: OutcomeStore.createId(),
+                run_id: 'wb_1234567890abcdefghij',
+                created_at: new Date().toISOString(),
+                completeness: 'complete',
+                changesets: [changeset],
+                artifacts: [],
+                links: [],
+                warnings: [],
+            },
+            'pending'
+        );
+        await rm(path, { recursive: true });
+        await before();
+        return { root, store, outcome, path };
+    } finally {
+        await snapshot.cleanup();
+    }
+}
+
 describe('OutcomeApplier', () => {
+    for (const direction of ['fileToDirectory', 'directoryToFile']) {
+        test(`applies ${direction} replacements and supports idempotent retry`, async () => {
+            const { root, store, outcome, path } = await pendingReplacement(direction);
+            try {
+                expect(
+                    await new OutcomeApplier(store).apply(outcome, { primary: root })
+                ).toEqual({ applied: 2, unchanged: 0 });
+                const after =
+                    direction === 'fileToDirectory' ? join(path, 'index.ts') : path;
+                expect(await readFile(after, 'utf8')).toBe('after\n');
+                expect((await store.receipt(outcome.id)).state).toBe('applied');
+                expect(
+                    await new OutcomeApplier(store).apply(outcome, { primary: root })
+                ).toEqual({ applied: 0, unchanged: 2 });
+            } finally {
+                await store.close();
+            }
+        });
+        test(`rolls back the original ${direction} tree when receipt persistence fails`, async () => {
+            const { root, store, outcome, path } = await pendingReplacement(direction);
+            const mark = store.markApplied.bind(store);
+            store.markApplied = async () => {
+                throw new Error('Receipt failed');
+            };
+            try {
+                await expect(
+                    new OutcomeApplier(store).apply(outcome, { primary: root })
+                ).rejects.toThrow('Receipt failed');
+                const before =
+                    direction === 'fileToDirectory' ? path : join(path, 'index.ts');
+                expect(await readFile(before, 'utf8')).toBe('before\n');
+                if (direction === 'directoryToFile')
+                    expect((await stat(path)).mode & 0o777).toBe(0o750);
+                expect((await store.receipt(outcome.id)).state).toBe('pending');
+                store.markApplied = mark;
+                expect(
+                    (await new OutcomeApplier(store).apply(outcome, { primary: root }))
+                        .applied
+                ).toBe(2);
+            } finally {
+                await store.close();
+            }
+        });
+        test(`rejects concurrent host edits during ${direction} staging`, async () => {
+            const { root, store, outcome, path } = await pendingReplacement(direction);
+            const before =
+                direction === 'fileToDirectory' ? path : join(path, 'index.ts');
+            const blob = store.blob.bind(store);
+            store.blob = async (descriptor) => {
+                await writeFile(before, 'human edit\n');
+                return blob(descriptor);
+            };
+            try {
+                await expect(
+                    new OutcomeApplier(store).apply(outcome, { primary: root })
+                ).rejects.toThrow('Workspace changed during');
+                expect(await readFile(before, 'utf8')).toBe('human edit\n');
+                expect((await store.receipt(outcome.id)).state).toBe('pending');
+            } finally {
+                await store.close();
+            }
+        });
+        test(`restores an edit arriving immediately before the ${direction} rename`, async () => {
+            const { root, store, outcome, path } = await pendingReplacement(direction);
+            const before =
+                direction === 'fileToDirectory' ? path : join(path, 'index.ts');
+            const prototype = OutcomeTransition.prototype as unknown as {
+                assertBefore(): Promise<void>;
+            };
+            const check = prototype.assertBefore;
+            let calls = 0;
+            const hook = spyOn(prototype, 'assertBefore').mockImplementation(
+                async function (this: OutcomeTransition) {
+                    await check.call(this);
+                    if (++calls === 2) await writeFile(before, 'late human edit\n');
+                }
+            );
+            try {
+                await expect(
+                    new OutcomeApplier(store).apply(outcome, { primary: root })
+                ).rejects.toThrow('Workspace changed during');
+                expect(await readFile(before, 'utf8')).toBe('late human edit\n');
+                expect((await store.receipt(outcome.id)).state).toBe('pending');
+            } finally {
+                hook.mockRestore();
+                await store.close();
+            }
+        });
+        test(`preserves a human destination recreated during ${direction} installation`, async () => {
+            const { root, store, outcome, path } = await pendingReplacement(direction);
+            const prototype = OutcomeTransition.prototype as unknown as {
+                assertOriginal(): Promise<void>;
+            };
+            const check = prototype.assertOriginal;
+            let calls = 0;
+            const hook = spyOn(prototype, 'assertOriginal').mockImplementation(
+                async function (this: OutcomeTransition) {
+                    await check.call(this);
+                    if (++calls === 1) await writeFile(path, 'recreated human file\n');
+                }
+            );
+            try {
+                const error = await new OutcomeApplier(store)
+                    .apply(outcome, { primary: root })
+                    .then(
+                        () => undefined,
+                        (cause: unknown) => cause
+                    );
+                expect(error).toBeInstanceOf(AggregateError);
+                if (!(error instanceof AggregateError))
+                    throw new Error('Expected recovery error');
+                const recovery = error.message.split('Recovery backups remain at ')[1];
+                if (!recovery) throw error;
+                temporaryDirectories.push(recovery);
+                const record = JSON.parse(
+                    await readFile(join(recovery, 'recovery.json'), 'utf8')
+                );
+                const backup = record.transitions[0].backup as string;
+                const original =
+                    direction === 'fileToDirectory' ? backup : join(backup, 'index.ts');
+                expect(await readFile(path, 'utf8')).toBe('recreated human file\n');
+                expect(await readFile(original, 'utf8')).toBe('before\n');
+                expect((await store.receipt(outcome.id)).state).toBe('pending');
+            } finally {
+                hook.mockRestore();
+                await store.close();
+            }
+        });
+    }
+    test('does not discard uncollected host files when replacing a directory', async () => {
+        const { root, store, outcome, path } =
+            await pendingReplacement('directoryToFile');
+        await writeFile(join(path, '.env'), 'host-only data');
+        try {
+            await expect(
+                new OutcomeApplier(store).apply(outcome, { primary: root })
+            ).rejects.toThrow('conflicts');
+            expect(await readFile(join(path, '.env'), 'utf8')).toBe('host-only data');
+            expect(await readFile(join(path, 'index.ts'), 'utf8')).toBe('before\n');
+        } finally {
+            await store.close();
+        }
+    });
+    test('does not discard unrecorded empty folders when replacing a directory', async () => {
+        const { root, store, outcome, path } =
+            await pendingReplacement('directoryToFile');
+        const empty = join(path, 'keep-empty');
+        await mkdir(empty);
+        try {
+            await expect(
+                new OutcomeApplier(store).apply(outcome, { primary: root })
+            ).rejects.toThrow('conflicts');
+            expect((await stat(empty)).isDirectory()).toBe(true);
+            expect(await readFile(join(path, 'index.ts'), 'utf8')).toBe('before\n');
+            expect((await store.receipt(outcome.id)).state).toBe('pending');
+        } finally {
+            await store.close();
+        }
+    });
+    test('preserves a human file created inside the reserved replacement directory', async () => {
+        const { root, store, outcome, path } =
+            await pendingReplacement('fileToDirectory');
+        const prototype = OutcomeTransition.prototype as unknown as {
+            reserveDirectory(): Promise<void>;
+        };
+        const reserve = prototype.reserveDirectory;
+        const hook = spyOn(prototype, 'reserveDirectory').mockImplementation(
+            async function (this: OutcomeTransition) {
+                await reserve.call(this);
+                await writeFile(join(path, 'human.txt'), 'human content\n');
+            }
+        );
+        try {
+            const error = await new OutcomeApplier(store)
+                .apply(outcome, { primary: root })
+                .then(
+                    () => undefined,
+                    (cause: unknown) => cause
+                );
+            expect(error).toBeInstanceOf(AggregateError);
+            if (!(error instanceof AggregateError))
+                throw new Error('Expected recovery error');
+            const recovery = error.message.split('Recovery backups remain at ')[1];
+            if (!recovery) throw error;
+            temporaryDirectories.push(recovery);
+            const record = JSON.parse(
+                await readFile(join(recovery, 'recovery.json'), 'utf8')
+            );
+            expect(await readFile(join(path, 'human.txt'), 'utf8')).toBe(
+                'human content\n'
+            );
+            expect(await readFile(record.transitions[0].backup, 'utf8')).toBe(
+                'before\n'
+            );
+            expect((await store.receipt(outcome.id)).state).toBe('pending');
+        } finally {
+            hook.mockRestore();
+            await store.close();
+        }
+    });
     test('applies an isolated changeset and records the receipt', async () => {
         const { root, store, outcome } = await pendingOutcome();
         const result = await new OutcomeApplier(store).apply(outcome, {
@@ -216,6 +464,134 @@ describe('OutcomeApplier', () => {
 });
 
 describe('OutcomeExporter', () => {
+    test('rejects SDK symlink aliases that turn a contained target into an escape', async () => {
+        const { root, store, outcome } = await pendingOutcome();
+        const changeset = outcome.changesets[0];
+        if (!changeset) throw new Error('Expected changeset');
+        changeset.entries.push(
+            {
+                path: 'a',
+                operation: 'add',
+                after: { kind: 'symlink', mode: 0o777, target: '.' },
+            },
+            {
+                path: 'd/link',
+                operation: 'add',
+                after: { kind: 'symlink', mode: 0o777, target: '../a/../outside' },
+            }
+        );
+        changeset.stats.additions += 2;
+        outcome.id = OutcomeStore.createId();
+        const target = join(await temporaryDirectory(), 'export');
+        try {
+            await expect(store.commit(outcome, 'pending')).rejects.toThrow(
+                'Escaping symlink'
+            );
+            await expect(
+                new OutcomeExporter(store).export(outcome, target)
+            ).rejects.toThrow('Escaping symlink');
+            await expect(
+                new OutcomeApplier(store).apply(outcome, { primary: root })
+            ).rejects.toThrow('Escaping symlink');
+            expect(await lstat(target).catch(() => undefined)).toBeUndefined();
+            expect(await readFile(join(root, 'modify.txt'), 'utf8')).toBe('before\n');
+        } finally {
+            await store.close();
+        }
+    });
+    test('checks unchanged host symlink aliases before applying a new link', async () => {
+        const { root, store, outcome } = await pendingOutcome();
+        const changeset = outcome.changesets[0];
+        if (!changeset) throw new Error('Expected changeset');
+        changeset.entries = [
+            {
+                path: 'd/link',
+                operation: 'add',
+                after: { kind: 'symlink', mode: 0o777, target: '../a/../outside' },
+            },
+        ];
+        changeset.stats = {
+            additions: 1,
+            modifications: 0,
+            deletions: 0,
+            binary_files: 0,
+        };
+        outcome.id = OutcomeStore.createId();
+        await store.commit(outcome, 'pending');
+        await symlink('.', join(root, 'a'));
+        try {
+            await expect(
+                new OutcomeApplier(store).apply(outcome, { primary: root })
+            ).rejects.toThrow('Escaping symlink');
+            expect(await lstat(join(root, 'd')).catch(() => undefined)).toBeUndefined();
+            expect(await readlink(join(root, 'a'))).toBe('.');
+            expect((await store.receipt(outcome.id)).state).toBe('pending');
+        } finally {
+            await store.close();
+        }
+    });
+    test('preserves contained symlink chains in exported bundles', async () => {
+        const { store, outcome } = await pendingOutcome();
+        const changeset = outcome.changesets[0];
+        const file = changeset?.entries.find(
+            (entry) => entry.path === 'added.txt'
+        )?.after;
+        if (!changeset || file?.kind !== 'file') throw new Error('Expected file state');
+        changeset.entries = [
+            { path: 'folder/item.txt', operation: 'add', after: file },
+            {
+                path: 'a',
+                operation: 'add',
+                after: { kind: 'symlink', mode: 0o777, target: 'folder' },
+            },
+            {
+                path: 'd/link',
+                operation: 'add',
+                after: { kind: 'symlink', mode: 0o777, target: '../a/item.txt' },
+            },
+        ];
+        changeset.stats = {
+            additions: 3,
+            modifications: 0,
+            deletions: 0,
+            binary_files: 0,
+        };
+        outcome.id = OutcomeStore.createId();
+        const target = join(await temporaryDirectory(), 'export');
+        try {
+            await store.commit(outcome, 'pending');
+            await new OutcomeExporter(store).export(outcome, target);
+            expect(
+                await readFile(
+                    join(target, 'changesets', changeset.id, 'files', 'd', 'link'),
+                    'utf8'
+                )
+            ).toBe('added\n');
+        } finally {
+            await store.close();
+        }
+    });
+    test('rejects escaping SDK symlinks at commit and export before materialization', async () => {
+        const { root, store, outcome } = await pendingOutcome();
+        const entry = outcome.changesets[0]?.entries.find(
+            (entry) => entry.path === 'link'
+        );
+        if (entry?.after?.kind !== 'symlink') throw new Error('Expected symlink');
+        entry.after.target = '../outside';
+        try {
+            await expect(
+                store.commit({ ...outcome, id: OutcomeStore.createId() }, 'pending')
+            ).rejects.toThrow('Escaping symlink');
+            await expect(
+                new OutcomeExporter(store).export(outcome, join(root, 'unsafe-export'))
+            ).rejects.toThrow('Escaping symlink');
+            expect(
+                await lstat(join(root, 'unsafe-export')).catch(() => undefined)
+            ).toBeUndefined();
+        } finally {
+            await store.close();
+        }
+    });
     test('preserves a destination created while export content is being prepared', async () => {
         const { root, store, outcome } = await pendingOutcome();
         const destination = join(root, 'concurrent-destination');

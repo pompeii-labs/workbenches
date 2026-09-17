@@ -15,6 +15,7 @@ import type {
     RunOutcome,
 } from './contracts.js';
 import { assertArtifactPaths, safeArtifactPath } from './paths.js';
+import { validateOutcomeSymlinks } from './symlinks.js';
 
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const identifierPattern = /^[a-z][a-z0-9_]{2,127}$/;
@@ -197,6 +198,17 @@ function parseChangeset(value: unknown): OutcomeChangeset {
     if (new Set(paths).size !== paths.length) {
         throw new Error('Outcome changeset paths must be unique');
     }
+    validateOutcomeSymlinks(entries);
+    const installed = new Set(
+        entries.filter((entry) => entry.after).map((entry) => entry.path)
+    );
+    for (const path of installed) {
+        const parts = path.split('/');
+        for (let i = 1; i < parts.length; i++) {
+            if (installed.has(parts.slice(0, i).join('/')))
+                throw new Error('Outcome change file and directory paths conflict');
+        }
+    }
     const statsRecord = object(record.stats, 'Outcome changeset stats');
     exactKeys(statsRecord, 'Outcome changeset stats', [
         'additions',
@@ -280,8 +292,22 @@ function parseChangeEntry(value: unknown): OutcomeChangeEntry {
     if (operation === 'delete' && (!before || after)) {
         throw new Error('Deleted outcome entry must have only a before state');
     }
+    const path = safeRelativePath(record.path, 'Outcome change path');
+    for (const state of [before, after]) {
+        if (state?.kind !== 'symlink') continue;
+        const target = posix.normalize(
+            posix.join(posix.dirname(path), state.target.replaceAll('\\', '/'))
+        );
+        if (
+            target === '..' ||
+            target.startsWith('../') ||
+            /^[a-z]:/i.test(state.target) ||
+            state.target.startsWith('\\')
+        )
+            throw new Error(`Escaping symlink is not allowed in outcome: ${path}`);
+    }
     return {
-        path: safeRelativePath(record.path, 'Outcome change path'),
+        path,
         operation,
         ...(before ? { before } : {}),
         ...(after ? { after } : {}),

@@ -205,6 +205,11 @@ export class E2BAssetSnapshot {
                 workspace,
                 maximumBytes,
             });
+            for (const path of deletions) {
+                validateRelativePath(path);
+                if (this.protectedOutputPath(path)) continue;
+                await rm(join(materialized, path), { recursive: true, force: true });
+            }
             const bytes = await extractArchive(
                 archive,
                 materialized,
@@ -214,11 +219,6 @@ export class E2BAssetSnapshot {
             for (const path of await walk(materialized, '', false)) {
                 if (this.protectedOutputPath(path))
                     await rm(join(materialized, path), { force: true });
-            }
-            for (const path of deletions) {
-                validateRelativePath(path);
-                if (this.protectedOutputPath(path)) continue;
-                await rm(join(materialized, path), { recursive: true, force: true });
             }
             const captured = baseline;
             let cleaned = false;

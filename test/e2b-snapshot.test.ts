@@ -18,6 +18,40 @@ afterEach(async () => {
 });
 
 describe('E2B workspace snapshots', () => {
+    for (const direction of ['fileToDirectory', 'directoryToFile']) {
+        test(`collects and applies ${direction} replacements`, async () => {
+            const local = await temporaryDirectory();
+            const remote = await temporaryDirectory();
+            const before = direction === 'fileToDirectory' ? local : remote;
+            const after = direction === 'fileToDirectory' ? remote : local;
+            await writeFile(join(before, 'module'), 'file');
+            await mkdir(join(after, 'module'));
+            await writeFile(join(after, 'module', 'index.ts'), 'nested');
+            const baseline = await E2BAssetSnapshot.create(binding(local), 1024 * 1024);
+            const output = await E2BAssetSnapshot.create(
+                binding(remote, 'asset'),
+                1024 * 1024
+            );
+            try {
+                await applyPending(baseline, output.archive, [
+                    direction === 'fileToDirectory' ? 'module' : 'module/index.ts',
+                ]);
+                expect(
+                    await readFile(
+                        join(
+                            local,
+                            'module',
+                            ...(direction === 'fileToDirectory' ? ['index.ts'] : [])
+                        ),
+                        'utf8'
+                    )
+                ).toBe(direction === 'fileToDirectory' ? 'nested' : 'file');
+            } finally {
+                await baseline.cleanup();
+                await output.cleanup();
+            }
+        });
+    }
     test('excludes ignored files, repository metadata, and common secrets', async () => {
         const directory = await temporaryDirectory();
         await writeFile(join(directory, '.gitignore'), 'ignored.txt\n');

@@ -14,12 +14,13 @@ import { dirname, join, resolve } from 'node:path';
 import type { RunOutcome } from './contracts.js';
 import { assertArtifactPaths, outcomeArtifactPath } from './paths.js';
 import type { OutcomeStore } from './store.js';
-import { assertSafeOutcomePath } from './validation.js';
+import { assertSafeOutcomePath, parseRunOutcome } from './validation.js';
 
 export class OutcomeExporter {
     constructor(private readonly store: Pick<OutcomeStore, 'blob'>) {}
 
     async export(outcome: RunOutcome, destination: string): Promise<string> {
+        outcome = parseRunOutcome(outcome);
         assertArtifactPaths(outcome.artifacts);
         const target = resolve(destination);
         if (await lstat(target).catch(() => undefined)) {

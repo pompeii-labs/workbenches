@@ -577,7 +577,59 @@ describe('E2B runtime provider', () => {
             ).toBe('baseline');
         } finally {
             await runtime.cleanup();
+            expect(client.sandbox.killed).toBeTrue();
         }
+    });
+
+    test('destroys an unrecoverable sandbox after outcome collection fails', async () => {
+        const resolved = await fixture();
+        const client = new FakeClient();
+        const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-failure-'));
+        temporaryDirectories.push(home);
+        const runtime = await new E2BRuntimeProvider({
+            client,
+            maxTransferBytes: 64,
+        }).prepare({
+            ...request(resolved),
+            outcome: { directory: home },
+        });
+        const store = new OutcomeStore(home);
+        try {
+            await runtime.preflight();
+            client.sandbox.outputSize = 1;
+            client.sandbox.outputDownload = new Uint8Array(65);
+            await expect(runtime.collectOutcome?.(store)).rejects.toThrow(
+                'transfer safety limit'
+            );
+        } finally {
+            await runtime.cleanup();
+            await store.close();
+        }
+        expect(client.sandbox.killed).toBeTrue();
+        await runtime.cleanup();
+    });
+
+    test('destroys an unrecoverable sandbox when native state persistence fails', async () => {
+        const resolved = await fixture();
+        const client = new FakeClient();
+        const state = await mkdtemp(join(tmpdir(), 'workbench-e2b-state-failure-'));
+        temporaryDirectories.push(state);
+        await writeFile(join(state, 'session.json'), '{}');
+        const runtime = await new E2BRuntimeProvider({
+            client,
+            maxTransferBytes: 128,
+        }).prepare({
+            ...request(resolved),
+            assets: [
+                ...request(resolved).assets,
+                { path: state, access: 'read-write', state: true },
+            ],
+        });
+        await runtime.preflight();
+        client.sandbox.outputDownload = new Uint8Array(129);
+        await expect(runtime.cleanup()).rejects.toThrow('transfer safety limit');
+        expect(client.sandbox.killed).toBeTrue();
+        await runtime.cleanup();
     });
 });
 

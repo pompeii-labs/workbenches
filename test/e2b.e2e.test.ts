@@ -191,6 +191,13 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
         'builds, streams, captures and applies an outcome, destroys its sandbox, and prunes paused orphans',
         async () => {
             const workbench = await fixture();
+            const root = workbench.repositoryDirectory;
+            await writeFile(join(root, 'file-module'), 'original file\n');
+            await mkdir(join(root, 'directory-module'));
+            await writeFile(
+                join(root, 'directory-module', 'index.txt'),
+                'original child\n'
+            );
             const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-clean-home-'));
             temporaryDirectories.push(home);
             const apiKey = process.env.E2B_API_KEY;
@@ -229,7 +236,19 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                 command: [
                     '/bin/sh',
                     '-c',
-                    'test ! -e ignored.txt; test ! -e .env; printf "real e2b output\\n"; printf "remote change\\n" > e2b-output.txt; dd if=/dev/zero of=e2b-large-output.bin bs=1048576 count=8 2>/dev/null; rm -f delete-me.txt; mkdir -p .workbenches/e2b-e2e; printf "tampered\\n" > .workbenches/e2b-e2e/instructions.md; git add -A; git commit -q --no-gpg-sign -m "agent commit"',
+                    [
+                        'test ! -e ignored.txt; test ! -e .env',
+                        'printf "real e2b output\\n"',
+                        'printf "remote change\\n" > e2b-output.txt',
+                        'dd if=/dev/zero of=e2b-large-output.bin bs=1048576 count=8 2>/dev/null',
+                        'rm -f delete-me.txt file-module',
+                        'mkdir file-module; printf "new child\\n" > file-module/index.txt',
+                        'rm directory-module/index.txt; rmdir directory-module',
+                        'printf "new file\\n" > directory-module',
+                        'mkdir -p .workbenches/e2b-e2e',
+                        'printf "tampered\\n" > .workbenches/e2b-e2e/instructions.md',
+                        'git add -A; git commit -q --no-gpg-sign -m "agent commit"',
+                    ].join('; '),
                 ],
                 cwd: runtime.workspaceDirectory,
                 env: runtime.environment,
@@ -238,6 +257,12 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             await expect(child.exited).resolves.toBe(0);
             const store = new OutcomeStore(home);
             const outcome = await commitRuntimeOutcome(runtime, store, run.id);
+            expect(await readFile(join(root, 'file-module'), 'utf8')).toBe(
+                'original file\n'
+            );
+            expect(
+                await readFile(join(root, 'directory-module', 'index.txt'), 'utf8')
+            ).toBe('original child\n');
             await expect(
                 readFile(join(workbench.repositoryDirectory, 'e2b-output.txt'))
             ).rejects.toMatchObject({ code: 'ENOENT' });
@@ -250,6 +275,12 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             await new OutcomeApplier(store).apply(outcome, {
                 primary: workbench.repositoryDirectory,
             });
+            expect(await readFile(join(root, 'file-module', 'index.txt'), 'utf8')).toBe(
+                'new child\n'
+            );
+            expect(await readFile(join(root, 'directory-module'), 'utf8')).toBe(
+                'new file\n'
+            );
             expect(
                 await readFile(
                     join(workbench.repositoryDirectory, 'e2b-output.txt'),

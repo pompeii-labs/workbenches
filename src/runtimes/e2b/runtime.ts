@@ -72,7 +72,6 @@ export class E2BRuntime implements PreparedRuntime {
     private ready = false;
     private cleaned = false;
     private outcomeCollection: Promise<RuntimeOutcomeCollection> | undefined;
-    private outcomeCollectionFailed = false;
     private statePersistence: Promise<void> | undefined;
     private readonly persistedState = new Set<number>();
     private recovery: E2BOutcomeRecovery | undefined;
@@ -365,7 +364,6 @@ export class E2BRuntime implements PreparedRuntime {
                 .then(() => this.collectSnapshots(store))
                 .catch((error) => {
                     this.outcomeCollection = undefined;
-                    this.outcomeCollectionFailed = true;
                     if (this.recovery)
                         throw new Error(
                             `${error instanceof Error ? error.message : String(error)}. Recover with: wb outcome ${this.options.run.id} --recover`,
@@ -375,7 +373,6 @@ export class E2BRuntime implements PreparedRuntime {
                 });
         }
         const outcome = await this.outcomeCollection;
-        this.outcomeCollectionFailed = false;
         return outcome;
     }
 
@@ -402,7 +399,6 @@ export class E2BRuntime implements PreparedRuntime {
         this.active.clear();
         const failures: unknown[] = [];
         await this.persistNativeState().catch((error) => {
-            this.outcomeCollectionFailed = true;
             failures.push(error);
         });
         if (this.sandbox) {
@@ -413,7 +409,7 @@ export class E2BRuntime implements PreparedRuntime {
             await this.recovery
                 ?.retain(this.sandbox, this.persistedState)
                 .catch((error) => failures.push(error));
-        } else if (!this.outcomeCollectionFailed) {
+        } else {
             await this.sandbox?.kill().catch((error) => failures.push(error));
         }
         const snapshotCleanup = await Promise.allSettled(
