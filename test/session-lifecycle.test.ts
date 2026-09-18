@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
 import { SessionLifecycle, SessionStore } from '../src/sessions/index.js';
+import { SessionSupervision } from '../src/sessions/supervision.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
 const homes: string[] = [];
@@ -62,6 +63,45 @@ describe('Workbench session lifecycle', () => {
             resumable: true,
             run: { id: resumed.id },
         });
+    });
+
+    test('observation keeps linked runs exact without changing control aliases', async () => {
+        const home = await temporaryHome();
+        const dispatcher = new RunDispatcher(home);
+        const sessions = new SessionStore(home);
+        const supervision = new SessionSupervision(home);
+        const resolved = await fixtureReference(home);
+        const first = await dispatcher.prepare({ resolved, mode: 'interactive' });
+        const second = await dispatcher.prepare({
+            resolved,
+            mode: 'interactive',
+            session: await sessions.read(first.id),
+        });
+        const third = await dispatcher.prepare({
+            resolved,
+            mode: 'interactive',
+            session: await sessions.read(first.id),
+        });
+        expect((await supervision.resolve(first.id)).id).toBe(third.id);
+        expect((await supervision.resolve(second.id)).id).toBe(second.id);
+        expect((await supervision.resolve(first.id, { exactRun: true })).id).toBe(
+            first.id
+        );
+        expect((await supervision.resolve(second.id, { exactRun: true })).id).toBe(
+            second.id
+        );
+        expect((await new SessionLifecycle(home).resolve(second.id)).run.id).toBe(
+            third.id
+        );
+        const missing = RunStore.createId();
+        await expect(supervision.resolve(missing, { exactRun: true })).rejects.toThrow(
+            'run does not exist'
+        );
+        await sessions.update(first.id, { latest_run_id: missing });
+        await expect(supervision.resolve(first.id)).rejects.toThrow(
+            'run does not exist'
+        );
+        expect((await supervision.resolve(second.id)).id).toBe(second.id);
     });
 
     test('locks a resumed session to its original runtime', async () => {
@@ -142,6 +182,9 @@ describe('Workbench session lifecycle', () => {
             resumable: false,
             run: { id: legacy.id },
         });
+        expect((await new SessionSupervision(home).resolve(legacy.id)).id).toBe(
+            legacy.id
+        );
     });
 });
 

@@ -350,6 +350,28 @@ describe.skipIf(!enabled)('Real headless CLI supervision', () => {
                         expect(next.result.run_id).not.toBe(launch.result.run_id);
                         const resumed = await finish(id);
                         expect(resumed.final.toLowerCase()).toContain('saffron');
+                        const previous = await invoke([
+                            'wait',
+                            launch.result.run_id,
+                            '--run',
+                            '--json',
+                        ]);
+                        expect(previous.code, previous.stderr).toBe(0);
+                        const firstBoundary = boundaries.find(
+                            (turn) => turn.run_id === completed.run_id
+                        );
+                        if (!firstBoundary) throw new Error('Missing first boundary');
+                        expect(previous.result).toEqual(firstBoundary);
+                        const previousFinal = await invoke([
+                            'wait',
+                            launch.result.run_id,
+                            '--run',
+                            '--after',
+                            String(previous.result.sequence),
+                            '--json',
+                        ]);
+                        expect(previousFinal.code, previousFinal.stderr).toBe(0);
+                        expect(previousFinal.result).toEqual(completed);
                         if (!resumed.outcome_id)
                             throw new Error('Missing resumed outcome');
                         const fresh = await outcomes.read(resumed.outcome_id);

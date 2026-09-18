@@ -283,6 +283,121 @@ describe('CLI integration', () => {
         expect(JSON.parse(final.stdout).run_id).toBe(next.run_id);
     }, 20_000);
 
+    test('keeps wait replies and cursors on an exact linked run', async () => {
+        const home = await temporaryDirectory('wait-run-');
+        const store = new RunStore(home);
+        const sessionId = RunStore.createId();
+        const runs = [];
+        for (const replies of [
+            ['first'],
+            ['second early', 'second final'],
+            ['third'],
+        ]) {
+            const run = await store.create({
+                ...(runs.length === 0 ? { id: sessionId } : {}),
+                metadata: {
+                    workbench: 'probe',
+                    workbench_version: '0.1.0',
+                    runner: 'opencode',
+                    model: 'openai/gpt-5.4-mini',
+                    workspace: home,
+                    mode: 'detached',
+                    session_id: sessionId,
+                },
+                request: { workbench_path: home, workspace: home, task: 'probe' },
+            });
+            const events = new RunEvents({
+                runId: run.id,
+                runner: run.runner,
+                onEvent: (event) => store.appendEvent(run.id, event),
+            });
+            for (const text of replies) {
+                await events.emit('turn.started', {});
+                await events.emit('output.text', { text });
+                await events.emit('turn.completed', {});
+            }
+            await events.emit('run.completed', {});
+            runs.push(await store.update(run.id, { status: 'completed' }));
+        }
+        const [first, second, third] = runs;
+        if (!first || !second || !third) throw new Error('Missing run fixture');
+        await new SessionStore(home).create({
+            id: sessionId,
+            workbench: first.workbench,
+            workbench_version: first.workbench_version,
+            runner: first.runner,
+            model: first.model,
+            reference: 'probe',
+            workbench_path: home,
+            workspace: home,
+            workspaces: [],
+            latest_run_id: third.id,
+        });
+        const environment = { WORKBENCH_HOME: home };
+        const secondEarly = await executeCli(
+            ['wait', second.id, '--json', '--timeout', '0'],
+            environment
+        );
+        expect(secondEarly.code).toBe(0);
+        const boundary = JSON.parse(secondEarly.stdout);
+        expect(boundary).toMatchObject({
+            run_id: second.id,
+            state: 'turn_completed',
+            final: 'second early',
+            sequence: 3,
+        });
+        const secondFinal = await executeCli(
+            ['wait', second.id, '--after', String(boundary.sequence), '--json'],
+            environment
+        );
+        expect(secondFinal.code).toBe(0);
+        expect(JSON.parse(secondFinal.stdout)).toMatchObject({
+            run_id: second.id,
+            state: 'completed',
+            final: 'second final',
+        });
+        const latest = await executeCli(['wait', sessionId, '--json'], environment);
+        expect(latest.code).toBe(0);
+        expect(JSON.parse(latest.stdout)).toMatchObject({
+            run_id: third.id,
+            final: 'third',
+        });
+        const pinnedFirst = await executeCli(
+            ['wait', first.id, '--run', '--json'],
+            environment
+        );
+        expect(pinnedFirst.code).toBe(0);
+        expect(JSON.parse(pinnedFirst.stdout)).toMatchObject({
+            session_id: sessionId,
+            run_id: first.id,
+            final: 'first',
+        });
+        const pinnedSecond = await executeCli(
+            ['wait', second.id, '--run', '--json'],
+            environment
+        );
+        expect(pinnedSecond.code).toBe(0);
+        expect(JSON.parse(pinnedSecond.stdout)).toEqual(boundary);
+
+        const before = await store.readEvents(second.id);
+        const metadata = await store.read(second.id);
+        const exhausted = await executeCli(
+            ['wait', second.id, '--after', '7', '--timeout', '0', '--json'],
+            environment
+        );
+        expect(exhausted.code).toBe(0);
+        expect(JSON.parse(exhausted.stdout)).toMatchObject({
+            run_id: second.id,
+            state: 'completed',
+            final: 'second final',
+        });
+        expect(await store.readEvents(second.id)).toEqual(before);
+        expect(await store.read(second.id)).toEqual(metadata);
+        expect((await new SessionStore(home).read(sessionId)).latest_run_id).toBe(
+            third.id
+        );
+    });
+
     test('local package runs use the caller directory and warn about unsafe workspace links', async () => {
         const fixture = await createFixture();
         const workspace = join(fixture.root, 'project');

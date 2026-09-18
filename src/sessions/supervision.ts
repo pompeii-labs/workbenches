@@ -1,6 +1,7 @@
 import { AuthoringJob, type AuthoringJobRecord } from '../authoring/job.js';
-import type { StoredRun } from '../runs/store.js';
+import { RunStore, type StoredRun } from '../runs/store.js';
 import { type RunSnapshot, RunSupervision } from '../runs/supervision.js';
+import { SessionStore } from './store.js';
 
 export interface SessionSnapshot extends RunSnapshot {
     run_state?: RunSnapshot['state'];
@@ -9,6 +10,20 @@ export interface SessionSnapshot extends RunSnapshot {
 
 export class SessionSupervision {
     constructor(private readonly home: string) {}
+
+    async resolve(
+        id: string,
+        options: { exactRun?: boolean } = {}
+    ): Promise<StoredRun> {
+        const runs = new RunStore(this.home);
+        if (options.exactRun) return runs.read(id);
+        // The session and its first run share an ID. Only a direct session
+        // lookup follows the latest execution; linked run IDs remain exact.
+        const session = await new SessionStore(this.home)
+            .read(id)
+            .catch(() => undefined);
+        return runs.read(session?.latest_run_id ?? id);
+    }
 
     async wait(
         run: StoredRun,

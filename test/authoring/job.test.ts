@@ -6,6 +6,7 @@ import { AuthoringJob, type AuthoringJobRecord } from '../../src/authoring/job.j
 import { AuthoringOperation } from '../../src/authoring/operation.js';
 import { RunEvents } from '../../src/runs/events.js';
 import { RunStore } from '../../src/runs/store.js';
+import { SessionStore } from '../../src/sessions/store.js';
 import { SessionSupervision } from '../../src/sessions/supervision.js';
 
 const directories: string[] = [];
@@ -142,6 +143,32 @@ describe('authoring verification supervision', () => {
             authoring: { status: 'running' },
         });
         expect((await f.jobs.forRun(f.run.id))?.status).toBe('running');
+    });
+
+    test('pinning an older creator run still joins its package verification', async () => {
+        const f = await fixture();
+        const store = new RunStore(f.home);
+        await store.update(f.run.id, { status: 'completed' });
+        await new SessionStore(f.home).create({
+            id: f.run.id,
+            workbench: f.run.workbench,
+            workbench_version: f.run.workbench_version,
+            runner: f.run.runner,
+            model: f.run.model,
+            reference: 'creator',
+            workbench_path: f.home,
+            workspace: f.home,
+            workspaces: [],
+            latest_run_id: RunStore.createId(),
+        });
+        const supervision = new SessionSupervision(f.home);
+        const run = await supervision.resolve(f.run.id, { exactRun: true });
+        expect(await supervision.wait(run)).toMatchObject({
+            run_id: f.run.id,
+            state: 'failed',
+            run_state: 'completed',
+            authoring: { status: 'failed' },
+        });
     });
 
     test('a creator turn boundary cannot bypass terminal cleanup and verification', async () => {
