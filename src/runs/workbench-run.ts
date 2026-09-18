@@ -1,13 +1,8 @@
-import { RunnerCredentialStore } from '../connections/credentials.js';
-import { ConnectionInspector } from '../connections/inspector.js';
-import { ConnectionStore } from '../connections/store.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
-import { type OutcomeCompleteness, OutcomeLifecycle } from '../outcomes/index.js';
-import { RunnerRegistry } from '../runners/registry.js';
+import type { OutcomeCompleteness } from '../outcomes/contracts.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import {
     type PreparedRuntime,
-    type RuntimeAsset,
     type RuntimeInfrastructureMetadata,
     RuntimeRegistry,
 } from '../runtimes/index.js';
@@ -19,7 +14,7 @@ import type {
 } from '../types.js';
 import { Workbench, WorkbenchWorkspaces } from '../workbench/index.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
-import { publishRunOutcome } from './outcomes.js';
+import { ExecutionPreparation } from './preparation.js';
 import { RunnerOutput } from './runner-output.js';
 import { RunStore } from './store.js';
 
@@ -62,7 +57,7 @@ export class WorkbenchRun {
     private readonly write: (value: string) => void;
     private readonly runtimeRegistry: RuntimeRegistry;
     private startedAt = 0;
-    private outcomeLifecycle: OutcomeLifecycle | undefined;
+    private preparation: ExecutionPreparation | undefined;
 
     constructor(
         private readonly options: WorkbenchRunOptions,
@@ -100,51 +95,26 @@ export class WorkbenchRun {
             ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
             ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
         });
-        let runner: PreparedRunner | undefined;
-        let runtime: PreparedRuntime | undefined;
+        const preparation = new ExecutionPreparation(
+            {
+                ...this.options,
+                workbench,
+                workspaceDirectory:
+                    this.options.workspaceDirectory ?? workbench.repositoryDirectory,
+                events,
+                mode: 'one-shot',
+                captureOutcomes: !this.options.dryRun,
+            },
+            {
+                environment: this.environment,
+                runtimes: this.runtimeRegistry,
+                ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
+            }
+        );
+        this.preparation = preparation;
         try {
-            this.outcomeLifecycle =
-                this.options.home && !this.options.dryRun
-                    ? await OutcomeLifecycle.create({
-                          home: this.options.home,
-                          runId: events.runId,
-                          ...(this.dependencies.now
-                              ? { now: this.dependencies.now }
-                              : {}),
-                          onAvailable: (outcome, applicationState) =>
-                              publishRunOutcome(
-                                  this.options.home,
-                                  events,
-                                  outcome,
-                                  applicationState
-                              ),
-                      })
-                    : undefined;
-            runner = await RunnerRegistry.standard().prepare(
-                workbench,
-                this.environment
-            );
-            runtime = await this.runtimeRegistry
-                .resolve(workbench.manifest.runtime)
-                .prepare(
-                    await this.runtimeRequest(
-                        workbench,
-                        runner.assets,
-                        workspaces,
-                        events.runId,
-                        this.outcomeLifecycle?.output
-                    )
-                );
-            const preflight = await runtime.preflight();
-            const configuration = await new ConnectionInspector({
-                workbench,
-                runtime,
-                runner,
-                reference: this.options.reference ?? workbench.manifest.name,
-                ...(this.options.home
-                    ? { store: new ConnectionStore(this.options.home) }
-                    : {}),
-            }).require(this.options.connection);
+            const { runner, runtime, preflight, configuration } =
+                await preparation.prepare();
             const invocation = runner.build(runtime, this.options.task, configuration);
 
             if (this.options.dryRun) {
@@ -175,7 +145,7 @@ export class WorkbenchRun {
                     : {}),
             });
             if (this.options.signal?.aborted) {
-                await this.emitCancellation(events, runtime);
+                await this.emitCancellation(events);
                 return 130;
             }
 
@@ -200,16 +170,14 @@ export class WorkbenchRun {
             return await this.launch(workbench, runner, runtime, events, invocation);
         } catch (error) {
             if (this.options.signal?.aborted) {
-                await this.emitCancellation(events, runtime);
+                await this.emitCancellation(events);
                 return 130;
             }
             const message = error instanceof Error ? error.message : String(error);
-            const outcomeId = await this.collectOutcome(
-                runtime,
-                events,
-                'partial'
-            ).catch(() => undefined);
-            const infrastructure = await this.infrastructure(runtime);
+            const outcomeId = await this.collectOutcome('partial').catch(
+                () => undefined
+            );
+            const infrastructure = await this.infrastructure();
             await events.emit('run.failed', {
                 message: RunnerOutput.redact(message, workbench, this.environment),
                 duration_ms: this.duration(),
@@ -218,8 +186,7 @@ export class WorkbenchRun {
             });
             return 1;
         } finally {
-            await this.cleanup(runtime, runner);
-            await this.outcomeLifecycle?.cleanup();
+            await preparation.cleanup();
         }
     }
 
@@ -247,7 +214,7 @@ export class WorkbenchRun {
         try {
             const result = await output.consume(child, () => runtime.cancel(child));
             if (this.options.signal?.aborted) {
-                await this.emitCancellation(events, runtime);
+                await this.emitCancellation(events);
                 return 130;
             }
             if (result.code !== 0) {
@@ -256,8 +223,8 @@ export class WorkbenchRun {
                     workbench,
                     this.environment
                 );
-                const infrastructure = await this.infrastructure(runtime);
-                const outcomeId = await this.collectOutcome(runtime, events, 'partial');
+                const infrastructure = await this.infrastructure();
+                const outcomeId = await this.collectOutcome('partial');
                 await events.emit('run.failed', {
                     message: `${runner.failureLabel} exited with code ${result.code}${detail ? `: ${detail}` : ''}`,
                     exit_code: result.code,
@@ -270,8 +237,8 @@ export class WorkbenchRun {
             if (!result.summary.turnCompleted) {
                 await events.emit('turn.completed', { reason: 'process-exit' });
             }
-            const outcomeId = await this.collectOutcome(runtime, events, 'complete');
-            const infrastructure = await this.infrastructure(runtime);
+            const outcomeId = await this.collectOutcome('complete');
+            const infrastructure = await this.infrastructure();
             await events.emit('run.completed', {
                 exit_code: 0,
                 duration_ms: this.duration(),
@@ -316,56 +283,6 @@ export class WorkbenchRun {
         );
     }
 
-    private async runtimeRequest(
-        workbench: ResolvedWorkbench,
-        runnerAssets: RuntimeAsset[],
-        workspaces: WorkbenchWorkspaceBinding[],
-        runId: string,
-        output?: OutcomeLifecycle['output']
-    ) {
-        const workspace =
-            this.options.workspaceDirectory ?? workbench.repositoryDirectory;
-        return {
-            workbench,
-            workspaceDirectory: workspace,
-            environment: this.environment,
-            assets: [
-                { path: workspace, access: 'read-write' as const },
-                {
-                    path: workbench.packageDirectory,
-                    access: 'read-only' as const,
-                },
-                ...workspaces.map((binding) => ({
-                    path: binding.path,
-                    access: binding.access,
-                    workspace: binding.name,
-                })),
-                ...runnerAssets,
-            ],
-            authorizations: {
-                hostDocker: this.options.allowHostDocker ?? false,
-            },
-            ...(workbench.manifest.runtime === 'e2b' && this.options.home
-                ? {
-                      credentials: await new RunnerCredentialStore(
-                          this.options.home
-                      ).prepare(workbench.manifest.runtime, workbench.manifest.runner),
-                  }
-                : {}),
-            ...(this.options.home
-                ? { run: { id: runId, scope: RunStore.scope(this.options.home) } }
-                : {}),
-            ...(output
-                ? {
-                      outcome: {
-                          directory: output.directory,
-                          ...(this.options.home ? { home: this.options.home } : {}),
-                      },
-                  }
-                : {}),
-        };
-    }
-
     private validateHostDockerAuthorization(workbench: ResolvedWorkbench): void {
         const declared = workbench.manifest.docker?.engine !== undefined;
         if (this.options.allowHostDocker && !declared) {
@@ -375,12 +292,9 @@ export class WorkbenchRun {
         }
     }
 
-    private async emitCancellation(
-        events: RunEvents,
-        runtime?: PreparedRuntime
-    ): Promise<void> {
-        const outcomeId = await this.collectOutcome(runtime, events, 'partial');
-        const infrastructure = await this.infrastructure(runtime);
+    private async emitCancellation(events: RunEvents): Promise<void> {
+        const outcomeId = await this.collectOutcome('partial');
+        const infrastructure = await this.infrastructure();
         await events.emit('run.cancelled', {
             reason: 'requested',
             duration_ms: this.duration(),
@@ -389,10 +303,8 @@ export class WorkbenchRun {
         });
     }
 
-    private async infrastructure(
-        runtime?: PreparedRuntime
-    ): Promise<RuntimeInfrastructureMetadata | undefined> {
-        return runtime?.infrastructure?.().catch(() => undefined);
+    private async infrastructure(): Promise<RuntimeInfrastructureMetadata | undefined> {
+        return this.preparation?.infrastructure();
     }
 
     private duration(): number {
@@ -400,24 +312,8 @@ export class WorkbenchRun {
     }
 
     private async collectOutcome(
-        runtime: PreparedRuntime | undefined,
-        _events: RunEvents,
         completeness: OutcomeCompleteness
     ): Promise<string | undefined> {
-        return (await this.outcomeLifecycle?.collect(runtime, completeness))?.id;
-    }
-
-    private async cleanup(
-        runtime: PreparedRuntime | undefined,
-        runner: PreparedRunner | undefined
-    ): Promise<void> {
-        const results = await Promise.allSettled([
-            runtime?.cleanup(),
-            runner?.cleanup(),
-        ]);
-        const failure = results.find(
-            (result): result is PromiseRejectedResult => result.status === 'rejected'
-        );
-        if (failure) throw failure.reason;
+        return (await this.preparation?.collect(completeness))?.id;
     }
 }

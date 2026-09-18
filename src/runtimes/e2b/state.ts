@@ -12,7 +12,7 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { OutcomeStorageLease } from '../../outcomes/lease.js';
-import { extractArchive } from './snapshot.js';
+import { extractArchive } from './archive.js';
 
 const stateName = '.workbench-state';
 interface StatePointer {

@@ -29,6 +29,49 @@ await writeFile(instructionsPath, 'Follow the user task.\n');
 afterAll(() => rm(instructionDirectory, { recursive: true, force: true }));
 
 describe('runner-neutral interactive host', () => {
+    test('collects partial runtime results after failed preflight and preserves the startup error', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'interactive-startup-'));
+        const adapter = new FakeAdapter();
+        const provider = new CapturingRuntimeProvider({
+            preflightFailure: new Error('startup failed'),
+            cleanupFailure: new Error('release failed'),
+        });
+        const resolved = reference();
+        resolved.workbench.manifest.runtime = 'docker';
+        const events: WorkbenchEvent[] = [];
+        try {
+            await expect(
+                InteractiveRun.start({
+                    home,
+                    resolved,
+                    onEvent: (event) => void events.push(event),
+                    dependencies: {
+                        ...dependencies(adapter),
+                        runtimeRegistry: new RuntimeRegistry([provider]),
+                    },
+                })
+            ).rejects.toThrow('startup failed');
+            expect(provider.collectionCount).toBe(1);
+            expect(provider.cleanupCount).toBe(1);
+            expect(adapter.startOptions).toBeUndefined();
+            expect(events.at(-1)).toMatchObject({
+                type: 'run.failed',
+                data: { message: 'startup failed' },
+            });
+            const store = new OutcomeStore(home);
+            try {
+                const outcome = await store.findFinalByRun(events[0]?.run_id ?? '');
+                expect(outcome).toMatchObject({
+                    completeness: 'partial',
+                    summary: 'Startup diagnostics',
+                });
+            } finally {
+                await store.close();
+            }
+        } finally {
+            await rm(home, { recursive: true, force: true });
+        }
+    });
     test('saves results before each turn completes and keeps the session alive after a collection error', async () => {
         const home = await mkdtemp(join(tmpdir(), 'workbench-live-interactive-'));
         const events: WorkbenchEvent[] = [];
@@ -443,6 +486,14 @@ class CapturingRuntimeProvider implements RuntimeProvider {
     request: RuntimePrepareRequest | undefined;
     cleanupCount = 0;
     infrastructureCount = 0;
+    collectionCount = 0;
+
+    constructor(
+        private readonly options: {
+            preflightFailure?: Error;
+            cleanupFailure?: Error;
+        } = {}
+    ) {}
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
         this.request = request;
@@ -461,14 +512,17 @@ class CapturingRuntimeProvider implements RuntimeProvider {
                 action: 'cache-hit',
             },
             pathFor: (path) => `/runtime${path}`,
-            preflight: async () => ({
-                runner: { name: 'opencode', path: '/usr/bin/opencode' },
-                tools: [],
-                enabledMcps: [],
-                disabledMcps: [],
-                optionalEnvironment: [],
-                workspaces: [],
-            }),
+            preflight: async () => {
+                if (this.options.preflightFailure) throw this.options.preflightFailure;
+                return {
+                    runner: { name: 'opencode', path: '/usr/bin/opencode' },
+                    tools: [],
+                    enabledMcps: [],
+                    disabledMcps: [],
+                    optionalEnvironment: [],
+                    workspaces: [],
+                };
+            },
             execute: async () => ({ code: 0, stdout: '', stderr: '' }),
             interact: async () => 0,
             launch: () => CapturingRuntimeProvider.process(),
@@ -478,6 +532,18 @@ class CapturingRuntimeProvider implements RuntimeProvider {
                 resolveUrl: async (url) => url,
             }),
             cancel: () => {},
+            collectOutcome: async () => {
+                expect(this.cleanupCount).toBe(0);
+                this.collectionCount += 1;
+                return {
+                    application_state: 'present',
+                    summary: 'Startup diagnostics',
+                    artifacts: [],
+                    links: [],
+                    changesets: [],
+                    warnings: [],
+                };
+            },
             infrastructure: async () => {
                 this.infrastructureCount += 1;
                 return {
@@ -488,6 +554,7 @@ class CapturingRuntimeProvider implements RuntimeProvider {
             },
             cleanup: async () => {
                 this.cleanupCount += 1;
+                if (this.options.cleanupFailure) throw this.options.cleanupFailure;
             },
         };
     }

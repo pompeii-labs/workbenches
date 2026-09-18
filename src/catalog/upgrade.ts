@@ -1,6 +1,6 @@
-import { RegistryClient } from '../registry/index.js';
+import { RegistryClient } from '../registry/client.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
-import { WorkbenchSource } from '../workbench/index.js';
+import { WorkbenchSource } from '../workbench/source.js';
 import { WorkbenchPackage } from './package.js';
 import { SavedWorkbenchCatalog } from './saved.js';
 import type { CatalogEntry, CatalogUpgradeResult } from './types.js';

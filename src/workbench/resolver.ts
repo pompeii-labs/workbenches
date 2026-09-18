@@ -1,9 +1,7 @@
 import { resolve } from 'node:path';
 
-import {
-    type CatalogRegistryReference,
-    SavedWorkbenchCatalog,
-} from '../catalog/index.js';
+import { SavedWorkbenchCatalog } from '../catalog/saved.js';
+import type { CatalogRegistryReference } from '../catalog/types.js';
 import { workbenchHome } from '../storage.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { WorkbenchSource } from './source.js';

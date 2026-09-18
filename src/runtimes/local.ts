@@ -4,11 +4,8 @@ import {
     type RuntimeOutcomeCollection,
 } from '../outcomes/index.js';
 import type { RunnerInvocation, SpawnedRunner } from '../types.js';
-import {
-    type PreflightResult,
-    WorkbenchPreflight,
-    WorkbenchWorkspaces,
-} from '../workbench/index.js';
+import { type PreflightResult, WorkbenchPreflight } from '../workbench/preflight.js';
+import { WorkbenchWorkspaces } from '../workbench/workspaces.js';
 import type {
     PreparedRuntime,
     RuntimeCommandResult,

@@ -7,7 +7,8 @@ import { ConnectionStore } from '../connections/store.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import { RunStore } from '../runs/store.js';
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
-import { type PreflightResult, WorkbenchWorkspaces } from '../workbench/index.js';
+import type { PreflightResult } from '../workbench/preflight.js';
+import { WorkbenchWorkspaces } from '../workbench/workspaces.js';
 import type { PreparedRuntime } from './contracts.js';
 import { RuntimeRegistry } from './registry.js';
 

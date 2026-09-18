@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 
-import { SavedWorkbenchCatalog } from '../catalog/index.js';
+import { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import {
     ConnectionInspector,
     ConnectionStore,
@@ -14,7 +14,8 @@ import {
 } from '../models/index.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRunner } from '../runners/runner.js';
-import { type PreparedRuntime, RuntimeRegistry } from '../runtimes/index.js';
+import type { PreparedRuntime } from '../runtimes/contracts.js';
+import { RuntimeRegistry } from '../runtimes/registry.js';
 import {
     GitHubWorkbenchSource,
     type RemoteWorkbenchSummary,

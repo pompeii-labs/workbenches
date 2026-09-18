@@ -1,14 +1,5 @@
-import { RunnerCredentialStore } from '../connections/credentials.js';
-import { ConnectionInspector } from '../connections/inspector.js';
-import { ConnectionStore } from '../connections/store.js';
-import type { ResolvedRunnerConfiguration } from '../models/index.js';
-import {
-    type OutcomeCompleteness,
-    OutcomeLifecycle,
-    type RunOutcome,
-} from '../outcomes/index.js';
+import type { OutcomeCompleteness, RunOutcome } from '../outcomes/contracts.js';
 import { RunnerRegistry } from '../runners/registry.js';
-import type { PreparedRunner } from '../runners/runner.js';
 import {
     normalizeRunnerInput,
     type RunnerInput,
@@ -21,17 +12,13 @@ import {
     type RunnerSessionContext,
 } from '../runners/session.js';
 import {
-    type PreparedRuntime,
     type RuntimeInfrastructureMetadata,
     RuntimeRegistry,
 } from '../runtimes/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
-import type {
-    PreflightResult,
-    ResolvedWorkbenchReference,
-} from '../workbench/index.js';
+import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
-import { publishRunOutcome } from './outcomes.js';
+import { ExecutionPreparation } from './preparation.js';
 import { RunStore } from './store.js';
 
 export interface InteractiveRunSession {
@@ -81,7 +68,6 @@ export interface InteractiveRunOptions {
 
 export class InteractiveRun {
     private readonly dependencies: InteractiveRunDependencies;
-    private outcomeLifecycle: OutcomeLifecycle | undefined;
 
     private constructor(private readonly options: InteractiveRunOptions) {
         this.dependencies = options.dependencies ?? {};
@@ -102,36 +88,31 @@ export class InteractiveRun {
             ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
         });
         let session: RunnerSession | undefined;
-        let preparedRunner: PreparedRunner | undefined;
-        let preparedRuntime: PreparedRuntime | undefined;
-        try {
-            this.outcomeLifecycle =
-                this.options.home && this.dependencies.captureOutcomes !== false
-                    ? await OutcomeLifecycle.create({
-                          home: this.options.home,
-                          runId: emitter.runId,
-                          ...(this.options.session?.nativeSessionId
-                              ? { resumeSessionId: this.options.session.id }
-                              : {}),
-                          ...(this.dependencies.now
-                              ? { now: this.dependencies.now }
-                              : {}),
-                          onAvailable: (outcome, applicationState) =>
-                              publishRunOutcome(
-                                  this.options.home,
-                                  emitter,
-                                  outcome,
-                                  applicationState
-                              ),
-                      })
-                    : undefined;
-            preparedRunner = await registry.prepare(workbench, environment);
-            const prepared = await this.prepare(
-                preparedRunner,
+        const preparation = new ExecutionPreparation(
+            {
+                ...this.options,
+                workbench,
+                workspaceDirectory: this.options.resolved.workspaceDirectory,
+                events: emitter,
+                mode: 'session',
+                ...(this.dependencies.captureOutcomes !== undefined
+                    ? { captureOutcomes: this.dependencies.captureOutcomes }
+                    : {}),
+            },
+            {
                 environment,
-                emitter.runId
-            );
-            preparedRuntime = prepared.runtime;
+                runners: registry,
+                runtimes:
+                    this.dependencies.runtimeRegistry ??
+                    RuntimeRegistry.standard({
+                        findExecutable: this.dependencies.findExecutable ?? Bun.which,
+                    }),
+                ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
+            }
+        );
+        try {
+            const prepared = await preparation.prepare();
+            const { runner: preparedRunner, runtime: preparedRuntime } = prepared;
             await emitter.emit('run.started', {
                 workbench: workbench.manifest.name,
                 workbench_version: workbench.manifest.version,
@@ -193,21 +174,23 @@ export class InteractiveRun {
                 session,
                 emitter,
                 this.options.interactive ?? false,
-                (completeness) =>
-                    this.outcomeLifecycle?.collect(preparedRuntime, completeness),
-                (turn) => this.outcomeLifecycle?.checkpoint(preparedRuntime, turn),
-                () => this.cleanup(preparedRuntime, preparedRunner)
+                (completeness) => preparation.collect(completeness),
+                (turn) => preparation.checkpoint(turn),
+                async () => {
+                    await preparation.cleanup();
+                    return preparation.infrastructure();
+                }
             );
         } catch (error) {
             await session?.close().catch(() => undefined);
-            const outcomeId = await this.outcomeLifecycle
-                ?.collect(preparedRuntime, 'partial')
+            const outcomeId = await preparation
+                .collect('partial')
                 .then((outcome) => outcome?.id)
                 .catch(() => undefined);
-            const infrastructure = await this.cleanup(
-                preparedRuntime,
-                preparedRunner
-            ).catch(() => undefined);
+            const infrastructure = await preparation
+                .cleanup()
+                .then(() => preparation.infrastructure())
+                .catch(() => undefined);
             await emitter
                 .emit('run.failed', {
                     message: InteractiveRun.errorMessage(error),
@@ -217,187 +200,6 @@ export class InteractiveRun {
                 .catch(() => undefined);
             throw error;
         }
-    }
-
-    private async prepare(
-        preparedRunner: PreparedRunner,
-        environment: Record<string, string | undefined>,
-        runId: string
-    ): Promise<{
-        configuration: ResolvedRunnerConfiguration;
-        preflight: PreflightResult;
-        runtime: PreparedRuntime;
-        authentication?: Awaited<ReturnType<ConnectionStore['find']>>;
-    }> {
-        const { workbench } = this.options.resolved;
-        let preparedRuntime: PreparedRuntime | undefined;
-        let configuration: ResolvedRunnerConfiguration | undefined;
-        let authentication: Awaited<ReturnType<ConnectionStore['find']>>;
-        let preflight: PreflightResult | undefined;
-        let preparationError: unknown;
-        try {
-            const runtimes =
-                this.dependencies.runtimeRegistry ??
-                RuntimeRegistry.standard({
-                    findExecutable: this.dependencies.findExecutable ?? Bun.which,
-                });
-            preparedRuntime = await runtimes
-                .resolve(workbench.manifest.runtime)
-                .prepare({
-                    workbench,
-                    workspaceDirectory: this.options.resolved.workspaceDirectory,
-                    environment,
-                    assets: [
-                        {
-                            path: this.options.resolved.workspaceDirectory,
-                            access: 'read-write',
-                        },
-                        {
-                            path: workbench.packageDirectory,
-                            access: 'read-only',
-                        },
-                        ...(this.options.workspaces ?? []).map((workspace) => ({
-                            path: workspace.path,
-                            access: workspace.access,
-                            workspace: workspace.name,
-                        })),
-                        ...preparedRunner.assets,
-                        ...(this.options.session
-                            ? [
-                                  {
-                                      path: this.options.session.directory,
-                                      access: 'read-write' as const,
-                                      state: true,
-                                  },
-                              ]
-                            : []),
-                    ],
-                    authorizations: {
-                        hostDocker: this.options.allowHostDocker ?? false,
-                    },
-                    purpose: 'run',
-                    ...(workbench.manifest.runtime === 'e2b' && this.options.home
-                        ? {
-                              credentials: await new RunnerCredentialStore(
-                                  this.options.home
-                              ).prepare(
-                                  workbench.manifest.runtime,
-                                  workbench.manifest.runner
-                              ),
-                          }
-                        : {}),
-                    ...(this.options.home
-                        ? {
-                              run: {
-                                  id: runId,
-                                  scope: RunStore.scope(this.options.home),
-                              },
-                          }
-                        : {}),
-                    ...(this.outcomeLifecycle
-                        ? {
-                              outcome: {
-                                  directory: this.outcomeLifecycle.output.directory,
-                                  ...(this.options.home
-                                      ? { home: this.options.home }
-                                      : {}),
-                              },
-                          }
-                        : {}),
-                });
-            preflight = await preparedRuntime.preflight();
-            const store = this.options.home
-                ? new ConnectionStore(this.options.home)
-                : undefined;
-            const inspector = new ConnectionInspector({
-                workbench,
-                runtime: preparedRuntime,
-                runner: preparedRunner,
-                reference: this.options.reference ?? workbench.manifest.name,
-                ...(store ? { store } : {}),
-            });
-            const preferred = await store?.find(ConnectionStore.context(workbench));
-            let status: Awaited<ReturnType<ConnectionInspector['inspect']>> | undefined;
-            try {
-                status = await inspector.inspect({
-                    ...(preferred ? { preferredConnection: preferred } : {}),
-                    ...(this.options.connection ? { discoverConnections: true } : {}),
-                });
-            } catch (error) {
-                if (
-                    !preferred ||
-                    !matchesRequestedConnection(preferred, this.options.connection)
-                ) {
-                    throw error;
-                }
-            }
-            const authenticated = this.options.connection
-                ? status?.connections.find((candidate) =>
-                      matchesRequestedConnection(candidate, this.options.connection)
-                  )
-                : undefined;
-            if (authenticated) {
-                configuration = inspector.configurationFor(authenticated);
-            } else if (!this.options.connection && status?.configuration) {
-                configuration = status.configuration;
-            } else if (
-                preferred &&
-                matchesRequestedConnection(preferred, this.options.connection)
-            ) {
-                if (!this.options.allowAuthentication) {
-                    throw new Error(
-                        `Authentication is required for ${preferred.provider}. Start this Workbench interactively once to finish ${preferred.nativeProvider} sign-in.`
-                    );
-                }
-                if (workbench.manifest.runner !== 'opencode') {
-                    throw new Error(
-                        `First-run authentication for ${workbench.manifest.runner} is not available inside a Workbench run yet`
-                    );
-                }
-                configuration = inspector.configurationFor(preferred);
-                authentication = preferred;
-            } else if (this.options.connection) {
-                throw new Error(
-                    `Connection ${this.options.connection} is not authenticated for ${status?.model ?? workbench.manifest.model.id} with ${workbench.manifest.runner} in the ${preparedRuntime.name} runtime. Run ${status?.connectCommand ?? `wb connect ${this.options.reference ?? workbench.manifest.name}`}.`
-                );
-            } else {
-                throw new Error(
-                    `No authenticated route is available for ${status?.model ?? workbench.manifest.model.id}. Run ${status?.connectCommand ?? `wb connect ${this.options.reference ?? workbench.manifest.name}`}.`
-                );
-            }
-        } catch (error) {
-            preparationError = error;
-        }
-        if (preparationError) {
-            await preparedRuntime?.cleanup().catch(() => undefined);
-            throw preparationError;
-        }
-        if (!preparedRuntime || !configuration || !preflight) {
-            throw new Error('Interactive Workbench preparation did not complete');
-        }
-        return {
-            configuration,
-            preflight,
-            runtime: preparedRuntime,
-            ...(authentication ? { authentication } : {}),
-        };
-    }
-
-    private async cleanup(
-        runtime: PreparedRuntime | undefined,
-        runner: PreparedRunner | undefined
-    ): Promise<RuntimeInfrastructureMetadata | undefined> {
-        const results = await Promise.allSettled([
-            runtime?.cleanup(),
-            runner?.cleanup(),
-            this.outcomeLifecycle?.cleanup(),
-        ]);
-        const infrastructure = await runtime?.infrastructure?.().catch(() => undefined);
-        const failure = results.find(
-            (result): result is PromiseRejectedResult => result.status === 'rejected'
-        );
-        if (failure) throw failure.reason;
-        return infrastructure;
     }
 
     private async requestPermission(
@@ -455,18 +257,6 @@ export class InteractiveRun {
     private static errorMessage(error: unknown): string {
         return error instanceof Error ? error.message : String(error);
     }
-}
-
-function matchesRequestedConnection(
-    selection: NonNullable<Awaited<ReturnType<ConnectionStore['find']>>>,
-    requested: string | undefined
-): boolean {
-    if (!requested) return true;
-    const normalized = requested.trim().toLowerCase();
-    return (
-        selection.provider.toLowerCase() === normalized ||
-        selection.nativeProvider.toLowerCase() === normalized
-    );
 }
 
 class HostedInteractiveSession implements InteractiveRunSession {
