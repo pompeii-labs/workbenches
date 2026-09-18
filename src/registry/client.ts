@@ -3,7 +3,7 @@ import {
     type RemoteWorkbenchPackage,
 } from '../sources/index.js';
 import { WORKBENCH_USER_AGENT } from '../user-agent.js';
-import { WorkbenchManifestParser } from '../workbench/index.js';
+import { WorkbenchManifestParser } from '../workbench/manifest.js';
 
 const defaultRegistryUrl = 'https://api.workbenches.dev';
 

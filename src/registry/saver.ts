@@ -1,5 +1,5 @@
 import type { CatalogEntry } from '../catalog/index.js';
-import { SavedWorkbenchCatalog } from '../catalog/index.js';
+import { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
 import type { RegistryReference } from './client.js';
 import { RegistryClient } from './client.js';

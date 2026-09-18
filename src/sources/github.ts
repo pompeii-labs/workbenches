@@ -2,7 +2,7 @@ import { posix } from 'node:path';
 
 import type { WorkbenchManifest } from '../types.js';
 import { WORKBENCH_USER_AGENT } from '../user-agent.js';
-import { WorkbenchManifestParser } from '../workbench/index.js';
+import { WorkbenchManifestParser } from '../workbench/manifest.js';
 
 const githubApi = 'https://api.github.com';
 const maximumPackageFiles = 256;
