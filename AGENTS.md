@@ -119,9 +119,9 @@ wb run project-core \
   --final
 ```
 
-Saved Workbenches use the current directory as the target workspace unless
-`--dir` is provided. Set it deliberately when the task concerns another
-project.
+Local references and saved Workbenches use the current directory as the target
+workspace unless `--dir` is provided. Set it deliberately when the task concerns
+another project.
 
 If `wb view` reports named workspace requirements, bind them explicitly with a
 repeatable `--workspace NAME=PATH` argument. Never guess sibling repository
@@ -192,12 +192,17 @@ active turn; `--queue` explicitly requests a FIFO follow-up. Input can come from
 text, `--task-file`, or explicit `--stdin`. Receipts contain an input ID and an
 `after_sequence` cursor for a subsequent `wait --after`.
 
-`wait` is read-only and prints one result, including the latest turn's final
-response, usage, outcome ID, and pending input requests. It exits with 0 at an
-idle or completed boundary, 1 on failure, 130 on cancellation or interruption,
-2 when input is needed, and 124 on timeout. Interrupting or timing out a wait
-does not cancel the execution. `--after` skips old idle boundaries; terminal
-executions and currently pending requests remain observable.
+`wait` is read-only and prints one result with a turn's final response, usage,
+outcome ID, and pending input requests. It returns the first completed turn after
+the cursor, even when a queued follow-up starts immediately. `turn_completed`
+means that turn replied, not that execution or runtime cleanup finished. Repeat
+with `--after` set to the returned `sequence` to advance to the next boundary or
+terminal result. Without a cursor, observation starts at the beginning of that
+run. Headless authoring waits for execution and package verification instead of
+intermediate creator turns. Exit codes are 0 for idle/turn_completed/completed,
+1 for failure, 130 for cancellation or interruption, 2 for input needed, and
+124 for timeout. Interrupting or timing out a wait does not cancel execution.
+Terminal executions and currently pending requests remain observable.
 
 Only answer reported requests. `allow` grants permission once and `deny`
 rejects it. `allow_always` must be explicitly offered by the runner. A question

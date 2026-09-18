@@ -417,14 +417,18 @@ steering or a queued follow-up. A closed resumable session can start a linked
 execution through an ordinary send. Accepted receipts expose correlation IDs
 and an event cursor, not proof that the runner has consumed queued input.
 
-`wait` is a read-only observer. It returns one snapshot at a fresh idle boundary,
-terminal execution, or pending native input request. A cursor skips earlier
-idle boundaries; terminal state and currently pending requests remain visible.
-Unattended runs wait for terminal cleanup instead of returning at an intermediate
-turn completion. Terminal snapshots drain the durable event tail before
-reporting final response, latest-turn usage, and outcome. Waiting does not attach
-an audience, restart an execution, or initiate authentication. Timeouts and
-interruptions stop observation only. `answer` validates a pending request's
+`wait` is a read-only observer. It returns the first completed turn after its
+cursor, an idle boundary, terminal execution, or pending native input request.
+Without a cursor, observation starts at the beginning of that run. A
+`turn_completed` snapshot preserves that turn's final response, usage, outcome,
+and boundary sequence even when queued work starts immediately. It does not
+claim execution or runtime cleanup has finished. Repeat with `--after` set to
+the returned sequence to observe subsequent boundaries or terminal completion.
+Terminal state and currently pending requests remain visible. Terminal snapshots
+drain the durable event tail before reporting final response, latest-turn usage,
+and outcome. Waiting does not attach an audience, restart an execution, or
+initiate authentication. Timeouts and interruptions stop observation only.
+`answer` validates a pending request's
 offered scope and submits the existing transient control message. Raw decisions
 and answers are not retained in receipts or normalized request-resolution events.
 
