@@ -176,15 +176,32 @@ wb init core
 wb init migrations --runner opencode --model openai/gpt-5.6-terra
 ```
 
-The creator remains a normal published Workbench and can also be run directly
-for automation or integration with another agent:
+Agents can use that same command without opening the terminal client. Supply
+exactly one brief as text, a UTF-8 file, or explicit stdin:
 
 ```sh
-wb add pompeii-labs/creator --as workbench-creator
-wb run workbench-creator \
-  --dir /path/to/repository \
-  --task "Inspect this repository and create a focused migrations Workbench"
+wb create migrations --task "Create a focused migration review expert" --json
+wb create .#migrations --task-file improvements.txt --detach --json
+wb wait wb_... --timeout 120 --json
+printf '%s\n' "Check failure cleanup more carefully" | \
+  wb create --from wb_... --stdin --detach --json
 ```
+
+Without `--detach`, headless authoring waits for execution and engine-owned
+verification, then prints one result. With `--detach`, it prints a correlated
+session/run/operation receipt while a separate supervisor verifies the package
+after the creator finishes. `wb wait` waits for that verification too. Its
+`authoring` result reports package selectors and paths, changed files, and the
+improvement evidence path when applicable. A completed creator turn alone is
+not authoring success: invalid packages, out-of-scope edits, missing version
+increments, and failed smoke checks produce a failed result and nonzero exit.
+
+`--from` can infer improvements from stored session evidence without a brief.
+Other headless authoring calls require one. If the creator needs permission,
+`wait` reports the pending request with exit 2; answer it explicitly through
+`wb answer`, then wait again. Bare `wb create` keeps its interactive behavior.
+The creator remains a normal published Workbench, but running it directly does
+not provide the `create` command's scope and verification contract.
 
 ### Discover and save Workbenches
 

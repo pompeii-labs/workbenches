@@ -111,6 +111,56 @@ export class AuthoringOperation {
         return this.record.id;
     }
 
+    get repository(): string {
+        return this.record.repository;
+    }
+
+    get evidencePath(): string | undefined {
+        return this.record.evidence_path;
+    }
+
+    get verification(): AuthoringFinishOptions {
+        return this.#finishOptions;
+    }
+
+    async checkpoint(): Promise<void> {
+        await writeFile(
+            join(this.home, 'authoring', this.id, 'baseline.json'),
+            JSON.stringify(this.repositoryBefore),
+            { mode: 0o600 }
+        );
+    }
+
+    static async load(
+        home: string,
+        id: string,
+        verification: AuthoringFinishOptions = {},
+        smoke?: AuthoringSmoke
+    ): Promise<AuthoringOperation> {
+        if (!/^author_[a-z0-9_]+$/.test(id))
+            throw new Error('Invalid authoring operation ID');
+        const directory = join(home, 'authoring', id);
+        const record = JSON.parse(
+            await readFile(join(directory, 'operation.json'), 'utf8')
+        ) as AuthoringOperationRecord;
+        const baseline = JSON.parse(
+            await readFile(join(directory, 'baseline.json'), 'utf8')
+        ) as RepositoryFileState[];
+        if (
+            record.version !== 1 ||
+            record.id !== id ||
+            typeof record.repository !== 'string' ||
+            !Array.isArray(record.before) ||
+            !Array.isArray(baseline) ||
+            !baseline.every(
+                (file) =>
+                    typeof file.path === 'string' && typeof file.digest === 'string'
+            )
+        )
+            throw new Error('Invalid authoring checkpoint');
+        return new AuthoringOperation(home, record, baseline, smoke, verification);
+    }
+
     static async prepare(
         home: string,
         options: PrepareAuthoringOperationOptions,
@@ -227,7 +277,7 @@ export class AuthoringOperation {
             kind: this.record.kind,
             status: 'failed',
             packages: this.record.target_selector ? [this.record.target_selector] : [],
-            changedFiles: [],
+            changedFiles: this.record.changed_files ?? [],
             error: message,
         };
     }

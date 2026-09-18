@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import {
+    mkdir,
+    mkdtemp,
+    readFile,
+    realpath,
+    rm,
+    stat,
+    writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -731,6 +739,80 @@ describe('native Workbench authoring', () => {
         expect(record).not.toContain('explicit-secret');
         expect(record).not.toContain('file-secret');
         expect(record).not.toContain(await realpath(docs));
+    });
+
+    test('reloaded checkpoints preserve scope and validation without retaining secrets', async () => {
+        const home = await temporaryDirectory('authoring-checkpoint-');
+        const repository = await temporaryDirectory('authoring-checkpoint-repo-');
+        const packageDirectory = await writeWorkbench(repository, 'core', '0.1.0');
+        await writeFile(
+            join(repository, 'notes.txt'),
+            'private-value-not-for-checkpoint'
+        );
+        const operation = await AuthoringOperation.prepare(
+            home,
+            {
+                id: 'author_checkpoint',
+                kind: 'edit',
+                repository,
+                targetSelector: 'core',
+                creator: {
+                    version: '0.1.4',
+                    digest: `sha256:${'b'.repeat(64)}`,
+                    registry_version_id: 'version-id',
+                    cached: false,
+                },
+            },
+            smoke
+        );
+        await operation.checkpoint();
+        const path = join(home, 'authoring', operation.id, 'baseline.json');
+        expect((await stat(path)).mode & 0o777).toBe(0o600);
+        expect(await readFile(path, 'utf8')).not.toContain(
+            'private-value-not-for-checkpoint'
+        );
+        const loaded = await AuthoringOperation.load(home, operation.id, {}, smoke);
+        await writeFile(join(packageDirectory, 'instructions.md'), '# changed\n');
+        await writeFile(
+            join(packageDirectory, 'workbench.yml'),
+            manifest('core', '0.1.1')
+        );
+        expect(await loaded.finish()).toMatchObject({
+            status: 'completed',
+            packages: ['core'],
+        });
+        await expect(AuthoringOperation.load(home, '../bad')).rejects.toThrow(
+            'Invalid authoring operation ID'
+        );
+    });
+
+    test('reloaded checkpoints still reject edits outside their target', async () => {
+        const home = await temporaryDirectory('authoring-checkpoint-');
+        const repository = await temporaryDirectory('authoring-checkpoint-repo-');
+        await writeWorkbench(repository, 'core', '0.1.0');
+        const operation = await AuthoringOperation.prepare(
+            home,
+            {
+                id: 'author_scope',
+                kind: 'edit',
+                repository,
+                targetSelector: 'core',
+                creator: {
+                    version: '0.1.4',
+                    digest: `sha256:${'b'.repeat(64)}`,
+                    registry_version_id: 'version-id',
+                    cached: false,
+                },
+            },
+            smoke
+        );
+        await operation.checkpoint();
+        const loaded = await AuthoringOperation.load(home, operation.id, {}, smoke);
+        await writeFile(join(repository, 'unexpected.txt'), 'unrequested change');
+        await expect(loaded.finish()).rejects.toThrow('outside');
+        expect((await loaded.fail('Scope validation failed')).changedFiles).toContain(
+            'unexpected.txt'
+        );
     });
 
     test('rejects an unchanged invalid candidate and empty creation', async () => {

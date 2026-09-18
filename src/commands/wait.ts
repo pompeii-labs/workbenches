@@ -1,7 +1,7 @@
 import { defineCommand } from 'citty';
-import { type RunSnapshot, RunSupervision } from '../runs/supervision.js';
 import { SessionLifecycle } from '../sessions/lifecycle.js';
 import { workbenchHome } from '../storage.js';
+import { CliWait } from './waiting.js';
 
 export const waitCommand = defineCommand({
     meta: {
@@ -32,52 +32,12 @@ export const waitCommand = defineCommand({
     async run({ args }) {
         const home = workbenchHome();
         const activity = await new SessionLifecycle(home).resolve(args.session);
-        const abort = new AbortController();
-        const stop = () => abort.abort();
-        process.on('SIGINT', stop);
-        try {
-            const result = await new RunSupervision(home).wait(activity.run, {
-                ...(args.after !== undefined
-                    ? { afterSequence: Number(args.after) }
-                    : {}),
-                ...(args.timeout !== undefined
-                    ? { timeoutMilliseconds: Number(args.timeout) * 1000 }
-                    : {}),
-                signal: abort.signal,
-            });
-            process.stdout.write(
-                args.json ? `${JSON.stringify(result)}\n` : summary(result)
-            );
-            process.exitCode = result.interrupted
-                ? 130
-                : result.state === 'failed'
-                  ? 1
-                  : result.state === 'cancelled'
-                    ? 130
-                    : result.state === 'needs_input'
-                      ? 2
-                      : result.state === 'timeout'
-                        ? 124
-                        : 0;
-        } finally {
-            process.off('SIGINT', stop);
-        }
+        await new CliWait().execute(home, activity.run, {
+            json: args.json,
+            ...(args.after !== undefined ? { afterSequence: Number(args.after) } : {}),
+            ...(args.timeout !== undefined
+                ? { timeoutMilliseconds: Number(args.timeout) * 1000 }
+                : {}),
+        });
     },
 });
-
-function summary(result: RunSnapshot): string {
-    const pending = result.pending_requests.map(
-        (request) =>
-            `${request.kind} · ${request.id}: ${JSON.stringify(request.details)}`
-    );
-    const answer = result.final.replace(/\s+/g, ' ').slice(0, 1000);
-    return `${[
-        `${result.state} · ${result.session_id} · sequence ${result.sequence}`,
-        answer,
-        result.error,
-        result.outcome_id ? `Outcome: ${result.outcome_id}` : undefined,
-        ...pending.slice(0, 4),
-    ]
-        .filter(Boolean)
-        .join('\n')}\n`;
-}

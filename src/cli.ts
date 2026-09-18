@@ -2,6 +2,7 @@
 
 import { defineCommand, renderUsage, runMain } from 'citty';
 import packageMetadata from '../package.json' with { type: 'json' };
+import { AuthoringJob } from './authoring/job.js';
 
 import { addCommand } from './commands/add.js';
 import { answerCommand } from './commands/answer.js';
@@ -81,6 +82,13 @@ export const workbenchCommand = defineCommand({
 });
 
 if (import.meta.main) {
+    if (process.argv[2] === '__authoring') {
+        const home = process.argv[3];
+        const id = process.argv[4];
+        if (!home || !id) process.exit(2);
+        await new ModelCatalog({ home }).loadCached();
+        process.exit(await new AuthoringJob(home).execute(id));
+    }
     if (process.argv[2] === '__worker') {
         const home = process.argv[3];
         const id = process.argv[4];
@@ -108,7 +116,15 @@ if (import.meta.main) {
         const explicitHelp = invocation.args.some(
             (argument) => argument === '--help' || argument === '-h'
         );
-        if (!explicitHelp && (bareInvocation || invocation.args[0] === 'create')) {
+        const headlessCreate = invocation.args.some((argument) =>
+            /^(--task(?:=|$)|-t$|--task-file(?:=|$)|--stdin$|--detach$|-d$|--json$)/.test(
+                argument
+            )
+        );
+        if (
+            !explicitHelp &&
+            (bareInvocation || (invocation.args[0] === 'create' && !headlessCreate))
+        ) {
             assertWorkbenchTuiSupported();
         }
         if (usesModelCatalog(invocation.args, bareInvocation)) {

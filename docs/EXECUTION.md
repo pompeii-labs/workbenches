@@ -434,6 +434,16 @@ Pi RPC carries the runtime reminder in its message because it has no equivalent
 part type. Stable package instructions remain in native system context; no
 credential values are included in either channel.
 
+Headless `create` uses the official creator and a separate authoring supervisor.
+The generic run engine does not own authoring validation. A private checkpoint
+retains baseline file paths and digests, not file contents or environment values.
+Candidate verification bindings travel in a private transient request consumed
+and removed by the supervisor. Once the creator execution ends, the supervisor
+checks package validity, scope, version advancement, and runtime smoke. `wait`
+includes that verification boundary for an authoring run and reports package
+paths, changed files, and evidence provenance. A successful native execution
+with failed verification is a failed authoring result, never a verified package.
+
 Every execution has one stable Workbench session ID. Runners with native session
 support use the same background session engine for foreground commands, detached
 commands, and the terminal client in local, Docker, and E2B runtimes. The first

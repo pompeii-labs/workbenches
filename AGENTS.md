@@ -320,28 +320,36 @@ per-request body limit, so use `wb image push` for images with large layers.
 Prefer a versioned tag and do not silently replace the image behind a published
 Workbench version.
 
-For substantial design, authoring, review, or repair work, use the standard
-maintainers' own creator Workbench instead of reconstructing the specification
-from scratch:
+For substantial authoring, editing, or improvement work, use the official
+creator through the same headless `create` command:
 
 ```sh
-wb add pompeii-labs/workbenches#creator --as workbench-creator
-wb run workbench-creator \
-  --dir /path/to/repository \
-  --task "Inspect this repository and create a focused Workbench" \
-  --final
+wb create core --dir /path/to/repository \
+  --task "Inspect this repository and create a focused review expert" --json
+wb create .#core --task-file improvements.txt --detach --json
+wb wait wb_... --timeout 120 --json
+wb create --from wb_... --feedback "Check failure cleanup" --detach --json
 ```
+
+Supply one brief through `--task`, `--task-file`, or `--stdin`; `--from` can
+infer improvements from evidence without one. Bare `create` remains interactive.
+Detached JSON reports session/run/operation IDs. A later `wait` reports verified
+package paths and changed files in `authoring`, not merely the creator's final
+text. Engine-owned validation, package scope, version advancement, and runtime
+smoke must pass before authoring is completed. A native run may be completed
+while authoring verification is running or failed; `run_state` distinguishes
+that case. Answer reported permissions explicitly, then wait again. Saved
+snapshots are immutable: author or improve a local source package.
 
 ## Current reference-engine support
 
-The repository is in public pre-alpha development. The current reference engine
-supports the draft-0 manifest plus OpenCode and Pi runners. Local execution
-and Docker execution support one-shot, detached, and experimental interactive
-sessions, including native context resume. Docker also supports image
-preparation and in-container smoke checks. OpenCode and Pi have different native
-capabilities, which must be reported honestly rather than hidden behind a
-fallback. Other runners and hosted runtimes are part of the standard's
-extensible design but are not yet runnable through this release.
+The repository is in public alpha development. The current reference engine
+supports the draft-0 manifest plus OpenCode and Pi runners. Local, Docker, and
+E2B execution support one-shot, detached, and experimental interactive sessions,
+including native context resume. Docker and E2B support image preparation and
+runtime smoke checks. OpenCode and Pi have different native capabilities, which
+must be reported honestly rather than hidden behind a fallback. Other runners
+and runtimes remain part of the standard's extensible design.
 
 The Workbench author locks its runner, model policy, provider routes, and native
 runner configuration. Consumers connect credentials once per runner/runtime
