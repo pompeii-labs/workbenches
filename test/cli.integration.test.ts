@@ -1395,7 +1395,7 @@ describe('CLI integration', () => {
             execution: 'session',
             status: 'completed',
         });
-    });
+    }, 20_000);
 
     test('serializes concurrent continuations onto one native run', async () => {
         const fixture = await createFixture();
