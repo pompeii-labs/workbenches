@@ -81,7 +81,7 @@ export class HostOutcomeCapture {
             changesets,
             artifacts: output.artifacts,
             links: output.links,
-            warnings: [],
+            warnings: this.snapshots.flatMap((snapshot) => snapshot.warnings),
         };
     }
 

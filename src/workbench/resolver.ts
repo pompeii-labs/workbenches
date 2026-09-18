@@ -57,9 +57,7 @@ export class WorkbenchResolver {
         const workbench = await source.select(local.directory, reference.selector);
         return {
             workbench,
-            workspaceDirectory: resolve(
-                options.workspaceDirectory ?? workbench.repositoryDirectory
-            ),
+            workspaceDirectory: resolve(options.workspaceDirectory ?? cwd),
             cleanup: async () => {},
             source: 'local',
         };

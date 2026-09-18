@@ -1,4 +1,3 @@
-import { lstat } from 'node:fs/promises';
 import { ModelRouter, type ResolvedRunnerConfiguration } from '../../models/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
@@ -54,9 +53,6 @@ class PreparedOpenCodeRunner implements PreparedRunner {
             ...(options.stagedDirectory
                 ? [{ path: options.stagedDirectory, access: 'read-write' as const }]
                 : []),
-            ...(options.nativeConfigFile
-                ? [{ path: options.nativeConfigFile, access: 'read-only' as const }]
-                : []),
         ];
     }
 
@@ -65,11 +61,7 @@ class PreparedOpenCodeRunner implements PreparedRunner {
         session = new OpenCodeSessionAdapter()
     ): Promise<PreparedOpenCodeRunner> {
         const staged = await stageOpenCodeSkills(workbench);
-        const nativeConfigFile =
-            workbench.runnerConfigPath &&
-            (await lstat(workbench.runnerConfigPath)).isFile()
-                ? workbench.runnerConfigPath
-                : undefined;
+        const nativeConfigFile = staged.nativeConfigFile;
         return new PreparedOpenCodeRunner({
             workbench,
             ...(staged?.directory ? { stagedDirectory: staged.directory } : {}),

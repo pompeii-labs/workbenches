@@ -361,7 +361,10 @@ describe('OpenCode interactive server adapter', () => {
         const session = await server.adapter().start({
             workbench: workbench(),
             workspaceDirectory: '/workspace',
-            environment: {},
+            environment: {
+                WORKBENCH_OUTPUT_DIR: '/current-attempt/outbox',
+                OPENAI_API_KEY: 'must-not-enter-native-prompt',
+            },
             configuration: configuration(),
             session: {
                 id: 'wb_resumetest123456789012',
@@ -381,6 +384,22 @@ describe('OpenCode interactive server adapter', () => {
         expect(server.spawnEnvironment.OPENCODE_DB).toBe(
             '/private/workbench/session/native/opencode.sqlite'
         );
+        server.onPrompt = () => server.completeTurn('done');
+        await session.prompt('return the revised report');
+        const prompt = server.promptBodies.at(-1);
+        expect(prompt?.parts).toEqual([
+            {
+                type: 'text',
+                synthetic: true,
+                text: expect.stringContaining('path="/current-attempt/outbox"'),
+            },
+            { type: 'text', text: 'return the revised report' },
+        ]);
+        expect(JSON.stringify(prompt)).not.toContain('must-not-enter-native-prompt');
+        await session.prompt('then summarize');
+        expect(server.promptBodies.at(-1)?.parts).toEqual([
+            { type: 'text', text: 'then summarize' },
+        ]);
         await session.close();
     });
 

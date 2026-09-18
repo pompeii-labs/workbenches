@@ -411,6 +411,43 @@ after receiving it.
 
 ## Resumable interactive sessions
 
+The CLI exposes the same stored control protocol through `send`, `wait`, and
+`answer`. `send` is idle-only unless the caller explicitly selects active-turn
+steering or a queued follow-up. A closed resumable session can start a linked
+execution through an ordinary send. Accepted receipts expose correlation IDs
+and an event cursor, not proof that the runner has consumed queued input.
+
+`wait` is a read-only observer. It returns the first completed turn after its
+cursor, an idle boundary, terminal execution, or pending native input request.
+Without a cursor, observation starts at the beginning of that run. A
+`turn_completed` snapshot preserves that turn's final response, usage, outcome,
+and boundary sequence even when queued work starts immediately. It does not
+claim execution or runtime cleanup has finished. Repeat with `--after` set to
+the returned sequence to observe subsequent boundaries or terminal completion.
+Terminal state and currently pending requests remain visible. Terminal snapshots
+drain the durable event tail before reporting final response, latest-turn usage,
+and outcome. Waiting does not attach an audience, restart an execution, or
+initiate authentication. Timeouts and interruptions stop observation only.
+`answer` validates a pending request's
+offered scope and submits the existing transient control message. Raw decisions
+and answers are not retained in receipts or normalized request-resolution events.
+
+Native continuation refreshes current attempt facts alongside the first resumed
+input without changing the stored user task. OpenCode uses a synthetic text part;
+Pi RPC carries the runtime reminder in its message because it has no equivalent
+part type. Stable package instructions remain in native system context; no
+credential values are included in either channel.
+
+Headless `create` uses the official creator and a separate authoring supervisor.
+The generic run engine does not own authoring validation. A private checkpoint
+retains baseline file paths and digests, not file contents or environment values.
+Candidate verification bindings travel in a private transient request consumed
+and removed by the supervisor. Once the creator execution ends, the supervisor
+checks package validity, scope, version advancement, and runtime smoke. `wait`
+includes that verification boundary for an authoring run and reports package
+paths, changed files, and evidence provenance. A successful native execution
+with failed verification is a failed authoring result, never a verified package.
+
 Every execution has one stable Workbench session ID. Runners with native session
 support use the same background session engine for foreground commands, detached
 commands, and the terminal client in local, Docker, and E2B runtimes. The first

@@ -1,6 +1,7 @@
 import { defineCommand } from 'citty';
 
 import { RunStore } from '../runs/index.js';
+import { RunSupervision } from '../runs/supervision.js';
 import {
     type SessionActivity,
     SessionIdentity,
@@ -46,12 +47,18 @@ export const psCommand = defineCommand({
         for (const activity of activities) {
             const run = activity.run;
             if (args.json) {
+                const snapshot = await new RunSupervision(workbenchHome()).snapshot(
+                    run
+                );
                 process.stdout.write(
                     `${JSON.stringify({
                         ...run,
                         session_id: activity.id,
                         session_name: activity.session?.name,
                         resumable: activity.resumable,
+                        state: snapshot.state,
+                        needs_input: snapshot.state === 'needs_input',
+                        pending_requests: snapshot.pending_requests,
                     })}\n`
                 );
                 continue;

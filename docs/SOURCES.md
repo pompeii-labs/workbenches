@@ -35,11 +35,10 @@ The spec-0 parser still accepts repository-contained paths for backward
 compatibility, but such a package cannot be saved by this engine. Symlinks are
 rejected during save to prevent a snapshot from reaching outside its package.
 
-A direct local repository reference runs against that repository by default. A
-saved alias runs against the current directory by default, because the saved
-package provides expertise while the current directory is the work target. `wb
-run <ref> --dir <workspace>` makes the target explicit. Direct remote runs are
-rejected with an instruction to save the package first; the engine never creates
+Both direct local references and saved aliases run against the current directory
+by default. The package provides expertise while the current directory is the
+work target. `wb run <ref> --dir <workspace>` makes the target explicit. Direct
+remote runs are rejected with an instruction to save the package first; the engine never creates
 a disposable remote work target.
 
 Remote inspection follows the GitHub default branch. The reference engine does

@@ -4,6 +4,7 @@ import {
     mkdir,
     mkdtemp,
     readFile,
+    rename,
     rm,
     symlink,
     unlink,
@@ -159,15 +160,61 @@ describe('WorkspaceSnapshot', () => {
         }
     });
 
-    test('rejects escaping symlinks and oversized snapshots', async () => {
+    test('skips unsafe links without following them or losing unrelated changes', async () => {
         const root = await repository();
         await symlink('../outside', join(root, 'escape'));
-        await expect(
-            WorkspaceSnapshot.create(root, {
-                workspace: { kind: 'primary' },
-            })
-        ).rejects.toThrow('Escaping symlink');
-        await unlink(join(root, 'escape'));
+        await symlink('/usr/bin/env', join(root, 'absolute'));
+        await symlink('escape/file.txt', join(root, 'indirect'));
+        await symlink('loop', join(root, 'loop'));
+        const snapshot = await WorkspaceSnapshot.create(root, {
+            workspace: { kind: 'primary' },
+        });
+        const store = new OutcomeStore(await temporaryDirectory());
+        try {
+            expect(snapshot.warnings[0]?.code).toBe('workspace_paths_excluded');
+            expect(snapshot.warnings[0]?.message).toContain('4 unsafe');
+            await writeFile(join(root, 'added.txt'), 'a valid result\n');
+            await unlink(join(root, 'modify.txt'));
+            await symlink('../outside', join(root, 'modify.txt'));
+            await symlink('../outside', join(root, 'new-escape'));
+            const result = await snapshot.collect(store);
+            expect(result?.entries.map((entry) => entry.path)).toEqual(['added.txt']);
+            expect(snapshot.warnings[0]?.message).toContain('6 unsafe');
+            await unlink(join(root, 'escape'));
+            await writeFile(join(root, 'escape'), 'still excluded for this capture\n');
+            expect(
+                (await snapshot.collect(store))?.entries.map((entry) => entry.path)
+            ).toEqual(['added.txt']);
+        } finally {
+            await snapshot.cleanup();
+            await store.close();
+        }
+    });
+
+    test('does not traverse tracked children through a replaced directory symlink', async () => {
+        const root = await repository();
+        const outside = await temporaryDirectory();
+        await mkdir(join(root, 'tracked'));
+        await writeFile(join(root, 'tracked', 'file.txt'), 'before\n');
+        await git(root, 'add', 'tracked');
+        const snapshot = await WorkspaceSnapshot.create(root, {
+            workspace: { kind: 'primary' },
+        });
+        const store = new OutcomeStore(await temporaryDirectory());
+        try {
+            await rename(join(root, 'tracked'), join(outside, 'original'));
+            await writeFile(join(outside, 'file.txt'), 'not a result\n');
+            await symlink(outside, join(root, 'tracked'));
+            expect(await snapshot.collect(store)).toBeUndefined();
+            expect(snapshot.warnings[0]?.code).toBe('workspace_paths_excluded');
+        } finally {
+            await snapshot.cleanup();
+            await store.close();
+        }
+    });
+
+    test('still rejects oversized snapshots', async () => {
+        const root = await repository();
         await expect(
             WorkspaceSnapshot.create(root, {
                 workspace: { kind: 'primary' },

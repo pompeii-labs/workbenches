@@ -3,13 +3,14 @@ import type { WorkbenchWorkspaceBinding } from '../types.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import type { RunControlReceipt } from './control.js';
 import { RunDispatcher } from './dispatcher.js';
-import type { RunHandle } from './handle.js';
+import { RunAlreadyTerminal, RunControlRejected, type RunHandle } from './handle.js';
 import { RunStore, type StoredRun } from './store.js';
 
 export interface ContinueRunOptions {
     resolved: ResolvedWorkbenchReference;
     session: StoredSession;
     task: string;
+    delivery?: 'send' | 'follow_up';
     mode: 'foreground' | 'detached';
     environment: Record<string, string | undefined>;
     environmentOverrides?: boolean;
@@ -112,7 +113,10 @@ export class RunContinuation {
         const afterSequence = events.at(-1)?.sequence ?? 0;
         const handle = this.#dispatcher.handle(run.id);
         try {
-            const receipt = await handle.followUp(options.task);
+            const receipt =
+                options.delivery === 'send'
+                    ? await handle.send(options.task)
+                    : await handle.followUp(options.task);
             return {
                 sessionId: session.id,
                 run,
@@ -122,6 +126,15 @@ export class RunContinuation {
                 receipt,
             };
         } catch (error) {
+            if (
+                options.delivery === 'send' &&
+                !(error instanceof RunAlreadyTerminal) &&
+                !(
+                    error instanceof RunControlRejected &&
+                    error.receipt.error?.code === 'run_terminal'
+                )
+            )
+                throw error;
             const refreshed = await this.latestRun(session);
             if (!RunStore.isTerminal(refreshed.status)) throw error;
             return this.startTask(options, await this.#sessions.read(session.id));

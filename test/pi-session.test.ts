@@ -54,6 +54,51 @@ runnerAdapterContract({
 });
 
 describe('Pi RPC session adapter', () => {
+    test('refreshes current attempt facts once when reopening native context, preserving images and later input', async () => {
+        const native = new FakePiRpc();
+        const session = await new PiSessionAdapter({
+            spawn: () => native.process,
+        }).start({
+            workbench,
+            workspaceDirectory: root,
+            environment: {
+                WORKBENCH_OUTPUT_DIR: '/current-attempt/outbox',
+                OPENAI_API_KEY: 'must-not-enter-resume-context',
+            },
+            configuration: new ModelRouter().resolve({ workbench }),
+            session: {
+                id: 'wb_resumetest123456789012',
+                directory: '/private/workbench/session/native',
+                nativeSessionId: '/private/workbench/session/native/context.jsonl',
+            },
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+        try {
+            await session.prompt({
+                text: 'revise the report',
+                images: [{ data: 'aW1hZ2U=', mimeType: 'image/png' }],
+            });
+            await session.prompt('then summarize');
+            const prompts = native.commands.filter((entry) => entry.type === 'prompt');
+            expect(prompts[0]?.message).toStartWith('<workbench_runtime>');
+            expect(prompts[0]?.message).toContain('path="/current-attempt/outbox"');
+            expect(prompts[0]?.message).toEndWith('\n\nrevise the report');
+            expect(prompts[0]?.images).toEqual([
+                { type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' },
+            ]);
+            expect(JSON.stringify(prompts)).not.toContain(
+                'must-not-enter-resume-context'
+            );
+            expect(prompts[1]?.message).toBe('then summarize');
+        } finally {
+            await session.close();
+        }
+    });
+
     test('queues native steering and follow-up messages without creating a new session', async () => {
         const native = new FakePiRpc();
         native.scenario = 'cancellation';

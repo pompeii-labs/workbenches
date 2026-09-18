@@ -44,6 +44,15 @@ export interface RunHandle {
     cancel(reason?: string): Promise<RunControlReceipt>;
 }
 
+export class RunControlRejected extends Error {
+    constructor(readonly receipt: RunControlReceipt) {
+        super(receipt.error?.message ?? 'Workbench input was rejected');
+        this.name = 'RunControlRejected';
+    }
+}
+
+export class RunAlreadyTerminal extends Error {}
+
 export class StoredRunHandle implements RunHandle {
     readonly events: AsyncIterable<WorkbenchEvent>;
     private readonly store: RunStore;
@@ -143,11 +152,13 @@ export class StoredRunHandle implements RunHandle {
     ): Promise<RunControlReceipt> {
         const run = await this.store.read(this.runId);
         if (RunStore.isTerminal(run.status)) {
-            throw new Error(`Workbench run is already ${run.status}: ${this.runId}`);
+            throw new RunAlreadyTerminal(
+                `Workbench run is already ${run.status}: ${this.runId}`
+            );
         }
         const receipt = await this.control.submit(submission);
         if (receipt.outcome === 'rejected') {
-            throw new Error(receipt.error?.message ?? 'Workbench input was rejected');
+            throw new RunControlRejected(receipt);
         }
         return receipt;
     }

@@ -30,8 +30,7 @@ export const connectCommand = defineCommand({
         },
         dir: {
             type: 'string',
-            description:
-                'Workspace directory (saved aliases default to the current directory)',
+            description: 'Workspace directory (defaults to the current directory)',
         },
         runtime: {
             type: 'string',

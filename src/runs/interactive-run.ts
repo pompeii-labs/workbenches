@@ -221,6 +221,11 @@ export class InteractiveRun {
                 'reject',
             ],
         });
+        await decision;
+        await emitter.emit('input.accepted', {
+            id: request.id,
+            kind: 'permission',
+        });
         return decision;
     }
 

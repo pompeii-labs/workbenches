@@ -119,9 +119,9 @@ wb run project-core \
   --final
 ```
 
-Saved Workbenches use the current directory as the target workspace unless
-`--dir` is provided. Set it deliberately when the task concerns another
-project.
+Local references and saved Workbenches use the current directory as the target
+workspace unless `--dir` is provided. Set it deliberately when the task concerns
+another project.
 
 If `wb view` reports named workspace requirements, bind them explicitly with a
 repeatable `--workspace NAME=PATH` argument. Never guess sibling repository
@@ -173,6 +173,45 @@ sessions; `wb ps --all` also includes terminal one-shot history. Runs persist
 their normalized events for replay.
 
 ## Leave interactive work to the human
+
+For headless supervision, use the session control commands instead of parsing
+an activity stream:
+
+```sh
+wb run project-core --task "Review the migration" --detach --json
+wb wait wb_... --timeout 120 --json
+wb send wb_... "Check the rollback too" --json
+wb send wb_... "Focus on data loss" --steer --json
+wb send wb_... --task-file followup.txt --queue --json
+wb answer wb_... request_id allow --json
+```
+
+`send` delivers only while idle, or starts a fresh continuation of a completed
+resumable session. An active turn rejects ordinary sends. `--steer` requires an
+active turn; `--queue` explicitly requests a FIFO follow-up. Input can come from
+text, `--task-file`, or explicit `--stdin`. Receipts contain an input ID and an
+`after_sequence` cursor for a subsequent `wait --after`.
+
+`wait` is read-only and prints one result with a turn's final response, usage,
+outcome ID, and pending input requests. It returns the first completed turn after
+the cursor, even when a queued follow-up starts immediately. `turn_completed`
+means that turn replied, not that execution or runtime cleanup finished. Repeat
+with `--after` set to the returned `sequence` to advance to the next boundary or
+terminal result. Without a cursor, observation starts at the beginning of that
+run. Headless authoring waits for execution and package verification instead of
+intermediate creator turns. Exit codes are 0 for idle/turn_completed/completed,
+1 for failure, 130 for cancellation or interruption, 2 for input needed, and
+124 for timeout. Interrupting or timing out a wait does not cancel execution.
+Terminal executions and currently pending requests remain observable.
+
+Only answer reported requests. `allow` grants permission once and `deny`
+rejects it. `allow_always` must be explicitly offered by the runner. A question
+accepts an offered label or free text when permitted; multiple questions use
+JSON string arrays, such as `[["First option"],["Second option"]]`, supplied as
+text, `--response-file`, or `--stdin`. `answer --reject` dismisses a question.
+Authentication requests report the runner's URL and instructions; never send
+credentials through `answer`. `ps --json` includes `needs_input` and pending
+request metadata.
 
 Running `wb` or `wb run <name>` without a task opens the experimental terminal
 client. Agents should normally use an explicit one-shot task, `--final`, or
@@ -286,28 +325,36 @@ per-request body limit, so use `wb image push` for images with large layers.
 Prefer a versioned tag and do not silently replace the image behind a published
 Workbench version.
 
-For substantial design, authoring, review, or repair work, use the standard
-maintainers' own creator Workbench instead of reconstructing the specification
-from scratch:
+For substantial authoring, editing, or improvement work, use the official
+creator through the same headless `create` command:
 
 ```sh
-wb add pompeii-labs/workbenches#creator --as workbench-creator
-wb run workbench-creator \
-  --dir /path/to/repository \
-  --task "Inspect this repository and create a focused Workbench" \
-  --final
+wb create core --dir /path/to/repository \
+  --task "Inspect this repository and create a focused review expert" --json
+wb create .#core --task-file improvements.txt --detach --json
+wb wait wb_... --timeout 120 --json
+wb create --from wb_... --feedback "Check failure cleanup" --detach --json
 ```
+
+Supply one brief through `--task`, `--task-file`, or `--stdin`; `--from` can
+infer improvements from evidence without one. Bare `create` remains interactive.
+Detached JSON reports session/run/operation IDs. A later `wait` reports verified
+package paths and changed files in `authoring`, not merely the creator's final
+text. Engine-owned validation, package scope, version advancement, and runtime
+smoke must pass before authoring is completed. A native run may be completed
+while authoring verification is running or failed; `run_state` distinguishes
+that case. Answer reported permissions explicitly, then wait again. Saved
+snapshots are immutable: author or improve a local source package.
 
 ## Current reference-engine support
 
-The repository is in public pre-alpha development. The current reference engine
-supports the draft-0 manifest plus OpenCode and Pi runners. Local execution
-and Docker execution support one-shot, detached, and experimental interactive
-sessions, including native context resume. Docker also supports image
-preparation and in-container smoke checks. OpenCode and Pi have different native
-capabilities, which must be reported honestly rather than hidden behind a
-fallback. Other runners and hosted runtimes are part of the standard's
-extensible design but are not yet runnable through this release.
+The repository is in public alpha development. The current reference engine
+supports the draft-0 manifest plus OpenCode and Pi runners. Local, Docker, and
+E2B execution support one-shot, detached, and experimental interactive sessions,
+including native context resume. Docker and E2B support image preparation and
+runtime smoke checks. OpenCode and Pi have different native capabilities, which
+must be reported honestly rather than hidden behind a fallback. Other runners
+and runtimes remain part of the standard's extensible design.
 
 The Workbench author locks its runner, model policy, provider routes, and native
 runner configuration. Consumers connect credentials once per runner/runtime

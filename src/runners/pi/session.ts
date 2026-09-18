@@ -1,4 +1,4 @@
-import type { RunnerContextFiles } from '../context.js';
+import { type RunnerContextFiles, runtimeContext } from '../context.js';
 import type {
     RunnerAdapterDeclaration,
     RunnerInput,
@@ -168,6 +168,7 @@ class PiRpcSession implements RunnerSession {
     private sequence = 0;
     private closed = false;
     private failure: Error | undefined;
+    private runtimeReminder: string;
 
     constructor(
         options: RunnerSessionStartOptions &
@@ -179,6 +180,16 @@ class PiRpcSession implements RunnerSession {
             }
     ) {
         this.options = options;
+        // RPC has no per-prompt system field. Refresh attempt facts alongside
+        // the first resumed input, without changing the stored user task.
+        this.runtimeReminder =
+            options.context && options.session?.nativeSessionId
+                ? runtimeContext(
+                      options.workbench,
+                      options.workspaceDirectory,
+                      options.environment
+                  )
+                : '';
     }
 
     get id(): string | undefined {
@@ -231,7 +242,17 @@ class PiRpcSession implements RunnerSession {
         const turn = createActiveTurn();
         this.active = turn;
         try {
-            await this.command('prompt', piPrompt(normalizeRunnerInput(input)));
+            const normalized = normalizeRunnerInput(input);
+            await this.command(
+                'prompt',
+                piPrompt({
+                    ...normalized,
+                    text: [this.runtimeReminder, normalized.text]
+                        .filter(Boolean)
+                        .join('\n\n'),
+                })
+            );
+            this.runtimeReminder = '';
         } catch (error) {
             this.failActive(asError(error));
         }

@@ -18,9 +18,11 @@ import type {
     OutcomeChangeset,
     OutcomeDigest,
     OutcomePathFingerprint,
+    OutcomeWarning,
     OutcomeWorkspace,
 } from './contracts.js';
 import type { OutcomeStore } from './store.js';
+import { validateFilesystemSymlink } from './symlinks.js';
 
 const defaultMaximumSnapshotBytes = 512 * 1_024 * 1_024;
 
@@ -49,8 +51,20 @@ export class WorkspaceSnapshot {
         private readonly temporaryDirectory: string,
         private readonly entries: Map<string, SnapshotEntry>,
         private readonly excludedPaths: string[],
-        private readonly maximumBytes: number
+        private readonly maximumBytes: number,
+        private readonly unsafePaths: Set<string>
     ) {}
+
+    get warnings(): OutcomeWarning[] {
+        if (!this.unsafePaths.size) return [];
+        const paths = [...this.unsafePaths].toSorted();
+        return [
+            {
+                code: 'workspace_paths_excluded',
+                message: `Skipped ${paths.length} unsafe symbolic link path(s) in ${this.workspace.kind === 'primary' ? 'the primary workspace' : `workspace ${this.workspace.name}`}: ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? ', ...' : ''}. These paths are excluded from workspace changes.`,
+            },
+        ];
+    }
 
     static async create(
         root: string,
@@ -77,7 +91,8 @@ export class WorkspaceSnapshot {
             .toSorted();
         try {
             const paths = await selectedPaths(resolvedRoot, excludedPaths);
-            const entries = await describeEntries(resolvedRoot, paths);
+            const unsafePaths = new Set<string>();
+            const entries = await describeEntries(resolvedRoot, paths, unsafePaths);
             const bytes = [...entries.values()].reduce(
                 (total, entry) => total + entry.size,
                 0
@@ -104,7 +119,8 @@ export class WorkspaceSnapshot {
                 temporaryDirectory,
                 entries,
                 excludedPaths,
-                maximumBytes
+                maximumBytes,
+                unsafePaths
             );
         } catch (error) {
             await rm(temporaryDirectory, { recursive: true, force: true });
@@ -114,11 +130,19 @@ export class WorkspaceSnapshot {
 
     async collect(store: OutcomeStore): Promise<OutcomeChangeset | undefined> {
         const currentPaths = await selectedPaths(this.root, this.excludedPaths);
-        const current = await describeEntries(this.root, currentPaths);
+        const current = await describeEntries(
+            this.root,
+            currentPaths,
+            this.unsafePaths
+        );
         const paths = new Set([...this.entries.keys(), ...current.keys()]);
         const changed = [...paths]
             .toSorted()
-            .filter((path) => !sameEntry(this.entries.get(path), current.get(path)));
+            .filter(
+                (path) =>
+                    !excluded(path, this.unsafePaths) &&
+                    !sameEntry(this.entries.get(path), current.get(path))
+            );
         if (changed.length === 0) return undefined;
         let materialized = 0;
         const entries: OutcomeChangeEntry[] = [];
@@ -332,10 +356,35 @@ async function walk(
 
 async function describeEntries(
     root: string,
-    paths: string[]
+    paths: string[],
+    unsafePaths: Set<string>
 ): Promise<Map<string, SnapshotEntry>> {
     const entries = new Map<string, SnapshotEntry>();
     for (const path of paths) {
+        if (excluded(path, unsafePaths)) continue;
+        const absolute = join(root, path);
+        try {
+            // Validate parents before reading a tracked path through a replaced directory.
+            await validateFilesystemSymlink(root, path, '.', []);
+            if ((await lstat(absolute)).isSymbolicLink()) {
+                await validateFilesystemSymlink(
+                    root,
+                    path,
+                    await readlink(absolute),
+                    []
+                );
+            }
+        } catch (error) {
+            if (
+                !(error instanceof Error) ||
+                !/^(Escaping|Cyclic) symlink is not allowed in outcome:/.test(
+                    error.message
+                )
+            )
+                throw error;
+            unsafePaths.add(path);
+            continue;
+        }
         entries.set(path, await describeEntry(join(root, path), path, root));
     }
     return entries;
@@ -491,8 +540,10 @@ function protectedPath(path: string): boolean {
     );
 }
 
-function excluded(path: string, roots: string[]): boolean {
-    return roots.some((root) => path === root || path.startsWith(`${root}/`));
+function excluded(path: string, roots: Iterable<string>): boolean {
+    for (const root of roots)
+        if (path === root || path.startsWith(`${root}/`)) return true;
+    return false;
 }
 
 function relativeIfContained(root: string, path: string): string[] {
