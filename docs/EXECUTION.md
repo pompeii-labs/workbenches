@@ -411,6 +411,29 @@ after receiving it.
 
 ## Resumable interactive sessions
 
+The CLI exposes the same stored control protocol through `send`, `wait`, and
+`answer`. `send` is idle-only unless the caller explicitly selects active-turn
+steering or a queued follow-up. A closed resumable session can start a linked
+execution through an ordinary send. Accepted receipts expose correlation IDs
+and an event cursor, not proof that the runner has consumed queued input.
+
+`wait` is a read-only observer. It returns one snapshot at a fresh idle boundary,
+terminal execution, or pending native input request. A cursor skips earlier
+idle boundaries; terminal state and currently pending requests remain visible.
+Unattended runs wait for terminal cleanup instead of returning at an intermediate
+turn completion. Terminal snapshots drain the durable event tail before
+reporting final response, latest-turn usage, and outcome. Waiting does not attach
+an audience, restart an execution, or initiate authentication. Timeouts and
+interruptions stop observation only. `answer` validates a pending request's
+offered scope and submits the existing transient control message. Raw decisions
+and answers are not retained in receipts or normalized request-resolution events.
+
+Native continuation refreshes current attempt facts alongside the first resumed
+input without changing the stored user task. OpenCode uses a synthetic text part;
+Pi RPC carries the runtime reminder in its message because it has no equivalent
+part type. Stable package instructions remain in native system context; no
+credential values are included in either channel.
+
 Every execution has one stable Workbench session ID. Runners with native session
 support use the same background session engine for foreground commands, detached
 commands, and the terminal client in local, Docker, and E2B runtimes. The first

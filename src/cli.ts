@@ -4,6 +4,7 @@ import { defineCommand, renderUsage, runMain } from 'citty';
 import packageMetadata from '../package.json' with { type: 'json' };
 
 import { addCommand } from './commands/add.js';
+import { answerCommand } from './commands/answer.js';
 import { attachCommand } from './commands/attach.js';
 import { buildCommand } from './commands/build.js';
 import { cleanCommand } from './commands/clean.js';
@@ -21,12 +22,14 @@ import { publishCommand } from './commands/publish.js';
 import { removeCommand } from './commands/remove.js';
 import { resumeCommand } from './commands/resume.js';
 import { runCommand } from './commands/run.js';
+import { sendCommand } from './commands/send.js';
 import { smokeCommand } from './commands/smoke.js';
 import { telemetryCommand } from './commands/telemetry.js';
 import { updateCommand } from './commands/update.js';
 import { upgradeCommand } from './commands/upgrade.js';
 import { validateCommand } from './commands/validate.js';
 import { viewCommand } from './commands/view.js';
+import { waitCommand } from './commands/wait.js';
 import { whoamiCommand } from './commands/whoami.js';
 import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
@@ -71,6 +74,9 @@ export const workbenchCommand = defineCommand({
         run: runCommand,
         attach: attachCommand,
         kill: killCommand,
+        send: sendCommand,
+        wait: waitCommand,
+        answer: answerCommand,
     },
 });
 
@@ -129,6 +135,7 @@ function usesModelCatalog(args: string[], bare: boolean): boolean {
         'init',
         'resume',
         'run',
+        'send',
         'smoke',
         'view',
     ]).has(args[0] ?? '');

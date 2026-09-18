@@ -645,6 +645,42 @@ when the previous one is closed. `--detach` returns the stable session ID while
 that continuation runs in the background. Killing cooperatively terminates the
 active run without deleting the session or its resumable context.
 
+Headless callers can supervise the same engine without keeping a client attached:
+
+```sh
+wb run project-core --task "Review the migration" --detach --json
+wb wait wb_... --timeout 120 --json
+wb send wb_... "Check the rollback" --json
+wb send wb_... "Focus on cleanup" --steer --json
+wb send wb_... --task-file followup.txt --queue --json
+wb answer wb_... request_id allow --json
+```
+
+Detached `run` and `resume` with `--json` return one launch receipt, not an event
+stream. `send` returns a receipt containing session/run/input IDs and an
+`after_sequence` cursor. Ordinary sends reject an active turn instead of silently
+queuing it. `--steer` requires an active execution; `--queue` explicitly requests
+a FIFO follow-up. Sending to a closed resumable session starts a fresh run from
+its saved native context. `--task-file` and `--stdin` are explicit alternatives
+to text, not implicit fallbacks.
+
+`wait` prints one snapshot with state, sequence, latest-turn final response and
+usage, outcome ID, and pending permission/question/authentication requests. Use
+`--after` with a receipt's cursor to skip an old idle boundary. Exit codes are
+0 for idle/completed, 1 for failed, 2 for input needed, 124 for timeout, and 130
+for cancellation or interruption. A timeout or interrupted wait never cancels
+the run. Waiting does not attach a controlling client, start authentication, or
+keep a runtime alive.
+
+`answer` resolves only a currently reported request ID. `allow` grants a
+permission once; `deny` rejects it. Multiple questions accept JSON string
+arrays, such as `[["First option"],["Second option"]]`. Use `--response-file`,
+`--stdin`, or `--reject` when appropriate. Authentication requests expose the
+runner's URL and instructions, never a credential-submission channel.
+`ps --json` includes `state`, `needs_input`, and pending requests. Native runner
+capabilities still apply: these commands do not invent permissions or questions
+for a harness that does not support them.
+
 Run and session data is never removed by `wb clean` until `--apply` is passed.
 The default policy selects terminal, non-resumable sessions and obsolete run
 history older than 30 days. Active runs are never eligible. Native resumable

@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { RunnerContextFiles } from '../context.js';
+import { type RunnerContextFiles, runtimeContext } from '../context.js';
 import type {
     RunnerInput,
     RunnerInputDelivery,
@@ -11,6 +11,7 @@ import type {
 } from '../session.js';
 import { normalizeRunnerInput } from '../session.js';
 import { OpenCodeEventAdapter } from './events.js';
+import { openCodeParts } from './input.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
 import { isOutboxPermission } from './outbox.js';
 import { OpenCodeQuestion } from './question.js';
@@ -49,6 +50,7 @@ export interface OpenCodeServerSessionOptions extends RunnerSessionStartOptions 
 
 export class OpenCodeServerSession implements RunnerSession {
     private readonly options: OpenCodeServerSessionOptions;
+    private runtimeReminder: string | undefined;
     private readonly closing = deferred<void>();
     private readonly server: OpenCodeServer;
     private readonly streamedTextParts = new Set<string>();
@@ -63,6 +65,15 @@ export class OpenCodeServerSession implements RunnerSession {
 
     constructor(options: OpenCodeServerSessionOptions) {
         this.options = options;
+        // Put refreshed attempt facts beside the first resumed user input.
+        this.runtimeReminder =
+            options.context && options.session?.nativeSessionId
+                ? runtimeContext(
+                      options.workbench,
+                      options.workspaceDirectory,
+                      options.environment
+                  )
+                : undefined;
         this.server = new OpenCodeServer({
             workspaceDirectory: options.workspaceDirectory,
             launch: options.launch,
@@ -212,10 +223,11 @@ export class OpenCodeServerSession implements RunnerSession {
                     body: JSON.stringify({
                         messageID: messageId,
                         model,
-                        parts: openCodeParts(normalized),
+                        parts: openCodeParts(normalized, this.runtimeReminder),
                     }),
                 }
             );
+            this.runtimeReminder = undefined;
         } catch (error) {
             this.failActive(asError(error));
         }
@@ -573,18 +585,6 @@ export class OpenCodeServerSession implements RunnerSession {
         const messageId = string(value);
         return messageId ? this.active?.assistantOutputIds.get(messageId) : undefined;
     }
-}
-
-function openCodeParts(input: ReturnType<typeof normalizeRunnerInput>) {
-    return [
-        { type: 'text', text: input.text },
-        ...input.images.map((image) => ({
-            type: 'file',
-            mime: image.mimeType,
-            url: `data:${image.mimeType};base64,${image.data}`,
-            ...(image.name ? { filename: image.name } : {}),
-        })),
-    ];
 }
 
 function createActiveTurn(messageId: string): ActiveTurn {

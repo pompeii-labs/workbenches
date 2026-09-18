@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import type { RunnerInput } from '../src/runners/session.js';
+import { RunAlreadyTerminal, RunControlRejected } from '../src/runs/handle.js';
 import {
     type DispatchRunOptions,
     type PrepareRunOptions,
@@ -15,6 +16,118 @@ import type { StoredSession } from '../src/sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
 describe('run continuation', () => {
+    test('strict continuation uses send, never implicit follow-up queuing', async () => {
+        const session = storedSession();
+        const active = storedRun(session.latest_run_id, 'running');
+        const handle = fakeHandle(active.id);
+        let sent = false;
+        handle.send = async () => {
+            sent = true;
+            return receipt('send', 'delivered');
+        };
+        handle.followUp = async () => {
+            throw new Error('must not queue');
+        };
+        const continuation = fixtureContinuation({
+            session,
+            run: active,
+            handle,
+            prepare: async () => {
+                throw new Error('must not prepare');
+            },
+        });
+        await continuation.submit({
+            resolved: resolvedWorkbench(),
+            session,
+            task: 'strict task',
+            delivery: 'send',
+            mode: 'detached',
+            environment: {},
+        });
+        expect(sent).toBeTrue();
+    });
+
+    for (const failure of [
+        new Error('Acknowledgement timed out; delivery is unknown'),
+        new RunControlRejected({
+            ...receipt('send', 'delivered'),
+            outcome: 'rejected',
+            error: { code: 'turn_active', message: 'Turn is active' },
+        }),
+    ])
+        test(`does not resubmit strict input after ${failure.message}`, async () => {
+            const session = storedSession();
+            const active = storedRun(session.latest_run_id, 'running');
+            const handle = fakeHandle(active.id);
+            let prepared = 0;
+            handle.send = async () => {
+                active.status = 'completed';
+                throw failure;
+            };
+            const continuation = fixtureContinuation({
+                session,
+                run: active,
+                handle,
+                prepare: async () => {
+                    prepared++;
+                    throw new Error('must not prepare');
+                },
+            });
+            await expect(
+                continuation.submit({
+                    resolved: resolvedWorkbench(),
+                    session,
+                    task: 'strict task',
+                    delivery: 'send',
+                    mode: 'detached',
+                    environment: {},
+                })
+            ).rejects.toBe(failure);
+            expect(prepared).toBe(0);
+        });
+
+    for (const failure of [
+        new RunAlreadyTerminal('Already completed'),
+        new RunControlRejected({
+            ...receipt('send', 'delivered'),
+            outcome: 'rejected',
+            error: { code: 'run_terminal', message: 'Run is terminal' },
+        }),
+    ])
+        test(`starts one fresh continuation after known terminal rejection: ${failure.message}`, async () => {
+            const session = storedSession();
+            const active = storedRun(session.latest_run_id, 'running');
+            const next = storedRun('wb_taskcontinuation1234567890123', 'dispatched');
+            const handle = fakeHandle(active.id);
+            let prepared = 0;
+            handle.send = async () => {
+                active.status = 'completed';
+                throw failure;
+            };
+            const continuation = fixtureContinuation({
+                session,
+                run: active,
+                handle,
+                prepare: async () => {
+                    prepared++;
+                    return next;
+                },
+            });
+            expect(
+                (
+                    await continuation.submit({
+                        resolved: resolvedWorkbench(),
+                        session,
+                        task: 'strict task',
+                        delivery: 'send',
+                        mode: 'detached',
+                        environment: {},
+                    })
+                ).run.id
+            ).toBe(next.id);
+            expect(prepared).toBe(1);
+        });
+
     test('sends a foreground continuation to the active run', async () => {
         const session = storedSession();
         const active = storedRun(session.latest_run_id, 'running');

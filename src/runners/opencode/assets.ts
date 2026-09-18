@@ -1,12 +1,13 @@
 import { chmod, cp, lstat, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 import type { ResolvedWorkbench } from '../../types.js';
 import { type RunnerContextFiles, stageRunnerContext } from '../context.js';
 
 export async function stageOpenCodeSkills(workbench: ResolvedWorkbench): Promise<{
     directory: string;
+    nativeConfigFile?: string;
     context: RunnerContextFiles;
     cleanup: () => Promise<void>;
 }> {
@@ -19,12 +20,26 @@ export async function stageOpenCodeSkills(workbench: ResolvedWorkbench): Promise
     const directory = await mkdtemp(join(tmpdir(), 'workbench-opencode-'));
     const skillsDirectory = join(directory, 'skills');
     let context: RunnerContextFiles;
+    let nativeConfigFile: string | undefined;
     try {
         if (configDirectory) {
             await cp(configDirectory, directory, {
                 recursive: true,
                 preserveTimestamps: true,
             });
+        }
+        if (config?.isFile() && workbench.runnerConfigPath) {
+            // Native config loading can write schema metadata. Keep those writes
+            // out of the pinned package, and preserve package-relative references.
+            const native = join(directory, 'native');
+            await cp(workbench.packageDirectory, native, {
+                recursive: true,
+                preserveTimestamps: true,
+            });
+            nativeConfigFile = join(
+                native,
+                relative(workbench.packageDirectory, workbench.runnerConfigPath)
+            );
         }
         await mkdir(skillsDirectory, { recursive: true });
         await Promise.all(
@@ -43,6 +58,7 @@ export async function stageOpenCodeSkills(workbench: ResolvedWorkbench): Promise
     }
     return {
         directory,
+        ...(nativeConfigFile ? { nativeConfigFile } : {}),
         context,
         cleanup: async () => {
             await chmod(directory, 0o755).catch(() => {});

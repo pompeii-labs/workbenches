@@ -114,8 +114,8 @@ export const resumeCommand = defineCommand({
             });
             return;
         }
-        if (args.detach && (args.json || args.final)) {
-            throw new Error('--detach cannot be combined with --json or --final');
+        if (args.detach && args.final) {
+            throw new Error('--detach cannot be combined with --final');
         }
         const continuation = await new RunContinuation(home).submit({
             resolved: target.resolved,
@@ -131,7 +131,19 @@ export const resumeCommand = defineCommand({
             ...(args.connection ? { connection: args.connection } : {}),
         });
         if (args.detach) {
-            console.log(target.session.id);
+            console.log(
+                args.json
+                    ? JSON.stringify({
+                          session_id: target.session.id,
+                          run_id: continuation.run.id,
+                          input_id: continuation.inputId,
+                          after_sequence: continuation.afterSequence,
+                          ...(continuation.receipt
+                              ? { receipt: continuation.receipt }
+                              : {}),
+                      })
+                    : target.session.id
+            );
             return;
         }
         const renderer = createEventRenderer({

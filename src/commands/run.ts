@@ -139,10 +139,8 @@ export const runCommand = defineCommand({
             });
             return;
         }
-        if (args.detach && (args.json || args.final || args['dry-run'])) {
-            throw new Error(
-                '--detach cannot be combined with --json, --final, or --dry-run'
-            );
+        if (args.detach && (args.final || args['dry-run'])) {
+            throw new Error('--detach cannot be combined with --final or --dry-run');
         }
 
         const resolved = await new WorkbenchResolver().resolve(args.workbench, {
@@ -237,7 +235,16 @@ export const runCommand = defineCommand({
                     environment,
                     waitForInitialTurn: true,
                 });
-                console.log(stored.session_id ?? stored.id);
+                console.log(
+                    args.json
+                        ? JSON.stringify({
+                              session_id: stored.session_id ?? stored.id,
+                              run_id: stored.id,
+                              input_id: `input_${stored.id}`,
+                              after_sequence: 0,
+                          })
+                        : (stored.session_id ?? stored.id)
+                );
                 return;
             }
 

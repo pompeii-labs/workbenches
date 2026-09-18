@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { RunnerRegistry } from '../src/runners/registry.js';
 import type { PreparedRuntime } from '../src/runtimes/contracts.js';
@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 describe('runner registry', () => {
-    test('stages OpenCode skills and a packaged config file as separate assets', async () => {
+    test('stages a writable native config copy without changing the pinned package', async () => {
         const workbench = await fixture();
         const runnerConfigPath = join(workbench.packageDirectory, 'opencode.json');
         await writeFile(runnerConfigPath, '{"share":"disabled"}\n');
@@ -27,10 +27,9 @@ describe('runner registry', () => {
 
         const runner = await RunnerRegistry.standard().prepare(workbench, {});
 
-        expect(runner.assets).toContainEqual({
-            path: runnerConfigPath,
-            access: 'read-only',
-        });
+        expect(
+            runner.assets.some((asset) => asset.path === runnerConfigPath)
+        ).toBeFalse();
         expect(runner.assets).toContainEqual({
             path: expect.stringContaining('workbench-opencode-'),
             access: 'read-write',
@@ -56,13 +55,58 @@ describe('runner registry', () => {
 
         expect(invocation.command).toContain('openai/gpt-5.6-terra');
         expect(native.env).toMatchObject({
-            OPENCODE_CONFIG: `/runtime/${runnerConfigPath.split('/').at(-1)}`,
+            OPENCODE_CONFIG: '/runtime/opencode.json',
             OPENCODE_CONFIG_DIR: expect.stringContaining(
                 '/runtime/workbench-opencode-'
             ),
         });
 
+        const staged = runner.assets[0]?.path;
+        if (!staged) throw new Error('Missing staged configuration');
+        const copy = join(staged, 'native', 'opencode.json');
+        expect(await readFile(copy, 'utf8')).toBe('{"share":"disabled"}\n');
+        await writeFile(
+            copy,
+            '{"$schema":"https://opencode.ai/config.json","share":"disabled"}\n'
+        );
+        expect(await readFile(runnerConfigPath, 'utf8')).toBe('{"share":"disabled"}\n');
+        expect(await readFile(join(staged, 'native', 'instructions.md'), 'utf8')).toBe(
+            await readFile(workbench.instructionsPath, 'utf8')
+        );
+
         await runner.cleanup();
+        await expect(stat(copy)).rejects.toThrow();
+    });
+
+    test('keeps single-file native config references relative to its copied package', async () => {
+        const workbench = await fixture();
+        const configDirectory = join(workbench.packageDirectory, 'runner');
+        await mkdir(configDirectory);
+        const config = join(configDirectory, 'settings.json');
+        const content =
+            '{"plugin":["./plugin.ts"],"instructions":["{file:../instructions.md}"]}';
+        await writeFile(config, content);
+        await writeFile(
+            join(configDirectory, 'plugin.ts'),
+            'export default async () => ({})\n'
+        );
+        workbench.manifest.runner = 'opencode';
+        workbench.runnerConfigPath = config;
+        const runner = await RunnerRegistry.standard().prepare(workbench, {});
+        try {
+            const stage = runner.assets[0]?.path;
+            if (!stage) throw new Error('Missing staged configuration');
+            const copy = join(stage, 'native', 'runner', 'settings.json');
+            expect(await readFile(copy, 'utf8')).toBe(content);
+            expect(await readFile(resolve(dirname(copy), './plugin.ts'), 'utf8')).toBe(
+                await readFile(join(configDirectory, 'plugin.ts'), 'utf8')
+            );
+            expect(
+                await readFile(resolve(dirname(copy), '../instructions.md'), 'utf8')
+            ).toBe(await readFile(workbench.instructionsPath, 'utf8'));
+        } finally {
+            await runner.cleanup();
+        }
     });
 
     test('binds Pi credentials inside Docker and rejects a changed runner', async () => {

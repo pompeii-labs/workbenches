@@ -174,6 +174,40 @@ their normalized events for replay.
 
 ## Leave interactive work to the human
 
+For headless supervision, use the session control commands instead of parsing
+an activity stream:
+
+```sh
+wb run project-core --task "Review the migration" --detach --json
+wb wait wb_... --timeout 120 --json
+wb send wb_... "Check the rollback too" --json
+wb send wb_... "Focus on data loss" --steer --json
+wb send wb_... --task-file followup.txt --queue --json
+wb answer wb_... request_id allow --json
+```
+
+`send` delivers only while idle, or starts a fresh continuation of a completed
+resumable session. An active turn rejects ordinary sends. `--steer` requires an
+active turn; `--queue` explicitly requests a FIFO follow-up. Input can come from
+text, `--task-file`, or explicit `--stdin`. Receipts contain an input ID and an
+`after_sequence` cursor for a subsequent `wait --after`.
+
+`wait` is read-only and prints one result, including the latest turn's final
+response, usage, outcome ID, and pending input requests. It exits with 0 at an
+idle or completed boundary, 1 on failure, 130 on cancellation or interruption,
+2 when input is needed, and 124 on timeout. Interrupting or timing out a wait
+does not cancel the execution. `--after` skips old idle boundaries; terminal
+executions and currently pending requests remain observable.
+
+Only answer reported requests. `allow` grants permission once and `deny`
+rejects it. `allow_always` must be explicitly offered by the runner. A question
+accepts an offered label or free text when permitted; multiple questions use
+JSON string arrays, such as `[["First option"],["Second option"]]`, supplied as
+text, `--response-file`, or `--stdin`. `answer --reject` dismisses a question.
+Authentication requests report the runner's URL and instructions; never send
+credentials through `answer`. `ps --json` includes `needs_input` and pending
+request metadata.
+
 Running `wb` or `wb run <name>` without a task opens the experimental terminal
 client. Agents should normally use an explicit one-shot task, `--final`, or
 `--json`; the interactive interface is intended for a human who wants a

@@ -12,7 +12,8 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-
+import { RunControl } from '../src/runs/control.js';
+import { RunEvents } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/index.js';
 import { SessionStore } from '../src/sessions/index.js';
 import { seedModelCatalogFixture } from './model-catalog-fixture.js';
@@ -30,6 +31,144 @@ afterEach(async () => {
 });
 
 describe('CLI integration', () => {
+    test('supervises detached native turns with receipts, rejection, queue, and fresh continuation', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('headless-cli-');
+        const bin = await fakeBin([], { delay: 1500 });
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+        const dispatched = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'first', '--detach', '--json'],
+            environment
+        );
+        expect(dispatched.code).toBe(0);
+        const launch = JSON.parse(dispatched.stdout);
+        expect(launch).toMatchObject({
+            session_id: launch.run_id,
+            input_id: `input_${launch.run_id}`,
+            after_sequence: 0,
+        });
+        const rejected = await executeCli(
+            ['send', launch.session_id, 'do not queue', '--json'],
+            environment
+        );
+        expect(rejected.code).toBe(1);
+        expect(JSON.parse(rejected.stdout)).toMatchObject({
+            receipt: { outcome: 'rejected', error: { code: 'turn_active' } },
+        });
+        const queued = await executeCli(
+            ['send', launch.session_id, 'second', '--queue', '--json'],
+            environment
+        );
+        expect(queued.code).toBe(0);
+        expect(JSON.parse(queued.stdout)).toMatchObject({
+            session_id: launch.session_id,
+            run_id: launch.run_id,
+            receipt: { disposition: 'queued' },
+        });
+        const timeout = await executeCli(
+            ['wait', launch.session_id, '--timeout', '0', '--json'],
+            environment
+        );
+        expect(timeout.code).toBe(124);
+        expect(JSON.parse(timeout.stdout).state).toBe('timeout');
+        const finished = await executeCli(
+            ['wait', launch.session_id, '--timeout', '10', '--json'],
+            environment
+        );
+        expect(finished.code).toBe(0);
+        expect(JSON.parse(finished.stdout)).toMatchObject({
+            state: 'completed',
+            final: 'fixture response',
+            pending_requests: [],
+        });
+        const taskFile = join(fixture.root, 'brief.txt');
+        await writeFile(taskFile, 'third task\nwith detail');
+        const continued = await executeCli(
+            ['send', launch.session_id, '--task-file', taskFile, '--json'],
+            environment
+        );
+        expect(continued.code).toBe(0);
+        const next = JSON.parse(continued.stdout);
+        expect(next.session_id).toBe(launch.session_id);
+        expect(next.run_id).not.toBe(launch.run_id);
+        const final = await executeCli(
+            ['wait', launch.session_id, '--timeout', '10', '--json'],
+            environment
+        );
+        expect(final.code).toBe(0);
+        expect(JSON.parse(final.stdout).run_id).toBe(next.run_id);
+    }, 20_000);
+
+    test('reports pending input, validates an answer, and rejects stale requests through CLI IPC', async () => {
+        const home = await temporaryDirectory('headless-answer-');
+        const store = new RunStore(home);
+        const run = await store.create({
+            metadata: {
+                workbench: 'probe',
+                workbench_version: '0.1.0',
+                runner: 'opencode',
+                model: 'openai/gpt-5.6-terra',
+                workspace: home,
+                mode: 'interactive',
+            },
+            request: { workbench_path: home, workspace: home, task: '' },
+        });
+        await store.update(run.id, { status: 'running', pid: process.pid });
+        const events = new RunEvents({
+            runId: run.id,
+            runner: run.runner,
+            onEvent: (event) => store.appendEvent(run.id, event),
+        });
+        await events.emit('input.requested', {
+            id: 'permission',
+            kind: 'permission',
+            action: 'sh',
+            resources: ['echo hello'],
+            message: 'Allow command?',
+            options: ['allow_once', 'reject'],
+        });
+        const environment = { WORKBENCH_HOME: home };
+        const waiting = await executeCli(['wait', run.id, '--json'], environment);
+        expect(waiting.code).toBe(2);
+        expect(JSON.parse(waiting.stdout)).toMatchObject({
+            state: 'needs_input',
+            pending_requests: [{ id: 'permission', kind: 'permission' }],
+        });
+        const ps = await executeCli(['ps', '--json'], environment);
+        expect(JSON.parse(ps.stdout)).toMatchObject({
+            needs_input: true,
+            state: 'needs_input',
+        });
+        const answering = executeCli(
+            ['answer', run.id, 'permission', 'allow', '--json'],
+            environment
+        );
+        const control = new RunControl(home, run.id);
+        const request = await control.receive();
+        expect(request?.permission).toEqual({
+            id: 'permission',
+            decision: 'allow_once',
+        });
+        if (!request) throw new Error('Missing permission response');
+        await events.emit('input.accepted', { id: 'permission', kind: 'permission' });
+        await control.resolve(request, {
+            outcome: 'accepted',
+            disposition: 'delivered',
+        });
+        const answered = await answering;
+        expect(answered.code).toBe(0);
+        expect(JSON.parse(answered.stdout).receipt.outcome).toBe('accepted');
+        const stale = await executeCli(
+            ['answer', run.id, 'permission', 'allow', '--json'],
+            environment
+        );
+        expect(stale.code).toBe(1);
+        expect(JSON.parse(stale.stdout).error.message).toContain('no longer pending');
+    });
+
     test('previews cleanup before removing only explicitly selected history', async () => {
         const home = await temporaryDirectory('workbench-clean-');
         const runs = new RunStore(home);
@@ -1853,8 +1992,8 @@ async function fakeBin(
             '    if (url.pathname === "/session" && request.method === "POST") return Response.json({ id: "ses_fixture" });',
             '    if (url.pathname.startsWith("/session/") && request.method === "GET") return Response.json({ id: url.pathname.split("/").at(-1) });',
             '    if (url.pathname.endsWith("/prompt_async")) {',
-            '      const input = await request.json() as { messageID: string; parts: Array<{ type: string; text?: string }> };',
-            '      const text = input.parts.find((part) => part.type === "text")?.text ?? "";',
+            '      const input = await request.json() as { messageID: string; parts: Array<{ type: string; text?: string; synthetic?: boolean }> };',
+            '      const text = input.parts.find((part) => part.type === "text" && !part.synthetic)?.text ?? "";',
             '      if (record) await Bun.write(record + ".args", text + "\\n");',
             '      setTimeout(() => {',
             '        emit("session.status", { status: { type: "busy" } });',

@@ -1,4 +1,3 @@
-import { lstat } from 'node:fs/promises';
 import type { RunnerContextFiles } from '../context.js';
 
 import type {
@@ -57,13 +56,7 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
 
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
         const staged = await stageOpenCodeSkills(options.workbench);
-        let nativeConfigFile: string | undefined;
-        try {
-            nativeConfigFile = await this.nativeConfigFile(options);
-        } catch (error) {
-            await staged?.cleanup();
-            throw error;
-        }
+        const nativeConfigFile = staged.nativeConfigFile;
         return this.startConfigured(
             options,
             {
@@ -108,13 +101,6 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
             await session.close().catch(() => {});
             throw error;
         }
-    }
-
-    private async nativeConfigFile(
-        options: RunnerSessionStartOptions
-    ): Promise<string | undefined> {
-        const path = options.workbench.runnerConfigPath;
-        return path && (await lstat(path)).isFile() ? path : undefined;
     }
 
     private async withTimeout<T>(
