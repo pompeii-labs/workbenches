@@ -192,6 +192,10 @@ active turn; `--queue` explicitly requests a FIFO follow-up. Input can come from
 text, `--task-file`, or explicit `--stdin`. Receipts contain an input ID and an
 `after_sequence` cursor for a subsequent `wait --after`.
 
+Use a receipt's `run_id` with `wait --run --after` to keep its cursor on that
+execution. Session IDs select the latest run; linked run IDs select the exact
+run. `--run` also pins the first run, whose ID is shared with the session.
+
 `wait` is read-only and prints one result with a turn's final response, usage,
 outcome ID, and pending input requests. It returns the first completed turn after
 the cursor, even when a queued follow-up starts immediately. `turn_completed`

@@ -1,5 +1,5 @@
 import { defineCommand } from 'citty';
-import { SessionLifecycle } from '../sessions/lifecycle.js';
+import { SessionSupervision } from '../sessions/supervision.js';
 import { workbenchHome } from '../storage.js';
 import { CliWait } from './waiting.js';
 
@@ -14,6 +14,12 @@ export const waitCommand = defineCommand({
             type: 'positional',
             required: true,
             description: 'Session or run ID',
+        },
+        run: {
+            type: 'boolean',
+            description:
+                "Treat the ID as an exact run, including a session's first run",
+            default: false,
         },
         json: {
             type: 'boolean',
@@ -31,8 +37,10 @@ export const waitCommand = defineCommand({
     },
     async run({ args }) {
         const home = workbenchHome();
-        const activity = await new SessionLifecycle(home).resolve(args.session);
-        await new CliWait().execute(home, activity.run, {
+        const run = await new SessionSupervision(home).resolve(args.session, {
+            exactRun: args.run,
+        });
+        await new CliWait().execute(home, run, {
             json: args.json,
             ...(args.after !== undefined ? { afterSequence: Number(args.after) } : {}),
             ...(args.timeout !== undefined

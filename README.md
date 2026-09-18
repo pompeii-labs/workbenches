@@ -681,6 +681,16 @@ a FIFO follow-up. Sending to a closed resumable session starts a fresh run from
 its saved native context. `--task-file` and `--stdin` are explicit alternatives
 to text, not implicit fallbacks.
 
+Waiting with a session ID selects its latest run. A linked run ID selects that
+exact execution. The session and its first run share an ID, so use `--run` to
+explicitly pin any run, including the first. Sequence cursors belong to a single
+run; use the receipt's `run_id` with `--run --after` when observing a submitted
+input, even if the session is continued again:
+
+```sh
+wb wait wb_... --run --after 42 --timeout 120 --json
+```
+
 `wait` prints one snapshot with state, sequence, final response and usage,
 outcome ID, and pending permission/question/authentication requests. It returns
 the first completed turn after the cursor, even if queued work starts immediately.

@@ -417,6 +417,11 @@ steering or a queued follow-up. A closed resumable session can start a linked
 execution through an ordinary send. Accepted receipts expose correlation IDs
 and an event cursor, not proof that the runner has consumed queued input.
 
+Observation resolves a session ID to its latest run, but a linked run ID to
+that exact execution. `wait --run` explicitly selects an exact run, including
+the first run whose ID is shared with the session. Event cursors are run-scoped;
+use the receipt's run ID with `--run --after` to observe a submitted input.
+
 `wait` is a read-only observer. It returns the first completed turn after its
 cursor, an idle boundary, terminal execution, or pending native input request.
 Without a cursor, observation starts at the beginning of that run. A
