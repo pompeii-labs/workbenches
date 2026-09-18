@@ -19,9 +19,13 @@ export class SessionSupervision {
         } = {}
     ): Promise<SessionSnapshot> {
         const started = performance.now();
-        const result = await new RunSupervision(this.home).wait(run, options);
         const jobs = new AuthoringJob(this.home);
         let authoring = await jobs.forRun(run.id);
+        const result = await new RunSupervision(this.home).wait(run, {
+            ...options,
+            // Authoring's result includes post-execution package verification.
+            terminalOnly: authoring !== undefined,
+        });
         if (!authoring) return result;
         if (result.state === 'completed' && !result.interrupted) {
             authoring = await jobs.wait(authoring, {

@@ -681,10 +681,15 @@ a FIFO follow-up. Sending to a closed resumable session starts a fresh run from
 its saved native context. `--task-file` and `--stdin` are explicit alternatives
 to text, not implicit fallbacks.
 
-`wait` prints one snapshot with state, sequence, latest-turn final response and
-usage, outcome ID, and pending permission/question/authentication requests. Use
-`--after` with a receipt's cursor to skip an old idle boundary. Exit codes are
-0 for idle/completed, 1 for failed, 2 for input needed, 124 for timeout, and 130
+`wait` prints one snapshot with state, sequence, final response and usage,
+outcome ID, and pending permission/question/authentication requests. It returns
+the first completed turn after the cursor, even if queued work starts immediately.
+`turn_completed` means that turn replied, not that execution or runtime cleanup
+finished. Repeat with `--after` set to the returned `sequence` to observe the next
+boundary or final `completed` result. Without a cursor, observation starts at
+the beginning of that run. Headless authoring waits for execution and package
+verification instead of returning intermediate creator turns. Exit codes are
+0 for idle/turn_completed/completed, 1 for failed, 2 for input needed, 124 for timeout, and 130
 for cancellation or interruption. A timeout or interrupted wait never cancels
 the run. Waiting does not attach a controlling client, start authentication, or
 keep a runtime alive.

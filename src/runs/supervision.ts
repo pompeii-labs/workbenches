@@ -5,6 +5,7 @@ export type SupervisionState =
     | 'starting'
     | 'running'
     | 'idle'
+    | 'turn_completed'
     | 'completed'
     | 'failed'
     | 'cancelled'
@@ -55,6 +56,7 @@ export class RunSupervision {
             afterSequence?: number;
             timeoutMilliseconds?: number;
             signal?: AbortSignal;
+            terminalOnly?: boolean;
         } = {}
     ): Promise<RunSnapshot> {
         const after = options.afterSequence ?? 0;
@@ -75,7 +77,8 @@ export class RunSupervision {
             sequence = view.sequence;
             let current = await this.store.reconcile(await this.store.read(run.id));
             let result = await this.settledSnapshot(view, current);
-            if (view.isBoundary(result, after)) return result;
+            let boundary = view.boundarySnapshot(result, after, options.terminalOnly);
+            if (boundary) return boundary;
             if (!controller.signal.aborted && !options.signal?.aborted) {
                 for await (const event of this.store.follow(run.id, {
                     afterSequence: sequence,
@@ -85,13 +88,19 @@ export class RunSupervision {
                     view.apply(event);
                     current = await this.store.reconcile(await this.store.read(run.id));
                     result = await this.settledSnapshot(view, current);
-                    if (view.isBoundary(result, after)) return result;
+                    boundary = view.boundarySnapshot(
+                        result,
+                        after,
+                        options.terminalOnly
+                    );
+                    if (boundary) return boundary;
                 }
             }
             // Terminal records can precede the observer's final metadata read.
             current = await this.store.reconcile(await this.store.read(run.id));
             result = await this.settledSnapshot(view, current);
-            if (view.isBoundary(result, after)) return result;
+            boundary = view.boundarySnapshot(result, after, options.terminalOnly);
+            if (boundary) return boundary;
             return options.signal?.aborted
                 ? { ...result, interrupted: true }
                 : { ...result, state: 'timeout' };
@@ -127,6 +136,7 @@ class RunObservation {
     private error: string | undefined;
     private readonly pending = new Map<string, PendingRunRequest>();
     private readonly queued = new Set<string>();
+    private readonly completedTurns: RunSnapshot[] = [];
 
     constructor(private readonly initial: StoredRun) {}
 
@@ -148,6 +158,13 @@ class RunObservation {
             this.active = false;
             this.boundary = event.sequence;
             this.pending.clear();
+            if (data.reason !== 'cancelled') {
+                this.completedTurns.push({
+                    ...this.snapshot(this.initial, false),
+                    state: 'turn_completed',
+                    usage: { ...this.usage },
+                });
+            }
         }
         if (event.type === 'output.text') {
             if (id && id !== this.answerId) {
@@ -199,7 +216,7 @@ class RunObservation {
             this.pending.delete(`authentication:${text(data.provider)}`);
     }
 
-    snapshot(run: StoredRun): RunSnapshot {
+    snapshot(run: StoredRun, useStoredOutcome = true): RunSnapshot {
         const terminal = RunStore.isTerminal(run.status);
         const pending = terminal ? [] : [...this.pending.values()];
         const state: SupervisionState = terminal
@@ -211,6 +228,8 @@ class RunObservation {
                 : this.ready
                   ? 'idle'
                   : 'starting';
+        const outcomeId =
+            this.outcomeId ?? (useStoredOutcome ? run.outcome_id : undefined);
         return {
             session_id: run.session_id ?? this.initial.session_id ?? run.id,
             run_id: run.id,
@@ -218,23 +237,42 @@ class RunObservation {
             sequence: this.sequence,
             final: this.answer.trimEnd(),
             usage: this.usage,
-            ...((this.outcomeId ?? run.outcome_id)
-                ? { outcome_id: this.outcomeId ?? run.outcome_id }
-                : {}),
+            ...(outcomeId ? { outcome_id: outcomeId } : {}),
             ...(this.error ? { error: this.error } : {}),
             pending_requests: pending,
         };
     }
 
-    isBoundary(result: RunSnapshot, after: number): boolean {
-        if (result.state === 'needs_input') return true;
-        if (RunStore.isTerminal(result.state as StoredRun['status'])) return true;
-        // Unattended executions close after their last turn; wait for cleanup too.
-        return (
+    boundarySnapshot(
+        result: RunSnapshot,
+        after: number,
+        terminalOnly = false
+    ): RunSnapshot | undefined {
+        if (result.state === 'failed' || result.state === 'cancelled') return result;
+        const turn = terminalOnly
+            ? undefined
+            : this.completedTurns.find((turn) => turn.sequence > after);
+        if (turn) {
+            // Only the last turn can describe the execution's current idle/terminal state.
+            if (
+                turn === this.completedTurns.at(-1) &&
+                !this.active &&
+                !this.queued.size
+            ) {
+                if (result.state === 'completed') return result;
+                if (result.state === 'idle' && this.initial.mode === 'interactive')
+                    return { ...turn, state: 'idle' };
+            }
+            return turn;
+        }
+        if (result.state === 'needs_input' || result.state === 'completed')
+            return result;
+        return !terminalOnly &&
             result.state === 'idle' &&
             this.initial.mode === 'interactive' &&
             this.boundary > after
-        );
+            ? result
+            : undefined;
     }
 }
 

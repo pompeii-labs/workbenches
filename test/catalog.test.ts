@@ -177,11 +177,20 @@ describe('sources and saved catalog', () => {
 
         const localReference = await resolver.resolve(`${fixture.root}#core`, {
             home,
+            cwd: workspace,
         });
         expect(localReference.workbench.manifest.name).toBe('core');
-        expect(localReference.workspaceDirectory).toBe(fixture.root);
+        expect(localReference.workspaceDirectory).toBe(workspace);
         expect(localReference.registry).toBeUndefined();
         await localReference.cleanup();
+
+        const overridden = await resolver.resolve(`${fixture.root}#core`, {
+            home,
+            cwd: workspace,
+            workspaceDirectory: fixture.root,
+        });
+        expect(overridden.workspaceDirectory).toBe(fixture.root);
+        await overridden.cleanup();
     });
 
     test('requires remote Workbenches to cross the explicit save boundary', async () => {

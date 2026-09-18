@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AuthoringJob, type AuthoringJobRecord } from '../../src/authoring/job.js';
 import { AuthoringOperation } from '../../src/authoring/operation.js';
+import { RunEvents } from '../../src/runs/events.js';
 import { RunStore } from '../../src/runs/store.js';
 import { SessionSupervision } from '../../src/sessions/supervision.js';
 
@@ -141,5 +142,30 @@ describe('authoring verification supervision', () => {
             authoring: { status: 'running' },
         });
         expect((await f.jobs.forRun(f.run.id))?.status).toBe('running');
+    });
+
+    test('a creator turn boundary cannot bypass terminal cleanup and verification', async () => {
+        const f = await fixture();
+        const store = new RunStore(f.home);
+        await store.update(f.run.id, { status: 'running', pid: process.pid });
+        await writeFile(f.path, JSON.stringify({ ...f.record, pid: process.pid }));
+        const events = new RunEvents({
+            runId: f.run.id,
+            runner: f.run.runner,
+            onEvent: (event) => store.appendEvent(f.run.id, event),
+        });
+        await events.emit('turn.started', {});
+        await events.emit('output.text', { text: 'Package authored' });
+        await events.emit('turn.completed', {});
+        expect(
+            await new SessionSupervision(f.home).wait(f.run, {
+                timeoutMilliseconds: 10,
+            })
+        ).toMatchObject({
+            state: 'timeout',
+            authoring: { status: 'running' },
+            final: 'Package authored',
+        });
+        expect((await store.read(f.run.id)).status).toBe('running');
     });
 });

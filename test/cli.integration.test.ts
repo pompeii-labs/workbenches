@@ -8,12 +8,14 @@ import {
     realpath,
     rm,
     stat,
+    symlink,
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { OfficialWorkbenchResolver } from '../src/authoring/official.js';
 import { WorkbenchPackage } from '../src/catalog/package.js';
+import { OutcomeStore } from '../src/outcomes/store.js';
 import { RunControl } from '../src/runs/control.js';
 import { RunEvents } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/index.js';
@@ -219,8 +221,42 @@ describe('CLI integration', () => {
         );
         expect(timeout.code).toBe(124);
         expect(JSON.parse(timeout.stdout).state).toBe('timeout');
-        const finished = await executeCli(
+        const firstTurn = await executeCli(
             ['wait', launch.session_id, '--timeout', '10', '--json'],
+            environment
+        );
+        expect(firstTurn.code).toBe(0);
+        const firstBoundary = JSON.parse(firstTurn.stdout);
+        expect(firstBoundary).toMatchObject({
+            state: 'turn_completed',
+            final: 'fixture response',
+        });
+        const secondTurn = await executeCli(
+            [
+                'wait',
+                launch.session_id,
+                '--after',
+                String(firstBoundary.sequence),
+                '--timeout',
+                '10',
+                '--json',
+            ],
+            environment
+        );
+        expect(secondTurn.code).toBe(0);
+        const secondBoundary = JSON.parse(secondTurn.stdout);
+        expect(secondBoundary.final).toBe('fixture response');
+        expect(secondBoundary.sequence).toBeGreaterThan(firstBoundary.sequence);
+        const finished = await executeCli(
+            [
+                'wait',
+                launch.session_id,
+                '--after',
+                String(secondBoundary.sequence),
+                '--timeout',
+                '10',
+                '--json',
+            ],
             environment
         );
         expect(finished.code).toBe(0);
@@ -246,6 +282,53 @@ describe('CLI integration', () => {
         expect(final.code).toBe(0);
         expect(JSON.parse(final.stdout).run_id).toBe(next.run_id);
     }, 20_000);
+
+    test('local package runs use the caller directory and warn about unsafe workspace links', async () => {
+        const fixture = await createFixture();
+        const workspace = join(fixture.root, 'project');
+        await mkdir(workspace);
+        await symlink('../outside', join(workspace, 'escape'));
+        const home = await temporaryDirectory('workspace-control-');
+        const bin = await fakeBin([]);
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+        const launched = await executeCli(
+            ['run', fixture.packageDirectory, '--task', 'hello', '--detach', '--json'],
+            environment,
+            workspace
+        );
+        expect(launched.code, launched.stderr).toBe(0);
+        const { run_id: id } = JSON.parse(launched.stdout);
+        expect((await new RunStore(home).read(id)).workspace).toBe(
+            await realpath(workspace)
+        );
+        let after = 0;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const waited = await executeCli(
+                ['wait', id, '--after', String(after), '--timeout', '5', '--json'],
+                environment,
+                workspace
+            );
+            expect(waited.code, waited.stderr).toBe(0);
+            const result = JSON.parse(waited.stdout);
+            after = result.sequence;
+            if (result.state !== 'completed') continue;
+            expect(result.final).toBe('fixture response');
+            const store = new OutcomeStore(home);
+            try {
+                const outcome = await store.read(result.outcome_id);
+                expect(outcome.warnings).toHaveLength(1);
+                expect(outcome.warnings[0]?.code).toBe('workspace_paths_excluded');
+                expect(outcome.changesets).toEqual([]);
+            } finally {
+                await store.close();
+            }
+            return;
+        }
+        throw new Error('Run did not finish');
+    });
 
     test('reports pending input, validates an answer, and rejects stale requests through CLI IPC', async () => {
         const home = await temporaryDirectory('headless-answer-');
@@ -581,7 +664,8 @@ describe('CLI integration', () => {
             {
                 PATH: `${bin}:${process.env.PATH}`,
                 WB_TEST_RECORD: record,
-            }
+            },
+            fixture.root
         );
         expect(result.code).toBe(0);
         expect(await readFile(`${record}.cwd`, 'utf8')).toBe(`${fixture.root}\n`);
@@ -1308,7 +1392,8 @@ describe('CLI integration', () => {
             {
                 PATH: `${bin}:${process.env.PATH}`,
                 WB_TEST_RECORD: record,
-            }
+            },
+            fixture.root
         );
 
         expect(result.code).toBe(0);
@@ -1477,7 +1562,8 @@ describe('CLI integration', () => {
                     '--allow-host-docker',
                     '--json',
                 ],
-                environment
+                environment,
+                fixture.root
             );
             expect({
                 code: allowed.code,
@@ -1917,7 +2003,7 @@ async function createFixture(
         dockerEngine?: boolean;
     } = {}
 ) {
-    const root = await mkdtemp(join(tmpdir(), 'workbench-cli-'));
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'workbench-cli-')));
     temporaryDirectories.push(root);
     const packageDirectory = join(root, '.workbenches', 'core');
     await mkdir(packageDirectory, { recursive: true });

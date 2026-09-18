@@ -157,15 +157,25 @@ describe.skipIf(!enabled)('Real headless CLI supervision', () => {
                         }
                         return { code, stderr, result };
                     };
+                    const boundaries: RunSnapshot[] = [];
                     const finish = async (id: string) => {
+                        let after = 0;
                         for (let attempt = 0; attempt < 16; attempt++) {
                             const result = await invoke([
                                 'wait',
                                 id,
+                                '--after',
+                                String(after),
                                 '--timeout',
                                 '180',
                                 '--json',
                             ]);
+                            if (result.result.state === 'turn_completed') {
+                                expect(result.code).toBe(0);
+                                boundaries.push(result.result);
+                                after = result.result.sequence;
+                                continue;
+                            }
                             if (result.code !== 2) {
                                 expect(
                                     result.code,
@@ -278,6 +288,14 @@ describe.skipIf(!enabled)('Real headless CLI supervision', () => {
                         expect(queued.result.receipt?.disposition).toBe('queued');
                         const completed = await finish(id);
                         expect(completed.state).toBe('completed');
+                        expect(
+                            boundaries.some(
+                                (turn) =>
+                                    turn.run_id === completed.run_id &&
+                                    turn.final.length > 0 &&
+                                    turn.sequence < completed.sequence
+                            )
+                        ).toBeTrue();
                         if (runner === 'opencode')
                             expect(
                                 JSON.parse(

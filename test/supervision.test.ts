@@ -125,17 +125,86 @@ describe('read-only run supervision', () => {
         expect((await f.supervision.snapshot(f.run)).state).toBe('running');
     });
 
-    test('unattended turns wait until runtime cleanup has completed', async () => {
+    test('unattended turn boundaries do not claim runtime cleanup has completed', async () => {
         const f = await fixture('detached');
         await f.emit('run.ready');
         await f.emit('turn.started');
         await f.emit('turn.completed');
+        const turn = await f.supervision.wait(f.run, { timeoutMilliseconds: 5 });
+        expect(turn.state).toBe('turn_completed');
         expect(
-            (await f.supervision.wait(f.run, { timeoutMilliseconds: 5 })).state
+            (
+                await f.supervision.wait(f.run, {
+                    afterSequence: turn.sequence,
+                    timeoutMilliseconds: 5,
+                })
+            ).state
         ).toBe('timeout');
         await f.emit('run.completed');
         await f.store.update(f.run.id, { status: 'completed' });
         expect((await f.supervision.wait(f.run)).state).toBe('completed');
+    });
+
+    test('every queued turn remains observable even after the execution closes', async () => {
+        const f = await fixture('detached');
+        await f.emit('run.ready');
+        await f.emit('turn.started');
+        await f.emit('input.queued', { id: 'next' });
+        await f.emit('output.text', { id: 'first', text: 'first final' });
+        await f.emit('usage.updated', { total_tokens: 10 });
+        await f.emit('outcome.available', { outcome_id: 'first-outcome' });
+        await f.emit('turn.completed');
+        const firstSequence = (await f.store.readEvents(f.run.id)).at(-1)?.sequence;
+        await f.emit('input.delivered', { id: 'next', kind: 'follow_up' });
+        await f.emit('turn.started');
+        await f.emit('output.text', { id: 'second', text: 'second final' });
+        await f.emit('usage.updated', { total_tokens: 20 });
+        await f.emit('outcome.available', { outcome_id: 'second-outcome' });
+        await f.emit('turn.completed');
+        const secondSequence = (await f.store.readEvents(f.run.id)).at(-1)?.sequence;
+        const first = await f.supervision.wait(f.run);
+        expect(first).toMatchObject({
+            state: 'turn_completed',
+            sequence: firstSequence,
+            final: 'first final',
+            usage: { total_tokens: 10 },
+            outcome_id: 'first-outcome',
+        });
+        const second = await f.supervision.wait(f.run, {
+            afterSequence: first.sequence,
+        });
+        expect(second).toMatchObject({
+            state: 'turn_completed',
+            sequence: secondSequence,
+            final: 'second final',
+            usage: { total_tokens: 20 },
+            outcome_id: 'second-outcome',
+        });
+        await f.emit('run.completed');
+        await f.store.update(f.run.id, { status: 'completed' });
+        expect(await f.supervision.wait(await f.store.read(f.run.id))).toEqual(first);
+        expect(
+            await f.supervision.wait(f.run, { afterSequence: first.sequence })
+        ).toMatchObject({ state: 'completed', final: 'second final' });
+        expect(
+            await f.supervision.wait(f.run, { afterSequence: second.sequence })
+        ).toMatchObject({ state: 'completed', final: 'second final' });
+    });
+
+    test('a live observer returns the first boundary before a queued turn finishes', async () => {
+        const f = await fixture('detached');
+        await f.emit('turn.started');
+        await f.emit('input.queued', { id: 'next' });
+        const waiting = f.supervision.wait(f.run, { timeoutMilliseconds: 1000 });
+        await f.emit('output.text', { text: 'first final' });
+        await f.emit('turn.completed');
+        await f.emit('input.delivered', { id: 'next', kind: 'follow_up' });
+        await f.emit('turn.started');
+        expect(await waiting).toMatchObject({
+            state: 'turn_completed',
+            final: 'first final',
+        });
+        expect((await f.supervision.snapshot(f.run)).state).toBe('running');
     });
 
     test('terminal metadata drains events appended after the observer reads its batch', async () => {

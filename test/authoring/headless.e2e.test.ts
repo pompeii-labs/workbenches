@@ -99,9 +99,23 @@ test.skipIf(process.env.WORKBENCH_AUTHORING_E2E !== '1')(
             return { code, stderr, result };
         };
         const finish = async (id: string) => {
+            let after = 0;
             for (let attempt = 0; attempt < 32; attempt++) {
-                const next = await invoke(['wait', id, '--timeout', '180', '--json']);
+                const next = await invoke([
+                    'wait',
+                    id,
+                    '--after',
+                    String(after),
+                    '--timeout',
+                    '180',
+                    '--json',
+                ]);
                 if (next.code === 124) continue;
+                if (next.result.state === 'turn_completed') {
+                    expect(next.code).toBe(0);
+                    after = next.result.sequence;
+                    continue;
+                }
                 if (next.code !== 2) {
                     expect(next.code, next.stderr + JSON.stringify(next.result)).toBe(
                         0
