@@ -5,7 +5,7 @@ import {
     E2B,
     type Sandbox as E2BSdkSandbox,
 } from 'e2b';
-
+import { installRepositoryTools } from '../repository-tools.js';
 import type {
     E2BClient,
     E2BCommand,
@@ -50,7 +50,10 @@ export class E2BSdkClient implements E2BClient {
                     .fromDockerfile(source.dockerfile)
               : undefined;
         if (!template) throw new Error('E2B template source is incomplete');
-        const built = await this.#client.Template.build(template, name);
+        const configured = source.repositoryTools
+            ? template.runCmd(installRepositoryTools, { user: 'root' })
+            : template;
+        const built = await this.#client.Template.build(configured, name);
         return {
             name,
             immutableReference: built.templateId,

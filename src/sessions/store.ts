@@ -11,6 +11,7 @@ import {
 import { join, resolve } from 'node:path';
 
 import type { CatalogRegistryReference } from '../catalog/index.js';
+import type { RepositoryBinding } from '../repositories/contracts.js';
 import { RunStore } from '../runs/store.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import { SessionIdentity } from './identity.js';
@@ -29,6 +30,7 @@ export interface StoredSession {
     source_workbench_path?: string;
     workbench_digest?: string;
     workspace: string;
+    repository?: RepositoryBinding;
     workspaces: WorkbenchWorkspaceBinding[];
     registry?: CatalogRegistryReference;
     native_session_id?: string;

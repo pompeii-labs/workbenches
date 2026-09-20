@@ -1,4 +1,4 @@
-import { autocomplete, type Option, select } from '@clack/prompts';
+import { autocomplete, type Option, password, select } from '@clack/prompts';
 import { defineCommand } from 'citty';
 import { ConnectionStore } from '../connections/store.js';
 import {
@@ -13,6 +13,7 @@ import {
 } from '../connections/targets.js';
 import { ModelCatalog } from '../models/catalog.js';
 import { ModelRouter } from '../models/routing.js';
+import { RuntimeSecretStore } from '../runtimes/secrets.js';
 import { workbenchHome } from '../storage.js';
 import { WorkbenchResolver } from '../workbench/index.js';
 import { CliPresenter } from './presenter.js';
@@ -20,7 +21,7 @@ import { CliPresenter } from './presenter.js';
 export const connectCommand = defineCommand({
     meta: {
         name: 'connect',
-        description: 'Manage reusable runner connections.',
+        description: 'Connect model and runtime providers.',
     },
     args: {
         workbench: {
@@ -34,7 +35,8 @@ export const connectCommand = defineCommand({
         },
         runtime: {
             type: 'string',
-            description: 'Connection runtime: local, docker, or e2b',
+            description:
+                'Runtime: local, docker, or e2b (E2B alone connects its API key)',
         },
         harness: {
             type: 'string',
@@ -48,10 +50,57 @@ export const connectCommand = defineCommand({
             type: 'string',
             description: 'Authentication method for the selected provider',
         },
+        stdin: {
+            type: 'boolean',
+            description: 'Read the E2B runtime key from standard input',
+            default: false,
+        },
+        status: {
+            type: 'boolean',
+            description: 'Show runtime provider connection status',
+            default: false,
+        },
+        remove: {
+            type: 'boolean',
+            description: 'Remove a saved runtime provider key',
+            default: false,
+        },
     },
     async run({ args }) {
         const output = new CliPresenter();
         const home = workbenchHome();
+        const e2bRuntimeKey =
+            args.runtime?.trim().toLowerCase() === 'e2b' &&
+            !(
+                args.workbench ||
+                args.dir ||
+                args.harness ||
+                args.provider ||
+                args.method
+            );
+        const modelTarget = Boolean(
+            args.workbench ||
+                args.dir ||
+                (args.runtime && !e2bRuntimeKey) ||
+                args.harness ||
+                args.provider ||
+                args.method
+        );
+        const runtimeProvider = e2bRuntimeKey
+            ? 'e2b'
+            : !modelTarget && process.stdin.isTTY && process.stderr.isTTY
+              ? await chooseConnectionKind()
+              : undefined;
+        if (runtimeProvider || args.stdin || args.status || args.remove) {
+            if (!runtimeProvider) {
+                throw new Error(
+                    '--stdin, --status, and --remove require --runtime e2b'
+                );
+            }
+            await connectRuntimeProvider(runtimeProvider, args, home, output);
+            return;
+        }
+        await new ModelCatalog({ home }).refresh();
         let cleanup = async () => {};
         try {
             const selection = args.workbench
@@ -102,6 +151,80 @@ export const connectCommand = defineCommand({
         }
     },
 });
+
+async function chooseConnectionKind(): Promise<string | undefined> {
+    const choice = await select({
+        message: 'What would you like to connect?',
+        options: [
+            {
+                value: 'model',
+                label: 'Model provider',
+                hint: 'OpenCode or Pi credentials and default route',
+            },
+            {
+                value: 'e2b',
+                label: 'E2B runtime',
+                hint: 'Save a host-only sandbox API key once',
+            },
+        ],
+    });
+    if (typeof choice === 'symbol') throw new Error('Connection setup cancelled');
+    return choice === 'model' ? undefined : choice;
+}
+
+async function connectRuntimeProvider(
+    provider: string,
+    args: { stdin: boolean; status: boolean; remove: boolean },
+    home: string,
+    output: CliPresenter
+): Promise<void> {
+    if (provider.trim().toLowerCase() !== 'e2b') {
+        throw new Error(`Unsupported runtime provider: ${provider}`);
+    }
+    if (Number(args.stdin) + Number(args.status) + Number(args.remove) > 1) {
+        throw new Error('--stdin, --status, and --remove cannot be combined');
+    }
+    const secrets = new RuntimeSecretStore(home);
+    if (args.status) {
+        const saved = Boolean(secrets.e2bKey());
+        const override = Boolean(process.env.E2B_API_KEY?.trim());
+        output.message(
+            saved
+                ? override
+                    ? 'E2B runtime key is saved; E2B_API_KEY currently overrides it'
+                    : 'E2B runtime key is saved'
+                : override
+                  ? 'E2B runtime key is available from E2B_API_KEY'
+                  : 'No E2B runtime key is saved'
+        );
+        return;
+    }
+    if (args.remove) {
+        secrets.removeE2B();
+        output.message('Removed the saved E2B runtime key', 'success');
+        return;
+    }
+    let key: string;
+    if (args.stdin) {
+        key = await Bun.stdin.text();
+    } else {
+        if (!process.stdin.isTTY || !process.stderr.isTTY) {
+            throw new Error(
+                'Run wb connect --runtime e2b in a terminal, or pass --stdin'
+            );
+        }
+        const entered = await password({
+            message: 'E2B API key',
+            validate: (value) => (value?.trim() ? undefined : 'Enter your E2B API key'),
+        });
+        if (typeof entered === 'symbol') {
+            throw new Error('Connection setup cancelled');
+        }
+        key = entered;
+    }
+    secrets.saveE2B(key);
+    output.message('E2B runtime key saved on this machine', 'success');
+}
 
 async function connectionTargetForWorkbench(
     args: Record<string, unknown>,

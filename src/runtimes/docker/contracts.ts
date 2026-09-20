@@ -62,4 +62,5 @@ export interface DockerRuntimeDependencies {
 export interface DockerImageInspect {
     Id?: string;
     RepoDigests?: string[];
+    Config?: { User?: string };
 }

@@ -79,6 +79,13 @@ export class DockerClient {
         environment: Record<string, string | undefined>
     ): Record<string, string | undefined> {
         const result = { ...environment };
+        for (const name of [
+            'GH_TOKEN',
+            'GITHUB_TOKEN',
+            'GH_ENTERPRISE_TOKEN',
+            'GITHUB_ENTERPRISE_TOKEN',
+        ])
+            delete result[name];
         for (const name of this.protectedEnvironmentNames) delete result[name];
         return result;
     }

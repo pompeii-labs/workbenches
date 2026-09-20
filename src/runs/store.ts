@@ -14,6 +14,7 @@ import {
 import { join, resolve } from 'node:path';
 import type { CatalogRegistryReference } from '../catalog/index.js';
 import { OutcomeStore } from '../outcomes/store.js';
+import type { RepositoryBinding } from '../repositories/contracts.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import { RunControl } from './control.js';
 import type { WorkbenchEvent } from './events.js';
@@ -36,6 +37,7 @@ export interface StoredRun {
     model: string;
     runtime?: string;
     workspace: string;
+    repository?: RepositoryBinding;
     mode?: 'foreground' | 'detached' | 'interactive';
     execution?: 'one_shot' | 'session';
     workspaces?: WorkbenchWorkspaceBinding[];
@@ -57,6 +59,7 @@ export interface StoredRunRequest {
     version: 1;
     workbench_path: string;
     workspace: string;
+    repository?: RepositoryBinding;
     task: string;
     workspaces?: WorkbenchWorkspaceBinding[];
     allow_host_docker?: boolean;

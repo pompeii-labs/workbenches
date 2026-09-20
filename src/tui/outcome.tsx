@@ -20,7 +20,19 @@ export function OutcomeCard(props: { item: OutcomeTranscriptItem; home?: string 
     );
     const healthy = () =>
         props.item.turnIndex !== undefined || props.item.completeness === 'complete';
-    const color = () => (healthy() ? theme.success : theme.yellow);
+    const hasSavedResults = () =>
+        Boolean(props.item.summary) ||
+        props.item.changesets > 0 ||
+        props.item.artifacts > 0 ||
+        props.item.links > 0;
+    const color = () =>
+        !hasSavedResults()
+            ? props.item.warnings > 0
+                ? theme.warning
+                : theme.textMuted
+            : healthy()
+              ? theme.success
+              : theme.yellow;
     return (
         <box
             flexDirection="column"
@@ -35,11 +47,13 @@ export function OutcomeCard(props: { item: OutcomeTranscriptItem; home?: string 
             <box flexDirection="row" justifyContent="space-between">
                 <text fg={color()}>
                     <strong>
-                        {props.item.turnIndex !== undefined
-                            ? `Results saved · turn ${props.item.turnIndex}`
-                            : props.item.completeness === 'complete'
-                              ? 'Outcome ready'
-                              : 'Partial outcome available'}
+                        {!hasSavedResults()
+                            ? 'No saved results'
+                            : props.item.turnIndex !== undefined
+                              ? `Results saved · turn ${props.item.turnIndex}`
+                              : props.item.completeness === 'complete'
+                                ? 'Outcome ready'
+                                : 'Partial outcome available'}
                     </strong>
                 </text>
                 <text fg={theme.textMuted}>

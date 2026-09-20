@@ -87,6 +87,7 @@ export class RunWorker {
                 {
                     workbenchPath: request.workbench_path,
                     workspaceDirectory: request.workspace,
+                    ...(request.repository ? { repository: request.repository } : {}),
                     task: request.task,
                     workspaces: request.workspaces ?? [],
                     allowHostDocker: request.allow_host_docker ?? false,

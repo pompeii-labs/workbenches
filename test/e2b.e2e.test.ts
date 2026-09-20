@@ -55,6 +55,44 @@ afterEach(async () => {
 });
 
 describe.skipIf(!enabled)('E2B runtime end to end', () => {
+    test(
+        'provisions Git and GitHub CLI in the engine-managed repository template',
+        async () => {
+            const apiKey = process.env.E2B_API_KEY;
+            if (!apiKey) throw new Error('E2B_API_KEY is required for this test');
+            const client = new E2BSdkClient(apiKey);
+            const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-tools-'));
+            temporaryDirectories.push(home);
+            const run = {
+                id: RunStore.createId(),
+                scope: RunStore.scope(home),
+            };
+            const prepared = await client.prepareTemplate(
+                {
+                    image: 'ghcr.io/anomalyco/opencode:1.18.30',
+                    repositoryTools: true,
+                },
+                'workbench-e2b-repository-tools-e2e-v1'
+            );
+            const sandbox = await client.createSandbox({
+                template: prepared.immutableReference,
+                metadata: e2bMetadata(run),
+                timeoutMilliseconds: 60_000,
+            });
+            try {
+                const result = await sandbox.run(
+                    'git --version && gh --version && opencode --version'
+                );
+                expect(result.code, result.stderr).toBe(0);
+                expect(result.stdout).toContain('git version');
+                expect(result.stdout).toContain('gh version');
+            } finally {
+                await sandbox.kill().catch(() => {});
+            }
+        },
+        10 * 60 * 1_000
+    );
+
     test('recovers interrupted collection from the original paused sandbox through the CLI', async () => {
         const workbench = await fixture();
         const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-recovery-home-'));
@@ -512,9 +550,45 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             });
             expect(restored.code, restored.stderr).toBe(0);
             expect(restored.stdout).toBe('{"fixture":"persistent"}\n');
-            await second.cleanup();
+            const thirdRun = { id: RunStore.createId(), scope };
+            const third = await new E2BRuntimeProvider({ client }).prepare({
+                workbench,
+                workspaceDirectory: workbench.repositoryDirectory,
+                environment: process.env,
+                assets,
+                credentials,
+                purpose: 'run',
+                run: thirdRun,
+            });
+            activeRuntimes.add(third);
+            await third.preflight();
+            for (const [index, runtime] of [second, third].entries()) {
+                const noise = await runtime.execute({
+                    command: [
+                        '/bin/sh',
+                        '-c',
+                        `printf 'cache-${index}' > "$XDG_DATA_HOME/opencode/opencode.db"; mkdir -p "$XDG_DATA_HOME/opencode/log"; printf 'log-${index}' > "$XDG_DATA_HOME/opencode/log/opencode.log"`,
+                    ],
+                    cwd: runtime.workspaceDirectory,
+                    env: runtime.environment,
+                });
+                expect(noise.code, noise.stderr).toBe(0);
+            }
+            await Promise.all([second.cleanup(), third.cleanup()]);
             activeRuntimes.delete(second);
+            activeRuntimes.delete(third);
             await expectManagedSandboxGone(client, scope, secondRun.id);
+            await expectManagedSandboxGone(client, scope, thirdRun.id);
+            const current = (await new E2BStateStore(credentials.directory).source())
+                .directory;
+            expect(await readFile(join(current, 'opencode', 'auth.json'), 'utf8')).toBe(
+                '{"fixture":"persistent"}\n'
+            );
+            expect(
+                await stat(join(current, 'opencode', 'opencode.db')).catch(
+                    () => undefined
+                )
+            ).toBeUndefined();
         },
         10 * 60 * 1_000
     );

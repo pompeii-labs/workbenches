@@ -7,7 +7,9 @@ import type { CatalogEntry } from '../catalog/index.js';
 import type { RegistrySearchResult } from '../registry/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
 import { WorkbenchWordmark } from './branding.js';
+import { useDialog } from './dialog/index.js';
 import { HomeLauncher, type HomeLauncherResult } from './home-launcher.js';
+import { type LaunchTarget, LaunchTargetPicker } from './launch.js';
 import { useTheme, type WorkbenchTheme } from './theme/index.js';
 
 export interface HomeScreenProps {
@@ -25,6 +27,7 @@ export interface HomeScreenProps {
 export function HomeScreen(props: HomeScreenProps) {
     const dimensions = useTerminalDimensions();
     const { theme } = useTheme();
+    const dialog = useDialog();
     const launcher = createMemo(
         () => new HomeLauncher(props.entries, Boolean(props.onCreate))
     );
@@ -120,7 +123,25 @@ export function HomeScreen(props: HomeScreenProps) {
     const openWorkbench = async (entry: CatalogEntry) => {
         setStatus({ text: `Opening ${entry.alias}...`, error: false });
         try {
-            props.onOpen(entry.alias, await props.resolve(entry.alias));
+            const resolved = await props.resolve(entry.alias);
+            setStatus(undefined);
+            dialog.open(() => (
+                <LaunchTargetPicker
+                    cwd={resolved.workspaceDirectory}
+                    onRun={(target: LaunchTarget) => {
+                        dialog.close();
+                        props.onOpen(entry.alias, {
+                            ...resolved,
+                            ...(target.kind === 'directory'
+                                ? { workspaceDirectory: target.path }
+                                : {}),
+                            ...(target.kind === 'repository'
+                                ? { repository: target.request }
+                                : {}),
+                        });
+                    }}
+                />
+            ));
         } catch (error) {
             setStatus({ text: errorMessage(error), error: true });
         }
@@ -218,6 +239,7 @@ export function HomeScreen(props: HomeScreenProps) {
     };
 
     useKeyboard((key) => {
+        if (key.defaultPrevented || dialog.active()) return;
         if (key.ctrl && key.name === 'c') {
             key.preventDefault();
             props.onExit();

@@ -1,3 +1,4 @@
+import { RuntimeSecretStore } from '../secrets.js';
 import type {
     E2BClient,
     E2BManagedSandbox,
@@ -19,9 +20,12 @@ export class E2BManagedSandboxes {
         dependencies: E2BRuntimeDependencies = {}
     ): E2BManagedSandboxes | undefined {
         validateScope(scope);
-        const apiKey = environment.E2B_API_KEY?.trim();
         const client =
-            dependencies.client ?? (apiKey ? new E2BSdkClient(apiKey) : null);
+            dependencies.client ??
+            (() => {
+                const key = RuntimeSecretStore.e2bKey(environment);
+                return key ? new E2BSdkClient(key) : null;
+            })();
         return client ? new E2BManagedSandboxes(client, scope) : undefined;
     }
 

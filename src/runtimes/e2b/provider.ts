@@ -1,11 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
-
+import { WorkbenchPreflight } from '../../workbench/preflight.js';
 import type {
     PreparedRuntime,
     RuntimePrepareRequest,
     RuntimeProvider,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
+import { RuntimeSecretStore } from '../secrets.js';
 import type { E2BRuntimeDependencies } from './contracts.js';
 import { E2BPathPlan } from './paths.js';
 import { E2BRuntime } from './runtime.js';
@@ -21,18 +22,24 @@ export class E2BRuntimeProvider implements RuntimeProvider {
     constructor(private readonly dependencies: E2BRuntimeDependencies = {}) {}
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
-        const apiKey = request.environment.E2B_API_KEY?.trim();
+        const paths = new E2BPathPlan(request);
+        await paths.verify();
+        new WorkbenchPreflight({
+            environment: paths.environment(),
+        }).checkConfiguration(paths.remap(request.workbench));
         const client =
-            this.dependencies.client ?? (apiKey ? new E2BSdkClient(apiKey) : null);
+            this.dependencies.client ??
+            (() => {
+                const key = RuntimeSecretStore.e2bKey(request.environment);
+                return key ? new E2BSdkClient(key) : null;
+            })();
         if (!client) {
             throw new RuntimeError(
                 this.name,
                 'prepare',
-                'E2B_API_KEY is required for the E2B runtime'
+                'E2B_API_KEY is required for the E2B runtime. Run wb connect --runtime e2b once, or set E2B_API_KEY.'
             );
         }
-        const paths = new E2BPathPlan(request);
-        await paths.verify();
         const template = await new E2BTemplateManager(client).prepare(request);
         const run = request.run ?? {
             id: `wb_${randomBytes(16).toString('hex')}`,

@@ -39,7 +39,9 @@ export class SessionSupervision {
         const result = await new RunSupervision(this.home).wait(run, {
             ...options,
             // Authoring's result includes post-execution package verification.
-            terminalOnly: authoring !== undefined,
+            terminalOnly:
+                authoring !== undefined ||
+                (run.repository?.delivery === 'pr' && run.mode !== 'interactive'),
         });
         if (!authoring) return result;
         if (result.state === 'completed' && !result.interrupted) {

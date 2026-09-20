@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { RuntimePreparation, RuntimePrepareRequest } from '../contracts.js';
 import { DockerBuildContext } from '../docker/build-context.js';
+import { needsRepositoryTools, repositoryToolsCacheKey } from '../repository-tools.js';
 import type { E2BClient, E2BTemplateSource } from './contracts.js';
 
 export interface PreparedE2BTemplate {
@@ -22,7 +23,15 @@ export class E2BTemplateManager {
         if (!image)
             throw new Error('E2B runtime requires an image or local image build');
         if (typeof image === 'string') {
-            return this.prepareSource(request, { image }, image, []);
+            return this.prepareSource(
+                request,
+                {
+                    image,
+                    ...(needsRepositoryTools(request) ? { repositoryTools: true } : {}),
+                },
+                image,
+                []
+            );
         }
 
         const staged = await DockerBuildContext.stage(request.workbench);
@@ -32,6 +41,7 @@ export class E2BTemplateManager {
                 {
                     dockerfile: staged.dockerfile,
                     context: staged.context,
+                    ...(needsRepositoryTools(request) ? { repositoryTools: true } : {}),
                 },
                 `local:${staged.digest}`,
                 staged.excludedPaths,
@@ -81,6 +91,9 @@ function templateName(request: RuntimePrepareRequest, reference: string): string
         name: request.workbench.manifest.name,
         version: request.workbench.manifest.version,
         reference,
+        ...(needsRepositoryTools(request)
+            ? { repositoryTools: repositoryToolsCacheKey }
+            : {}),
     });
     const digest = createHash('sha256').update(identity).digest('hex').slice(0, 20);
     return `workbench-${slug || 'runtime'}-${digest}`;

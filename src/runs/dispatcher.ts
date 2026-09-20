@@ -2,6 +2,7 @@ import { basename } from 'node:path';
 
 import { WorkbenchPackage } from '../catalog/index.js';
 import { modelLabel } from '../models/index.js';
+import { RepositoryGitHub, RepositoryWorkspace } from '../repositories/index.js';
 import { RunnerRegistry } from '../runners/index.js';
 import {
     SessionIdentity,
@@ -55,6 +56,24 @@ export class RunDispatcher {
             ? this.identity.fromPrompt(options.task)
             : undefined;
         if (options.session) this.assertCompatible(options, options.session, digest);
+        const repository =
+            options.session?.repository ??
+            (options.resolved.repository
+                ? await (
+                      await RepositoryGitHub.forEnvironment(process.env, true)
+                  ).resolve(options.resolved.repository, id)
+                : undefined);
+        if (repository) {
+            if (workspaces.length || options.allowHostDocker)
+                throw new Error(
+                    'Repository runs cannot bind host workspaces or the host Docker engine'
+                );
+            new RepositoryWorkspace(
+                this.home,
+                repository,
+                process.env
+            ).assertCredentialsOwnedByEngine(workbench);
+        }
         const session =
             options.session ??
             (await this.sessions.create({
@@ -72,6 +91,7 @@ export class RunDispatcher {
                     : {}),
                 workbench_digest: digest,
                 workspace: options.resolved.workspaceDirectory,
+                ...(repository ? { repository } : {}),
                 workspaces,
                 ...(options.resolved.registry
                     ? { registry: options.resolved.registry }
@@ -89,6 +109,7 @@ export class RunDispatcher {
                     model: modelLabel(workbench.manifest.model),
                     runtime: workbench.manifest.runtime,
                     workspace: options.resolved.workspaceDirectory,
+                    ...(repository ? { repository } : {}),
                     mode: options.mode,
                     execution,
                     workspaces,
@@ -105,6 +126,7 @@ export class RunDispatcher {
                 request: {
                     workbench_path: workbench.packageDirectory,
                     workspace: options.resolved.workspaceDirectory,
+                    ...(repository ? { repository } : {}),
                     task: options.task ?? '',
                     workspaces,
                     allow_host_docker: options.allowHostDocker ?? false,
@@ -211,7 +233,9 @@ export class RunDispatcher {
         while (Date.now() - started < startupTimeout) {
             const run = await this.store.read(id);
             startupTimeout =
-                run.runtime === 'docker' || run.runtime === 'e2b' ? 5 * 60_000 : 15_000;
+                run.repository || run.runtime === 'docker' || run.runtime === 'e2b'
+                    ? 5 * 60_000
+                    : 15_000;
             if (RunStore.isTerminal(run.status)) {
                 if (run.status === 'completed') return;
                 const events = await this.store.readEvents(id);

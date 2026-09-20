@@ -10,9 +10,11 @@ import {
     type RunOutcome,
 } from '../outcomes/index.js';
 import { formatOutcomeBytes as formatBytes } from '../outcomes/presentation.js';
+import { RepositoryWorkspace } from '../repositories/index.js';
 import { RunStore, type StoredRun } from '../runs/index.js';
 import { E2BOutcomeRecovery } from '../runtimes/e2b/recovery.js';
 import { E2BSdkClient } from '../runtimes/e2b/sdk.js';
+import { RuntimeSecretStore } from '../runtimes/secrets.js';
 import { workbenchHome } from '../storage.js';
 import { CliPresenter } from './presenter.js';
 
@@ -147,10 +149,10 @@ async function recoverOutcome(
 }
 
 function e2bRecoveryClient(): E2BSdkClient {
-    const key = process.env.E2B_API_KEY?.trim();
+    const key = RuntimeSecretStore.e2bKey();
     if (!key)
         throw new Error(
-            'E2B_API_KEY is required to manage the original outcome sandbox'
+            'E2B_API_KEY is required to manage the original outcome sandbox. Run wb connect --runtime e2b once, or set E2B_API_KEY.'
         );
     return new E2BSdkClient(key);
 }
@@ -180,7 +182,16 @@ function workspaceTargets(run: StoredRun, primary?: string) {
         ])
     );
     return {
-        primary: resolve(primary ?? run.workspace),
+        primary: resolve(
+            primary ??
+                (run.repository
+                    ? new RepositoryWorkspace(
+                          workbenchHome(),
+                          run.repository,
+                          process.env
+                      ).directory
+                    : run.workspace)
+        ),
         ...(Object.keys(named).length > 0 ? { named } : {}),
     };
 }

@@ -1,5 +1,6 @@
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
 import type { OutcomeCompleteness } from '../outcomes/contracts.js';
+import type { RepositoryBinding } from '../repositories/contracts.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import {
     type PreparedRuntime,
@@ -24,6 +25,7 @@ export interface WorkbenchRunOptions {
     dryRun?: boolean;
     workspaceDirectory?: string;
     workspaces?: WorkbenchWorkspaceBinding[];
+    repository?: RepositoryBinding;
     allowHostDocker?: boolean;
     runId?: string;
     signal?: AbortSignal;

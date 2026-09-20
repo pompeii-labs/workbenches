@@ -11,7 +11,14 @@ export interface E2BAssetBinding {
     access: 'read-only' | 'read-write';
     excludedHostPaths: string[];
     workspace?: string;
-    kind: 'workspace' | 'package' | 'asset' | 'credentials' | 'state' | 'outcome';
+    kind:
+        | 'workspace'
+        | 'package'
+        | 'asset'
+        | 'credentials'
+        | 'state'
+        | 'outcome'
+        | 'git';
 }
 
 export class E2BPathPlan {
@@ -24,46 +31,54 @@ export class E2BPathPlan {
         for (const asset of request.assets) {
             const hostPath = resolve(asset.path);
             const existing = unique.get(hostPath);
-            const binding: E2BAssetBinding = asset.workspace
+            const binding: E2BAssetBinding = asset.git
                 ? {
                       hostPath,
-                      runtimePath: `/workspaces/${asset.workspace}`,
+                      runtimePath: '/workspace/.git',
                       access: asset.access,
                       excludedHostPaths: [],
-                      workspace: asset.workspace,
-                      kind: 'workspace',
+                      kind: 'git',
                   }
-                : asset.state
+                : asset.workspace
                   ? {
                         hostPath,
-                        runtimePath: `/runtime-state/${unique.size}`,
+                        runtimePath: `/workspaces/${asset.workspace}`,
                         access: asset.access,
                         excludedHostPaths: [],
-                        kind: 'state',
+                        workspace: asset.workspace,
+                        kind: 'workspace',
                     }
-                  : hostPath === workspace
+                  : asset.state
                     ? {
                           hostPath,
-                          runtimePath: '/workspace',
+                          runtimePath: `/runtime-state/${unique.size}`,
                           access: asset.access,
                           excludedHostPaths: [],
-                          kind: 'workspace',
+                          kind: 'state',
                       }
-                    : hostPath === packageDirectory
+                    : hostPath === workspace
                       ? {
                             hostPath,
-                            runtimePath: '/workbench',
+                            runtimePath: '/workspace',
                             access: asset.access,
                             excludedHostPaths: [],
-                            kind: 'package',
+                            kind: 'workspace',
                         }
-                      : {
-                            hostPath,
-                            runtimePath: `/runtime-assets/${unique.size}`,
-                            access: asset.access,
-                            excludedHostPaths: [],
-                            kind: 'asset',
-                        };
+                      : hostPath === packageDirectory
+                        ? {
+                              hostPath,
+                              runtimePath: '/workbench',
+                              access: asset.access,
+                              excludedHostPaths: [],
+                              kind: 'package',
+                          }
+                        : {
+                              hostPath,
+                              runtimePath: `/runtime-assets/${unique.size}`,
+                              access: asset.access,
+                              excludedHostPaths: [],
+                              kind: 'asset',
+                          };
             if (existing && existing.runtimePath !== binding.runtimePath) {
                 throw new Error(
                     `Runtime assets must resolve to distinct staged paths: ${hostPath}`
@@ -188,6 +203,12 @@ export class E2BPathPlan {
         );
         return {
             HOME: '/tmp/workbench-home',
+            ...(this.request.repository
+                ? {
+                      WORKBENCH_REPOSITORY: this.request.repository.name,
+                      WORKBENCH_REPOSITORY_REVISION: this.request.repository.revision,
+                  }
+                : {}),
             ...(credentials && this.request.workbench.manifest.runner === 'opencode'
                 ? { XDG_DATA_HOME: credentials.runtimePath }
                 : {}),
@@ -201,6 +222,23 @@ export class E2BPathPlan {
                     this.request.environment[name],
                 ])
             ),
+            ...(this.request.repository?.delivery === 'pr'
+                ? Object.fromEntries(
+                      [
+                          'GH_TOKEN',
+                          'GIT_TERMINAL_PROMPT',
+                          'GIT_CONFIG_COUNT',
+                          'GIT_CONFIG_KEY_0',
+                          'GIT_CONFIG_VALUE_0',
+                          'GIT_CONFIG_KEY_1',
+                          'GIT_CONFIG_VALUE_1',
+                          'GIT_CONFIG_KEY_2',
+                          'GIT_CONFIG_VALUE_2',
+                          'GIT_CONFIG_KEY_3',
+                          'GIT_CONFIG_VALUE_3',
+                      ].map((name) => [name, this.request.environment[name]])
+                  )
+                : {}),
         };
     }
 

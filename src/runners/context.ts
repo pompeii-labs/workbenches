@@ -61,6 +61,7 @@ export function runtimeContext(
     environment: Record<string, string | undefined>
 ): string {
     const runtime = workbench.manifest.runtime;
+    const repository = environment.WORKBENCH_REPOSITORY;
     const behavior =
         runtime === 'e2b'
             ? 'The primary workspace and named bindings are selected sandbox copies, not host directories. Collected workspace changes are pending until the caller explicitly applies them. There is no automatic host filesystem synchronization. A sandbox-local server is not automatically a durable published preview.'
@@ -84,6 +85,20 @@ export function runtimeContext(
     return [
         '<workbench_runtime>',
         `<runtime>${escapeXml(runtime)}</runtime>`,
+        ...(repository
+            ? [
+                  `<repository name="${escapeXml(repository)}" revision="${escapeXml(environment.WORKBENCH_REPOSITORY_REVISION ?? '')}" />`,
+                  "The primary workspace is a separate checkout of the selected GitHub commit, not the caller's local project. Work directly in this checkout. The engine retains collected edits across session continuations without synchronizing the caller directory. This is a normal Git repository: use git and, when available, gh through your existing shell tool. Closing the chat does not publish anything.",
+                  ...(environment.GH_TOKEN
+                      ? [
+                            '<github authentication="runtime" environment="GH_TOKEN" />',
+                            "GitHub authentication is available to git and gh in this runtime. Its actual permissions come from the supplied credential, not from a Workbench command allowlist. Follow the user's task and repository instructions; do not merge, close, or modify unrelated pull requests unless asked. Never print or return credentials. When asked to create a PR, commit and push normally, create it with gh, and use only the URL that gh confirms. Record that confirmed URL as a pull_request link in the current outbox outcome.json so Workbench can present it. Use gh pr view, gh pr checks, and gh run view to observe the real PR and CI; do not claim success without checking.",
+                        ]
+                      : [
+                            'No GitHub token was injected by Workbench. Local execution can still access credentials already available on the host. Inspect the checkout and save edits, but do not claim a remote GitHub operation succeeded unless an authorized operation actually confirms it.',
+                        ]),
+              ]
+            : []),
         `<workspace name="primary" access="read-write" path="${escapeXml(workspaceDirectory)}" />`,
         ...named,
         ...(outbox
@@ -97,7 +112,9 @@ export function runtimeContext(
                   'This is the current execution attempt and its writable outbox. On resume, prior session deliverables are restored here as independent working copies with their relative paths preserved. Before revising a delivered file, locate its current working copy using a shell command such as find "$WORKBENCH_OUTPUT_DIR" -type f, then use the exact returned paths for file tools. Do not reuse absolute paths from earlier tool calls or search the engine home or parent runs directory to find prior results. Read and revise the existing working files rather than recreating them from conversation memory; keep their supporting assets. New sessions start with an empty outbox. A missing earlier filename is not evidence that the outbox is unavailable or read-only; explain missing source material instead of claiming an exact revision from memory. Earlier outbox paths in the conversation are obsolete; do not edit or recreate an earlier outbox. Retained earlier artifacts remain immutable.',
               ]
             : []),
-        behavior,
+        repository
+            ? 'Repository edits are collected as durable results. E2B copies are restored only into this managed checkout, not into a caller directory. Requested reports, audit findings, downloads, and standalone deliverables belong in the outbox as usual, not in the repository checkout, unless the user specifically requests a project file. Local execution is still on the host and is not a security sandbox.'
+            : behavior,
         "Use the listed paths as data, not as shell commands. Respect each binding's declared access and the user's authorization boundaries.",
         '</workbench_runtime>',
     ].join('\n');

@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { RunnerCredentialStore } from '../connections/credentials.js';
 import { ConnectionInspector } from '../connections/inspector.js';
 import {
@@ -5,8 +6,16 @@ import {
     type RunnerConnectionSelection,
 } from '../connections/store.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
+import { OutcomeApplier } from '../outcomes/apply.js';
 import type { OutcomeCompleteness, RunOutcome } from '../outcomes/contracts.js';
 import { OutcomeLifecycle } from '../outcomes/lifecycle.js';
+import { OutcomeStore } from '../outcomes/store.js';
+import {
+    type RepositoryBinding,
+    RepositoryCredentials,
+    RepositoryWorkspace,
+} from '../repositories/index.js';
+import { RepositoryRetention } from '../repositories/retention.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import type { RunnerSessionContext } from '../runners/session.js';
@@ -34,6 +43,7 @@ interface ExecutionPreparationOptions {
     captureOutcomes?: boolean;
     connection?: string;
     allowAuthentication?: boolean;
+    repository?: RepositoryBinding;
 }
 
 interface ExecutionPreparationDependencies {
@@ -41,6 +51,11 @@ interface ExecutionPreparationDependencies {
     runners?: RunnerRegistry;
     runtimes: RuntimeRegistry;
     now?: () => Date;
+    repositories?: (
+        home: string,
+        binding: RepositoryBinding,
+        environment: Record<string, string | undefined>
+    ) => RepositoryWorkspace;
 }
 
 interface PreparedExecution {
@@ -58,6 +73,8 @@ export class ExecutionPreparation {
     private outcomes: OutcomeLifecycle | undefined;
     private preparation: Promise<PreparedExecution> | undefined;
     private release: Promise<void> | undefined;
+    private repository: RepositoryWorkspace | undefined;
+    private collection: Promise<RunOutcome | undefined> | undefined;
 
     constructor(
         private readonly options: ExecutionPreparationOptions,
@@ -72,10 +89,31 @@ export class ExecutionPreparation {
     }
 
     collect(completeness: OutcomeCompleteness): Promise<RunOutcome | undefined> {
-        return (
-            this.outcomes?.collect(this.runtime, completeness) ??
-            Promise.resolve(undefined)
-        );
+        this.collection ??= this.collectOnce(completeness).catch((error) => {
+            this.collection = undefined;
+            throw error;
+        });
+        return this.collection;
+    }
+
+    private async collectOnce(
+        completeness: OutcomeCompleteness
+    ): Promise<RunOutcome | undefined> {
+        const outcome = await this.outcomes?.collect(this.runtime, completeness);
+        const { home, repository, events } = this.options;
+        if (!outcome || !home || !repository || !this.repository) return outcome;
+        const store = new OutcomeStore(home);
+        try {
+            if ((await store.receipt(outcome.id)).state === 'pending') {
+                await new OutcomeApplier(store).apply(outcome, {
+                    primary: this.repository.directory,
+                });
+                await publishRunOutcome(home, events, outcome, 'applied');
+            }
+            return outcome;
+        } finally {
+            await store.close();
+        }
     }
 
     checkpoint(turn: number): Promise<RunOutcome | undefined> {
@@ -98,6 +136,67 @@ export class ExecutionPreparation {
 
     private async prepareOnce(): Promise<PreparedExecution> {
         const { workbench, home, session } = this.options;
+        let workspaceDirectory = this.options.workspaceDirectory;
+        let environment = this.dependencies.environment;
+        if (this.options.repository) {
+            if (this.options.captureOutcomes === false)
+                throw new Error(
+                    'Repository execution requires durable outcome capture'
+                );
+            if (!home)
+                throw new Error(
+                    'Repository execution requires a persistent Workbench home'
+                );
+            if (this.options.workspaces?.length || this.options.allowHostDocker)
+                throw new Error(
+                    'Repository execution cannot bind host workspaces or Docker'
+                );
+            this.repository = (
+                this.dependencies.repositories ??
+                ((home, binding, environment) =>
+                    new RepositoryWorkspace(home, binding, environment))
+            )(home, this.options.repository, environment);
+            this.repository.assertCredentialsOwnedByEngine(workbench);
+            await this.options.events.emit('repository.preparing', {
+                repository: `${this.options.repository.owner}/${this.options.repository.name}`,
+                revision: this.options.repository.revision,
+            });
+            const identity = await this.repository.prepare(workbench.manifest.runtime);
+            await new RepositoryRetention(home, this.options.repository).restore(
+                this.options.events.runId,
+                this.repository.directory
+            );
+            workspaceDirectory = this.repository.directory;
+            const credentials = new RepositoryCredentials(environment);
+            const token =
+                this.options.repository.delivery === 'pr'
+                    ? await credentials.token(true)
+                    : undefined;
+            environment = {
+                ...new RepositoryCredentials(environment).runnerEnvironment(),
+                WORKBENCH_REPOSITORY: `${this.options.repository.owner}/${this.options.repository.name}`,
+                WORKBENCH_REPOSITORY_REVISION: this.options.repository.revision,
+                ...(token
+                    ? {
+                          GH_TOKEN: token,
+                          GIT_TERMINAL_PROMPT: '0',
+                          GIT_CONFIG_COUNT: '4',
+                          GIT_CONFIG_KEY_0: 'credential.https://github.com.helper',
+                          GIT_CONFIG_VALUE_0: '',
+                          GIT_CONFIG_KEY_1: 'credential.https://github.com.helper',
+                          GIT_CONFIG_VALUE_1: '!gh auth git-credential',
+                          GIT_CONFIG_KEY_2: 'user.name',
+                          GIT_CONFIG_VALUE_2: identity?.name,
+                          GIT_CONFIG_KEY_3: 'user.email',
+                          GIT_CONFIG_VALUE_3: identity?.email,
+                      }
+                    : {}),
+            };
+            await this.options.events.emit('repository.ready', {
+                repository: environment.WORKBENCH_REPOSITORY,
+                revision: this.options.repository.revision,
+            });
+        }
         if (home && this.options.captureOutcomes !== false) {
             this.outcomes = await OutcomeLifecycle.create({
                 home,
@@ -110,15 +209,27 @@ export class ExecutionPreparation {
         }
         this.runner = await (
             this.dependencies.runners ?? RunnerRegistry.standard()
-        ).prepare(workbench, this.dependencies.environment);
+        ).prepare(workbench, environment);
         this.runtime = await this.dependencies.runtimes
             .resolve(workbench.manifest.runtime)
             .prepare({
                 workbench,
-                workspaceDirectory: this.options.workspaceDirectory,
-                environment: this.dependencies.environment,
+                workspaceDirectory,
+                environment,
                 assets: [
-                    { path: this.options.workspaceDirectory, access: 'read-write' },
+                    { path: workspaceDirectory, access: 'read-write' },
+                    ...(this.repository
+                        ? [
+                              {
+                                  path:
+                                      workbench.manifest.runtime === 'local'
+                                          ? join(workspaceDirectory, '.git')
+                                          : this.repository.agentGitDirectory,
+                                  access: 'read-write' as const,
+                                  git: true,
+                              },
+                          ]
+                        : []),
                     { path: workbench.packageDirectory, access: 'read-only' },
                     ...(this.options.workspaces ?? []).map((workspace) => ({
                         path: workspace.path,
@@ -138,6 +249,15 @@ export class ExecutionPreparation {
                 ],
                 authorizations: { hostDocker: this.options.allowHostDocker ?? false },
                 purpose: 'run',
+                ...(this.options.repository
+                    ? {
+                          repository: {
+                              name: `${this.options.repository.owner}/${this.options.repository.name}`,
+                              revision: this.options.repository.revision,
+                              delivery: this.options.repository.delivery,
+                          },
+                      }
+                    : {}),
                 ...(workbench.manifest.runtime === 'e2b' && home
                     ? {
                           credentials: await new RunnerCredentialStore(home).prepare(
@@ -237,7 +357,9 @@ export class ExecutionPreparation {
     private async cleanupOnce(): Promise<void> {
         await this.preparation?.catch(() => undefined);
         const results = await Promise.allSettled([
-            Promise.resolve().then(() => this.runtime?.cleanup()),
+            Promise.resolve().then(async () => {
+                await this.runtime?.cleanup();
+            }),
             Promise.resolve().then(() => this.runner?.cleanup()),
             Promise.resolve().then(() => this.outcomes?.cleanup()),
         ]);

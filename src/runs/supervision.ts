@@ -1,3 +1,8 @@
+import {
+    type RepositoryBinding,
+    type RepositoryDeliveryReceipt,
+    RepositoryDeliveryStore,
+} from '../repositories/index.js';
 import type { WorkbenchEvent } from './events.js';
 import { RunStore, type StoredRun } from './store.js';
 
@@ -30,13 +35,15 @@ export interface RunSnapshot {
     error?: string;
     pending_requests: PendingRunRequest[];
     interrupted?: boolean;
+    repository?: RepositoryBinding;
+    delivery?: RepositoryDeliveryReceipt;
 }
 
 /** Read-only projection of the existing run protocol, not a second run state. */
 export class RunSupervision {
     private readonly store: RunStore;
 
-    constructor(home: string) {
+    constructor(private readonly home: string) {
         this.store = new RunStore(home);
     }
 
@@ -120,7 +127,16 @@ export class RunSupervision {
         if (RunStore.isTerminal(run.status))
             for (const event of await this.store.readEvents(run.id))
                 if (event.sequence > view.sequence) view.apply(event);
-        return view.snapshot(run);
+        const receipts = new RepositoryDeliveryStore(this.home);
+        const delivery = run.repository
+            ? ((await receipts.readSession(run.repository.session_id)) ??
+              (await receipts.read(run.id)))
+            : await receipts.read(run.id);
+        return {
+            ...view.snapshot(run),
+            ...(run.repository ? { repository: run.repository } : {}),
+            ...(delivery ? { delivery } : {}),
+        };
     }
 }
 
@@ -240,6 +256,7 @@ class RunObservation {
             ...(outcomeId ? { outcome_id: outcomeId } : {}),
             ...(this.error ? { error: this.error } : {}),
             pending_requests: pending,
+            ...(run.repository ? { repository: run.repository } : {}),
         };
     }
 

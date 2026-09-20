@@ -42,10 +42,12 @@ describe('E2B runtime provider', () => {
 
     test('requires an API key before contacting E2B', async () => {
         const resolved = await fixture();
+        const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-empty-home-'));
+        temporaryDirectories.push(home);
         await expect(
             new E2BRuntimeProvider().prepare({
                 ...request(resolved),
-                environment: {},
+                environment: { WORKBENCH_HOME: home },
             })
         ).rejects.toThrow('E2B_API_KEY is required for the E2B runtime');
     });
@@ -83,6 +85,36 @@ describe('E2B runtime provider', () => {
             expect(client.createOptions[0]?.timeoutMilliseconds).toBe(3_600_000);
         } finally {
             await runtime.cleanup();
+        }
+    });
+
+    test('adds engine-managed Git tools for repository runs without changing the Workbench image', async () => {
+        const resolved = await fixture();
+        const client = new FakeClient();
+        const ordinaryClient = new FakeClient();
+        const ordinary = await new E2BRuntimeProvider({
+            client: ordinaryClient,
+        }).prepare(request(resolved));
+        const runtime = await new E2BRuntimeProvider({ client }).prepare({
+            ...request(resolved),
+            repository: {
+                name: 'example/project',
+                revision: 'main',
+                delivery: 'pr',
+            },
+        });
+        try {
+            expect(client.templateSources).toEqual([
+                {
+                    image: 'ghcr.io/example/workbench:1.0.0',
+                    repositoryTools: true,
+                },
+            ]);
+            expect(client.templateNames[0]).not.toBe(ordinaryClient.templateNames[0]);
+            await runtime.preflight();
+        } finally {
+            await runtime.cleanup();
+            await ordinary.cleanup();
         }
     });
 
@@ -424,6 +456,13 @@ describe('E2B runtime provider', () => {
 
     test('collects declared remote artifacts without materializing them into the host output directory', async () => {
         const resolved = await fixture();
+        await mkdir(join(resolved.repositoryDirectory, 'apps', 'web'), {
+            recursive: true,
+        });
+        await writeFile(
+            join(resolved.repositoryDirectory, 'apps', 'web', '.npmrc'),
+            'fixture config'
+        );
         const outputDirectory = await mkdtemp(join(tmpdir(), 'workbench-e2b-output-'));
         const remoteOutput = await mkdtemp(
             join(tmpdir(), 'workbench-e2b-remote-output-')
@@ -497,6 +536,13 @@ describe('E2B runtime provider', () => {
                 summary: 'Remote work complete',
                 artifacts: [{ name: 'Report' }],
             });
+            expect(collected?.warnings).toEqual([
+                {
+                    code: 'workspace_paths_excluded',
+                    message:
+                        '1 protected or nested workspace path was not sent to E2B: "apps/web/.npmrc". This path cannot appear in returned changes.',
+                },
+            ]);
             const artifact = collected?.artifacts[0];
             if (!artifact) throw new Error('Expected a collected artifact');
             expect(await readFile(await store.blob(artifact.content), 'utf8')).toBe(

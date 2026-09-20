@@ -402,6 +402,15 @@ describe('CLI integration', () => {
         const fixture = await createFixture();
         const workspace = join(fixture.root, 'project');
         await mkdir(workspace);
+        const initialized = Bun.spawn(['git', 'init'], {
+            cwd: workspace,
+            stdout: 'ignore',
+            stderr: 'pipe',
+        });
+        expect(
+            await initialized.exited,
+            await new Response(initialized.stderr).text()
+        ).toBe(0);
         await symlink('../outside', join(workspace, 'escape'));
         const home = await temporaryDirectory('workspace-control-');
         const bin = await fakeBin([]);
@@ -1069,7 +1078,7 @@ describe('CLI integration', () => {
             ['run', fixture.packageDirectory, '--task', 'inspect', '--no-color'],
             environment
         );
-        expect(human.code).toBe(0);
+        expect(human.code, human.stderr).toBe(0);
         expect(human.stdout).toContain(
             'Result\n\nThe important value is safe.\n\n• First\n• Second'
         );

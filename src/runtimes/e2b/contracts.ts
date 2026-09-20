@@ -4,6 +4,7 @@ export interface E2BTemplateSource {
     image?: string;
     dockerfile?: string;
     context?: string;
+    repositoryTools?: boolean;
 }
 
 export interface E2BPreparedTemplate {

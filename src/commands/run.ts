@@ -1,6 +1,7 @@
 import { defineCommand } from 'citty';
 
 import { createEventRenderer } from '../rendering/index.js';
+import { parseRepository, RepositoryDeliveryStore } from '../repositories/index.js';
 import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
@@ -64,6 +65,16 @@ export const runCommand = defineCommand({
             type: 'string',
             description: 'Workspace directory (defaults to the current directory)',
         },
+        repo: {
+            type: 'string',
+            description:
+                'Run in an isolated GitHub checkout with your GitHub credential',
+        },
+        ref: {
+            type: 'string',
+            description:
+                'Repository branch, tag, or commit (defaults to its default branch)',
+        },
         'env-file': {
             type: 'string',
             valueHint: 'path',
@@ -92,6 +103,18 @@ export const runCommand = defineCommand({
     },
     async run({ args, rawArgs }) {
         rejectUnknownRunOptions(rawArgs);
+        if (args.ref && !args.repo) throw new Error('--ref requires --repo');
+        if (args.repo && args.dir)
+            throw new Error('--repo and --dir cannot be combined');
+        if (args.repo && args['dry-run'])
+            throw new Error('Repository runs do not support --dry-run yet');
+        if (args.repo) parseRepository(args.repo);
+        const repository = args.repo
+            ? {
+                  repository: args.repo,
+                  ...(args.ref ? { ref: args.ref } : {}),
+              }
+            : undefined;
         if (args.prompt !== undefined && args.task !== undefined) {
             throw new Error('Pass a task either positionally or with --task, not both');
         }
@@ -114,6 +137,7 @@ export const runCommand = defineCommand({
             const resolved = await new WorkbenchResolver().resolve(args.workbench, {
                 ...(args.dir ? { workspaceDirectory: args.dir } : {}),
             });
+            if (repository) resolved.repository = repository;
             const workspaces = await workbenchWorkspaces.bind({
                 workbench: resolved.workbench,
                 rawArgs,
@@ -145,6 +169,7 @@ export const runCommand = defineCommand({
         const resolved = await new WorkbenchResolver().resolve(args.workbench, {
             ...(args.dir ? { workspaceDirectory: args.dir } : {}),
         });
+        if (repository) resolved.repository = repository;
         try {
             const workspaces = await workbenchWorkspaces.bind({
                 workbench: resolved.workbench,
@@ -202,7 +227,7 @@ export const runCommand = defineCommand({
             if (args.detach) {
                 // E2B preparation creates a billable sandbox. The dispatched
                 // worker performs the same preflight before startup completes.
-                if (resolved.workbench.manifest.runtime !== 'e2b') {
+                if (!repository && resolved.workbench.manifest.runtime !== 'e2b') {
                     const smoke = await new RuntimeSmoke({
                         workbench: resolved.workbench,
                         workspaceDirectory: resolved.workspaceDirectory,
@@ -278,6 +303,11 @@ export const runCommand = defineCommand({
                 }
                 if (followed.terminalStatus === 'failed') process.exitCode = 1;
                 if (followed.terminalStatus === 'cancelled') process.exitCode = 130;
+                if (
+                    (await new RepositoryDeliveryStore(home).read(stored.id))?.state ===
+                    'failed'
+                )
+                    process.exitCode = 1;
             } finally {
                 renderer.finish();
             }
@@ -288,6 +318,8 @@ export const runCommand = defineCommand({
 });
 
 const runOptions = new Set([
+    '--repo',
+    '--ref',
     '--task',
     '-t',
     '--json',

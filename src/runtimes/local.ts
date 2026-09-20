@@ -62,7 +62,10 @@ export class LocalRuntimeProvider implements RuntimeProvider {
             );
         }
         const outcome = request.outcome
-            ? await HostOutcomeCapture.create(request)
+            ? await HostOutcomeCapture.create(request, {
+                  bestEffortWorkspaceChanges: !request.repository,
+                  gitBaseline: true,
+              })
             : undefined;
         return new LocalRuntime(request, this.dependencies, outcome);
     }
@@ -79,12 +82,14 @@ export class LocalRuntime implements PreparedRuntime {
     private ready = false;
     private cleaned = false;
     private readonly workspaceBindings = new WorkbenchWorkspaces();
+    private readonly requiresGitHubCli;
 
     constructor(
         request: RuntimePrepareRequest,
         private readonly dependencies: Required<LocalRuntimeDependencies>,
         private readonly outcome?: HostOutcomeCapture
     ) {
+        this.requiresGitHubCli = request.repository?.delivery === 'pr';
         this.workbench = request.workbench;
         this.workspaceDirectory = request.workspaceDirectory;
         this.workspaces = request.assets.flatMap((asset) =>
@@ -100,6 +105,12 @@ export class LocalRuntime implements PreparedRuntime {
         );
         this.environment = {
             ...request.environment,
+            ...(request.repository
+                ? {
+                      WORKBENCH_REPOSITORY: request.repository.name,
+                      WORKBENCH_REPOSITORY_REVISION: request.repository.revision,
+                  }
+                : {}),
             ...this.workspaceBindings.environment(this.workspaces),
             ...(request.outcome
                 ? { WORKBENCH_OUTPUT_DIR: request.outcome.directory }
@@ -114,6 +125,10 @@ export class LocalRuntime implements PreparedRuntime {
     async preflight(): Promise<PreflightResult> {
         this.assertAvailable('preflight');
         try {
+            if (this.requiresGitHubCli && !this.dependencies.findExecutable('gh'))
+                throw new Error(
+                    'GitHub CLI (gh) is required for authenticated repository runs'
+                );
             const result = new WorkbenchPreflight({
                 environment: this.environment,
                 findExecutable: this.dependencies.findExecutable,
@@ -207,6 +222,10 @@ export class LocalRuntime implements PreparedRuntime {
         store: OutcomeStore
     ): Promise<RuntimeOutcomeCollection | undefined> {
         return this.outcome?.collect(store);
+    }
+
+    async snapshotRepository(store: OutcomeStore) {
+        return this.outcome?.snapshot(store);
     }
 
     async cleanup(): Promise<void> {

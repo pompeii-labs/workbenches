@@ -238,6 +238,8 @@ can be fixed before model tokens are spent.
 
 When a Workbench has compatible credentials through more than one provider,
 use `wb connect` to choose the default connection for a runner and runtime.
+For E2B sandbox provisioning, `wb connect --runtime e2b` saves a separate
+host-only API key. An inherited `E2B_API_KEY` overrides it.
 `wb connect <name>` uses that Workbench as the authentication environment, but
 the resulting default is reusable by every compatible Workbench on the same
 runner and runtime. A run may use `--connection <provider>` to select another

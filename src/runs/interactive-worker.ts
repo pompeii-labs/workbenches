@@ -96,6 +96,7 @@ export class InteractiveRunWorker {
                 },
                 reference: request.reference ?? metadata.workbench,
                 home: this.home,
+                ...(request.repository ? { repository: request.repository } : {}),
                 workspaces: request.workspaces ?? [],
                 allowHostDocker: request.allow_host_docker ?? false,
                 interactive: metadata.mode === 'interactive',

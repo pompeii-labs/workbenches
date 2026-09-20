@@ -1,6 +1,12 @@
 export const WORKBENCH_EVENT_TYPES = [
     'run.started',
     'run.ready',
+    'repository.preparing',
+    'repository.ready',
+    'repository.checks',
+    'delivery.started',
+    'delivery.completed',
+    'delivery.failed',
     'authentication.requested',
     'authentication.completed',
     'turn.started',

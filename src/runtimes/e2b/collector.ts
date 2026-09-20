@@ -13,6 +13,7 @@ import { formatBytes } from './infrastructure.js';
 import { quote } from './shell.js';
 import { type E2BAssetSnapshot, extractArchive } from './snapshot.js';
 import { downloadE2BFile } from './streams.js';
+import { workspaceTracking } from './tracking.js';
 
 export class E2BOutcomeCollector {
     constructor(
@@ -36,7 +37,7 @@ export class E2BOutcomeCollector {
             artifacts: [],
             links: [],
         };
-        let excluded = 0;
+        const excluded = new Set<string>();
         try {
             for (const [index, snapshot] of this.options.snapshots.entries()) {
                 if (
@@ -56,10 +57,11 @@ export class E2BOutcomeCollector {
                 const remoteArchive = `/tmp/workbench-output-${index}.tar.gz`;
                 const remoteChanged = `/tmp/workbench-changed-${index}`;
                 const remoteDeleted = `/tmp/workbench-deleted-${index}`;
+                const tracking = workspaceTracking(this.options.snapshots, index);
                 const command = [
-                    `git -C ${quote(root)} add -A`,
-                    `git -C ${quote(root)} diff --cached --name-only --diff-filter=ACMRTUXB -z ${quote(baseline)} > ${quote(remoteChanged)}`,
-                    `git -C ${quote(root)} diff --cached --name-only --diff-filter=D -z ${quote(baseline)} > ${quote(remoteDeleted)}`,
+                    `${tracking.git} add -A`,
+                    `${tracking.git} diff --cached --name-only --diff-filter=ACMRTUXB -z ${quote(baseline)} > ${quote(remoteChanged)}`,
+                    `${tracking.git} diff --cached --name-only --diff-filter=D -z ${quote(baseline)} > ${quote(remoteDeleted)}`,
                     `tar -C ${quote(root)} --null --files-from=${quote(remoteChanged)} -czf ${quote(remoteArchive)}`,
                 ].join(' && ');
                 requireSuccess(
@@ -118,7 +120,14 @@ export class E2BOutcomeCollector {
                 captures.push(capture);
                 const changeset = await capture.collect(store);
                 if (changeset) changesets.push(changeset);
-                excluded += snapshot.excludedPaths.length;
+                for (const path of snapshot.excludedPaths) {
+                    if (snapshot.syncExcludedPaths.includes(path)) continue;
+                    excluded.add(
+                        snapshot.binding.workspace
+                            ? `${snapshot.binding.workspace}/${path}`
+                            : path
+                    );
+                }
                 await sandbox
                     .run(
                         `rm -f ${quote(remoteArchive)} ${quote(remoteChanged)} ${quote(remoteDeleted)}`
@@ -137,15 +146,7 @@ export class E2BOutcomeCollector {
                 changesets,
                 artifacts: output.artifacts,
                 links: output.links,
-                warnings:
-                    excluded > 0
-                        ? [
-                              {
-                                  code: 'workspace_paths_excluded',
-                                  message: `${excluded} protected or nested workspace path${excluded === 1 ? ' was' : 's were'} excluded from remote execution and its outcome.`,
-                              },
-                          ]
-                        : [],
+                warnings: exclusionWarnings([...excluded]),
             };
         } finally {
             await Promise.allSettled(captures.map((capture) => capture.cleanup()));
@@ -199,6 +200,21 @@ export class E2BOutcomeCollector {
             await rm(directory, { recursive: true, force: true });
         }
     }
+}
+
+function exclusionWarnings(paths: string[]) {
+    if (paths.length === 0) return [];
+    const visible = paths
+        .slice(0, 3)
+        .map((path) => JSON.stringify(path))
+        .join(', ');
+    const remaining = paths.length - 3;
+    return [
+        {
+            code: 'workspace_paths_excluded',
+            message: `${paths.length} protected or nested workspace path${paths.length === 1 ? ' was' : 's were'} not sent to E2B: ${visible}${remaining > 0 ? `, and ${remaining} more` : ''}. ${paths.length === 1 ? 'This path' : 'These paths'} cannot appear in returned changes.`,
+        },
+    ];
 }
 
 function requireSuccess(

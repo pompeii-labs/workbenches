@@ -24,6 +24,7 @@ export interface RuntimeAsset {
     access: 'read-only' | 'read-write';
     workspace?: string;
     state?: boolean;
+    git?: boolean;
 }
 
 export interface RuntimeCredentialBinding {
@@ -42,6 +43,7 @@ export interface RuntimePrepareRequest {
     purpose?: 'build' | 'connect' | 'run';
     run?: { id: string; scope: string };
     outcome?: { directory: string; home?: string };
+    repository?: { name: string; revision: string; delivery: 'none' | 'pr' };
 }
 
 export interface RuntimeCommandOptions {
@@ -125,6 +127,10 @@ export interface PreparedRuntime {
     cancel(process: SpawnedRunner): void;
     infrastructure?(): Promise<RuntimeInfrastructureMetadata | undefined>;
     collectOutcome?(store: OutcomeStore): Promise<RuntimeOutcomeCollection | undefined>;
+    /** Capture repository changes during execution without finalizing or caching them. */
+    snapshotRepository?(
+        store: OutcomeStore
+    ): Promise<RuntimeOutcomeCollection | undefined>;
     /** Collect returned files and links without finalizing native state or workspace diffs. */
     collectOutput?(store: OutcomeStore): Promise<CollectedOutput | undefined>;
     finalizeOutcome?(): Promise<void>;

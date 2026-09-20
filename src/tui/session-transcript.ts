@@ -255,6 +255,30 @@ function isTranscriptItem(value: unknown): value is TranscriptItem {
     if (kind === 'user' || kind === 'assistant') {
         return typeof Reflect.get(value, 'text') === 'string';
     }
+    if (kind === 'checks') {
+        const jobs = Reflect.get(value, 'jobs');
+        return (
+            ['none', 'pending', 'failed', 'incomplete', 'passed'].includes(
+                String(Reflect.get(value, 'state'))
+            ) &&
+            typeof Reflect.get(value, 'url') === 'string' &&
+            /^[a-f0-9]{40}$/.test(String(Reflect.get(value, 'head'))) &&
+            Number.isSafeInteger(jobs) &&
+            Number(jobs) >= 0
+        );
+    }
+    if (kind === 'delivery') {
+        return (
+            typeof Reflect.get(value, 'outcomeId') === 'string' &&
+            ['published', 'failed', 'unchanged'].includes(
+                String(Reflect.get(value, 'state'))
+            ) &&
+            (Reflect.get(value, 'url') === undefined ||
+                typeof Reflect.get(value, 'url') === 'string') &&
+            (Reflect.get(value, 'message') === undefined ||
+                typeof Reflect.get(value, 'message') === 'string')
+        );
+    }
     if (kind === 'notice') {
         return (
             typeof Reflect.get(value, 'text') === 'string' &&

@@ -214,6 +214,16 @@ class GuardedRuntime implements PreparedRuntime {
         }
     }
 
+    async snapshotRepository(
+        store: OutcomeStore
+    ): Promise<RuntimeOutcomeCollection | undefined> {
+        try {
+            return await this.runtime.snapshotRepository?.(store);
+        } catch (error) {
+            throw RuntimeError.from(this.name, 'collect', error);
+        }
+    }
+
     async finalizeOutcome(): Promise<void> {
         await this.runtime.finalizeOutcome?.();
     }

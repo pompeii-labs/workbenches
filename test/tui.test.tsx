@@ -330,6 +330,9 @@ describe.serial('Workbench TUI', () => {
         findInput(setup.renderer.root, 'home-launcher').submit();
         await Bun.sleep(10);
         await setup.flush();
+        expect(setup.captureCharFrame()).toContain('Launch Workbench');
+        setup.mockInput.pressEnter();
+        await setup.flush();
         frame = setup.captureCharFrame();
         expect(frame).toContain('◆ lux-migrations');
         expect(frame).toContain('opencode · openai/gpt-5.4-mini · local');
@@ -374,6 +377,9 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
 
         expect(saved).toEqual([published]);
+        expect(setup.captureCharFrame()).toContain('Launch Workbench');
+        setup.mockInput.pressEnter();
+        await setup.flush();
         frame = setup.captureCharFrame();
         expect(frame).toContain('◆ workers');
         expect(frame).toContain('opencode · openai/gpt-5.4-mini · local');
@@ -471,6 +477,9 @@ describe.serial('Workbench TUI', () => {
 
         findInput(setup.renderer.root, 'home-launcher').submit();
         await Bun.sleep(10);
+        await setup.flush();
+        expect(setup.captureCharFrame()).toContain('Launch Workbench');
+        setup.mockInput.pressEnter();
         await setup.flush();
 
         const frame = setup.captureCharFrame();
@@ -585,7 +594,7 @@ describe.serial('Workbench TUI', () => {
 
         const prompt = findPrompt(setup.renderer.root);
         expect(setup.captureCharFrame()).toContain('Connecting to Workbench...');
-        expect(setup.captureCharFrame()).toContain('Starting OpenCode...');
+        expect(setup.captureCharFrame()).toContain('Preparing local workspace...');
         expect(setup.captureCharFrame()).not.toContain('Ready when you are.');
         prompt.blur();
         await setup.mockInput.typeText('/');
@@ -601,15 +610,66 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
         expect(setup.captureCharFrame()).not.toContain('Connecting to Workbench...');
         expect(setup.captureCharFrame()).toContain('Ready when you are.');
-        expect(setup.captureCharFrame()).not.toContain('Starting OpenCode...');
+        expect(setup.captureCharFrame()).not.toContain('Preparing local workspace...');
         prompt.submit();
         await setup.flush();
         expect(sent).toBe(1);
     });
 
+    test('accepts the first message as a new turn after startup reports ready', async () => {
+        let sent = 0;
+        let steered = 0;
+        const handle = fakeHandle(() => sent++);
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'repo-engineer',
+                            resolved: resolvedWorkbench('repo-engineer', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => ({
+                            ...handle,
+                            observe: () =>
+                                (async function* () {
+                                    yield event(0, 'run.started', {});
+                                    yield event(1, 'run.ready', {});
+                                })(),
+                            steer: async () => {
+                                steered++;
+                                throw new Error('No active turn');
+                            },
+                        })}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28 }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain('Ready when you are.');
+        expect(frame).toContain('enter send');
+        expect(frame).not.toContain('enter steer');
+
+        const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('Read the repository');
+        prompt.submit();
+        await setup.flush();
+        expect(sent).toBe(1);
+        expect(steered).toBe(0);
+    });
+
     for (const [runtime, runner, label] of [
-        ['local', 'opencode', 'Starting OpenCode...'],
-        ['local', 'pi', 'Starting Pi...'],
+        ['local', 'opencode', 'Preparing local workspace...'],
+        ['local', 'pi', 'Preparing local workspace...'],
         ['docker', 'opencode', 'Starting Docker container...'],
         ['e2b', 'opencode', 'Starting E2B sandbox...'],
     ] as const) {
@@ -1815,7 +1875,11 @@ describe.serial('Workbench TUI', () => {
                         entries={[]}
                         initial={{
                             alias: 'creator',
-                            resolved: resolvedWorkbench('creator', 'opencode'),
+                            resolved: resolvedWorkbench(
+                                'creator',
+                                'opencode',
+                                '/workspace/project'
+                            ),
                         }}
                         resolve={async () => {
                             throw new Error('not opened in this test');
@@ -1828,7 +1892,13 @@ describe.serial('Workbench TUI', () => {
                                 'opencode'
                             ),
                         })}
-                        listSessions={() => store.list({ resumableOnly: true })}
+                        listSessions={(workspace) => {
+                            expect(workspace).toBe('/workspace/project');
+                            return store.list({
+                                resumableOnly: true,
+                                ...(workspace ? { workspace } : {}),
+                            });
+                        }}
                         start={async ({ session: target }) => {
                             if (target) resumed = target;
                             return fakeHandle(() => {});
@@ -2457,6 +2527,39 @@ describe.serial('Workbench TUI', () => {
         expect(frame).toContain('1 changeset · 2 artifacts · 1 link');
         expect(frame).toContain('/outcome');
         expect(frame).toContain('wbo_1234567890abcdefghij');
+    });
+
+    test('does not call an empty durable outcome ready', async () => {
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <box width="100%" height="100%">
+                        <Transcript
+                            assistantLabel="fixture"
+                            streaming={false}
+                            item={{
+                                id: 'empty-outcome-card',
+                                kind: 'outcome',
+                                outcomeId: 'wbo_1234567890abcdefghij',
+                                applicationState: 'applied',
+                                completeness: 'complete',
+                                changesets: 0,
+                                artifacts: 0,
+                                links: 0,
+                                warnings: 1,
+                            }}
+                        />
+                    </box>
+                </ThemeProvider>
+            ),
+            { width: 90, height: 12 }
+        );
+        renderers.push(setup.renderer);
+        await setup.flush();
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain('No saved results');
+        expect(frame).toContain('1 warning');
+        expect(frame).not.toContain('Outcome ready');
     });
 
     test('renders every tool action and keeps failure details visible', async () => {

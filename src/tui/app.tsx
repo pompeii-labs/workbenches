@@ -6,6 +6,7 @@ import type {
 } from '../authoring/index.js';
 import type { CatalogEntry } from '../catalog/index.js';
 import type { RegistrySearchResult } from '../registry/index.js';
+import type { RepositoryInspection } from '../repositories/index.js';
 import type { RunHandle } from '../runs/index.js';
 import type { ResolvedSession, StoredSession } from '../sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
@@ -35,7 +36,7 @@ export interface TuiAppProps {
     searchRegistry?: (query: string) => Promise<RegistrySearchResult[]>;
     saveRegistry?: (workbench: RegistrySearchResult) => Promise<CatalogEntry>;
     resolveSession?: (id: string) => Promise<ResolvedSession>;
-    listSessions?: () => Promise<StoredSession[]>;
+    listSessions?: (workspace?: string) => Promise<StoredSession[]>;
     createWorkbench?: () => Promise<PreparedWorkbenchChat>;
     improveWorkbench?: (
         sessionId: string,
@@ -51,6 +52,7 @@ export interface TuiAppProps {
     }) => Promise<RunHandle>;
     onSessionObserved?: (id: string | undefined) => void;
     onAuthoringFinished?: (result: AuthoringOperationResult) => void;
+    repositoryInspection?: (id: string) => RepositoryInspection;
 }
 
 interface ChatScreenState {
@@ -121,10 +123,10 @@ export function WorkbenchApp(props: TuiAppProps) {
         const target = await props.resolveSession(session.id);
         openSession(target);
     };
-    const refreshSessions = async () => {
+    const refreshSessions = async (workspace?: string) => {
         if (!props.listSessions) return;
         try {
-            setRecentSessions(await props.listSessions());
+            setRecentSessions(await props.listSessions(workspace));
         } catch {
             // Keep the last known list when local session discovery is unavailable.
         }
@@ -134,8 +136,9 @@ export function WorkbenchApp(props: TuiAppProps) {
         void refreshSessions();
     };
     const browseSessions = () => {
+        const workspace = chat()?.resolved.workspaceDirectory;
         setScreen({ kind: 'resume' });
-        void refreshSessions();
+        void refreshSessions(workspace);
     };
 
     return (
@@ -216,6 +219,12 @@ export function WorkbenchApp(props: TuiAppProps) {
                                         ? { connection: current.connection }
                                         : {})}
                                     start={props.start}
+                                    {...(props.repositoryInspection
+                                        ? {
+                                              repositoryInspection:
+                                                  props.repositoryInspection,
+                                          }
+                                        : {})}
                                     {...(props.onSessionObserved
                                         ? {
                                               onSessionObserved:

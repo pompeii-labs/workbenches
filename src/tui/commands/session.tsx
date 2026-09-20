@@ -44,6 +44,7 @@ export class SessionCommands {
             themes: SessionThemeActions;
             actions: SessionCommandActions;
             authoring?: boolean;
+            repository?: { open(): void; workspace(): string };
         }
     ) {
         this.registry = new TuiCommandRegistry(this.#definitions());
@@ -123,7 +124,9 @@ export class SessionCommands {
                                 { label: 'Type', value: manifest.runtime },
                                 {
                                     label: 'Workspace',
-                                    value: this.options.resolved.workspaceDirectory,
+                                    value:
+                                        this.options.repository?.workspace() ??
+                                        this.options.resolved.workspaceDirectory,
                                 },
                             ]}
                         />
@@ -148,6 +151,21 @@ export class SessionCommands {
                         />
                     ))
             ),
+            ...(this.options.repository
+                ? ['pr', 'checks', 'logs'].map((name) =>
+                      this.#command(
+                          name,
+                          name === 'pr'
+                              ? 'Session PR'
+                              : name === 'checks'
+                                ? 'GitHub CI'
+                                : 'CI logs',
+                          'Inspect the session PR, current commit checks, and job logs',
+                          'Workbench',
+                          () => this.options.repository?.open()
+                      )
+                  )
+                : []),
             this.#command(
                 'permissions',
                 'Runner capabilities',

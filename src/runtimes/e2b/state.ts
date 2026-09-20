@@ -27,7 +27,17 @@ export interface E2BStateSource {
 /** Copy-on-write native state. Remote state never overwrites caller-owned files. */
 export class E2BStateStore {
     private readonly root: string;
-    constructor(private readonly directory: string) {
+    constructor(
+        private readonly directory: string,
+        private readonly files?: readonly string[]
+    ) {
+        for (const file of files ?? []) {
+            if (
+                !/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(file) ||
+                file.split('/').some((part) => part === '.' || part === '..')
+            )
+                throw new Error('Invalid E2B native state selection');
+        }
         this.root = join(directory, stateName);
     }
 
@@ -58,9 +68,10 @@ export class E2BStateStore {
             try {
                 const bytes = await extractArchive(archive, pending, maximumBytes);
                 await privatize(pending);
+                if (this.files) await retainFiles(pending, this.files);
                 if (
-                    (await fingerprint(pending)) ===
-                    (await fingerprint(current.directory))
+                    (await fingerprint(pending, this.files)) ===
+                    (await fingerprint(current.directory, this.files))
                 ) {
                     await rm(pending, { recursive: true, force: true });
                     return bytes;
@@ -78,8 +89,10 @@ export class E2BStateStore {
                 });
                 await rename(pointerTemporary, join(this.root, 'current.json'));
                 // Keep one predecessor for interrupted staging. Never prune the canonical input.
-                const previous = current.version.startsWith('generation:')
-                    ? current.version.slice('generation:'.length)
+                const previous = current.directory.startsWith(
+                    `${this.root}/generations/`
+                )
+                    ? current.directory.slice(`${this.root}/generations/`.length)
                     : undefined;
                 for (const entry of await readdir(join(this.root, 'generations'), {
                     withFileTypes: true,
@@ -118,7 +131,7 @@ export class E2BStateStore {
         if (!details)
             return {
                 directory: this.directory,
-                version: await fingerprint(this.directory),
+                version: await fingerprint(this.directory, this.files),
             };
         if (!details.isFile() || details.isSymbolicLink() || details.size > 1_024) {
             throw new Error('Invalid E2B native state pointer');
@@ -129,7 +142,12 @@ export class E2BStateStore {
         }
         const directory = join(this.root, 'generations', value.generation);
         await requireDirectory(directory);
-        return { directory, version: `generation:${value.generation}` };
+        return {
+            directory,
+            version: this.files
+                ? await fingerprint(directory, this.files)
+                : `generation:${value.generation}`,
+        };
     }
 }
 
@@ -164,8 +182,70 @@ async function privatize(directory: string): Promise<void> {
     }
 }
 
-async function fingerprint(directory: string): Promise<string> {
+export async function selectedStateFiles(
+    directory: string,
+    files: readonly string[]
+): Promise<string[]> {
+    const selected: string[] = [];
+    for (const file of files.toSorted()) {
+        let path = directory;
+        const parts = file.split('/');
+        for (const [index, part] of parts.entries()) {
+            path = join(path, part);
+            const details = await lstat(path).catch((error) => {
+                if (
+                    error instanceof Error &&
+                    'code' in error &&
+                    error.code === 'ENOENT'
+                )
+                    return undefined;
+                throw error;
+            });
+            if (!details) break;
+            const last = index === parts.length - 1;
+            if (
+                details.isSymbolicLink() ||
+                !(last ? details.isFile() : details.isDirectory())
+            )
+                throw new Error(
+                    'E2B native state selection contains a non-regular file'
+                );
+            if (last) selected.push(file);
+        }
+    }
+    return selected;
+}
+
+async function retainFiles(
+    directory: string,
+    files: readonly string[],
+    prefix = ''
+): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+        const path = join(directory, entry.name);
+        if (entry.isDirectory() && files.some((file) => file.startsWith(`${name}/`)))
+            await retainFiles(path, files, name);
+        else if (!entry.isFile() || !files.includes(name))
+            await rm(path, { recursive: entry.isDirectory(), force: true });
+    }
+}
+
+async function fingerprint(
+    directory: string,
+    files?: readonly string[]
+): Promise<string> {
     const hash = createHash('sha256');
+    if (files) {
+        for (const file of await selectedStateFiles(directory, files)) {
+            hash.update(`${file}\0`);
+            const digest = createHash('sha256');
+            for await (const chunk of createReadStream(join(directory, file)))
+                digest.update(chunk);
+            hash.update(`${digest.digest('hex')}\0`);
+        }
+        return `sha256:${hash.digest('hex')}`;
+    }
     const visit = async (root: string, prefix = ''): Promise<void> => {
         for (const entry of (await readdir(root, { withFileTypes: true })).toSorted(
             (a, b) => a.name.localeCompare(b.name)

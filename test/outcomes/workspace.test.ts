@@ -3,10 +3,12 @@ import {
     chmod,
     mkdir,
     mkdtemp,
+    readdir,
     readFile,
     rename,
     rm,
     symlink,
+    truncate,
     unlink,
     writeFile,
 } from 'node:fs/promises';
@@ -63,6 +65,83 @@ async function repository(): Promise<string> {
 }
 
 describe('WorkspaceSnapshot', () => {
+    test('uses Git objects instead of copying a clean local baseline', async () => {
+        const root = await repository();
+        const snapshot = await WorkspaceSnapshot.create(root, {
+            workspace: { kind: 'primary' },
+            baseline: 'git',
+        });
+        const baseline = (snapshot as unknown as { baselineRoot: string }).baselineRoot;
+        const store = new OutcomeStore(await temporaryDirectory());
+        try {
+            expect(await readdir(baseline)).toEqual([]);
+            await writeFile(join(root, 'modify.txt'), 'after run\n');
+            await unlink(join(root, 'delete.txt'));
+            // The captured object stays available even if the index changes mid-run.
+            await git(root, 'add', '-A');
+            const changeset = await snapshot.collect(store);
+            expect(changeset?.entries.map((entry) => entry.path)).toEqual([
+                'delete.txt',
+                'modify.txt',
+            ]);
+            expect(await readFile(join(baseline, 'modify.txt'), 'utf8')).toBe(
+                'committed\n'
+            );
+            expect(await readFile(join(baseline, 'delete.txt'), 'utf8')).toBe(
+                'delete me\n'
+            );
+            const review = changeset?.review;
+            if (!review) throw new Error('Missing review diff');
+            expect(await readFile(await store.blob(review), 'utf8')).toContain(
+                '-committed'
+            );
+        } finally {
+            await snapshot.cleanup();
+            await store.close();
+        }
+    });
+
+    test('retains only dirty and untracked local baseline bytes', async () => {
+        const root = await repository();
+        await writeFile(join(root, 'modify.txt'), 'staged before run\n');
+        await git(root, 'add', 'modify.txt');
+        await writeFile(join(root, 'delete.txt'), 'unstaged before run\n');
+        await writeFile(join(root, 'preexisting.txt'), 'untracked before run\n');
+        const snapshot = await WorkspaceSnapshot.create(root, {
+            workspace: { kind: 'primary' },
+            baseline: 'git',
+        });
+        const baseline = (snapshot as unknown as { baselineRoot: string }).baselineRoot;
+        const store = new OutcomeStore(await temporaryDirectory());
+        try {
+            expect((await readdir(baseline)).toSorted()).toEqual([
+                'delete.txt',
+                'preexisting.txt',
+            ]);
+            await writeFile(join(root, 'modify.txt'), 'changed staged file\n');
+            await unlink(join(root, 'delete.txt'));
+            await writeFile(join(root, 'preexisting.txt'), 'changed untracked file\n');
+            const changeset = await snapshot.collect(store);
+            expect(changeset?.entries.map((entry) => entry.path)).toEqual([
+                'delete.txt',
+                'modify.txt',
+                'preexisting.txt',
+            ]);
+            expect(await readFile(join(baseline, 'modify.txt'), 'utf8')).toBe(
+                'staged before run\n'
+            );
+            const review = changeset?.review;
+            if (!review) throw new Error('Missing review diff');
+            const patch = await readFile(await store.blob(review), 'utf8');
+            expect(patch).toContain('-unstaged before run');
+            expect(patch).toContain('-untracked before run');
+            expect(patch).toContain('-staged before run');
+        } finally {
+            await snapshot.cleanup();
+            await store.close();
+        }
+    });
+
     test('isolates changes made after a dirty workspace baseline', async () => {
         const root = await repository();
         await writeFile(join(root, 'modify.txt'), 'dirty before run\n');
@@ -222,4 +301,16 @@ describe('WorkspaceSnapshot', () => {
             })
         ).rejects.toThrow('safety limit');
     });
+
+    test('measures an oversized sparse workspace before reading file contents', async () => {
+        const root = await repository();
+        await writeFile(join(root, 'oversized.bin'), '');
+        await truncate(join(root, 'oversized.bin'), 16 * 1_024 * 1_024 * 1_024);
+        await expect(
+            WorkspaceSnapshot.create(root, {
+                workspace: { kind: 'primary' },
+                maximumBytes: 1_024,
+            })
+        ).rejects.toThrow('16 GiB');
+    }, 2_000);
 });

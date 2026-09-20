@@ -114,6 +114,8 @@ export class SessionRetention {
             if (!this.oldEnough(this.runTimestamp(run), policy.before)) return false;
             if (!run.session_id) return true;
             const session = sessionsById.get(run.session_id);
+            // Repository continuations accumulate changes from their original base.
+            if (session?.repository) return false;
             return !session || session.latest_run_id !== run.id;
         });
 
@@ -290,6 +292,7 @@ export class SessionRetention {
         if (!session) return this.removeIfEligible(initial, policy);
         return this.#sessions.exclusive(session.id, async () => {
             const currentSession = await this.#sessions.read(session.id);
+            if (currentSession.repository) return false;
             if (currentSession.latest_run_id === id) return false;
             return this.removeIfEligible(await this.#runs.read(id), policy);
         });

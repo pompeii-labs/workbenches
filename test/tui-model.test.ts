@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import type { WorkbenchEvent } from '../src/runs/index.js';
+import { startupLabel } from '../src/tui/activity.js';
 import {
     addUserMessage,
     emptyTranscript,
@@ -153,8 +154,10 @@ describe('TUI transcript model', () => {
     });
 
     test('represents ready, failed, cancelled, and failed-tool states', () => {
-        let state = reduceTranscript(emptyTranscript(), event(1, 'run.ready', {}));
-        expect(state.status).toBe('Ready');
+        let state = reduceTranscript(emptyTranscript(), event(1, 'run.started', {}));
+        expect(state).toMatchObject({ busy: true, status: 'Starting' });
+        state = reduceTranscript(state, event(1, 'run.ready', {}));
+        expect(state).toMatchObject({ busy: false, status: 'Ready' });
 
         state = reduceTranscript(
             state,
@@ -201,6 +204,18 @@ describe('TUI transcript model', () => {
             tone: 'muted',
         });
         expect(reduceTranscript(state, event(7, 'runner.event', {}))).toBe(state);
+    });
+
+    test('labels preparation separately from harness startup', () => {
+        expect(startupLabel('local', 'opencode', 'Connecting')).toBe(
+            'Preparing local workspace...'
+        );
+        expect(startupLabel('local', 'opencode', 'Starting')).toBe(
+            'Starting OpenCode...'
+        );
+        expect(startupLabel('e2b', 'opencode', 'Connecting')).toBe(
+            'Starting E2B sandbox...'
+        );
     });
 
     test('represents a normalized question lifecycle', () => {

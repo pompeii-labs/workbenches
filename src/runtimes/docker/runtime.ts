@@ -112,6 +112,7 @@ export class DockerRuntime implements PreparedRuntime {
             this.workbench.manifest.runner,
             ...this.workbench.manifest.tools,
             ...(this.options.hostSocket ? ['docker'] : []),
+            ...(this.options.request.repository?.delivery === 'pr' ? ['gh'] : []),
         ];
         const paths = await Promise.all(names.map((name) => this.findInside(name)));
         const runnerPath = paths[0];
@@ -129,9 +130,17 @@ export class DockerRuntime implements PreparedRuntime {
             }
             return { name, path };
         });
-        if (this.options.hostSocket && !paths.at(-1)) {
+        if (
+            this.options.hostSocket &&
+            !paths[1 + this.workbench.manifest.tools.length]
+        ) {
             throw new Error(
                 `Docker CLI is unavailable in Docker image ${this.preparation.immutableReference} for the declared host engine binding`
+            );
+        }
+        if (this.options.request.repository?.delivery === 'pr' && !paths.at(-1)) {
+            throw new Error(
+                `Engine-managed GitHub CLI (gh) is unavailable in Docker image ${this.preparation.immutableReference}`
             );
         }
         await Promise.all([
@@ -325,6 +334,10 @@ export class DockerRuntime implements PreparedRuntime {
 
     collectOutput(store: OutcomeStore) {
         return this.options.outcome?.collectOutput(store) ?? Promise.resolve(undefined);
+    }
+
+    async snapshotRepository(store: OutcomeStore) {
+        return this.options.outcome?.snapshot(store);
     }
 
     async cleanup(): Promise<void> {

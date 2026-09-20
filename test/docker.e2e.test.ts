@@ -10,6 +10,7 @@ import {
 } from '../src/runtimes/docker/index.js';
 import { SessionRetention } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { activateModelCatalogFixture } from './model-catalog-fixture.js';
 
 const temporaryDirectories: string[] = [];
 const dockerTest = process.env.WORKBENCH_DOCKER_E2E === '1' ? test : test.skip;
@@ -40,6 +41,54 @@ async function removeTemporaryDirectory(directory: string): Promise<void> {
 }
 
 describe('Docker runtime end-to-end', () => {
+    dockerTest(
+        'provisions Git and GitHub CLI for repository runs without author image setup',
+        async () => {
+            activateModelCatalogFixture();
+            const fixture = await createFixture();
+            const runtime = await new DockerRuntimeProvider().prepare({
+                workbench: fixture.workbench,
+                workspaceDirectory: fixture.root,
+                environment: {},
+                assets: [
+                    { path: fixture.root, access: 'read-write' },
+                    { path: fixture.packageDirectory, access: 'read-only' },
+                ],
+                repository: {
+                    name: 'example/project',
+                    revision: 'main',
+                    delivery: 'pr',
+                },
+            });
+            try {
+                expect(runtime.preparation?.reference).toStartWith(
+                    'workbench-repository-tools:'
+                );
+                await runtime.preflight();
+                const child = runtime.launch({
+                    command: ['/bin/sh', '-c', 'git --version && gh --version'],
+                    cwd: runtime.workspaceDirectory,
+                    env: runtime.environment,
+                });
+                const [code, stdout, stderr] = await Promise.all([
+                    child.exited,
+                    child.stdout
+                        ? new Response(child.stdout).text()
+                        : Promise.resolve(''),
+                    child.stderr
+                        ? new Response(child.stderr).text()
+                        : Promise.resolve(''),
+                ]);
+                expect({ code, stderr }).toEqual({ code: 0, stderr: '' });
+                expect(stdout).toContain('git version');
+                expect(stdout).toContain('gh version');
+            } finally {
+                await runtime.cleanup();
+            }
+        },
+        5 * 60 * 1_000
+    );
+
     dockerTest(
         'removes only a scoped managed container whose run no longer exists',
         async () => {

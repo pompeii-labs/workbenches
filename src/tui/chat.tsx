@@ -4,7 +4,6 @@ import {
     createEffect,
     createMemo,
     createSignal,
-    Index,
     onCleanup,
     onMount,
     Show,
@@ -13,6 +12,7 @@ import type {
     AuthoringOperation,
     AuthoringOperationResult,
 } from '../authoring/index.js';
+import { RepositoryInspection } from '../repositories/index.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type {
     RunnerPermissionDecision,
@@ -23,9 +23,10 @@ import type {
 import type { RunHandle } from '../runs/index.js';
 import { SessionStore, type StoredSession } from '../sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
-import { ActivityIndicator, startupLabel, usageLabel } from './activity.js';
+import { startupLabel, usageLabel } from './activity.js';
 import { ChatHeader } from './chat-header.js';
 import { SessionCommands } from './commands/session.js';
+import { Conversation } from './conversation.js';
 import { useDialog } from './dialog/index.js';
 import { showTranscriptOutcome } from './dialog/outcome.js';
 import {
@@ -46,11 +47,13 @@ import {
 import { Composer, type ComposerRef } from './prompt/composer.js';
 import { PromptHistory } from './prompt/history.js';
 import { QuestionPrompt, questionFromEvent } from './question.js';
+import { RepositoryController } from './repository/controller.js';
+import { RepositoryPanel } from './repository/panel.js';
+import { RepositoryStrip } from './repository/strip.js';
 import { consumeEvents, eventData, TurnCancellation } from './session.js';
 import type { TranscriptCursor } from './session-transcript.js';
 import { SessionTranscript } from './session-transcript.js';
 import { useTheme } from './theme/index.js';
-import { Transcript } from './transcript.js';
 
 export interface ChatScreenProps {
     home: string;
@@ -81,6 +84,7 @@ export interface ChatScreenProps {
     onBrowseSessions: () => void;
     onExit: () => void;
     homeAvailable: boolean;
+    repositoryInspection?: (id: string) => RepositoryInspection;
 }
 
 export interface PreparedWorkbenchChat {
@@ -95,6 +99,21 @@ export function ChatScreen(props: ChatScreenProps) {
     const themes = useTheme();
     const { theme } = themes;
     const dialog = useDialog();
+    const repository = new RepositoryController(
+        props.resolved.repository,
+        props.session?.repository,
+        props.repositoryInspection ??
+            ((id) =>
+                new RepositoryInspection(
+                    props.home,
+                    id,
+                    props.environment ?? process.env
+                ))
+    );
+    const showRepository = () =>
+        dialog.open(() => (
+            <RepositoryPanel controller={repository} home={props.home} />
+        ));
     const [state, setState] = createSignal(emptyTranscript());
     const [sessionReady, setSessionReady] = createSignal(false);
     const [sessionName, setSessionName] = createSignal(props.session?.name);
@@ -406,6 +425,7 @@ export function ChatScreen(props: ChatScreenProps) {
                 setStoredTranscript(new SessionTranscript(props.home, session.runId));
             }
             const cursor = eventCursor();
+            await repository.attach(session.runId);
             const resumingObservedRun = cursor?.runId === session.runId;
             const afterSequence = resumingObservedRun ? cursor.sequence : undefined;
             if (resumingObservedRun && restoredReady) {
@@ -413,6 +433,7 @@ export function ChatScreen(props: ChatScreenProps) {
                 composer?.focus();
             }
             void consumeEvents(session, observation.signal, afterSequence, (event) => {
+                repository.observe(event);
                 if (event.type === 'run.ready') {
                     setSessionReady(true);
                     composer?.focus();
@@ -463,6 +484,7 @@ export function ChatScreen(props: ChatScreenProps) {
         }
     });
     onCleanup(() => {
+        repository.dispose();
         events.dispose();
         if (!leaving) {
             leaving = true;
@@ -511,7 +533,10 @@ export function ChatScreen(props: ChatScreenProps) {
                 return;
             }
         }
-        if (key.ctrl && key.name === 'c') {
+        if (key.ctrl && key.name === 'g' && repository.available) {
+            key.preventDefault();
+            showRepository();
+        } else if (key.ctrl && key.name === 'c') {
             key.preventDefault();
             if (state().busy || cancellationPending()) void cancelTurn();
             else void close(false);
@@ -551,6 +576,18 @@ export function ChatScreen(props: ChatScreenProps) {
         dialog,
         themes,
         authoring: Boolean(props.operation),
+        ...(repository.available
+            ? {
+                  repository: {
+                      open: showRepository,
+                      workspace: () =>
+                          repository.state().status?.workspace ??
+                          (props.resolved.workbench.manifest.runtime === 'local'
+                              ? 'Preparing managed checkout'
+                              : '/workspace'),
+                  },
+              }
+            : {}),
         actions: {
             currentSessionId: () => props.session?.id ?? session?.runId,
             sessionRenamed: (updated) => {
@@ -577,60 +614,20 @@ export function ChatScreen(props: ChatScreenProps) {
                 manifest={manifest}
             />
 
-            <scrollbox
-                flexGrow={1}
-                stickyScroll={true}
-                stickyStart="bottom"
-                paddingX={1}
-                paddingY={1}
-            >
-                <Show
-                    when={state().items.length === 0 && sessionReady() && !error()}
-                    fallback={<box height={0} />}
-                >
-                    <box flexDirection="column" paddingTop={2}>
-                        <text fg={theme.muted}>Ready when you are.</text>
-                        <text fg={theme.faint}>
-                            This session keeps its context across every turn.
-                        </text>
-                    </box>
-                </Show>
-                <Index each={transcript()} fallback={<box height={0} />}>
-                    {(item, index) => (
-                        <Transcript
-                            item={item()}
-                            assistantLabel={manifest.name}
-                            workspace={props.resolved.workspaceDirectory}
-                            home={props.home}
-                            streaming={
-                                item().kind === 'assistant' &&
-                                state().busy &&
-                                index === transcript().length - 1
-                            }
-                        />
-                    )}
-                </Index>
-                <Show when={activityStatus()}>
-                    {(status: () => string) => (
-                        <box marginTop={1}>
-                            <ActivityIndicator
-                                label={status()}
-                                elapsed={!sessionReady()}
-                            />
-                        </box>
-                    )}
-                </Show>
-                <Show when={error().length > 0} fallback={<box height={0} />}>
-                    <box
-                        border={['left']}
-                        borderColor={theme.red}
-                        paddingLeft={1}
-                        marginTop={1}
-                    >
-                        <text fg={theme.red}>{error()}</text>
-                    </box>
-                </Show>
-            </scrollbox>
+            <RepositoryStrip controller={repository} />
+            <Conversation
+                items={transcript()}
+                ready={sessionReady()}
+                busy={state().busy}
+                error={error()}
+                activity={activityStatus()}
+                assistantLabel={manifest.name}
+                home={props.home}
+                workspace={
+                    repository.state().status?.workspace ??
+                    props.resolved.workspaceDirectory
+                }
+            />
 
             <Show
                 when={question()}

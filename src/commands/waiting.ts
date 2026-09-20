@@ -20,7 +20,7 @@ export class CliWait {
             );
             process.exitCode = result.interrupted
                 ? 130
-                : result.state === 'failed'
+                : result.state === 'failed' || result.delivery?.state === 'failed'
                   ? 1
                   : result.state === 'cancelled'
                     ? 130
@@ -41,5 +41,5 @@ function summary(result: SessionSnapshot): string {
             `${request.kind} · ${request.id}: ${JSON.stringify(request.details)}`
     );
     const answer = result.final.replace(/\s+/g, ' ').slice(0, 1000);
-    return `${[`${result.state} · ${result.session_id} · sequence ${result.sequence}`, answer, result.error, result.outcome_id ? `Outcome: ${result.outcome_id}` : undefined, result.authoring?.result?.packages.map((entry) => entry.path).join(', '), ...pending.slice(0, 4)].filter(Boolean).join('\n')}\n`;
+    return `${[`${result.state} · ${result.session_id} · sequence ${result.sequence}`, answer, result.error, result.outcome_id ? `Outcome: ${result.outcome_id}` : undefined, result.delivery?.pull_request?.url, result.delivery?.state === 'failed' ? `PR delivery failed: ${result.delivery.message}` : undefined, result.authoring?.result?.packages.map((entry) => entry.path).join(', '), ...pending.slice(0, 4)].filter(Boolean).join('\n')}\n`;
 }

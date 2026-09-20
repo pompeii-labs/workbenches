@@ -26,7 +26,9 @@ export class DockerMountPlan {
         for (const asset of request.assets) {
             const hostPath = resolve(asset.path);
             let runtimePath: string;
-            if (asset.workspace) {
+            if (asset.git) {
+                runtimePath = join(hostSocket ? workspace : '/workspace', '.git');
+            } else if (asset.workspace) {
                 runtimePath = hostSocket ? hostPath : `/workspaces/${asset.workspace}`;
             } else if (hostPath === workspace) {
                 runtimePath = hostSocket ? hostPath : '/workspace';
@@ -138,12 +140,35 @@ export class DockerMountPlan {
     containerEnvironment(): Record<string, string | undefined> {
         return {
             HOME: '/tmp/workbench-home',
+            ...(this.request.repository
+                ? {
+                      WORKBENCH_REPOSITORY: this.request.repository.name,
+                      WORKBENCH_REPOSITORY_REVISION: this.request.repository.revision,
+                  }
+                : {}),
             ...Object.fromEntries(
                 DockerMountPlan.environmentNames(this.request.workbench).map((name) => [
                     name,
                     this.request.environment[name],
                 ])
             ),
+            ...(this.request.repository?.delivery === 'pr'
+                ? Object.fromEntries(
+                      [
+                          'GH_TOKEN',
+                          'GIT_TERMINAL_PROMPT',
+                          'GIT_CONFIG_COUNT',
+                          'GIT_CONFIG_KEY_0',
+                          'GIT_CONFIG_VALUE_0',
+                          'GIT_CONFIG_KEY_1',
+                          'GIT_CONFIG_VALUE_1',
+                          'GIT_CONFIG_KEY_2',
+                          'GIT_CONFIG_VALUE_2',
+                          'GIT_CONFIG_KEY_3',
+                          'GIT_CONFIG_VALUE_3',
+                      ].map((name) => [name, this.request.environment[name]])
+                  )
+                : {}),
         };
     }
 

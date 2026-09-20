@@ -35,6 +35,7 @@ export function startupLabel(
     status: string,
     resuming = false
 ): string | undefined {
+    if (status === 'Preparing repository') return 'Preparing GitHub repository...';
     if (status !== 'Connecting' && status !== 'Starting') return;
     const harness =
         runner === 'opencode' ? 'OpenCode' : runner === 'pi' ? 'Pi' : runner;
@@ -44,7 +45,7 @@ export function startupLabel(
     }
     if (runtime === 'e2b') return 'Starting E2B sandbox...';
     if (runtime === 'docker') return 'Starting Docker container...';
-    return `Starting ${harness}...`;
+    return 'Preparing local workspace...';
 }
 
 export function usageLabel(
