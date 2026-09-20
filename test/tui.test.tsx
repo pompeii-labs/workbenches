@@ -1909,8 +1909,12 @@ describe.serial('Workbench TUI', () => {
             { width: 100, height: 32 }
         );
         renderers.push(setup.renderer);
-        await Bun.sleep(10);
-        await setup.flush();
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+            await setup.flush();
+            if (setup.captureCharFrame().includes('Ready when you are.')) break;
+            await Bun.sleep(10);
+        }
+        expect(setup.captureCharFrame()).toContain('Ready when you are.');
 
         const prompt = findPrompt(setup.renderer.root);
         prompt.setText('/resume');
