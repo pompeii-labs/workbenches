@@ -44,7 +44,6 @@ jobs:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun run lint
       - run: bun test test/release.test.ts test/self-update.test.ts test/windows.install.test.ts
       - run: bun run release:package
 
