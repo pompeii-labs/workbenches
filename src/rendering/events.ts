@@ -49,6 +49,7 @@ class FinalEventRenderer implements EventRenderer {
     private answer = '';
     private answerId = '';
     private error = '';
+    private deliveryError = '';
 
     constructor(
         private readonly stdout: (value: string) => void,
@@ -74,11 +75,16 @@ class FinalEventRenderer implements EventRenderer {
             this.answer += text(event.data, 'text');
         }
         if (event.type === 'run.failed') this.error = text(event.data, 'message');
+        if (event.type === 'delivery.failed')
+            this.deliveryError = text(event.data, 'message');
+        if (event.type === 'delivery.completed') this.deliveryError = '';
     }
 
     finish(): void {
         if (this.answer) this.stdout(`${this.answer.replace(/\s+$/, '')}\n`);
         if (this.error) this.stderr(`error: ${this.error}\n`);
+        if (this.deliveryError)
+            this.stderr(`PR delivery failed: ${this.deliveryError}\n`);
     }
 }
 
@@ -88,6 +94,7 @@ class HumanEventRenderer implements EventRenderer {
     private readonly usage: Record<string, number> = {};
     private inAnswer = false;
     private workspace = '';
+    private deliveryFailed = false;
 
     constructor(
         private readonly stdout: (value: string) => void,
@@ -222,7 +229,9 @@ class HumanEventRenderer implements EventRenderer {
             this.endAnswer();
             const duration = durationLabel(number(event.data, 'duration_ms'));
             this.stdout(
-                `\n${colors.green('✓')} ${colors.bold(colors.green('Completed'))}${summaryLabel(duration, this.usage, colors)}\n`
+                this.deliveryFailed
+                    ? `\n${colors.yellow('!')} Completed with failed PR delivery${summaryLabel(duration, this.usage, colors)}\n`
+                    : `\n${colors.green('✓')} ${colors.bold(colors.green('Completed'))}${summaryLabel(duration, this.usage, colors)}\n`
             );
             return;
         }
@@ -242,6 +251,43 @@ class HumanEventRenderer implements EventRenderer {
                 `  ${colors.cyan('◆')} ${colors.bold(title)} ${colors.dim(`· ${state} · ${number(event.data, 'changesets')} changesets · ${number(event.data, 'artifacts')} artifacts · ${number(event.data, 'links')} links`)}\n`
             );
             this.stdout(`    wb outcome ${id}\n`);
+            return;
+        }
+        if (event.type === 'repository.preparing') {
+            this.endAnswer();
+            this.stdout(
+                `  ${colors.cyan('◆')} Preparing ${text(event.data, 'repository')} at ${text(event.data, 'revision').slice(0, 12)}\n`
+            );
+            return;
+        }
+        if (event.type === 'delivery.started') {
+            this.endAnswer();
+            this.stdout('  Publishing draft PR...\n');
+            return;
+        }
+        if (event.type === 'delivery.completed') {
+            this.deliveryFailed = false;
+            this.endAnswer();
+            const pull = record(record(event.data)?.pull_request) ?? {};
+            this.stdout(
+                `  ${colors.green('✓')} ${typeof pull.url === 'string' ? `Draft PR: ${pull.url}` : 'No repository changes to publish'}\n`
+            );
+            return;
+        }
+        if (event.type === 'delivery.failed') {
+            this.deliveryFailed = true;
+            this.endAnswer();
+            this.stderr(
+                `  ${colors.red('!')} PR delivery failed: ${text(event.data, 'message')}\n  Work is saved. Resume the agent to continue GitHub work.\n`
+            );
+            return;
+        }
+        if (event.type === 'repository.checks') {
+            this.endAnswer();
+            const pull = record(record(event.data)?.pull_request) ?? {};
+            this.stdout(
+                `  CI: ${text(event.data, 'state')} · ${String(pull.head ?? '').slice(0, 12)}\n`
+            );
             return;
         }
         if (event.type === 'outcome.failed') {

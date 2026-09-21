@@ -11,12 +11,13 @@ import { createGzip } from 'node:zlib';
 
 import tar from 'tar-stream';
 
+import { nativeCredentialPaths } from '../../connections/index.js';
 import type { OutcomeChangeset, OutcomeWorkspace } from '../../outcomes/contracts.js';
 import type { OutcomeStore } from '../../outcomes/store.js';
 import { WorkspaceSnapshot } from '../../outcomes/workspace.js';
 import { extractArchive } from './archive.js';
 import type { E2BAssetBinding } from './paths.js';
-import { type E2BStateSource, E2BStateStore } from './state.js';
+import { type E2BStateSource, E2BStateStore, selectedStateFiles } from './state.js';
 
 export { extractArchive } from './archive.js';
 
@@ -64,8 +65,15 @@ export class E2BAssetSnapshot {
         maximumBytes: number,
         persistentDirectory?: string
     ): Promise<E2BAssetSnapshot> {
-        if (binding.kind === 'state' || binding.kind === 'credentials') {
-            return new E2BStateStore(binding.hostPath).withSource((source) =>
+        if (
+            binding.kind === 'state' ||
+            binding.kind === 'credentials' ||
+            binding.kind === 'git'
+        ) {
+            return new E2BStateStore(
+                binding.hostPath,
+                binding.kind === 'credentials' ? nativeCredentialPaths : undefined
+            ).withSource((source) =>
                 E2BAssetSnapshot.createFrom(binding, maximumBytes, source)
             );
         }
@@ -103,11 +111,11 @@ export class E2BAssetSnapshot {
                   )
                 : ['.workbench-file'];
             const entries = source.isDirectory()
-                ? await describeEntries(sourcePath, paths, sourcePath)
+                ? await describeEntryMetadata(sourcePath, paths, sourcePath)
                 : new Map([
                       [
                           '.workbench-file',
-                          await describeEntry(
+                          await describeSingleEntryMetadata(
                               binding.hostPath,
                               '.workbench-file',
                               dirname(binding.hostPath)
@@ -123,6 +131,7 @@ export class E2BAssetSnapshot {
                     `E2B transfer exceeds the ${formatBytes(maximumBytes)} safety limit: ${binding.hostPath} is ${formatBytes(bytes)}`
                 );
             }
+            await digestEntries(sourcePath, entries, source.isDirectory());
             await writeArchive(sourcePath, archive, entries, source.isDirectory());
             return new E2BAssetSnapshot(
                 binding,
@@ -146,11 +155,10 @@ export class E2BAssetSnapshot {
 
     async persistState(archive: string, maximumBytes: number): Promise<number> {
         if (!this.stateSource) throw new Error('Snapshot is not managed native state');
-        return new E2BStateStore(this.binding.hostPath).install(
-            archive,
-            this.stateSource.version,
-            maximumBytes
-        );
+        return new E2BStateStore(
+            this.binding.hostPath,
+            this.binding.kind === 'credentials' ? nativeCredentialPaths : undefined
+        ).install(archive, this.stateSource.version, maximumBytes);
     }
 
     recoverySnapshot(directory: string): E2BRecoverySnapshot {
@@ -270,6 +278,10 @@ async function selectedPaths(
     excludedPaths: string[],
     syncExcludedPaths: string[]
 ): Promise<string[]> {
+    if (binding.kind === 'credentials')
+        return selectedStateFiles(binding.hostPath, nativeCredentialPaths);
+    if (binding.kind === 'git')
+        return walk(binding.hostPath, '', true, excludedPaths, syncExcludedPaths);
     if (binding.kind !== 'workspace') {
         return walk(binding.hostPath, '', true, excludedPaths, syncExcludedPaths);
     }
@@ -373,7 +385,7 @@ function excludedByNestedAsset(path: string, roots: string[]): boolean {
     return roots.some((root) => path === root || path.startsWith(`${root}/`));
 }
 
-async function describeEntries(
+async function describeEntryMetadata(
     root: string,
     paths: string[],
     symlinkRoot: string
@@ -381,12 +393,15 @@ async function describeEntries(
     const entries = new Map<string, E2BSnapshotEntry>();
     for (const path of paths.toSorted()) {
         validateRelativePath(path);
-        entries.set(path, await describeEntry(join(root, path), path, symlinkRoot));
+        entries.set(
+            path,
+            await describeSingleEntryMetadata(join(root, path), path, symlinkRoot)
+        );
     }
     return entries;
 }
 
-async function describeEntry(
+async function describeSingleEntryMetadata(
     absolutePath: string,
     path: string,
     symlinkRoot: string
@@ -410,9 +425,21 @@ async function describeEntry(
         path,
         type: 'file',
         mode: details.mode & 0o777,
-        digest: await digestFile(absolutePath),
         size: details.size,
     };
+}
+
+async function digestEntries(
+    source: string,
+    entries: Map<string, E2BSnapshotEntry>,
+    sourceIsDirectory: boolean
+): Promise<void> {
+    for (const entry of entries.values()) {
+        if (entry.type !== 'file') continue;
+        entry.digest = await digestFile(
+            sourceIsDirectory ? join(source, entry.path) : source
+        );
+    }
 }
 
 async function writeArchive(
@@ -510,6 +537,7 @@ function protectedWorkspacePath(path: string): boolean {
                 '.ssh',
                 '.aws',
                 '.gnupg',
+                '.workbench',
                 '.workbench-state',
                 'node_modules',
             ].includes(segment)
@@ -525,9 +553,15 @@ function protectedWorkspacePath(path: string): boolean {
         return true;
     }
     if (
-        ['.npmrc', '.netrc', '.pypirc', 'id_rsa', 'id_ed25519', 'credentials'].includes(
-            name
-        )
+        [
+            '.npmrc',
+            '.netrc',
+            '.pypirc',
+            'id_rsa',
+            'id_ed25519',
+            'credentials',
+            'runtime.secrets.json',
+        ].includes(name)
     ) {
         return true;
     }

@@ -1,6 +1,7 @@
 import { defineCommand } from 'citty';
 
 import { createEventRenderer } from '../rendering/index.js';
+import { RepositoryDeliveryStore } from '../repositories/receipts.js';
 import { RunStore } from '../runs/index.js';
 import { SessionLifecycle } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
@@ -57,5 +58,10 @@ export const attachCommand = defineCommand({
         const completed = await store.read(initial.id);
         if (completed.status === 'failed') process.exitCode = completed.exit_code ?? 1;
         if (completed.status === 'cancelled') process.exitCode = 130;
+        if (
+            (await new RepositoryDeliveryStore(home).read(completed.id))?.state ===
+            'failed'
+        )
+            process.exitCode = 1;
     },
 });

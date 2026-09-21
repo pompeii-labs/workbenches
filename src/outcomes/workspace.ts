@@ -21,6 +21,7 @@ import type {
     OutcomeWarning,
     OutcomeWorkspace,
 } from './contracts.js';
+import { GitBaseline } from './git.js';
 import type { OutcomeStore } from './store.js';
 import { validateFilesystemSymlink } from './symlinks.js';
 
@@ -32,6 +33,7 @@ interface SnapshotEntry {
     mode: number;
     size: number;
     digest?: OutcomeDigest;
+    gitOid?: string;
     target?: string;
 }
 
@@ -39,6 +41,21 @@ export interface WorkspaceSnapshotOptions {
     workspace: OutcomeWorkspace;
     excludedPaths?: string[];
     maximumBytes?: number;
+    baseline?: 'copy' | 'git';
+}
+
+export class WorkspaceSnapshotLimitError extends Error {
+    readonly maximumBytes: number;
+    readonly actualBytes: number;
+
+    constructor(root: string, maximumBytes: number, actualBytes: number) {
+        super(
+            `Workspace snapshot exceeds the ${formatBytes(maximumBytes)} safety limit: ${root} is ${formatBytes(actualBytes)}`
+        );
+        this.name = 'WorkspaceSnapshotLimitError';
+        this.maximumBytes = maximumBytes;
+        this.actualBytes = actualBytes;
+    }
 }
 
 export class WorkspaceSnapshot {
@@ -52,7 +69,9 @@ export class WorkspaceSnapshot {
         private readonly entries: Map<string, SnapshotEntry>,
         private readonly excludedPaths: string[],
         private readonly maximumBytes: number,
-        private readonly unsafePaths: Set<string>
+        private readonly unsafePaths: Set<string>,
+        private readonly gitBaseline: GitBaseline | undefined,
+        private readonly indexedFiles: Map<string, string>
     ) {}
 
     get warnings(): OutcomeWarning[] {
@@ -92,17 +111,24 @@ export class WorkspaceSnapshot {
         try {
             const paths = await selectedPaths(resolvedRoot, excludedPaths);
             const unsafePaths = new Set<string>();
-            const entries = await describeEntries(resolvedRoot, paths, unsafePaths);
-            const bytes = [...entries.values()].reduce(
-                (total, entry) => total + entry.size,
-                0
+            const gitBaseline =
+                options.baseline === 'git'
+                    ? await GitBaseline.open(resolvedRoot)
+                    : undefined;
+            const entries = await describeEntries(
+                resolvedRoot,
+                paths,
+                unsafePaths,
+                maximumBytes,
+                gitBaseline?.objectFormat
             );
-            if (bytes > maximumBytes) {
-                throw new Error(
-                    `Workspace snapshot exceeds the ${formatBytes(maximumBytes)} safety limit: ${resolvedRoot} is ${formatBytes(bytes)}`
-                );
-            }
+            const indexedFiles = new Map<string, string>();
             for (const entry of entries.values()) {
+                const oid = gitBaseline?.matchingBlob(entry.path, entry.gitOid);
+                if (entry.type === 'file' && oid) {
+                    indexedFiles.set(entry.path, oid);
+                    continue;
+                }
                 await cloneEntry(
                     join(resolvedRoot, entry.path),
                     join(baselineRoot, entry.path),
@@ -120,7 +146,9 @@ export class WorkspaceSnapshot {
                 entries,
                 excludedPaths,
                 maximumBytes,
-                unsafePaths
+                unsafePaths,
+                gitBaseline,
+                indexedFiles
             );
         } catch (error) {
             await rm(temporaryDirectory, { recursive: true, force: true });
@@ -133,7 +161,8 @@ export class WorkspaceSnapshot {
         const current = await describeEntries(
             this.root,
             currentPaths,
-            this.unsafePaths
+            this.unsafePaths,
+            this.maximumBytes
         );
         const paths = new Set([...this.entries.keys(), ...current.keys()]);
         const changed = [...paths]
@@ -150,10 +179,13 @@ export class WorkspaceSnapshot {
         for (const path of changed) {
             const before = this.entries.get(path);
             const after = current.get(path);
+            if (before) await this.materializeBefore(before);
             materialized += after?.size ?? 0;
             if (materialized > this.maximumBytes) {
-                throw new Error(
-                    `Workspace changes exceed the ${formatBytes(this.maximumBytes)} safety limit`
+                throw new WorkspaceSnapshotLimitError(
+                    this.root,
+                    this.maximumBytes,
+                    materialized
                 );
             }
             if (!before && after) {
@@ -214,6 +246,20 @@ export class WorkspaceSnapshot {
         return rm(this.temporaryDirectory, { recursive: true, force: true });
     }
 
+    private async materializeBefore(entry: SnapshotEntry): Promise<void> {
+        const oid = this.indexedFiles.get(entry.path);
+        if (!oid || !this.gitBaseline || entry.type !== 'file') return;
+        await this.gitBaseline.materialize(
+            oid,
+            join(this.baselineRoot, entry.path),
+            entry.mode,
+            entry.size,
+            entry.digest as OutcomeDigest,
+            digestFile
+        );
+        this.indexedFiles.delete(entry.path);
+    }
+
     private async outcomeState(store: OutcomeStore, entry: SnapshotEntry) {
         if (entry.type === 'symlink') {
             return {
@@ -251,7 +297,7 @@ export class WorkspaceSnapshot {
                     }
                 }
                 if (entry.after) {
-                    const current = await describeEntry(
+                    const current = await describeEntryMetadata(
                         join(this.root, entry.path),
                         entry.path,
                         this.root
@@ -357,9 +403,12 @@ async function walk(
 async function describeEntries(
     root: string,
     paths: string[],
-    unsafePaths: Set<string>
+    unsafePaths: Set<string>,
+    maximumBytes: number,
+    gitObjectFormat?: 'sha1' | 'sha256'
 ): Promise<Map<string, SnapshotEntry>> {
     const entries = new Map<string, SnapshotEntry>();
+    let bytes = 0;
     for (const path of paths) {
         if (excluded(path, unsafePaths)) continue;
         const absolute = join(root, path);
@@ -385,12 +434,28 @@ async function describeEntries(
             unsafePaths.add(path);
             continue;
         }
-        entries.set(path, await describeEntry(join(root, path), path, root));
+        const entry = await describeEntryMetadata(join(root, path), path, root);
+        entries.set(path, entry);
+        bytes += entry.size;
+    }
+    if (bytes > maximumBytes) {
+        throw new WorkspaceSnapshotLimitError(root, maximumBytes, bytes);
+    }
+    for (const entry of entries.values()) {
+        if (entry.type === 'file') {
+            const digests = await digestFileWithGit(
+                join(root, entry.path),
+                entry.size,
+                gitObjectFormat
+            );
+            entry.digest = digests.digest;
+            if (digests.gitOid) entry.gitOid = digests.gitOid;
+        }
     }
     return entries;
 }
 
-async function describeEntry(
+async function describeEntryMetadata(
     absolute: string,
     path: string,
     root: string
@@ -413,7 +478,6 @@ async function describeEntry(
         type: 'file',
         mode: details.mode & 0o777,
         size: details.size,
-        digest: await digestFile(absolute),
     };
 }
 
@@ -486,9 +550,25 @@ function digestEntries(entries: Map<string, SnapshotEntry>): OutcomeDigest {
 }
 
 async function digestFile(path: string): Promise<OutcomeDigest> {
+    return (await digestFileWithGit(path, 0)).digest;
+}
+
+async function digestFileWithGit(
+    path: string,
+    size: number,
+    gitObjectFormat?: 'sha1' | 'sha256'
+): Promise<{ digest: OutcomeDigest; gitOid?: string }> {
     const hash = createHash('sha256');
-    for await (const chunk of createReadStream(path)) hash.update(chunk);
-    return `sha256:${hash.digest('hex')}`;
+    const git = gitObjectFormat ? createHash(gitObjectFormat) : undefined;
+    git?.update(`blob ${size}\0`);
+    for await (const chunk of createReadStream(path)) {
+        hash.update(chunk);
+        git?.update(chunk);
+    }
+    return {
+        digest: `sha256:${hash.digest('hex')}`,
+        ...(git ? { gitOid: git.digest('hex') } : {}),
+    };
 }
 
 async function gitRevision(root: string): Promise<string | undefined> {

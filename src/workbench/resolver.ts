@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 
 import { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import type { CatalogRegistryReference } from '../catalog/types.js';
+import type { RepositoryRequest } from '../repositories/contracts.js';
 import { workbenchHome } from '../storage.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { WorkbenchSource } from './source.js';
@@ -13,6 +14,7 @@ export interface ResolvedWorkbenchReference {
     cleanup: () => Promise<void>;
     source?: 'local' | 'saved' | 'system';
     registry?: CatalogRegistryReference;
+    repository?: RepositoryRequest;
 }
 
 export interface WorkbenchResolverOptions {

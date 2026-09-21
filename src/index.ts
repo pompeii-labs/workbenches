@@ -90,6 +90,11 @@ export {
     type EventRendererOptions,
     type OutputMode,
 } from './rendering/index.js';
+export type {
+    RepositoryBinding,
+    RepositoryDeliveryReceipt,
+    RepositoryRequest,
+} from './repositories/contracts.js';
 export {
     type NormalizedRunnerInput,
     normalizeRunnerInput,

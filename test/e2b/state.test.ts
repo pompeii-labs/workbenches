@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { nativeCredentialPaths } from '../../src/connections/index.js';
 import { E2BAssetSnapshot } from '../../src/runtimes/e2b/snapshot.js';
 import { E2BStateStore } from '../../src/runtimes/e2b/state.js';
 
@@ -29,10 +30,11 @@ async function directory(): Promise<string> {
     directories.push(value);
     return value;
 }
-async function archive(content: string): Promise<string> {
+async function archive(content: string, noise?: string): Promise<string> {
     const root = await directory();
     await mkdir(join(root, 'opencode'));
     await writeFile(join(root, 'opencode', 'auth.json'), content);
+    if (noise) await writeFile(join(root, 'opencode', 'opencode.db'), noise);
     const snapshot = await E2BAssetSnapshot.create(
         {
             hostPath: root,
@@ -48,6 +50,145 @@ async function archive(content: string): Promise<string> {
 }
 
 describe('E2B managed native state', () => {
+    test('round-trips agent Git metadata separately from the engine checkout', async () => {
+        const root = await directory();
+        await mkdir(join(root, 'objects'));
+        await writeFile(join(root, 'HEAD'), 'ref: refs/heads/initial\n');
+        const input = await E2BAssetSnapshot.create(
+            {
+                hostPath: root,
+                runtimePath: '/workspace/.git',
+                access: 'read-write',
+                kind: 'git',
+                excludedHostPaths: [],
+            },
+            1_024
+        );
+        snapshots.push(input);
+        expect([...input.entries.keys()]).toEqual(['HEAD']);
+        const remote = await directory();
+        await writeFile(join(remote, 'HEAD'), 'ref: refs/heads/feature\n');
+        const result = await E2BAssetSnapshot.create(
+            {
+                hostPath: remote,
+                runtimePath: '/workspace/.git',
+                access: 'read-write',
+                kind: 'git',
+                excludedHostPaths: [],
+            },
+            1_024
+        );
+        snapshots.push(result);
+        const store = new E2BStateStore(root);
+        await store.install(result.archive, (await store.source()).version, 1_024);
+        expect(await readFile(join(root, 'HEAD'), 'utf8')).toBe(
+            'ref: refs/heads/initial\n'
+        );
+        const resumed = await E2BAssetSnapshot.create(
+            {
+                hostPath: root,
+                runtimePath: '/workspace/.git',
+                access: 'read-write',
+                kind: 'git',
+                excludedHostPaths: [],
+            },
+            1_024
+        );
+        snapshots.push(resumed);
+        expect([...resumed.entries.keys()]).toEqual(['HEAD']);
+        expect(
+            await readFile(join((await store.source()).directory, 'HEAD'), 'utf8')
+        ).toBe('ref: refs/heads/feature\n');
+    });
+    test('stages only auth files and ignores concurrent session caches in legacy credential generations', async () => {
+        const root = await directory();
+        const legacy = new E2BStateStore(root);
+        await legacy.install(
+            await archive('auth', 'old cache'),
+            (await legacy.source()).version,
+            1_024
+        );
+        const store = new E2BStateStore(root, nativeCredentialPaths);
+        const baseline = await store.source();
+        await writeFile(
+            join(baseline.directory, 'opencode', 'opencode.db'),
+            'changed cache'
+        );
+        expect((await store.source()).version).toBe(baseline.version);
+        await Promise.all([
+            store.install(
+                await archive('auth', 'first remote cache'),
+                baseline.version,
+                1_024
+            ),
+            store.install(
+                await archive('auth', 'second remote cache'),
+                baseline.version,
+                1_024
+            ),
+        ]);
+        expect(await store.source()).toEqual(baseline);
+        const snapshot = await E2BAssetSnapshot.create(
+            {
+                hostPath: root,
+                runtimePath: '/credentials',
+                access: 'read-write',
+                kind: 'credentials',
+                excludedHostPaths: [],
+            },
+            1_024
+        );
+        snapshots.push(snapshot);
+        expect([...snapshot.entries.keys()]).toEqual(['opencode/auth.json']);
+    });
+
+    test('persists auth alone while still rejecting conflicting credential refreshes', async () => {
+        const root = await directory();
+        const store = new E2BStateStore(root, nativeCredentialPaths);
+        const baseline = await store.source();
+        await store.install(
+            await archive('first auth', 'cache'),
+            baseline.version,
+            1_024
+        );
+        const current = await store.source();
+        expect(
+            await readFile(join(current.directory, 'opencode', 'auth.json'), 'utf8')
+        ).toBe('first auth');
+        expect(
+            await stat(join(current.directory, 'opencode', 'opencode.db')).catch(
+                () => undefined
+            )
+        ).toBeUndefined();
+        await expect(
+            store.install(
+                await archive('conflicting auth', 'cache'),
+                baseline.version,
+                1_024
+            )
+        ).rejects.toThrow('changed during this run');
+        expect(await store.source()).toEqual(current);
+        await store.install(await archive('second auth'), current.version, 1_024);
+        await store.install(
+            await archive('third auth'),
+            (await store.source()).version,
+            1_024
+        );
+        expect(
+            await readdir(join(root, '.workbench-state', 'generations'))
+        ).toHaveLength(2);
+    });
+
+    test('refuses symlinked credential parents rather than reading outside the store', async () => {
+        const root = await directory();
+        const outside = await directory();
+        await writeFile(join(outside, 'auth.json'), 'outside');
+        await symlink(outside, join(root, 'opencode'));
+        await expect(
+            new E2BStateStore(root, nativeCredentialPaths).source()
+        ).rejects.toThrow('non-regular file');
+    });
+
     test('retries an already activated archive after interrupted progress journaling', async () => {
         const root = await directory();
         const store = new E2BStateStore(root);

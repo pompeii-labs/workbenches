@@ -30,6 +30,7 @@ import { e2bMetadata } from './sdk.js';
 import { definedEnvironment, gitExcludePattern, quote, shellCommand } from './shell.js';
 import { E2BAssetSnapshot } from './snapshot.js';
 import { terminalDimensions } from './terminal.js';
+import { remoteExclusions, workspaceTracking } from './tracking.js';
 
 interface E2BRuntimeOptions {
     request: RuntimePrepareRequest;
@@ -117,13 +118,16 @@ export class E2BRuntime implements PreparedRuntime {
             'tar',
             this.workbench.manifest.runner,
             ...this.workbench.manifest.tools,
+            ...(this.options.request.repository?.delivery === 'pr' ? ['gh'] : []),
         ];
         const paths = await Promise.all(
             names.map((name) => this.findInside(sandbox, name))
         );
         if (!paths[0]) {
             throw new Error(
-                `Git is unavailable in E2B image ${this.preparation.immutableReference}; E2B workspace outcome collection requires git`
+                this.options.request.repository
+                    ? `Engine-managed Git is unavailable in E2B template ${this.preparation.immutableReference}`
+                    : `Git is unavailable in E2B image ${this.preparation.immutableReference}; E2B workspace outcome collection requires git`
             );
         }
         if (!paths[1]) {
@@ -155,6 +159,11 @@ export class E2BRuntime implements PreparedRuntime {
             }
             return { name, path };
         });
+        if (this.options.request.repository?.delivery === 'pr' && !paths.at(-1)) {
+            throw new Error(
+                `Engine-managed GitHub CLI (gh) is unavailable in E2B template ${this.preparation.immutableReference}`
+            );
+        }
         await this.preflightAssets(sandbox);
         this.ready = true;
         return {
@@ -378,6 +387,10 @@ export class E2BRuntime implements PreparedRuntime {
         await this.recovery?.discard();
     }
 
+    snapshotRepository(store: OutcomeStore) {
+        return this.collectSnapshots(store);
+    }
+
     collectOutput(store: OutcomeStore) {
         return new E2BOutcomeCollector({
             sandbox: this.requireReady(),
@@ -513,6 +526,11 @@ export class E2BRuntime implements PreparedRuntime {
                 ? [
                       `mkdir -p ${quote(target)}`,
                       `tar -xzf ${quote(remoteArchive)} -C ${quote(target)}`,
+                      ...(snapshot.binding.kind === 'git'
+                          ? [
+                                `mkdir -p ${quote(`${target}/refs/heads`)} ${quote(`${target}/refs/tags`)} ${quote(`${target}/info`)}`,
+                            ]
+                          : []),
                   ]
                 : [
                       `mkdir -p ${quote(dirname(target))}`,
@@ -523,21 +541,23 @@ export class E2BRuntime implements PreparedRuntime {
             if (
                 snapshot.binding.access === 'read-write' &&
                 snapshot.sourceIsDirectory &&
-                snapshot.binding.kind !== 'outcome'
+                snapshot.binding.kind !== 'outcome' &&
+                snapshot.binding.kind !== 'git'
             ) {
+                const tracking = workspaceTracking(snapshots, index);
                 command.push(
-                    `git -C ${quote(target)} init -q`,
-                    `git -C ${quote(target)} config user.email workbench@localhost`,
-                    `git -C ${quote(target)} config user.name Workbench`,
+                    `${tracking.git} init -q`,
+                    `${tracking.git} config user.email workbench@localhost`,
+                    `${tracking.git} config user.name Workbench`,
                     `printf '%s\\n' ${[
                         ...remoteExclusions,
                         ...snapshot.syncExcludedPaths.map(gitExcludePattern),
                     ]
                         .map(quote)
-                        .join(' ')} >> ${quote(`${target}/.git/info/exclude`)}`,
-                    `git -C ${quote(target)} add -A`,
-                    `git -C ${quote(target)} commit -q --allow-empty --no-gpg-sign -m baseline`,
-                    `git -C ${quote(target)} rev-parse HEAD`
+                        .join(' ')} >> ${quote(`${tracking.directory}/info/exclude`)}`,
+                    `${tracking.git} add -A`,
+                    `${tracking.git} commit -q --allow-empty --no-gpg-sign -m baseline`,
+                    `${tracking.git} rev-parse HEAD`
                 );
             } else if (snapshot.binding.access === 'read-only') {
                 command.push(`chmod -R a-w ${quote(target)}`);
@@ -551,7 +571,8 @@ export class E2BRuntime implements PreparedRuntime {
             if (
                 snapshot.binding.access === 'read-write' &&
                 snapshot.sourceIsDirectory &&
-                snapshot.binding.kind !== 'outcome'
+                snapshot.binding.kind !== 'outcome' &&
+                snapshot.binding.kind !== 'git'
             ) {
                 const baseline = result.stdout.trim().split(/\s+/).at(-1) ?? '';
                 if (!/^[a-f0-9]{40,64}$/.test(baseline)) {
@@ -665,25 +686,3 @@ function requireSuccess(
     const detail = result.stderr.trim() || result.stdout.trim();
     throw new Error(`${message}${detail ? `: ${detail}` : ''}`);
 }
-
-const remoteExclusions = [
-    '.env',
-    '.env.*',
-    '!.env.example',
-    '!.env.sample',
-    '.ssh',
-    '.aws',
-    '.gnupg',
-    'node_modules',
-    '.npmrc',
-    '.netrc',
-    '.pypirc',
-    'id_rsa',
-    'id_ed25519',
-    'credentials',
-    '*.pem',
-    '*.key',
-    '*.p12',
-    '*.pfx',
-    '*.kubeconfig',
-];

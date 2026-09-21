@@ -1,6 +1,7 @@
 import { defineCommand } from 'citty';
 
 import { createEventRenderer } from '../rendering/index.js';
+import { RepositoryDeliveryStore } from '../repositories/receipts.js';
 import { RunContinuation } from '../runs/index.js';
 import { SessionResolver } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
@@ -175,5 +176,10 @@ export const resumeCommand = defineCommand({
                 `Session ${target.session.id} ended before completing the task`
             );
         }
+        if (
+            (await new RepositoryDeliveryStore(home).read(continuation.run.id))
+                ?.state === 'failed'
+        )
+            process.exitCode = 1;
     },
 });

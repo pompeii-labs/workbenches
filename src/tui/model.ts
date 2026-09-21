@@ -26,11 +26,30 @@ export interface OutcomeTranscriptItem {
     summary?: string;
 }
 
+export interface DeliveryTranscriptItem {
+    id: string;
+    kind: 'delivery';
+    outcomeId: string;
+    state: 'published' | 'failed' | 'unchanged';
+    url?: string;
+    message?: string;
+    updated?: boolean;
+}
+
 export type TranscriptItem =
     | { id: string; kind: 'user'; text: string; images?: string[] }
     | { id: string; kind: 'assistant'; text: string }
     | ToolTranscriptItem
     | OutcomeTranscriptItem
+    | DeliveryTranscriptItem
+    | {
+          id: string;
+          kind: 'checks';
+          state: string;
+          url: string;
+          head: string;
+          jobs: number;
+      }
     | { id: string; kind: 'notice'; text: string; tone: 'muted' | 'error' };
 
 export type TranscriptDisplayItem =
@@ -269,7 +288,66 @@ export function reduceTranscript(
             ],
         };
     }
-    if (event.type === 'run.ready') return { ...state, status: 'Ready' };
+    if (event.type === 'run.started')
+        return { ...state, busy: true, status: 'Starting' };
+    if (event.type === 'run.ready') return { ...state, busy: false, status: 'Ready' };
+    if (event.type === 'repository.preparing')
+        return { ...state, busy: true, status: 'Preparing repository' };
+    if (event.type === 'repository.ready')
+        return { ...state, busy: false, status: 'Connecting' };
+    if (event.type === 'delivery.started')
+        return { ...state, busy: true, status: 'Publishing draft PR' };
+    if (event.type === 'delivery.completed' || event.type === 'delivery.failed') {
+        const outcomeId = field(event.data, 'outcome_id');
+        const stateName = field(event.data, 'state');
+        if (!outcomeId || !['published', 'failed', 'unchanged'].includes(stateName))
+            return state;
+        const pull = object(object(event.data)?.pull_request) ?? {};
+        const url = typeof pull.url === 'string' ? pull.url : undefined;
+        const message = field(event.data, 'message');
+        return {
+            ...state,
+            busy: state.busy,
+            status: state.busy ? 'Working' : 'Ready',
+            items: [
+                ...state.items.filter(
+                    (item) => item.kind !== 'delivery' || item.outcomeId !== outcomeId
+                ),
+                {
+                    id: `delivery-${outcomeId}`,
+                    kind: 'delivery',
+                    outcomeId,
+                    state: stateName as DeliveryTranscriptItem['state'],
+                    ...(url ? { url } : {}),
+                    ...(message ? { message } : {}),
+                    ...(object(event.data)?.updated === true ? { updated: true } : {}),
+                },
+            ],
+        };
+    }
+    if (event.type === 'repository.checks') {
+        const pull = object(object(event.data)?.pull_request);
+        const url = typeof pull?.url === 'string' ? pull.url : '';
+        const head = typeof pull?.head === 'string' ? pull.head : '';
+        const jobs = object(event.data)?.jobs;
+        if (!url || !head) return state;
+        return {
+            ...state,
+            items: [
+                ...state.items.filter(
+                    (item) => item.kind !== 'checks' || item.head !== head
+                ),
+                {
+                    id: `checks-${head}`,
+                    kind: 'checks',
+                    state: field(event.data, 'state'),
+                    url,
+                    head,
+                    jobs: Array.isArray(jobs) ? jobs.length : 0,
+                },
+            ],
+        };
+    }
     if (event.type === 'authentication.requested') {
         const provider = field(event.data, 'provider') || 'provider';
         const url = field(event.data, 'url');

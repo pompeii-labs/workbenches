@@ -27,6 +27,15 @@ run fails or when its client disconnects. E2B never silently applies collected
 workspace edits to the host. Returning remote results and accepting them are
 separate operations.
 
+Local execution does not copy the workspace before launching the runner. For a
+Git working tree within the capture limit, unchanged tracked files use immutable
+Git index blobs as their before-state; only pre-existing dirty or untracked
+content needs a private temporary baseline. A non-Git workspace or one that
+exceeds the capture limit still runs in place and returns outbox artifacts and
+links, with a warning that workspace changes were not captured. Repository
+delivery remains strict: it requires an exact changeset from its managed
+checkout and never treats a missing changeset as a successful publication.
+
 Every normal durable execution receives an engine-owned outbox directory through
 `WORKBENCH_OUTPUT_DIR`. The provider maps that directory into its runtime. A
 harness can use its existing file-writing tools to return a report, screenshot,
@@ -313,11 +322,11 @@ sandbox when possible. Ordinary history cleanup protects its run and sandbox
 until the caller explicitly recovers or discards the pending work.
 
 ```sh
-E2B_API_KEY=... wb outcome wb_... --recover
+wb outcome wb_... --recover
 wb outcome wb_... --json
 wb outcome wb_... --apply
 # Or explicitly abandon the uncollected remote work:
-E2B_API_KEY=... wb outcome wb_... --discard-recovery
+wb outcome wb_... --discard-recovery
 ```
 
 Recovery reconnects only to the original scoped sandbox. It does not create a

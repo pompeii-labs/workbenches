@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConnectionStore } from '../../src/connections/store.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
+import { RepositoryWorkspace } from '../../src/repositories/workspace.js';
+import { runtimeContext } from '../../src/runners/context.js';
 import { RunnerRegistry } from '../../src/runners/registry.js';
 import { type PreparedRunner, Runner } from '../../src/runners/runner.js';
 import { RunEvents } from '../../src/runs/events.js';
@@ -14,8 +16,11 @@ import type {
     RuntimePrepareRequest,
     RuntimeProvider,
 } from '../../src/runtimes/contracts.js';
+import { DockerMountPlan } from '../../src/runtimes/docker/mounts.js';
+import { E2BPathPlan } from '../../src/runtimes/e2b/paths.js';
 import { RuntimeRegistry } from '../../src/runtimes/registry.js';
 import type { ResolvedWorkbench } from '../../src/types.js';
+import { checkoutFixture, fixtureIdentity } from '../repositories/fixture.js';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -25,6 +30,159 @@ afterEach(async () => {
 });
 
 describe('shared execution preparation', () => {
+    for (const runtime of ['local', 'docker', 'e2b']) {
+        test(`${runtime} gives authenticated repository runs normal gh and git credentials`, async () => {
+            const fixture = await createFixture({
+                runtime,
+                repository: true,
+                delivery: 'pr',
+            });
+            try {
+                await fixture.preparation.prepare();
+                const request = fixture.provider.request;
+                if (!request) throw new Error('Missing runtime request');
+                expect(request.environment.GH_TOKEN).toBe('github-account-credential');
+                expect(request.environment.GIT_CONFIG_KEY_1).toBe(
+                    'credential.https://github.com.helper'
+                );
+                expect(request.environment.GIT_CONFIG_VALUE_1).toBe(
+                    '!gh auth git-credential'
+                );
+                expect(request.environment.GITHUB_TOKEN).toBeUndefined();
+                expect(request.environment.SSH_AUTH_SOCK).toBeUndefined();
+                const visible =
+                    runtime === 'docker'
+                        ? new DockerMountPlan(request).containerEnvironment()
+                        : runtime === 'e2b'
+                          ? new E2BPathPlan(request).environment()
+                          : request.environment;
+                expect(visible.GH_TOKEN).toBe('github-account-credential');
+                expect(visible.GIT_CONFIG_COUNT).toBe('4');
+                expect(visible.GIT_CONFIG_VALUE_2).toBe('example');
+                expect(visible.GIT_CONFIG_VALUE_3).toBe(
+                    '123+example@users.noreply.github.com'
+                );
+                const context = runtimeContext(
+                    fixture.workbench,
+                    request.workspaceDirectory,
+                    visible
+                );
+                expect(context).toContain('GitHub authentication is available');
+                expect(context).not.toContain('github-account-credential');
+            } finally {
+                await fixture.preparation.cleanup();
+            }
+        });
+    }
+    for (const runtime of ['local', 'docker', 'e2b']) {
+        for (const runner of ['opencode', 'pi']) {
+            for (const mode of ['one-shot', 'session'] as const) {
+                test(`${runner} on ${runtime} keeps GitHub credentials out of legacy read-only repository ${mode} runs`, async () => {
+                    const fixture = await createFixture({
+                        runtime,
+                        runner,
+                        mode,
+                        repository: true,
+                    });
+                    try {
+                        const prepared = await fixture.preparation.prepare();
+                        const request = fixture.provider.request;
+                        if (!request || !fixture.repository)
+                            throw new Error('Missing repository request');
+                        const repository = fixture.repository;
+                        const directory = join(
+                            fixture.home,
+                            'sessions',
+                            fixture.repository.binding.session_id,
+                            'repository'
+                        );
+                        expect(request.workspaceDirectory).toBe(directory);
+                        expect(request.environment.GH_TOKEN).toBeUndefined();
+                        expect(request.environment.GITHUB_TOKEN).toBeUndefined();
+                        expect(request.environment.SSH_AUTH_SOCK).toBeUndefined();
+                        expect(request.environment.GIT_CONFIG_VALUE_0).toBeUndefined();
+                        expect(request.repository).toEqual({
+                            name: 'example/project',
+                            revision: fixture.repository.binding.revision,
+                            delivery: 'none',
+                        });
+                        expect(request.assets).toContainEqual({
+                            path:
+                                runtime === 'local'
+                                    ? join(directory, '.git')
+                                    : join(
+                                          fixture.home,
+                                          'sessions',
+                                          fixture.repository.binding.session_id,
+                                          'agent-git'
+                                      ),
+                            access: 'read-write',
+                            git: true,
+                        });
+                        expect(
+                            request.assets.some((asset) => asset.path === fixture.root)
+                        ).toBeFalse();
+                        const invocation = prepared.runner.build(
+                            prepared.runtime,
+                            'Audit the project',
+                            prepared.configuration
+                        );
+                        expect(JSON.stringify(invocation)).not.toContain(
+                            'github-account-credential'
+                        );
+                        expect(
+                            runtimeContext(
+                                fixture.workbench,
+                                directory,
+                                request.environment
+                            )
+                        ).toContain('<repository name="example/project"');
+                        expect(
+                            fixture.eventsSeen.map((event) => event.type).slice(0, 2)
+                        ).toEqual(['repository.preparing', 'repository.ready']);
+                        if (runtime === 'docker') {
+                            const plan = new DockerMountPlan(request);
+                            expect(plan.arguments()).toContain(
+                                `${fixture.home}/sessions/${fixture.repository.binding.session_id}/agent-git:/workspace/.git`
+                            );
+                            expect(plan.containerEnvironment()).toMatchObject({
+                                WORKBENCH_REPOSITORY: 'example/project',
+                            });
+                            expect(
+                                plan.containerEnvironment().GH_TOKEN
+                            ).toBeUndefined();
+                        }
+                        if (runtime === 'e2b') {
+                            const plan = new E2BPathPlan(request);
+                            expect(
+                                plan.bindings.find(
+                                    (asset) =>
+                                        asset.hostPath ===
+                                        join(
+                                            fixture.home,
+                                            'sessions',
+                                            repository.binding.session_id,
+                                            'agent-git'
+                                        )
+                                )
+                            ).toMatchObject({
+                                runtimePath: '/workspace/.git',
+                                access: 'read-write',
+                                kind: 'git',
+                            });
+                            expect(plan.environment()).toMatchObject({
+                                WORKBENCH_REPOSITORY: 'example/project',
+                            });
+                            expect(plan.environment().GH_TOKEN).toBeUndefined();
+                            expect(plan.environment().E2B_API_KEY).toBeUndefined();
+                        }
+                    } finally {
+                        await fixture.preparation.cleanup();
+                    }
+                });
+            }
+        }
+    }
     for (const runtime of ['local', 'docker', 'e2b']) {
         for (const runner of ['opencode', 'pi']) {
             for (const mode of ['one-shot', 'session'] as const) {
@@ -217,6 +375,8 @@ describe('shared execution preparation', () => {
 });
 
 interface FixtureOptions {
+    repository?: boolean;
+    delivery?: 'none' | 'pr';
     runtime?: string;
     runner?: string;
     mode?: 'one-shot' | 'session';
@@ -230,14 +390,15 @@ interface FixtureOptions {
 }
 
 async function createFixture(options: FixtureOptions = {}) {
-    const root = await mkdtemp(join(tmpdir(), 'preparation-'));
+    const repository = options.repository ? await checkoutFixture() : undefined;
+    const root = repository?.root ?? (await mkdtemp(join(tmpdir(), 'preparation-')));
     directories.push(root);
     const home = join(root, 'home');
     const instructionsPath = join(root, 'instructions.md');
     await writeFile(instructionsPath, 'Follow the user task.');
     const workbench: ResolvedWorkbench = {
         manifestPath: join(root, 'workbench.yml'),
-        packageDirectory: root,
+        packageDirectory: repository?.source ?? root,
         repositoryDirectory: root,
         instructionsPath,
         skills: [],
@@ -258,7 +419,34 @@ async function createFixture(options: FixtureOptions = {}) {
     const calls: string[] = [];
     const runner = new TrackingRunner(workbench.manifest.runner, calls);
     const provider = new TrackingRuntime(workbench.manifest.runtime, calls, options);
-    const events = new RunEvents({ runId: RunStore.createId(), runner: runner.name });
+    const eventsSeen: Array<{ type: string }> = [];
+    const events = new RunEvents({
+        runId: RunStore.createId(),
+        runner: runner.name,
+        onEvent: (event) => {
+            eventsSeen.push(event);
+        },
+    });
+    if (repository) {
+        repository.binding.delivery = options.delivery ?? 'none';
+        await new RunStore(home).create({
+            id: events.runId,
+            metadata: {
+                workbench: 'fixture',
+                workbench_version: '0.1.0',
+                runner: runner.name,
+                model: 'openai/gpt-5.6-terra',
+                workspace: root,
+                repository: repository.binding,
+            },
+            request: {
+                workbench_path: workbench.manifestPath,
+                workspace: root,
+                task: 'Audit',
+                repository: repository.binding,
+            },
+        });
+    }
     const preparation = new ExecutionPreparation(
         {
             workbench,
@@ -266,9 +454,10 @@ async function createFixture(options: FixtureOptions = {}) {
             workspaceDirectory: root,
             events,
             mode: options.mode ?? 'one-shot',
-            workspaces: [
-                { name: 'notes', path: join(root, 'notes'), access: 'read-only' },
-            ],
+            ...(repository ? { repository: repository.binding } : {}),
+            workspaces: repository
+                ? []
+                : [{ name: 'notes', path: join(root, 'notes'), access: 'read-only' }],
             ...(options.mode === 'session'
                 ? {
                       session: {
@@ -287,12 +476,40 @@ async function createFixture(options: FixtureOptions = {}) {
         {
             environment: options.unauthenticated
                 ? {}
-                : { OPENROUTER_API_KEY: 'fixture-key' },
+                : {
+                      OPENROUTER_API_KEY: 'fixture-key',
+                      GH_TOKEN: 'github-account-credential',
+                      GITHUB_TOKEN: 'github-account-credential',
+                      SSH_AUTH_SOCK: '/socket',
+                      GIT_CONFIG_VALUE_0: 'poisoned',
+                  },
+            ...(repository
+                ? {
+                      repositories: (home, binding, environment) =>
+                          new RepositoryWorkspace(
+                              home,
+                              binding,
+                              environment,
+                              repository.git,
+                              fixtureIdentity
+                          ),
+                  }
+                : {}),
             runners: new RunnerRegistry([runner]),
             runtimes: new RuntimeRegistry([provider]),
         }
     );
-    return { root, home, workbench, calls, events, provider, preparation };
+    return {
+        root,
+        home,
+        workbench,
+        calls,
+        events,
+        eventsSeen,
+        provider,
+        preparation,
+        repository,
+    };
 }
 
 class TrackingRunner extends Runner {
@@ -370,9 +587,16 @@ class TrackingRuntime implements RuntimeProvider {
             execute: async () => ({ code: 0, stdout: '', stderr: '' }),
             interact: unused,
             launch: unused,
-            launchSession: unused,
+            launchSession: (invocation) =>
+                Bun.spawn(invocation.command, {
+                    cwd: invocation.cwd,
+                    env: invocation.env,
+                    stdin: 'pipe',
+                    stdout: 'pipe',
+                    stderr: 'pipe',
+                }),
             launchService: unused,
-            cancel: unused,
+            cancel: (process) => process.kill?.(),
             cleanup: () => {
                 this.calls.push('runtime.cleanup');
                 if (this.options.cleanupFailure) throw this.options.cleanupFailure;

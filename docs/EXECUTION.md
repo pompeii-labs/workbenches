@@ -246,9 +246,11 @@ required by the host control plane but is excluded from the runtime environment.
 The sandbox receives manifest-declared environment values for allowed model
 routes and a separately staged native credential store for the selected runner.
 
-`wb connect` selects E2B before the harness, provider, and authentication method
-and persists that non-secret preference locally. It creates no sandbox, does
-not require `E2B_API_KEY`, and incurs no E2B usage. When a configured OpenCode
+`wb connect --runtime e2b` saves the E2B control-plane key locally without
+creating a sandbox or incurring E2B usage. An inherited `E2B_API_KEY` overrides
+it. The separate model-provider path selects E2B before the harness, provider,
+and authentication method and persists that non-secret preference locally.
+When a configured OpenCode
 credential is missing, the first real foreground or TUI run creates its normal
 sandbox, exposes the headless authorization URL and code through normalized run
 events, waits for completion, and then creates the native session in that same
@@ -336,6 +338,54 @@ provider filesystem to survive. It is not a guarantee against provider data
 loss or expiration, and outcome recovery is separate from native session resume.
 Inspecting, applying, and exporting already-collected results requires no live
 sandbox or runtime key.
+
+## Repository execution and GitHub authentication
+
+`run --repo owner/repository` selects a GitHub input independently of the package
+source and caller workspace. `--ref` defaults to the repository's default branch.
+Before runtime preparation, the engine resolves an immutable commit and tree,
+stores their non-secret provenance on the session, run, and worker request, and
+checks out that commit under `sessions/<session_id>/repository`. The recorded
+caller workspace remains the discovery scope, not a transfer source or apply
+destination. Repository mode rejects named host bindings and host Docker access.
+
+Resolution and checkout use inherited `GH_TOKEN`, `GITHUB_TOKEN`, or the GitHub
+CLI's existing login. Authenticated host Git runs only against fresh
+engine-generated metadata, with credential helpers, hooks, filesystem monitors,
+global configuration, and redirect following disabled. The engine does not put
+the token in Git arguments, persisted configuration, normalized events, or
+package metadata. A new repository run receives `GH_TOKEN` in the runner's
+process environment. Git uses `gh auth git-credential` as its
+HTTPS credential helper. The same credential resolves the commit author's
+GitHub no-reply identity; the engine does not invent a shared account or use
+the caller's unrelated Git configuration. The checkout has a normal `origin` remote.
+Docker and E2B stage writable Git metadata separately from the engine's
+checkout. E2B captures that metadata as resumable native state. Local execution
+can access host credentials independently and is not a security sandbox. Older
+sessions retain their recorded authentication choice when resumed.
+
+Collected remote workspace changes are applied only to this managed checkout.
+Pending results from earlier attempts are recovered before a continuation takes
+its baseline. Missing checkout provenance, missing history, or conflicts fail
+closed rather than replacing session edits or synchronizing the caller project.
+The original pinned commit remains stable across continuations.
+
+`--repo` enables ordinary authenticated `git` and `gh` use in the runner.
+It is not a restricted PR capability: the token keeps its actual GitHub scopes.
+The agent may commit, push, create or update a PR, inspect CI, or perform other
+operations permitted by that token. The user should supply an appropriately
+scoped token. Workbench does not provide a GitHub-specific agent tool, proxy
+commands through the engine, or publish a PR automatically when execution ends.
+The agent must verify remote operations before reporting success.
+
+The normal outcome contract remains separate from GitHub activity. A confirmed
+PR URL may be saved as a `pull_request` outcome link. The TUI verifies a saved
+link against GitHub before showing the PR and can inspect observed checks and
+bounded job logs. A saved link alone does not create, update, or authorize a PR.
+Events `repository.preparing` and `repository.ready` carry repository identity
+and the pinned revision. CLI and TUI results report saved outcomes; a completed
+run does not imply that the agent created a PR. Users may resume the native
+session to ask the agent to continue GitHub work.
 
 ## Session, run, and turn boundaries
 
@@ -676,13 +726,15 @@ The default policy may select:
 
 - A terminal session that never reached native resumable state.
 - A terminal run that has no session record.
-- An old historical run that is not the latest run of its session.
+- An old historical run that is not the latest run of a non-repository session.
 - A managed Docker container whose scoped run is terminal or no longer exists.
 - A managed E2B sandbox whose scoped run is terminal or no longer exists.
 
 Active runs are never eligible. A session with native resumable state protects
-its session directory and latest run even after the cutoff. Removing that state
-requires both `--include-sessions` and `--apply`. Images, build caches, E2B
+its session directory and latest run even after the cutoff. Repository sessions
+retain all linked attempt history for cumulative change composition until their
+session is removed. Removing resumable state requires both `--include-sessions`
+and `--apply`. Images, build caches, E2B
 templates, saved Workbench packages, runner credential volumes, and unrelated
 Docker containers or E2B sandboxes are outside this cleanup contract.
 

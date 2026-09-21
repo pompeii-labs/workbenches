@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OutcomeLifecycle, OutcomeStore } from '../../src/outcomes/index.js';
@@ -26,6 +26,61 @@ async function directory(): Promise<string> {
     const value = await mkdtemp(join(tmpdir(), 'workbench-outcome-runtime-'));
     directories.push(value);
     return value;
+}
+
+async function git(root: string, ...args: string[]): Promise<void> {
+    const child = Bun.spawn(['git', ...args], {
+        cwd: root,
+        stdin: 'ignore',
+        stdout: 'ignore',
+        stderr: 'pipe',
+    });
+    const error = new Response(child.stderr).text();
+    if ((await child.exited) !== 0) throw new Error(await error);
+}
+
+async function initializeRepository(root: string): Promise<void> {
+    await git(root, 'init', '-q');
+    await git(root, 'add', '.');
+    await git(
+        root,
+        '-c',
+        'user.name=Workbench',
+        '-c',
+        'user.email=workbench@localhost',
+        'commit',
+        '-q',
+        '-m',
+        'baseline'
+    );
+}
+
+async function localProbe(root: string, name: string): Promise<ResolvedWorkbench> {
+    const packageDirectory = join(root, '.workbenches', 'probe');
+    await mkdir(packageDirectory, { recursive: true });
+    const manifestPath = join(packageDirectory, 'workbench.yml');
+    const instructionsPath = join(packageDirectory, 'instructions.md');
+    await writeFile(instructionsPath, '# Local outcome probe\n');
+    return {
+        manifestPath,
+        packageDirectory,
+        repositoryDirectory: root,
+        instructionsPath,
+        skills: [],
+        manifest: {
+            spec: 0,
+            version: '0.1.0',
+            name,
+            runner: 'sh',
+            model: { id: 'openai/gpt-5.6-terra' },
+            instructions: './instructions.md',
+            skills: [],
+            tools: [],
+            mcps: [],
+            env: {},
+            runtime: 'local',
+        },
+    };
 }
 
 describe('Outcome runtime process end to end', () => {
@@ -63,10 +118,12 @@ describe('Outcome runtime process end to end', () => {
                     },
                 };
                 await writeFile(manifestPath, Bun.YAML.stringify(workbench.manifest));
-                await writeFile(join(root, 'dirty.txt'), 'preexisting dirty content\n');
                 await writeFile(join(root, 'modify.txt'), 'before\n');
                 await writeFile(join(root, 'delete.txt'), 'delete\n');
                 await writeFile(join(api, 'api.txt'), 'before\n');
+                await initializeRepository(root);
+                await initializeRepository(api);
+                await writeFile(join(root, 'dirty.txt'), 'preexisting dirty content\n');
                 const published: string[] = [];
                 const lifecycle = await OutcomeLifecycle.create({
                     home,
@@ -156,4 +213,114 @@ describe('Outcome runtime process end to end', () => {
             180_000
         );
     }
+
+    test('runs local non-Git workspaces without copying the workspace', async () => {
+        const root = await directory();
+        const home = await directory();
+        const workbench = await localProbe(root, 'non-git-probe');
+        const lifecycle = await OutcomeLifecycle.create({
+            home,
+            runId: 'wb_1234567890abcdefghij',
+        });
+        lifecycles.push(lifecycle);
+        const runtime = await new LocalRuntimeProvider().prepare({
+            workbench,
+            workspaceDirectory: root,
+            environment: process.env,
+            outcome: { directory: lifecycle.output.directory },
+            assets: [
+                { path: root, access: 'read-write' },
+                { path: workbench.packageDirectory, access: 'read-only' },
+            ],
+        });
+        runtimes.push(runtime);
+        await writeFile(join(root, 'created.txt'), 'not copied\n');
+        await writeFile(join(lifecycle.output.directory, 'report.txt'), 'result\n');
+        const outcome = await lifecycle.collect(runtime, 'complete');
+        expect(outcome?.changesets).toEqual([]);
+        expect(outcome?.artifacts.map((artifact) => artifact.name)).toEqual([
+            'report.txt',
+        ]);
+        expect(outcome?.warnings).toEqual([
+            {
+                code: 'workspace_changes_unavailable',
+                message:
+                    'Primary workspace changes were not captured because it is not a Git working tree. Returned files and links are still captured.',
+            },
+        ]);
+    });
+
+    test('runs local oversized Git workspaces without copying the workspace', async () => {
+        const root = await directory();
+        const home = await directory();
+        const workbench = await localProbe(root, 'oversized-git-probe');
+        await initializeRepository(root);
+        await writeFile(join(root, 'oversized.bin'), '');
+        await truncate(join(root, 'oversized.bin'), 16 * 1_024 * 1_024 * 1_024);
+        const lifecycle = await OutcomeLifecycle.create({
+            home,
+            runId: 'wb_abcdefghij1234567890',
+        });
+        lifecycles.push(lifecycle);
+        const runtime = await new LocalRuntimeProvider().prepare({
+            workbench,
+            workspaceDirectory: root,
+            environment: process.env,
+            outcome: { directory: lifecycle.output.directory },
+            assets: [
+                { path: root, access: 'read-write' },
+                { path: workbench.packageDirectory, access: 'read-only' },
+            ],
+        });
+        runtimes.push(runtime);
+        await writeFile(join(lifecycle.output.directory, 'report.txt'), 'result\n');
+        const outcome = await lifecycle.collect(runtime, 'complete');
+        expect(outcome?.changesets).toEqual([]);
+        expect(outcome?.artifacts).toHaveLength(1);
+        expect(outcome?.warnings).toEqual([
+            {
+                code: 'workspace_changes_unavailable',
+                message:
+                    'Primary workspace changes were not captured because its 16 GiB snapshot exceeds the 512 MiB safety limit. Returned files and links are still captured.',
+            },
+        ]);
+    });
+
+    test('preserves local artifacts when workspace growth exceeds the capture limit', async () => {
+        const root = await directory();
+        const home = await directory();
+        const workbench = await localProbe(root, 'growing-git-probe');
+        await initializeRepository(root);
+        const lifecycle = await OutcomeLifecycle.create({
+            home,
+            runId: 'wb_abcdefghij1234567891',
+        });
+        lifecycles.push(lifecycle);
+        const runtime = await new LocalRuntimeProvider().prepare({
+            workbench,
+            workspaceDirectory: root,
+            environment: process.env,
+            outcome: { directory: lifecycle.output.directory },
+            assets: [
+                { path: root, access: 'read-write' },
+                { path: workbench.packageDirectory, access: 'read-only' },
+            ],
+        });
+        runtimes.push(runtime);
+        await writeFile(join(root, 'grown.bin'), '');
+        await truncate(join(root, 'grown.bin'), 16 * 1_024 * 1_024 * 1_024);
+        await writeFile(join(lifecycle.output.directory, 'report.txt'), 'result\n');
+        const outcome = await lifecycle.collect(runtime, 'complete');
+        expect(outcome?.changesets).toEqual([]);
+        expect(outcome?.artifacts.map((artifact) => artifact.name)).toEqual([
+            'report.txt',
+        ]);
+        expect(outcome?.warnings).toEqual([
+            {
+                code: 'workspace_changes_unavailable',
+                message:
+                    'Primary workspace changes were not captured because its 16 GiB snapshot exceeds the 512 MiB safety limit. Returned files and links are still captured.',
+            },
+        ]);
+    });
 });

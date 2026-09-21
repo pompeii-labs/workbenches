@@ -114,10 +114,10 @@ export async function renderWorkbenchTui(
                                 registrySaver.save(workbench.reference)
                             }
                             resolveSession={(id) => sessionResolver.resolve(id)}
-                            listSessions={() =>
+                            listSessions={(selectedWorkspace) =>
                                 new SessionStore(home).list({
                                     resumableOnly: true,
-                                    workspace,
+                                    workspace: selectedWorkspace ?? workspace,
                                 })
                             }
                             createWorkbench={() =>

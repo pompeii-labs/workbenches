@@ -3,6 +3,9 @@ import { join } from 'node:path';
 
 import type { RuntimeCredentialBinding } from '../runtimes/contracts.js';
 
+// Native auth files for the supported harnesses. Logs, databases, and caches are session state.
+export const nativeCredentialPaths = ['auth.json', 'opencode/auth.json'] as const;
+
 export class RunnerCredentialStore {
     constructor(private readonly home: string) {}
 

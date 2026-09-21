@@ -314,6 +314,103 @@ describe('Docker runtime provider', () => {
         }
     });
 
+    test('builds a cached engine-managed Git layer for a repository run', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        const commands: string[][] = [];
+        let built = false;
+        let dockerfile = '';
+        let installer = '';
+        const command = dockerMock(commands, {
+            inspectRepository: () => built,
+            imageUser: 'node',
+            onBuild: async (args) => {
+                const index = args.indexOf('--file');
+                dockerfile = await readFile(args[index + 1] ?? '', 'utf8');
+                installer = await readFile(
+                    join(args.at(-1) ?? '', 'install.sh'),
+                    'utf8'
+                );
+                built = true;
+            },
+        });
+        const provider = new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command,
+        });
+        const input = {
+            ...request(fixture),
+            repository: {
+                name: 'example/project',
+                revision: 'main',
+                delivery: 'pr' as const,
+            },
+        };
+        const first = await provider.prepare(input);
+        const second = await provider.prepare(input);
+        try {
+            expect(first.preparation?.reference).toStartWith(
+                'workbench-repository-tools:'
+            );
+            expect(first.preparation?.action).toBe('built');
+            expect(second.preparation?.action).toBe('cache-hit');
+            expect(dockerfile).toContain('USER root');
+            expect(dockerfile).toContain('USER node');
+            expect(dockerfile).toContain('COPY install.sh');
+            expect(installer).toContain('github-cli');
+            expect(installer).toContain('git gh');
+            expect(
+                commands.filter((candidate) => candidate[1] === 'buildx')
+            ).toHaveLength(1);
+        } finally {
+            await first.cleanup();
+            await second.cleanup();
+        }
+    });
+
+    test('uses the content-addressed tag as the Git layer base for a locally built image', async () => {
+        const fixture = await createFixture({ localBuild: true });
+        const commands: string[][] = [];
+        let localBuilt = false;
+        let toolsBuilt = false;
+        let dockerfile = '';
+        const command = dockerMock(commands, {
+            inspectLocal: () => localBuilt,
+            inspectRepository: () => toolsBuilt,
+            onBuild: async (args) => {
+                const tag = args[args.indexOf('--tag') + 1] ?? '';
+                if (tag.startsWith('workbench-local/')) {
+                    localBuilt = true;
+                } else {
+                    dockerfile = await readFile(
+                        args[args.indexOf('--file') + 1] ?? '',
+                        'utf8'
+                    );
+                    toolsBuilt = true;
+                }
+            },
+        });
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command,
+        }).prepare({
+            ...request(fixture),
+            repository: {
+                name: 'example/project',
+                revision: 'main',
+                delivery: 'pr',
+            },
+        });
+        try {
+            expect(dockerfile).toMatch(/^FROM workbench-local\/lux-core:[a-f0-9]+\n/);
+            expect(dockerfile).not.toContain('FROM sha256:');
+            expect(
+                commands.filter((candidate) => candidate[1] === 'buildx')
+            ).toHaveLength(2);
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('remaps packaged runner configuration into the container', async () => {
         const fixture = await createFixture({
             image: 'ghcr.io/example/lux:0.1.0',
@@ -927,14 +1024,16 @@ function dockerMock(
     options: {
         missing?: string;
         inspectLocal?: () => boolean;
-        onBuild?: () => void;
+        inspectRepository?: () => boolean;
+        imageUser?: string;
+        onBuild?: (command: string[]) => void | Promise<void>;
     } = {}
 ) {
     return async (command: string[]): Promise<DockerCommandResult> => {
         commands.push(command);
         if (command[1] === 'version') return result(0, '28.1.1\n');
         if (command[1] === 'buildx') {
-            options.onBuild?.();
+            await options.onBuild?.(command);
             return result(0, 'built\n');
         }
         if (command[1] === 'image' && command[2] === 'pull') {
@@ -945,6 +1044,12 @@ function dockerMock(
             if (reference.startsWith('workbench-local/') && !options.inspectLocal?.()) {
                 return result(1, '', 'No such image');
             }
+            if (
+                reference.startsWith('workbench-repository-tools:') &&
+                !options.inspectRepository?.()
+            ) {
+                return result(1, '', 'No such image');
+            }
             return result(
                 0,
                 `${JSON.stringify({
@@ -952,6 +1057,9 @@ function dockerMock(
                     RepoDigests: [
                         'ghcr.io/example/lux@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                     ],
+                    ...(options.imageUser
+                        ? { Config: { User: options.imageUser } }
+                        : {}),
                 })}\n`
             );
         }

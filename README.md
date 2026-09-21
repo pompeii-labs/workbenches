@@ -283,7 +283,76 @@ saved run metadata or normalized events. Prefer `--env-file` or inherited
 environment for secrets because command-line values may be retained in shell
 history.
 
-### Connect a runner environment
+### Work on a GitHub repository
+
+Select a repository independently of the Workbench package or current directory:
+
+```sh
+wb run project-core --repo owner/project --task "Audit authentication"
+wb run project-core --repo owner/project --ref main \
+  --task "Add pagination and tests"
+```
+
+Repository access uses inherited `GH_TOKEN`, then `GITHUB_TOKEN`, or an existing
+`gh auth login`. No GitHub App, registry account, or hosted Workbench service is
+required. This authentication is separate from `wb connect`, which selects model
+provider connections. Private repositories require repository read access; PR
+creation also requires Contents and Pull requests write permissions. CI inspection
+requires Actions and Checks read permissions. Workflow changes may require
+additional GitHub permissions.
+
+The engine resolves the selected ref to an exact commit and checks it out under
+the session's managed storage. It never uploads or synchronizes your current
+project. The current directory remains the session-discovery scope. Repository
+mode cannot be combined with `--dir`, named host workspace bindings, host Docker
+access, or `--dry-run`.
+
+Workbench authors do not need to declare or install `git` or `gh`. For Docker
+and E2B repository runs, the engine builds a cached tooling layer on top of the
+Workbench image. The original image and package remain unchanged.
+
+Repository runs pass `GH_TOKEN` into the runner and configure Git to use `gh`
+for HTTPS authentication. The engine resolves the authenticated GitHub account
+and configures commits with that account's GitHub no-reply identity, without
+exposing its private email. The agent can use ordinary `git` and `gh`
+commands to commit, push, open or update a PR, and inspect CI. There is no
+Workbench-specific GitHub tool or automatic PR publication when a turn ends.
+The token retains its actual GitHub permissions; repository mode is not a
+technical restriction to PR operations. Use a suitably scoped token. Docker
+and E2B do not mount your GitHub CLI configuration or SSH agent. A local run can
+still access credentials already available on the host; local execution is not a
+security sandbox.
+
+`wait --json` includes repository provenance and any saved outcome. The TUI
+shows repository preparation separately from model work.
+From the home search, select any saved or published Workbench to choose its run
+target: the current directory, another local directory with path completion, or
+a GitHub repository. The repository choice asks for an optional base ref and
+uses your available GitHub credential. In the non-interactive CLI, the target remains the
+current directory unless `--dir` or `--repo` is passed.
+
+Repository sessions keep the target, base branch, and GitHub authentication
+status visible above the conversation. If the agent records a confirmed PR URL
+as a `pull_request` outcome link, `/pr`, `/checks`, `/logs` or Ctrl+G can inspect
+that PR without another model turn or sandbox launch. Refresh with `r`, toggle
+30-second watching with `w`, open the PR with `o`, or select a job with arrows
+and press Enter for its logs (`v` opens the job on GitHub). CI is an observed
+snapshot, not a live guarantee. Watching stops when the panel closes. The panel
+also offers `d` to inspect the saved diff. Outcome dialogs offer the same diff
+view; diff and CI log display are bounded to 128 KiB and indicate truncation.
+
+Resume retains the managed checkout and runner Git state. The agent decides
+when and whether to push, open a PR, update it, or take any other GitHub action
+allowed by the credential. Workbench never does those actions automatically.
+
+The initial checkout is shallow. Submodules are preserved but not initialized,
+and Git LFS pointer files are not automatically downloaded. Branches, tags, and
+commits are accepted as the starting ref;
+the credential's actual permissions determine which later GitHub operations work.
+Requested attachments continue to use the normal returned-results contract;
+project edits remain workspace changes.
+
+### Connect model and runtime providers
 
 The Workbench author selects the runner, model, allowed provider routes, and
 native runner configuration. Those choices cannot be overridden when the
@@ -293,19 +362,35 @@ boundary:
 
 ```sh
 wb connect
-# Runtime → harness → provider → authentication method
+# Model provider → runtime → harness → provider → authentication method
+# Or E2B runtime → masked API-key prompt
 wb run project-core --task "Review this migration"
 ```
 
-`wb connect` is configuration-only. It does not launch a runner, start Docker,
-create an E2B sandbox, require an E2B key, contact a model provider, or ask for
-provider credentials. The resulting default belongs to the runner and runtime,
-not a Workbench. Compatible Workbenches automatically reuse it. The same flow
-can be scripted explicitly:
+The model-provider path is configuration-only. It does not launch a runner,
+start Docker, create an E2B sandbox, require an E2B key, contact a model
+provider, or ask for model credentials. The resulting default belongs to the
+runner and runtime, not a Workbench. Compatible Workbenches automatically reuse
+it. The same flow can be scripted explicitly:
 
 ```sh
 wb connect --runtime e2b --harness opencode --provider openai --method chatgpt
 ```
+
+The E2B runtime-provider path saves its host-only API key once, without
+starting a sandbox or incurring E2B usage:
+
+```sh
+wb connect --runtime e2b
+wb connect --runtime e2b --status
+```
+
+The terminal prompt masks the key. For automation, pipe it explicitly with
+`wb connect --runtime e2b --stdin`; there is no key-valued command-line flag
+that could enter shell history. Remove the saved key with
+`wb connect --runtime e2b --remove`. The key is stored in
+`~/.workbench/runtime.secrets.json` with mode `0600`, separately from model
+credentials. An inherited `E2B_API_KEY` overrides the saved key for one process.
 
 Passing a Workbench reference narrows the provider choices to routes allowed by
 that package; it still performs no runtime work.
@@ -512,7 +597,7 @@ modes and non-Unix contexts are rejected rather than silently substituted.
 ### Run in E2B
 
 An E2B Workbench uses the same image declaration as Docker and requires an E2B
-API key on the host:
+API key on the host. Connect once, then run normally:
 
 ```yaml
 runtime: e2b
@@ -522,9 +607,10 @@ image:
 ```
 
 ```sh
-E2B_API_KEY=... wb build project-core
-E2B_API_KEY=... wb smoke project-core
-E2B_API_KEY=... wb run project-core --task "Review this migration"
+wb connect --runtime e2b
+wb build project-core
+wb smoke project-core
+wb run project-core --task "Review this migration"
 ```
 
 The image can be a public OCI reference or a Workbench-local Dockerfile. The
@@ -545,10 +631,12 @@ original baseline as durable pending changesets, never automatically applied to
 the host. Read-write single-file assets are rejected.
 
 Input and output transfers each have a 512 MiB safety limit, enforced against
-uncompressed content. `E2B_API_KEY` is used only by the host control plane and is
-never sent to the sandbox. The sandbox receives manifest-declared environment
-values for allowed model routes and the private native credential store for its
-selected runner. `wb connect` performs no E2B work and does not require the key.
+uncompressed content. The saved E2B key, or an overriding `E2B_API_KEY`, is used
+only by the host control plane and is never sent to the sandbox. The sandbox
+receives manifest-declared environment values for allowed model routes and the
+private native credential store for its selected runner. Connecting E2B saves
+the key but performs no E2B work; the
+separate model-provider connection path does not require the key.
 If a configured OpenCode credential is missing, the first real foreground or
 TUI run performs the headless ChatGPT authorization inside the sandbox that was
 created for that run, then continues the run after authorization succeeds.
@@ -717,7 +805,9 @@ Run and session data is never removed by `wb clean` until `--apply` is passed.
 The default policy selects terminal, non-resumable sessions and obsolete run
 history older than 30 days. Active runs are never eligible. Native resumable
 context and its latest run are protected unless `--include-sessions` is also
-passed. To explicitly clear all terminal history, including resumable context,
+passed. Repository sessions also retain all earlier attempt outcomes needed for
+cumulative delivery until the session is removed. To explicitly clear all
+terminal history, including resumable context,
 use `wb clean --older-than 0s --include-sessions --apply`. `--json` returns the
 same preview or result as a stable machine-readable report, including byte
 counts and protected resources.
@@ -808,9 +898,9 @@ control messages, not durable run history.
 
 Supported sessions can be reopened with `wb resume <session-or-run-id>` or from
 the TUI's `/resume` browser. The browser is scoped to the active workspace. On a
-bare invocation that is the current working directory; an explicit `--dir` or
-resumed session preserves its recorded workspace. An active session is
-reattached instead of duplicated. A closed session creates a new durable run
+bare invocation that is the current working directory; a directory selected in
+the TUI, an explicit `--dir`, or a resumed session uses its recorded workspace.
+An active session is reattached instead of duplicated. A closed session creates a new durable run
 linked to the same stable session. Workbench keeps a small private session index
 and a disposable transcript presentation cache. The selected runner remains the
 source of truth for model context: OpenCode resumes from its session database and

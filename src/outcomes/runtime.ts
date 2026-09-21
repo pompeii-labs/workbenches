@@ -10,7 +10,7 @@ import type {
 } from './contracts.js';
 import { type CollectedOutput, OutcomeOutput } from './output.js';
 import type { OutcomeStore } from './store.js';
-import { WorkspaceSnapshot } from './workspace.js';
+import { WorkspaceSnapshot, WorkspaceSnapshotLimitError } from './workspace.js';
 
 export interface RuntimeOutcomeCollection {
     application_state: OutcomeApplicationState;
@@ -21,38 +21,75 @@ export interface RuntimeOutcomeCollection {
     warnings: OutcomeWarning[];
 }
 
+export interface HostOutcomeCaptureOptions {
+    bestEffortWorkspaceChanges?: boolean;
+    gitBaseline?: boolean;
+}
+
 export class HostOutcomeCapture {
     private collection: Promise<RuntimeOutcomeCollection> | undefined;
 
     private constructor(
         private readonly snapshots: WorkspaceSnapshot[],
-        private readonly output: OutcomeOutput
+        private readonly output: OutcomeOutput,
+        private readonly warnings: OutcomeWarning[],
+        private readonly bestEffortWorkspaceChanges: boolean
     ) {}
 
-    static async create(request: RuntimePrepareRequest): Promise<HostOutcomeCapture> {
+    static async create(
+        request: RuntimePrepareRequest,
+        options: HostOutcomeCaptureOptions = {}
+    ): Promise<HostOutcomeCapture> {
         if (!request.outcome) {
             throw new Error('Host outcome capture requires an output directory');
         }
         const roots = writableWorkspaces(request);
         const snapshots: WorkspaceSnapshot[] = [];
+        const warnings: OutcomeWarning[] = [];
         try {
             for (const candidate of roots) {
-                snapshots.push(
-                    await WorkspaceSnapshot.create(candidate.path, {
-                        workspace: candidate.workspace,
-                        excludedPaths: roots
-                            .filter(
-                                (other) =>
-                                    other.path !== candidate.path &&
-                                    contains(candidate.path, other.path)
-                            )
-                            .map((other) => other.path),
-                    })
-                );
+                if (
+                    options.bestEffortWorkspaceChanges &&
+                    !(await isGitWorkingTree(candidate.path))
+                ) {
+                    warnings.push({
+                        code: 'workspace_changes_unavailable',
+                        message: `${workspaceLabel(candidate.workspace)} changes were not captured because it is not a Git working tree. Returned files and links are still captured.`,
+                    });
+                    continue;
+                }
+                try {
+                    snapshots.push(
+                        await WorkspaceSnapshot.create(candidate.path, {
+                            workspace: candidate.workspace,
+                            ...(options.gitBaseline ? { baseline: 'git' } : {}),
+                            excludedPaths: roots
+                                .filter(
+                                    (other) =>
+                                        other.path !== candidate.path &&
+                                        contains(candidate.path, other.path)
+                                )
+                                .map((other) => other.path),
+                        })
+                    );
+                } catch (error) {
+                    if (
+                        !options.bestEffortWorkspaceChanges ||
+                        !(error instanceof WorkspaceSnapshotLimitError)
+                    ) {
+                        throw error;
+                    }
+                    warnings.push({
+                        code: 'workspace_changes_unavailable',
+                        message: `${workspaceLabel(candidate.workspace)} changes were not captured because its ${formatBytes(error.actualBytes)} snapshot exceeds the ${formatBytes(error.maximumBytes)} safety limit. Returned files and links are still captured.`,
+                    });
+                }
             }
             return new HostOutcomeCapture(
                 snapshots,
-                OutcomeOutput.open(request.outcome.directory)
+                OutcomeOutput.open(request.outcome.directory),
+                warnings,
+                options.bestEffortWorkspaceChanges ?? false
             );
         } catch (error) {
             await Promise.allSettled(snapshots.map((snapshot) => snapshot.cleanup()));
@@ -70,10 +107,31 @@ export class HostOutcomeCapture {
         return this.collection;
     }
 
+    /** Capture current repository edits without freezing final collection. */
+    snapshot(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+        return this.collectOnce(store);
+    }
+
     private async collectOnce(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
-        const changesets = (
-            await Promise.all(this.snapshots.map((snapshot) => snapshot.collect(store)))
-        ).flatMap((changeset) => (changeset ? [changeset] : []));
+        const changesets: OutcomeChangeset[] = [];
+        const warnings = [...this.warnings];
+        for (const snapshot of this.snapshots) {
+            try {
+                const changeset = await snapshot.collect(store);
+                if (changeset) changesets.push(changeset);
+            } catch (error) {
+                if (
+                    !this.bestEffortWorkspaceChanges ||
+                    !(error instanceof WorkspaceSnapshotLimitError)
+                ) {
+                    throw error;
+                }
+                warnings.push({
+                    code: 'workspace_changes_unavailable',
+                    message: `${workspaceLabel(snapshot.workspace)} changes were not captured because its ${formatBytes(error.actualBytes)} snapshot exceeds the ${formatBytes(error.maximumBytes)} safety limit. Returned files and links are still captured.`,
+                });
+            }
+        }
         const output = await this.output.collect(store);
         return {
             application_state: 'present',
@@ -81,7 +139,10 @@ export class HostOutcomeCapture {
             changesets,
             artifacts: output.artifacts,
             links: output.links,
-            warnings: this.snapshots.flatMap((snapshot) => snapshot.warnings),
+            warnings: [
+                ...warnings,
+                ...this.snapshots.flatMap((snapshot) => snapshot.warnings),
+            ],
         };
     }
 
@@ -99,6 +160,42 @@ export class HostOutcomeCapture {
         );
         if (failure) throw failure.reason;
     }
+}
+
+async function isGitWorkingTree(path: string): Promise<boolean> {
+    try {
+        const child = Bun.spawn(['git', 'rev-parse', '--is-inside-work-tree'], {
+            cwd: path,
+            stdin: 'ignore',
+            stdout: 'pipe',
+            stderr: 'ignore',
+        });
+        const output = (await new Response(child.stdout).text()).trim();
+        return (await child.exited) === 0 && output === 'true';
+    } catch {
+        return false;
+    }
+}
+
+function workspaceLabel(
+    workspace: { kind: 'primary' } | { kind: 'named'; name: string }
+): string {
+    return workspace.kind === 'primary'
+        ? 'Primary workspace'
+        : `Workspace ${workspace.name}`;
+}
+
+function formatBytes(bytes: number): string {
+    if (bytes < 1_024) return `${bytes} B`;
+    const units = ['KiB', 'MiB', 'GiB'];
+    let value = bytes;
+    let unit = 'B';
+    for (const next of units) {
+        value /= 1_024;
+        unit = next;
+        if (value < 1_024) break;
+    }
+    return `${value.toFixed(value < 10 ? 1 : 0)} ${unit}`;
 }
 
 function writableWorkspaces(request: RuntimePrepareRequest): Array<{

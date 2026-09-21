@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { nativeCredentialPaths } from '../../connections/index.js';
 import type { E2BSandbox } from './contracts.js';
 import { quote } from './shell.js';
 import type { E2BAssetSnapshot } from './snapshot.js';
@@ -20,15 +21,18 @@ export async function captureE2BNativeState(
         for (const [index, snapshot] of snapshots.entries()) {
             if (
                 snapshot.binding.kind !== 'state' &&
-                snapshot.binding.kind !== 'credentials'
+                snapshot.binding.kind !== 'credentials' &&
+                snapshot.binding.kind !== 'git'
             )
                 continue;
             if (completed.has(index)) continue;
             const root = snapshot.binding.runtimePath;
             const remoteArchive = `/tmp/workbench-native-state-${index}.tar.gz`;
-            const result = await sandbox.run(
-                `tar -C ${quote(root)} --exclude=./.git --exclude=./.workbench-state -czf ${quote(remoteArchive)} .`
-            );
+            const selection =
+                snapshot.binding.kind === 'credentials'
+                    ? `cd ${quote(root)}; set --; for file in ${nativeCredentialPaths.map(quote).join(' ')}; do if [ -e "$file" ] || [ -L "$file" ]; then set -- "$@" "$file"; fi; done; tar -czf ${quote(remoteArchive)} -T /dev/null "$@"`
+                    : `tar -C ${quote(root)} --exclude=./.git --exclude=./.workbench-state -czf ${quote(remoteArchive)} .`;
+            const result = await sandbox.run(selection);
             if (result.code !== 0)
                 throw new Error(
                     `Failed to collect E2B native state: ${result.stderr.trim()}`

@@ -2,6 +2,7 @@ import type { PreparedRuntime } from '../runtimes/contracts.js';
 import type {
     OutcomeApplicationState,
     OutcomeCompleteness,
+    OutcomeLink,
     RunOutcome,
 } from './contracts.js';
 import { OutcomeOutput } from './output.js';
@@ -27,6 +28,7 @@ export class OutcomeLifecycle {
     private applicationState: OutcomeApplicationState | undefined;
     private queue: Promise<unknown> = Promise.resolve();
     private initialFingerprint: string | undefined;
+    private readonly engineLinks = new Map<string, OutcomeLink>();
     private checkpointResult:
         | {
               fingerprint: string;
@@ -91,6 +93,47 @@ export class OutcomeLifecycle {
         return this.collection;
     }
 
+    recordLink(link: OutcomeLink): void {
+        this.engineLinks.set(link.uri, link);
+    }
+
+    /** A durable publication checkpoint, not the final result or an artifact-only turn snapshot. */
+    snapshotRepository(runtime: PreparedRuntime): Promise<RunOutcome> {
+        if (this.collection || this.outcome)
+            return Promise.reject(
+                new Error('Execution is already collecting its final result')
+            );
+        return this.enqueue(async () => {
+            const store = new OutcomeStore(this.options.home);
+            try {
+                const collected = await runtime.snapshotRepository?.(store);
+                if (!collected)
+                    throw new Error(
+                        'Runtime cannot snapshot repository changes during execution'
+                    );
+                const outcome = await store.commit(
+                    {
+                        version: 1,
+                        id: OutcomeStore.createId(),
+                        run_id: this.options.runId,
+                        created_at: (this.options.now?.() ?? new Date()).toISOString(),
+                        completeness: 'partial',
+                        ...(collected.summary ? { summary: collected.summary } : {}),
+                        changesets: collected.changesets,
+                        artifacts: collected.artifacts,
+                        links: this.links(collected.links),
+                        warnings: collected.warnings,
+                    },
+                    collected.application_state
+                );
+                await this.options.onAvailable?.(outcome, collected.application_state);
+                return outcome;
+            } finally {
+                await store.close();
+            }
+        });
+    }
+
     checkpoint(
         runtime: PreparedRuntime | undefined,
         turnIndex: number
@@ -117,6 +160,7 @@ export class OutcomeLifecycle {
                 const output =
                     (await runtime?.collectOutput?.(store)) ??
                     (await this.output.collect(store));
+                output.links = this.links(output.links);
                 const fingerprint = JSON.stringify(output);
                 if (fingerprint === previous?.fingerprint) return previous?.outcome;
                 if (!previous && fingerprint === this.initialFingerprint)
@@ -186,7 +230,7 @@ export class OutcomeLifecycle {
                 ...(fallback.summary ? { summary: fallback.summary } : {}),
                 changesets: fallback.changesets,
                 artifacts: fallback.artifacts,
-                links: fallback.links,
+                links: this.links(fallback.links),
                 warnings: fallback.warnings,
             };
             this.outcome = await store.commit(outcome, fallback.application_state);
@@ -212,5 +256,16 @@ export class OutcomeLifecycle {
                 });
         }
         await this.publication;
+    }
+
+    private links(links: OutcomeLink[]): OutcomeLink[] {
+        const reserved = new Set([...this.engineLinks.values()].map((link) => link.id));
+        const merged = new Map(
+            links
+                .filter((link) => !reserved.has(link.id))
+                .map((link) => [link.uri, link])
+        );
+        for (const [uri, link] of this.engineLinks) merged.set(uri, link);
+        return [...merged.values()];
     }
 }

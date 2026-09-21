@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { OutcomeStore } from '../src/outcomes/store.js';
 
 import {
     LocalRuntimeProvider,
@@ -32,6 +33,40 @@ const request = {
 let cancellationCount = 0;
 
 describe('local runtime provider contract', () => {
+    test('registry forwards live repository snapshots and guards collection failures', async () => {
+        const native = await new LocalRuntimeProvider().prepare(request);
+        let calls = 0;
+        let fail = false;
+        native.snapshotRepository = async () => {
+            calls++;
+            if (fail) throw new Error('Snapshot unavailable');
+            return {
+                application_state: 'present',
+                changesets: [],
+                artifacts: [],
+                links: [],
+                warnings: [],
+            };
+        };
+        const runtime = await new RuntimeRegistry([
+            { name: 'local', prepare: async () => native },
+        ])
+            .resolve('local')
+            .prepare(request);
+        try {
+            expect(
+                await runtime.snapshotRepository?.({} as OutcomeStore)
+            ).toMatchObject({ application_state: 'present' });
+            fail = true;
+            await expect(
+                runtime.snapshotRepository?.({} as OutcomeStore)
+            ).rejects.toThrow('Snapshot unavailable');
+            expect(calls).toBe(2);
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('bounds shutdown when a native process ignores graceful termination', async () => {
         const child = LocalRuntime.spawn(
             [

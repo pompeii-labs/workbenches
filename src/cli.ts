@@ -146,7 +146,6 @@ function usesModelCatalog(args: string[], bare: boolean): boolean {
     if (bare) return true;
     return new Set([
         'build',
-        'connect',
         'create',
         'init',
         'resume',

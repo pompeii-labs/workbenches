@@ -67,6 +67,9 @@ export class CliRunClient {
                 return (
                     (waitForRunEnd &&
                         (event.type === 'outcome.available' ||
+                            event.type === 'delivery.started' ||
+                            event.type === 'delivery.completed' ||
+                            event.type === 'delivery.failed' ||
                             event.type === 'run.completed')) ||
                     view.includes(event)
                 );
@@ -92,7 +95,10 @@ class InputEventView {
     includes(event: WorkbenchEvent): boolean {
         if (
             this.includePrelude &&
-            (event.type === 'run.started' || event.type === 'run.ready')
+            (event.type === 'run.started' ||
+                event.type === 'run.ready' ||
+                event.type === 'repository.preparing' ||
+                event.type === 'repository.ready')
         ) {
             return true;
         }

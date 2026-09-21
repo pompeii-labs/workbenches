@@ -72,6 +72,12 @@
             "enum": [
                 "run.started",
                 "run.ready",
+                "repository.preparing",
+                "repository.ready",
+                "repository.checks",
+                "delivery.started",
+                "delivery.completed",
+                "delivery.failed",
                 "authentication.requested",
                 "authentication.completed",
                 "turn.started",
@@ -101,6 +107,195 @@
         "data": { "type": "object" }
     },
     "allOf": [
+        {
+            "if": { "properties": { "type": { "const": "repository.checks" } } },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": [
+                            "pull_request",
+                            "state",
+                            "truncated",
+                            "checks",
+                            "statuses",
+                            "workflows",
+                            "jobs"
+                        ],
+                        "properties": {
+                            "state": {
+                                "enum": [
+                                    "none",
+                                    "pending",
+                                    "failed",
+                                    "incomplete",
+                                    "passed"
+                                ]
+                            },
+                            "truncated": { "type": "boolean" },
+                            "pull_request": {
+                                "type": "object",
+                                "required": [
+                                    "number",
+                                    "url",
+                                    "head",
+                                    "branch",
+                                    "state",
+                                    "merged",
+                                    "draft"
+                                ],
+                                "properties": {
+                                    "number": { "type": "integer", "minimum": 1 },
+                                    "url": { "type": "string", "format": "uri" },
+                                    "head": {
+                                        "type": "string",
+                                        "pattern": "^[a-f0-9]{40}$"
+                                    },
+                                    "branch": { "type": "string", "minLength": 1 },
+                                    "state": { "enum": ["open", "closed"] },
+                                    "merged": { "type": "boolean" },
+                                    "draft": { "type": "boolean" }
+                                }
+                            },
+                            "checks": { "type": "array", "maxItems": 100 },
+                            "statuses": { "type": "array", "maxItems": 100 },
+                            "workflows": { "type": "array", "maxItems": 20 },
+                            "jobs": { "type": "array", "maxItems": 2000 }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "type": { "enum": ["repository.preparing", "repository.ready"] }
+                }
+            },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["repository", "revision"],
+                        "properties": {
+                            "repository": { "type": "string", "minLength": 3 },
+                            "revision": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{40}$"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "delivery.started" } } },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["repository", "outcome_id"],
+                        "properties": {
+                            "repository": { "type": "string", "minLength": 3 },
+                            "outcome_id": {
+                                "type": "string",
+                                "pattern": "^wbo_[a-z0-9]{20,64}$"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "type": { "enum": ["delivery.completed", "delivery.failed"] }
+                }
+            },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": [
+                            "version",
+                            "run_id",
+                            "outcome_id",
+                            "repository",
+                            "revision",
+                            "branch",
+                            "base_branch",
+                            "created_at",
+                            "state"
+                        ],
+                        "properties": {
+                            "version": { "const": 1 },
+                            "run_id": {
+                                "type": "string",
+                                "pattern": "^wb_[a-z0-9]{20,64}$"
+                            },
+                            "outcome_id": {
+                                "type": "string",
+                                "pattern": "^wbo_[a-z0-9]{20,64}$"
+                            },
+                            "repository": { "type": "string", "minLength": 3 },
+                            "revision": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{40}$"
+                            },
+                            "branch": { "type": "string", "minLength": 1 },
+                            "base_branch": { "type": "string", "minLength": 1 },
+                            "created_at": { "type": "string", "format": "date-time" },
+                            "state": { "enum": ["published", "failed", "unchanged"] },
+                            "tree": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+                            "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+                            "message": { "type": "string" },
+                            "pull_request": {
+                                "type": "object",
+                                "required": ["number", "url"],
+                                "properties": {
+                                    "number": { "type": "integer", "minimum": 1 },
+                                    "url": { "type": "string", "format": "uri" }
+                                }
+                            }
+                        },
+                        "allOf": [
+                            {
+                                "if": {
+                                    "properties": { "state": { "const": "published" } }
+                                },
+                                "then": {
+                                    "required": ["tree", "commit", "pull_request"]
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "delivery.failed" } } },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "properties": { "state": { "const": "failed" } }
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "delivery.completed" } } },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "state": { "enum": ["published", "unchanged"] }
+                        }
+                    }
+                }
+            }
+        },
         {
             "if": { "properties": { "type": { "const": "output.text" } } },
             "then": {

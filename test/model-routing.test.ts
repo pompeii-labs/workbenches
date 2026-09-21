@@ -139,11 +139,15 @@ describe('locked model routing', () => {
                 OPENROUTER_API_KEY: 'selected',
                 SHARED_TOKEN: 'declared',
                 PATH: '/bin',
+                WORKBENCH_REPOSITORY: 'example/project',
+                WORKBENCH_REPOSITORY_REVISION: 'a'.repeat(40),
             })
         ).toEqual({
             OPENROUTER_API_KEY: 'selected',
             SHARED_TOKEN: 'declared',
             PATH: '/bin',
+            WORKBENCH_REPOSITORY: 'example/project',
+            WORKBENCH_REPOSITORY_REVISION: 'a'.repeat(40),
         });
     });
 });

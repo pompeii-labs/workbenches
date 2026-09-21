@@ -1,4 +1,5 @@
 import type { OutcomeCompleteness, RunOutcome } from '../outcomes/contracts.js';
+import type { RepositoryBinding } from '../repositories/contracts.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import {
     normalizeRunnerInput,
@@ -46,6 +47,7 @@ export interface InteractiveRunDependencies {
 }
 
 export interface InteractiveRunOptions {
+    repository?: RepositoryBinding;
     runId?: string;
     resolved: ResolvedWorkbenchReference;
     reference?: string;

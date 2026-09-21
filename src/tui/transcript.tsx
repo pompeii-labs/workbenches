@@ -4,6 +4,7 @@ import { type Accessor, For, Match, Show, Switch } from 'solid-js';
 
 import { sanitizeMarkdown } from '../rendering/index.js';
 import { ActivityIndicator } from './activity.js';
+import { DeliveryCard } from './delivery.js';
 import type { TranscriptDisplayItem } from './model.js';
 import { OutcomeCard } from './outcome.js';
 import { useTheme } from './theme/index.js';
@@ -18,6 +19,33 @@ export function Transcript(props: {
     const { syntax, theme } = useTheme();
     return (
         <Switch>
+            <Match when={props.item.kind === 'checks'}>
+                {props.item.kind === 'checks' ? (
+                    <box
+                        flexDirection="column"
+                        marginTop={1}
+                        paddingX={2}
+                        paddingY={1}
+                        backgroundColor={theme.backgroundPanel}
+                    >
+                        <text
+                            fg={
+                                props.item.state === 'failed'
+                                    ? theme.red
+                                    : props.item.state === 'passed'
+                                      ? theme.success
+                                      : theme.textMuted
+                            }
+                        >
+                            CI · {props.item.state} · {props.item.head.slice(0, 12)} ·{' '}
+                            {props.item.jobs} jobs
+                        </text>
+                        <text fg={theme.accent}>
+                            <a href={props.item.url}>{props.item.url}</a>
+                        </text>
+                    </box>
+                ) : null}
+            </Match>
             <Match when={props.item.kind === 'user'}>
                 <box border={['left']} borderColor={theme.accent} marginTop={1}>
                     <box
@@ -105,6 +133,11 @@ export function Transcript(props: {
                         item={props.item}
                         {...(props.home ? { home: props.home } : {})}
                     />
+                ) : null}
+            </Match>
+            <Match when={props.item.kind === 'delivery'}>
+                {props.item.kind === 'delivery' ? (
+                    <DeliveryCard item={props.item} />
                 ) : null}
             </Match>
         </Switch>

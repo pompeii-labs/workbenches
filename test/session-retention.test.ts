@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OutcomeStore } from '../src/outcomes/index.js';
+import type { RepositoryBinding } from '../src/repositories/contracts.js';
 import { RunStore, type StoredRunStatus } from '../src/runs/index.js';
 import type {
     ManagedDockerContainer,
@@ -219,6 +220,50 @@ describe('Workbench session retention', () => {
         expect(sandboxStorage.removed).toEqual([]);
     });
 
+    test('retains repository attempt history until its session is explicitly removed', async () => {
+        const home = await temporaryHome();
+        const runs = new RunStore(home);
+        const sessions = new SessionStore(home);
+        const sessionId = RunStore.createId();
+        const historicalId = RunStore.createId();
+        const latestId = RunStore.createId();
+        await fixtureSession(sessions, sessionId, historicalId, {
+            owner: 'example',
+            name: 'project',
+            default_branch: 'main',
+            base_branch: 'main',
+            revision: 'a'.repeat(40),
+            tree: 'b'.repeat(40),
+            session_id: sessionId,
+            delivery: 'pr',
+        });
+        await fixtureRun(runs, historicalId, sessionId, 'completed');
+        await fixtureRun(runs, latestId, sessionId, 'completed');
+        await sessions.update(sessionId, {
+            native_session_id: 'ses_repository_retained',
+            latest_run_id: latestId,
+        });
+        await Bun.sleep(2);
+        const retention = new SessionRetention(home);
+        const policy = { before: new Date() };
+        const review = await retention.review(policy);
+        expect(review.runs).toEqual([]);
+        expect(review.protectedResumableSessions).toEqual([sessionId]);
+        const retained = await retention.apply(policy);
+        expect(retained.removedRuns).toEqual([]);
+        expect((await runs.read(historicalId)).status).toBe('completed');
+        expect((await runs.read(latestId)).status).toBe('completed');
+
+        const removed = await retention.apply({
+            ...policy,
+            includeResumableSessions: true,
+        });
+        expect(removed.removedSessions).toEqual([sessionId]);
+        expect(removed.removedRuns.toSorted()).toEqual(
+            [historicalId, latestId].toSorted()
+        );
+    });
+
     test('requires an explicit policy to remove resumable native context', async () => {
         const home = await temporaryHome();
         const runs = new RunStore(home);
@@ -280,7 +325,12 @@ async function temporaryHome(): Promise<string> {
     return home;
 }
 
-function fixtureSession(store: SessionStore, id: string, latestRunId: string) {
+function fixtureSession(
+    store: SessionStore,
+    id: string,
+    latestRunId: string,
+    repository?: RepositoryBinding
+) {
     return store.create({
         id,
         workbench: 'fixture-core',
@@ -293,6 +343,7 @@ function fixtureSession(store: SessionStore, id: string, latestRunId: string) {
         workspace: '/repo',
         workspaces: [],
         latest_run_id: latestRunId,
+        ...(repository ? { repository } : {}),
     });
 }
 

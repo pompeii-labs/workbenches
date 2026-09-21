@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+    mkdir,
+    mkdtemp,
+    readFile,
+    rm,
+    symlink,
+    truncate,
+    writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -58,6 +66,12 @@ describe('E2B workspace snapshots', () => {
         await writeFile(join(directory, 'visible.txt'), 'visible');
         await writeFile(join(directory, 'ignored.txt'), 'ignored');
         await writeFile(join(directory, '.env'), 'SECRET=value');
+        await mkdir(join(directory, '.workbench'));
+        await writeFile(
+            join(directory, '.workbench', 'runtime.secrets.json'),
+            'SECRET'
+        );
+        await writeFile(join(directory, 'runtime.secrets.json'), 'SECRET');
         await writeFile(join(directory, '.env.example'), 'SECRET=example');
         await run(['git', 'init', '-q'], directory);
         await run(
@@ -65,6 +79,16 @@ describe('E2B workspace snapshots', () => {
             directory
         );
         await run(['git', 'add', '-f', '.env'], directory);
+        await run(
+            [
+                'git',
+                'add',
+                '-f',
+                '.workbench/runtime.secrets.json',
+                'runtime.secrets.json',
+            ],
+            directory
+        );
 
         const snapshot = await E2BAssetSnapshot.create(binding(directory), 1024 * 1024);
         try {
@@ -75,6 +99,8 @@ describe('E2B workspace snapshots', () => {
             ]);
             expect(snapshot.entries.has('ignored.txt')).toBeFalse();
             expect(snapshot.entries.has('.env')).toBeFalse();
+            expect(snapshot.entries.has('.workbench/runtime.secrets.json')).toBeFalse();
+            expect(snapshot.entries.has('runtime.secrets.json')).toBeFalse();
             expect(snapshot.excludedPaths).toContain('.env');
         } finally {
             await snapshot.cleanup();
@@ -151,6 +177,15 @@ describe('E2B workspace snapshots', () => {
             'E2B transfer exceeds the 8 B safety limit'
         );
     });
+
+    test('measures an oversized sparse transfer before reading file contents', async () => {
+        const directory = await temporaryDirectory();
+        await writeFile(join(directory, 'oversized.bin'), '');
+        await truncate(join(directory, 'oversized.bin'), 16 * 1_024 * 1_024 * 1_024);
+        await expect(
+            E2BAssetSnapshot.create(binding(directory), 1_024)
+        ).rejects.toThrow('16 GiB');
+    }, 2_000);
 
     test('rejects symlinks that escape the transferred root', async () => {
         const directory = await temporaryDirectory();
