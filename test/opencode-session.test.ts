@@ -251,6 +251,33 @@ describe('OpenCode interactive server adapter', () => {
         await session.close();
     });
 
+    test('does not spend the native startup budget while waiting for device authentication', async () => {
+        const server = new FakeOpenCodeServer();
+        server.authenticationDelayMs = 150;
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            authentication: {
+                provider: 'openai',
+                nativeProvider: 'openai',
+                authenticationMethod: 'oauth',
+                method: 'chatgpt',
+                nativeMethod: 'ChatGPT Pro/Plus (headless)',
+            },
+            host: {
+                emit: async () => {},
+                requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+
+        expect(session.id).toBeDefined();
+        expect(server.createdSessions).toBe(1);
+        await session.close();
+    });
+
     test('translates structured image input to native file parts', async () => {
         const server = new FakeOpenCodeServer();
         const events: WorkbenchEventDraft[] = [];
@@ -1012,6 +1039,7 @@ class FakeOpenCodeServer {
     autoIdleOnAbort = true;
     stallSessionCreation = false;
     sessionCreationDelayMs = 0;
+    authenticationDelayMs = 0;
     spawnEnvironment: Record<string, string | undefined> = {};
     onPrompt?: (body: Record<string, unknown>) => void;
     onPermissionReply?: (body: Record<string, unknown>) => void;
@@ -1038,6 +1066,7 @@ class FakeOpenCodeServer {
             },
             fetch: (input, init) => this.fetch(input, init),
             startupTimeoutMs: 100,
+            authenticationTimeoutMs: 500,
         });
     }
 
@@ -1334,6 +1363,7 @@ class FakeOpenCodeServer {
         ) {
             const body = JSON.parse(String(init.body)) as { method: number };
             this.authenticationRequests.push(`callback:openai:${body.method}`);
+            if (this.authenticationDelayMs) await Bun.sleep(this.authenticationDelayMs);
             return Response.json({});
         }
         if (url.pathname === '/session' && init.method === 'POST') {

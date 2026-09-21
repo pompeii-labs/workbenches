@@ -17,6 +17,7 @@ import { isOutboxPermission } from './outbox.js';
 import { OpenCodeQuestion } from './question.js';
 import type { OpenCodeFetch, OpenCodeServerLauncher } from './server.js';
 import { OpenCodeServer } from './server.js';
+import { withTimeout } from './timing.js';
 
 interface ActiveTurn {
     adapter: OpenCodeEventAdapter;
@@ -42,6 +43,7 @@ export interface OpenCodeServerSessionOptions extends RunnerSessionStartOptions 
     fetch: OpenCodeFetch;
     password: () => string;
     startupTimeoutMs: number;
+    authenticationTimeoutMs: number;
     configDirectory?: string;
     nativeConfigFile?: string;
     launch: OpenCodeServerLauncher;
@@ -107,10 +109,20 @@ export class OpenCodeServerSession implements RunnerSession {
             (error) => this.fail(error)
         );
 
-        if (this.options.authentication) {
-            await this.authenticate(this.options.authentication);
-        }
+        if (this.options.authentication)
+            await withTimeout(
+                this.authenticate(this.options.authentication),
+                'OpenCode authentication did not complete in time',
+                this.options.authenticationTimeoutMs
+            );
+        await withTimeout(
+            this.openNativeSession(),
+            'OpenCode session did not become ready in time',
+            this.options.startupTimeoutMs
+        );
+    }
 
+    private async openNativeSession(): Promise<void> {
         const sessionId = this.options.session?.nativeSessionId
             ? await this.resume(this.options.session.nativeSessionId)
             : await this.create();

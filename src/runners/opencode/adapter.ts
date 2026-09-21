@@ -30,6 +30,7 @@ export interface OpenCodeSessionDependencies {
     fetch?: OpenCodeFetch;
     password?: () => string;
     startupTimeoutMs?: number;
+    authenticationTimeoutMs?: number;
 }
 
 export interface PreparedOpenCodeSession {
@@ -51,6 +52,8 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
             fetch: dependencies.fetch ?? globalThis.fetch,
             password: dependencies.password ?? (() => crypto.randomUUID()),
             startupTimeoutMs: dependencies.startupTimeoutMs ?? 10_000,
+            authenticationTimeoutMs:
+                dependencies.authenticationTimeoutMs ?? 10 * 60_000,
         };
     }
 
@@ -88,36 +91,15 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
             ...this.dependencies,
             ...prepared,
             startupTimeoutMs,
+            authenticationTimeoutMs: this.dependencies.authenticationTimeoutMs,
             cleanup,
         });
         try {
-            await this.withTimeout(
-                session.start(),
-                'OpenCode session did not become ready in time',
-                startupTimeoutMs
-            );
+            await session.start();
             return session;
         } catch (error) {
             await session.close().catch(() => {});
             throw error;
-        }
-    }
-
-    private async withTimeout<T>(
-        promise: Promise<T>,
-        message: string,
-        timeoutMs: number
-    ): Promise<T> {
-        let timeout: ReturnType<typeof setTimeout> | undefined;
-        try {
-            return await Promise.race([
-                promise,
-                new Promise<T>((_, reject) => {
-                    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
-                }),
-            ]);
-        } finally {
-            if (timeout) clearTimeout(timeout);
         }
     }
 }
