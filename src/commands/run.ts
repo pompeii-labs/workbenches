@@ -11,6 +11,7 @@ import {
     WorkbenchResolver,
     WorkbenchWorkspaces,
 } from '../workbench/index.js';
+import { CliInput } from './input.js';
 import { CliPresenter } from './presenter.js';
 import { CliRunClient } from './run-client.js';
 
@@ -34,6 +35,15 @@ export const runCommand = defineCommand({
             type: 'string',
             alias: 't',
             description: 'One-shot task (equivalent to the positional task)',
+        },
+        'task-file': {
+            type: 'string',
+            description: 'Read the one-shot task from a UTF-8 file',
+        },
+        stdin: {
+            type: 'boolean',
+            description: 'Read the one-shot task from stdin',
+            default: false,
         },
         json: {
             type: 'boolean',
@@ -115,9 +125,6 @@ export const runCommand = defineCommand({
                   ...(args.ref ? { ref: args.ref } : {}),
               }
             : undefined;
-        if (args.prompt !== undefined && args.task !== undefined) {
-            throw new Error('Pass a task either positionally or with --task, not both');
-        }
         if (args.json && args.final) {
             throw new Error('--json and --final cannot be used together');
         }
@@ -129,7 +136,20 @@ export const runCommand = defineCommand({
         });
         const home = workbenchHome();
         const dispatcher = new RunDispatcher(home);
-        const task = (args.task ?? args.prompt ?? '').trim();
+        const taskSources = [
+            args.prompt !== undefined,
+            args.task !== undefined,
+            args['task-file'] !== undefined,
+            args.stdin,
+        ].filter(Boolean).length;
+        const task =
+            taskSources === 0
+                ? ''
+                : await new CliInput().read({
+                      text: args.task ?? args.prompt,
+                      file: args['task-file'],
+                      stdin: args.stdin,
+                  });
         if (!task) {
             if (args.detach || args.json || args.final || args['dry-run']) {
                 throw new Error('This run mode requires a non-empty task');
@@ -322,6 +342,8 @@ const runOptions = new Set([
     '--ref',
     '--task',
     '-t',
+    '--task-file',
+    '--stdin',
     '--json',
     '--final',
     '--color',
