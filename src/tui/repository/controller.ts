@@ -169,11 +169,28 @@ async function openRepositoryUrl(url: string) {
         parsed.port
     )
         throw new Error('Only GitHub result links can be opened');
-    const command = process.platform === 'darwin' ? ['open', url] : ['xdg-open', url];
+    const command =
+        process.platform === 'darwin'
+            ? ['open', url]
+            : process.platform === 'win32'
+              ? [
+                    'powershell.exe',
+                    '-NoLogo',
+                    '-NoProfile',
+                    '-NonInteractive',
+                    '-Command',
+                    'Start-Process -FilePath $env:WORKBENCH_OPEN_URL',
+                ]
+              : ['xdg-open', url];
     const child = Bun.spawn(command, {
         env: {
             PATH: process.env.PATH,
             HOME: process.env.HOME,
+            SystemRoot: process.env.SystemRoot,
+            ComSpec: process.env.ComSpec,
+            ...(process.platform === 'win32'
+                ? { WORKBENCH_OPEN_URL: parsed.href }
+                : {}),
             DISPLAY: process.env.DISPLAY,
             WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY,
             XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,

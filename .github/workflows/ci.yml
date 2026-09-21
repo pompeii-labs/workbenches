@@ -29,6 +29,25 @@ jobs:
       - run: bun audit --audit-level=moderate
       - run: bun run build
 
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+          - runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun test test/release.test.ts test/self-update.test.ts test/windows.install.test.ts
+      - run: bun run release:package
+
   commitlint:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

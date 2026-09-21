@@ -36,11 +36,18 @@ export const updateCommand = defineCommand({
             return;
         }
         output.progress(`Installing Workbench ${release.version}`);
-        const path = await updater.install(release);
+        const installation = await updater.install(release);
         output.record({
-            machine: ['updated', current, release.version, path],
-            title: `Updated Workbench to ${release.version}`,
-            details: [path],
+            machine: [
+                installation.pendingRestart ? 'staged' : 'updated',
+                current,
+                release.version,
+                installation.path,
+            ],
+            title: installation.pendingRestart
+                ? `Workbench ${release.version} will be ready after this command exits`
+                : `Updated Workbench to ${release.version}`,
+            details: [installation.path],
         });
     },
 });

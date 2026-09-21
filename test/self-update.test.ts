@@ -78,7 +78,7 @@ describe('CLI self-update', () => {
     });
 
     test('rejects unsupported release targets', () => {
-        expect(() => ReleaseTarget.from('win32', 'x64')).toThrow(
+        expect(() => ReleaseTarget.from('freebsd', 'x64')).toThrow(
             'Unsupported release operating system'
         );
         expect(() => ReleaseTarget.from('linux', 'riscv64')).toThrow(
@@ -86,19 +86,55 @@ describe('CLI self-update', () => {
         );
     });
 
-    test('verifies and atomically replaces an installed executable', async () => {
-        const fixture = await releaseFixture();
-        const target = join(await temporaryDirectory('workbench-update-target-'), 'wb');
-        await executableFile(target, '#!/bin/sh\necho old\n');
+    test.skipIf(process.platform === 'win32')(
+        'verifies and atomically replaces an installed executable',
+        async () => {
+            const fixture = await releaseFixture();
+            const target = join(
+                await temporaryDirectory('workbench-update-target-'),
+                'wb'
+            );
+            await executableFile(target, '#!/bin/sh\necho old\n');
 
-        const installed = await new CliUpdater({
+            const installation = await new CliUpdater({
+                executable: target,
+                fetch: fixture.fetch,
+            }).install(fixture.release);
+
+            expect(installation).toEqual({
+                path: await realpath(target),
+                pendingRestart: false,
+            });
+            expect(await readFile(target, 'utf8')).toContain('echo updated');
+            expect((await stat(target)).mode & 0o111).not.toBe(0);
+        }
+    );
+
+    test('stages a Windows executable for replacement after the CLI exits', async () => {
+        const fixture = await releaseFixture({ platform: 'win32' });
+        const directory = await temporaryDirectory('workbench-update-windows-');
+        const target = join(directory, 'workbench.exe');
+        await writeFile(target, 'old');
+        let scheduled: { staged: string; target: string } | undefined;
+
+        const installation = await new CliUpdater({
+            platform: 'win32',
+            architecture: 'x64',
             executable: target,
             fetch: fixture.fetch,
+            scheduleWindowsReplacement: async (staged, destination) => {
+                scheduled = { staged, target: destination };
+            },
         }).install(fixture.release);
 
-        expect(installed).toBe(await realpath(target));
-        expect(await readFile(target, 'utf8')).toContain('echo updated');
-        expect((await stat(target)).mode & 0o111).not.toBe(0);
+        expect(installation).toEqual({
+            path: await realpath(target),
+            pendingRestart: true,
+        });
+        expect(scheduled?.target).toBe(await realpath(target));
+        expect(scheduled?.staged).toEndWith('.exe');
+        expect(await readFile(scheduled?.staged ?? '', 'utf8')).toBe('updated');
+        expect(await readFile(target, 'utf8')).toBe('old');
     });
 
     test('leaves the installed executable untouched after a checksum failure', async () => {
@@ -133,17 +169,23 @@ describe('CLI self-update', () => {
     });
 });
 
-async function releaseFixture(options: { invalidChecksum?: boolean } = {}) {
+async function releaseFixture(
+    options: { invalidChecksum?: boolean; platform?: NodeJS.Platform } = {}
+) {
     const root = await temporaryDirectory('workbench-self-update-release-');
-    const targetName = ReleaseTarget.from(process.platform, process.arch).name;
+    const platform = options.platform ?? process.platform;
+    const target = ReleaseTarget.from(
+        platform,
+        platform === 'win32' ? 'x64' : process.arch
+    );
+    const targetName = target.name;
     const packageDirectory = join(root, targetName);
     const archiveName = `${targetName}.tar.gz`;
     const archive = join(root, archiveName);
     await mkdir(packageDirectory, { recursive: true });
-    await executableFile(
-        join(packageDirectory, 'workbench'),
-        '#!/bin/sh\necho updated\n'
-    );
+    const executable = join(packageDirectory, target.executable);
+    if (platform === 'win32') await writeFile(executable, 'updated');
+    else await executableFile(executable, '#!/bin/sh\necho updated\n');
     const code = await Bun.spawn(['tar', '-czf', archive, '-C', root, targetName], {
         stdout: 'ignore',
         stderr: 'inherit',

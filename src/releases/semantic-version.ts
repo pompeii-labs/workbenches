@@ -58,10 +58,13 @@ export class SemanticVersion {
 }
 
 export class ReleaseTarget {
-    private constructor(readonly name: string) {}
+    private constructor(
+        readonly name: string,
+        readonly executable: 'workbench' | 'workbench.exe'
+    ) {}
 
     static from(platform: string, architecture: string): ReleaseTarget {
-        if (platform !== 'darwin' && platform !== 'linux') {
+        if (platform !== 'darwin' && platform !== 'linux' && platform !== 'win32') {
             throw new Error(`Unsupported release operating system: ${platform}`);
         }
         const normalizedArchitecture =
@@ -73,6 +76,10 @@ export class ReleaseTarget {
         if (!normalizedArchitecture) {
             throw new Error(`Unsupported release architecture: ${architecture}`);
         }
-        return new ReleaseTarget(`workbench-${platform}-${normalizedArchitecture}`);
+        const os = platform === 'win32' ? 'windows' : platform;
+        return new ReleaseTarget(
+            `workbench-${os}-${normalizedArchitecture}`,
+            os === 'windows' ? 'workbench.exe' : 'workbench'
+        );
     }
 }

@@ -42,6 +42,10 @@ jobs:
             artifact: workbench-darwin-x64
           - runner: macos-15
             artifact: workbench-darwin-arm64
+          - runner: windows-2025
+            artifact: workbench-windows-x64
+          - runner: windows-11-arm
+            artifact: workbench-windows-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

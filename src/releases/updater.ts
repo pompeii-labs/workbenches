@@ -37,6 +37,12 @@ export interface CliUpdaterOptions {
     platform?: NodeJS.Platform;
     architecture?: string;
     executable?: string;
+    scheduleWindowsReplacement?: (staged: string, target: string) => Promise<void>;
+}
+
+export interface CliUpdateInstallation {
+    path: string;
+    pendingRestart: boolean;
 }
 
 export class CliUpdater {
@@ -63,11 +69,13 @@ export class CliUpdater {
             )[0];
     }
 
-    async install(release: CliRelease): Promise<string> {
-        const targetName = ReleaseTarget.from(
-            this.options.platform ?? process.platform,
+    async install(release: CliRelease): Promise<CliUpdateInstallation> {
+        const platform = this.options.platform ?? process.platform;
+        const releaseTarget = ReleaseTarget.from(
+            platform,
             this.options.architecture ?? process.arch
-        ).name;
+        );
+        const targetName = releaseTarget.name;
         const archiveName = `${targetName}.tar.gz`;
         const archiveAsset = release.assets.find((asset) => asset.name === archiveName);
         const checksumsAsset = release.assets.find(
@@ -77,7 +85,7 @@ export class CliUpdater {
             throw new Error(`Workbench ${release.tag} does not support this platform`);
         }
 
-        const target = this.options.executable
+        const targetPath = this.options.executable
             ? await realpath(this.options.executable)
             : await this.installedExecutable();
         const temporary = await mkdtemp(join(tmpdir(), 'workbench-update-'));
@@ -93,8 +101,13 @@ export class CliUpdater {
                 new TextDecoder().decode(checksumBytes),
                 archiveName
             );
-            const source = await this.extract(archive, temporary, targetName);
-            return await this.replace(source, target);
+            const source = await this.extract(
+                archive,
+                temporary,
+                targetName,
+                releaseTarget.executable
+            );
+            return await this.replace(source, targetPath, platform);
         } finally {
             await rm(temporary, { recursive: true, force: true });
         }
@@ -193,10 +206,11 @@ export class CliUpdater {
     private async extract(
         archive: string,
         temporary: string,
-        targetName: string
+        targetName: string,
+        executable: string
     ): Promise<string> {
         const extraction = Bun.spawn(
-            ['tar', '-xzf', archive, '-C', temporary, `${targetName}/workbench`],
+            ['tar', '-xzf', archive, '-C', temporary, `${targetName}/${executable}`],
             { stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' }
         );
         const [code, stderr] = await Promise.all([
@@ -208,23 +222,34 @@ export class CliUpdater {
                 `Could not extract the Workbench update${stderr.trim() ? `: ${stderr.trim()}` : ''}`
             );
         }
-        const source = join(temporary, targetName, 'workbench');
+        const source = join(temporary, targetName, executable);
         if (!(await stat(source).catch(() => null))) {
             throw new Error('The Workbench release archive does not contain the CLI');
         }
         return source;
     }
 
-    private async replace(source: string, target: string): Promise<string> {
+    private async replace(
+        source: string,
+        target: string,
+        platform: NodeJS.Platform
+    ): Promise<CliUpdateInstallation> {
         const staged = join(
             dirname(target),
-            `.workbench-update-${crypto.randomUUID()}`
+            `.workbench-update-${crypto.randomUUID()}${platform === 'win32' ? '.exe' : ''}`
         );
         try {
             await copyFile(source, staged);
-            await chmod(staged, 0o755);
+            if (platform !== 'win32') await chmod(staged, 0o755);
+            if (platform === 'win32') {
+                await (
+                    this.options.scheduleWindowsReplacement ??
+                    scheduleWindowsReplacement
+                )(staged, target);
+                return { path: target, pendingRestart: true };
+            }
             await rename(staged, target);
-            return target;
+            return { path: target, pendingRestart: false };
         } catch (error) {
             await rm(staged, { force: true });
             const detail = error instanceof Error ? error.message : String(error);
@@ -275,6 +300,38 @@ export class CliUpdater {
             assets,
         };
     }
+}
+
+async function scheduleWindowsReplacement(
+    staged: string,
+    target: string
+): Promise<void> {
+    const child = Bun.spawn(
+        [
+            'powershell.exe',
+            '-NoLogo',
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            '$ErrorActionPreference = "Stop"; Wait-Process -Id ([int]$env:WORKBENCH_UPDATE_PARENT_PID) -ErrorAction SilentlyContinue; Move-Item -Force -LiteralPath $env:WORKBENCH_UPDATE_STAGED -Destination $env:WORKBENCH_UPDATE_TARGET',
+        ],
+        {
+            env: {
+                PATH: process.env.PATH,
+                SystemRoot: process.env.SystemRoot,
+                ComSpec: process.env.ComSpec,
+                WORKBENCH_UPDATE_PARENT_PID: String(process.pid),
+                WORKBENCH_UPDATE_STAGED: staged,
+                WORKBENCH_UPDATE_TARGET: target,
+            },
+            stdin: 'ignore',
+            stdout: 'ignore',
+            stderr: 'ignore',
+            detached: true,
+            windowsHide: true,
+        }
+    );
+    child.unref();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

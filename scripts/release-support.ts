@@ -1,23 +1,26 @@
 export interface ReleaseTarget {
-    os: 'darwin' | 'linux';
+    os: 'darwin' | 'linux' | 'windows';
     architecture: 'arm64' | 'x64';
     name: string;
+    executable: 'workbench' | 'workbench.exe';
 }
 
 export function resolveReleaseTarget(
     platform = process.platform,
     architecture = process.arch
 ): ReleaseTarget {
-    if (platform !== 'darwin' && platform !== 'linux') {
+    if (platform !== 'darwin' && platform !== 'linux' && platform !== 'win32') {
         throw new Error(`Unsupported release operating system: ${platform}`);
     }
     if (architecture !== 'arm64' && architecture !== 'x64') {
         throw new Error(`Unsupported release architecture: ${architecture}`);
     }
+    const os = platform === 'win32' ? 'windows' : platform;
     return {
-        os: platform,
+        os,
         architecture,
-        name: `workbench-${platform}-${architecture}`,
+        name: `workbench-${os}-${architecture}`,
+        executable: os === 'windows' ? 'workbench.exe' : 'workbench',
     };
 }
 

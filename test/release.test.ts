@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -25,10 +25,19 @@ describe('release contract', () => {
             'workbench-linux-arm64'
         );
         expect(resolveReleaseTarget('linux', 'x64').name).toBe('workbench-linux-x64');
+        expect(resolveReleaseTarget('win32', 'x64')).toEqual({
+            os: 'windows',
+            architecture: 'x64',
+            name: 'workbench-windows-x64',
+            executable: 'workbench.exe',
+        });
+        expect(resolveReleaseTarget('win32', 'arm64').name).toBe(
+            'workbench-windows-arm64'
+        );
     });
 
     test('rejects unsupported operating systems and architectures', () => {
-        expect(() => resolveReleaseTarget('win32', 'x64')).toThrow(
+        expect(() => resolveReleaseTarget('freebsd', 'x64')).toThrow(
             'Unsupported release operating system'
         );
         expect(() => resolveReleaseTarget('linux', 'ia32')).toThrow(
@@ -43,6 +52,16 @@ describe('release contract', () => {
         );
         expect(() => verifyReleaseTag('v0.0.0', '0.0.0')).toThrow(
             'development-only version'
+        );
+    });
+
+    test('keeps the Windows installer default pinned to the package version', async () => {
+        const installer = await readFile(
+            resolve(import.meta.dir, '..', 'install.ps1'),
+            'utf8'
+        );
+        expect(installer).toContain(
+            `if (-not $Version) { $Version = '${packageMetadata.version}' }`
         );
     });
 });
