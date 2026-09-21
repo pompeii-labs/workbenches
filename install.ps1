@@ -65,7 +65,15 @@ try {
         }
     }
     if (-not $expected) { throw "workbench installer: checksum is missing for $archiveName" }
-    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+    $stream = [IO.File]::OpenRead($archive)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $hasher.ComputeHash($stream)
+    } finally {
+        $stream.Dispose()
+        $hasher.Dispose()
+    }
+    $actual = [BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant()
     if ($actual -ne $expected) { throw "workbench installer: checksum verification failed for $archiveName" }
 
     & tar.exe -xzf $archive -C $temporary

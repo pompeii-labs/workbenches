@@ -111,7 +111,10 @@ describe('CLI self-update', () => {
     );
 
     test('stages a Windows executable for replacement after the CLI exits', async () => {
-        const fixture = await releaseFixture({ platform: 'win32' });
+        const fixture = await releaseFixture({
+            platform: 'win32',
+            architecture: 'x64',
+        });
         const directory = await temporaryDirectory('workbench-update-windows-');
         const target = join(directory, 'workbench.exe');
         await writeFile(target, 'old');
@@ -170,14 +173,15 @@ describe('CLI self-update', () => {
 });
 
 async function releaseFixture(
-    options: { invalidChecksum?: boolean; platform?: NodeJS.Platform } = {}
+    options: {
+        invalidChecksum?: boolean;
+        platform?: NodeJS.Platform;
+        architecture?: string;
+    } = {}
 ) {
     const root = await temporaryDirectory('workbench-self-update-release-');
     const platform = options.platform ?? process.platform;
-    const target = ReleaseTarget.from(
-        platform,
-        platform === 'win32' ? 'x64' : process.arch
-    );
+    const target = ReleaseTarget.from(platform, options.architecture ?? process.arch);
     const targetName = target.name;
     const packageDirectory = join(root, targetName);
     const archiveName = `${targetName}.tar.gz`;
