@@ -18,6 +18,7 @@ import { listCommand } from './commands/list.js';
 import { loginCommand } from './commands/login.js';
 import { logoutCommand } from './commands/logout.js';
 import { outcomeCommand } from './commands/outcome.js';
+import { exitOnBrokenPipe } from './commands/pipe.js';
 import { psCommand } from './commands/ps.js';
 import { publishCommand } from './commands/publish.js';
 import { removeCommand } from './commands/remove.js';
@@ -82,6 +83,8 @@ export const workbenchCommand = defineCommand({
 });
 
 if (import.meta.main) {
+    exitOnBrokenPipe(process.stdout);
+    exitOnBrokenPipe(process.stderr);
     if (process.argv[2] === '__authoring') {
         const home = process.argv[3];
         const id = process.argv[4];
