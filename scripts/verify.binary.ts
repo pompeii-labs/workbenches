@@ -35,6 +35,9 @@ async function execute(
     args: string[],
     environment: Record<string, string> = {}
 ): Promise<{ code: number; stdout: string; stderr: string }> {
+    const invocation = crypto.randomUUID();
+    const stdoutPath = join(directory, `${invocation}.stdout`);
+    const stderrPath = join(directory, `${invocation}.stderr`);
     const child = Bun.spawn([resolve(binary), ...args], {
         cwd: directory,
         env: {
@@ -54,13 +57,17 @@ async function execute(
             ...environment,
         },
         stdin: 'ignore',
-        stdout: 'pipe',
-        stderr: 'pipe',
+        stdout: Bun.file(stdoutPath),
+        stderr: Bun.file(stderrPath),
     });
-    const [code, stdout, stderr] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
+    const code = await child.exited;
+    const [stdout, stderr] = await Promise.all([
+        Bun.file(stdoutPath).text(),
+        Bun.file(stderrPath).text(),
+    ]);
+    await Promise.all([
+        rm(stdoutPath, { force: true }),
+        rm(stderrPath, { force: true }),
     ]);
     return { code, stdout, stderr };
 }
