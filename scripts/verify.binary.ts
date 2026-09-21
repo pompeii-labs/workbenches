@@ -38,29 +38,27 @@ async function execute(
     const invocation = crypto.randomUUID();
     const stdoutPath = join(directory, `${invocation}.stdout`);
     const stderrPath = join(directory, `${invocation}.stderr`);
-    const child = Bun.spawn([resolve(binary), ...args], {
-        cwd: directory,
-        env: {
-            PATH: process.env.PATH,
-            HOME: process.env.HOME,
-            USERPROFILE: process.env.USERPROFILE,
-            LOCALAPPDATA: process.env.LOCALAPPDATA,
-            APPDATA: process.env.APPDATA,
-            SystemRoot: process.env.SystemRoot,
-            ComSpec: process.env.ComSpec,
-            PATHEXT: process.env.PATHEXT,
-            TEMP: process.env.TEMP,
-            TMP: process.env.TMP,
-            TERM: 'dumb',
-            NO_COLOR: '1',
-            WORKBENCH_HOME: join(directory, 'engine'),
-            ...environment,
-        },
-        stdin: 'ignore',
-        stdout: Bun.file(stdoutPath),
-        stderr: Bun.file(stderrPath),
-    });
-    const code = await child.exited;
+    const childEnvironment = {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        USERPROFILE: process.env.USERPROFILE,
+        LOCALAPPDATA: process.env.LOCALAPPDATA,
+        APPDATA: process.env.APPDATA,
+        SystemRoot: process.env.SystemRoot,
+        ComSpec: process.env.ComSpec,
+        PATHEXT: process.env.PATHEXT,
+        TEMP: process.env.TEMP,
+        TMP: process.env.TMP,
+        TERM: 'dumb',
+        NO_COLOR: '1',
+        WORKBENCH_HOME: join(directory, 'engine'),
+        ...environment,
+    };
+    await Promise.all([writeFile(stdoutPath, ''), writeFile(stderrPath, '')]);
+    const code =
+        process.platform === 'win32'
+            ? await executeOnWindows(args, childEnvironment, stdoutPath, stderrPath)
+            : await executeDirectly(args, childEnvironment, stdoutPath, stderrPath);
     const [stdout, stderr] = await Promise.all([
         Bun.file(stdoutPath).text(),
         Bun.file(stderrPath).text(),
@@ -70,6 +68,69 @@ async function execute(
         rm(stderrPath, { force: true }),
     ]);
     return { code, stdout, stderr };
+}
+
+async function executeDirectly(
+    args: string[],
+    environment: Record<string, string | undefined>,
+    stdoutPath: string,
+    stderrPath: string
+): Promise<number> {
+    const child = Bun.spawn([resolve(binary), ...args], {
+        cwd: directory,
+        env: environment,
+        stdin: 'ignore',
+        stdout: Bun.file(stdoutPath),
+        stderr: Bun.file(stderrPath),
+    });
+    return child.exited;
+}
+
+async function executeOnWindows(
+    args: string[],
+    environment: Record<string, string | undefined>,
+    stdoutPath: string,
+    stderrPath: string
+): Promise<number> {
+    const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+    const powerShell = join(
+        systemRoot,
+        'System32',
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe'
+    );
+    const command = [
+        '$arguments = @(ConvertFrom-Json -InputObject $env:WORKBENCH_TEST_ARGUMENTS)',
+        '$process = Start-Process -FilePath $env:WORKBENCH_TEST_BINARY -ArgumentList $arguments -NoNewWindow -Wait -PassThru -RedirectStandardOutput $env:WORKBENCH_TEST_STDOUT -RedirectStandardError $env:WORKBENCH_TEST_STDERR',
+        'exit $process.ExitCode',
+    ].join('; ');
+    const child = Bun.spawn(
+        [
+            powerShell,
+            '-NoLogo',
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-Command',
+            command,
+        ],
+        {
+            cwd: directory,
+            env: {
+                ...environment,
+                WORKBENCH_TEST_BINARY: resolve(binary),
+                WORKBENCH_TEST_ARGUMENTS: JSON.stringify(args),
+                WORKBENCH_TEST_STDOUT: stdoutPath,
+                WORKBENCH_TEST_STDERR: stderrPath,
+            },
+            stdin: 'ignore',
+            stdout: 'ignore',
+            stderr: 'inherit',
+        }
+    );
+    return child.exited;
 }
 
 function verify(
