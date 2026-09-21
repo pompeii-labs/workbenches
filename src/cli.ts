@@ -140,6 +140,13 @@ if (import.meta.main) {
                 process.stdout.write(`${await renderUsage(command, parent)}\n\n`);
             },
         });
+    } catch (error) {
+        console.error(
+            error instanceof Error
+                ? error
+                : new Error('Workbench command failed unexpectedly')
+        );
+        process.exitCode = 1;
     } finally {
         console.error = defaultConsoleError;
     }
