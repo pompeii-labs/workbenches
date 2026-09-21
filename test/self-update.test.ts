@@ -118,25 +118,21 @@ describe('CLI self-update', () => {
         const directory = await temporaryDirectory('workbench-update-windows-');
         const target = join(directory, 'workbench.exe');
         await writeFile(target, 'old');
-        let scheduled: { staged: string; target: string } | undefined;
 
         const installation = await new CliUpdater({
             platform: 'win32',
             architecture: 'x64',
             executable: target,
             fetch: fixture.fetch,
-            scheduleWindowsReplacement: async (staged, destination) => {
-                scheduled = { staged, target: destination };
-            },
         }).install(fixture.release);
 
         expect(installation).toEqual({
             path: await realpath(target),
             pendingRestart: true,
         });
-        expect(scheduled?.target).toBe(await realpath(target));
-        expect(scheduled?.staged).toEndWith('.exe');
-        expect(await readFile(scheduled?.staged ?? '', 'utf8')).toBe('updated');
+        expect(await readFile(join(directory, 'workbench.update.exe'), 'utf8')).toBe(
+            'updated'
+        );
         expect(await readFile(target, 'utf8')).toBe('old');
     });
 

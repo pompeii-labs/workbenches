@@ -20,11 +20,13 @@ await Promise.all([
     copyFile(join(root, 'LICENSE'), join(staging, 'LICENSE')),
     copyFile(join(root, 'NOTICE'), join(staging, 'NOTICE')),
 ]);
-await run([join(staging, executable), '--help'], root);
-await run([process.execPath, 'test', 'test/release.test.ts'], root, {
-    ...process.env,
-    WORKBENCH_TEST_BINARY: join(staging, executable),
-});
+if (target.os === 'windows')
+    await copyFile(join(root, 'wb.cmd'), join(staging, 'wb.cmd'));
+await run(
+    [process.execPath, 'scripts/verify.binary.ts', join(staging, executable)],
+    root
+);
+await run([process.execPath, 'test', 'test/release.test.ts'], root);
 if (target.os === 'windows')
     await run([process.execPath, 'test', 'test/windows.install.test.ts'], root);
 await run(['tar', '-czf', archive, '-C', release, target.name], root);

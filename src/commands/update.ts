@@ -45,7 +45,9 @@ export const updateCommand = defineCommand({
                 installation.path,
             ],
             title: installation.pendingRestart
-                ? `Workbench ${release.version} will be ready after this command exits`
+                ? process.env.WORKBENCH_UPDATE_WRAPPER === '1'
+                    ? `Workbench ${release.version} will be ready after this command exits`
+                    : `Workbench ${release.version} is staged; run wb to finish the update`
                 : `Updated Workbench to ${release.version}`,
             details: [installation.path],
         });

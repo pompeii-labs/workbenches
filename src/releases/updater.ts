@@ -37,7 +37,6 @@ export interface CliUpdaterOptions {
     platform?: NodeJS.Platform;
     architecture?: string;
     executable?: string;
-    scheduleWindowsReplacement?: (staged: string, target: string) => Promise<void>;
 }
 
 export interface CliUpdateInstallation {
@@ -234,20 +233,14 @@ export class CliUpdater {
         target: string,
         platform: NodeJS.Platform
     ): Promise<CliUpdateInstallation> {
-        const staged = join(
-            dirname(target),
-            `.workbench-update-${crypto.randomUUID()}${platform === 'win32' ? '.exe' : ''}`
-        );
+        const staged =
+            platform === 'win32'
+                ? join(dirname(target), 'workbench.update.exe')
+                : join(dirname(target), `.workbench-update-${crypto.randomUUID()}`);
         try {
             await copyFile(source, staged);
             if (platform !== 'win32') await chmod(staged, 0o755);
-            if (platform === 'win32') {
-                await (
-                    this.options.scheduleWindowsReplacement ??
-                    scheduleWindowsReplacement
-                )(staged, target);
-                return { path: target, pendingRestart: true };
-            }
+            if (platform === 'win32') return { path: target, pendingRestart: true };
             await rename(staged, target);
             return { path: target, pendingRestart: false };
         } catch (error) {
@@ -300,38 +293,6 @@ export class CliUpdater {
             assets,
         };
     }
-}
-
-async function scheduleWindowsReplacement(
-    staged: string,
-    target: string
-): Promise<void> {
-    const child = Bun.spawn(
-        [
-            'powershell.exe',
-            '-NoLogo',
-            '-NoProfile',
-            '-NonInteractive',
-            '-Command',
-            '$ErrorActionPreference = "Stop"; Wait-Process -Id ([int]$env:WORKBENCH_UPDATE_PARENT_PID) -ErrorAction SilentlyContinue; Move-Item -Force -LiteralPath $env:WORKBENCH_UPDATE_STAGED -Destination $env:WORKBENCH_UPDATE_TARGET',
-        ],
-        {
-            env: {
-                PATH: process.env.PATH,
-                SystemRoot: process.env.SystemRoot,
-                ComSpec: process.env.ComSpec,
-                WORKBENCH_UPDATE_PARENT_PID: String(process.pid),
-                WORKBENCH_UPDATE_STAGED: staged,
-                WORKBENCH_UPDATE_TARGET: target,
-            },
-            stdin: 'ignore',
-            stdout: 'ignore',
-            stderr: 'ignore',
-            detached: true,
-            windowsHide: true,
-        }
-    );
-    child.unref();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

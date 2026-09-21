@@ -79,16 +79,17 @@ try {
     & tar.exe -xzf $archive -C $temporary
     if ($LASTEXITCODE -ne 0) { throw 'workbench installer: could not extract the release archive' }
     $source = Join-Path $temporary "$target\workbench.exe"
-    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-        throw 'workbench installer: release archive does not contain workbench.exe'
+    $sourceAlias = Join-Path $temporary "$target\wb.cmd"
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf) -or -not (Test-Path -LiteralPath $sourceAlias -PathType Leaf)) {
+        throw 'workbench installer: release archive is incomplete'
     }
 
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+    Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath (Join-Path $BinDir 'workbench.update.exe')
     $temporaryBinary = Join-Path $BinDir ".workbench-$([Guid]::NewGuid().ToString('N')).exe"
     Copy-Item -LiteralPath $source -Destination $temporaryBinary
     Move-Item -Force -LiteralPath $temporaryBinary -Destination (Join-Path $BinDir 'workbench.exe')
-    $alias = '@echo off' + "`r`n" + '"%~dp0workbench.exe" %*' + "`r`n"
-    Set-Content -NoNewline -Encoding Ascii -LiteralPath (Join-Path $BinDir 'wb.cmd') -Value $alias
+    Copy-Item -Force -LiteralPath $sourceAlias -Destination (Join-Path $BinDir 'wb.cmd')
 
     Write-Output "Installed Workbench to $(Join-Path $BinDir 'workbench.exe')"
     if (-not (($env:PATH -split ';') -contains $BinDir)) {

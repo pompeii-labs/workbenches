@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+    copyFile,
+    mkdir,
+    mkdtemp,
+    readFile,
+    rm,
+    stat,
+    writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -8,6 +16,7 @@ import { resolveReleaseTarget } from '../scripts/release-support.js';
 
 const root = resolve(import.meta.dir, '..');
 const installer = join(root, 'install.ps1');
+const launcher = join(root, 'wb.cmd');
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -22,6 +31,8 @@ describe.skipIf(process.platform !== 'win32')('Windows release installer', () =>
     test('verifies and installs the native executable and wb launcher', async () => {
         const fixture = await releaseFixture();
         const destination = await temporaryDirectory('workbench-windows-install-');
+        const pending = join(destination, 'workbench.update.exe');
+        await writeFile(pending, 'stale update');
 
         const result = await runInstaller(fixture.release, destination);
 
@@ -30,9 +41,28 @@ describe.skipIf(process.platform !== 'win32')('Windows release installer', () =>
             'fixture workbench'
         );
         expect(await readFile(join(destination, 'wb.cmd'), 'utf8')).toContain(
-            '"%~dp0workbench.exe" %*'
+            'call :apply_update'
         );
-    });
+        expect(await Bun.file(pending).exists()).toBe(false);
+
+        const command = process.env.ComSpec;
+        if (!command) throw new Error('ComSpec is required for this test');
+        await copyFile(command, pending);
+        const code = await Bun.spawn(
+            ['cmd.exe', '/d', '/c', 'wb.cmd', '/d', '/c', 'exit', '0'],
+            {
+                cwd: destination,
+                stdin: 'ignore',
+                stdout: 'ignore',
+                stderr: 'inherit',
+            }
+        ).exited;
+        expect(code).toBe(0);
+        expect(await Bun.file(pending).exists()).toBe(false);
+        expect((await stat(join(destination, 'workbench.exe'))).size).toBe(
+            (await stat(command)).size
+        );
+    }, 20_000);
 
     test('leaves the destination untouched when checksum verification fails', async () => {
         const fixture = await releaseFixture(true);
@@ -56,6 +86,7 @@ async function releaseFixture(invalidChecksum = false) {
     await mkdir(packageDirectory, { recursive: true });
     await mkdir(release, { recursive: true });
     await writeFile(join(packageDirectory, 'workbench.exe'), 'fixture workbench');
+    await copyFile(launcher, join(packageDirectory, 'wb.cmd'));
     const code = await Bun.spawn(
         ['tar.exe', '-czf', archive, '-C', directory, target],
         { stdout: 'ignore', stderr: 'inherit' }
