@@ -1,6 +1,8 @@
 ---
 name: workbench-subagents
 description: Delegate bounded, checkable work to a packaged Workbench through the wb CLI. Use when another agent should dispatch, supervise, continue, and collect a Workbench run without an MCP server or SDK.
+license: Apache-2.0
+compatibility: Requires the Workbench (`wb`) CLI on PATH; selected Workbenches may require network access and provider credentials.
 ---
 
 # Workbench subagents
