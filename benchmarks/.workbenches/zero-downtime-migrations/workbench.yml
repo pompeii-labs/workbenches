@@ -1,0 +1,38 @@
+spec: 0
+version: 1.0.0
+
+name: zero-downtime-migrations
+description: Ship schema changes to a live Postgres database without downtime.
+
+runner: opencode
+runner_config: ./opencode.json
+model:
+  id: openai/gpt-5.6-terra
+  routes:
+    - provider: openrouter
+      model: openai/gpt-5.6-terra
+
+instructions: ./instructions.md
+skills:
+  - ./skills/expand-contract
+
+tools:
+  - opencode
+  - bun
+  - git
+  - docker
+
+mcps: []
+env:
+  OPENROUTER_API_KEY:
+    required: true
+
+runtime: docker
+image:
+  build: ./Dockerfile
+  context: .
+# Rehearsals and lock probes run Postgres as sibling containers on the host
+# engine, alongside whatever the project's own docker compose brings up.
+docker:
+  engine:
+    mode: host

@@ -1,0 +1,22 @@
+{
+    "name": "api",
+    "module": "index.ts",
+    "type": "module",
+    "private": true,
+    "scripts": {
+        "dev": "bun run --watch src/index.ts",
+        "start": "bun run src/index.ts"
+    },
+    "devDependencies": {
+        "@types/bun": "latest"
+    },
+    "peerDependencies": {
+        "typescript": "^5"
+    },
+    "dependencies": {
+        "@hono/zod-validator": "^0.8.0",
+        "@luxdb/sdk": "^2.8.4",
+        "hono": "^4.12.27",
+        "zod": "^4.4.3"
+    }
+}

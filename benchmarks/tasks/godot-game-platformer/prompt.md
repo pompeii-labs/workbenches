@@ -1,0 +1,1 @@
+Build a one-screen platformer in Godot called Lantern Keep. Jump between platforms, grab the three lanterns, reach the door. Arrow keys and space. Leave me a browser build I can drop on any static host.

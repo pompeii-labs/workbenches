@@ -1,0 +1,40 @@
+spec: 0
+version: 1.0.0
+
+name: web-performance
+description: Make a slow web page or API fast without changing what it shows.
+
+runner: opencode
+runner_config: ./opencode.json
+model:
+  id: openai/gpt-5.6-terra
+  routes:
+    - provider: openrouter
+      model: openai/gpt-5.6-terra
+
+instructions: ./instructions.md
+skills:
+  - ./skills/sql-n-plus-one
+  - ./skills/page-load-basics
+
+tools:
+  - opencode
+  - bun
+  - git
+  - docker
+
+mcps: []
+env:
+  OPENROUTER_API_KEY:
+    required: true
+
+runtime: docker
+image:
+  build: ./Dockerfile
+  context: .
+# perf-audit/perf-check reach the project's own Postgres and dev server as
+# sibling processes on the host engine, alongside whatever docker compose the
+# project itself brings up.
+docker:
+  engine:
+    mode: host

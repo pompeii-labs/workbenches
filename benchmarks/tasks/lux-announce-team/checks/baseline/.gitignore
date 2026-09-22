@@ -1,0 +1,4 @@
+.env.local
+lux/.lux-local.json
+lux/.env-profiles/
+lux/.backups/

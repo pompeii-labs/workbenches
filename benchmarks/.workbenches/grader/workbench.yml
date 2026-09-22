@@ -1,0 +1,45 @@
+spec: 0
+version: 1.0.2
+
+name: grader
+description: Decide whether a submitted change actually works, by running it.
+
+runner: opencode
+runner_config: ./opencode.json
+# A stronger judge than the model under test. This is not cross-family blinding.
+model:
+  id: openai/gpt-5.6-sol
+  routes:
+    - provider: openrouter
+      model: openai/gpt-5.6-sol
+
+instructions: ./instructions.md
+skills: []
+
+tools:
+  - opencode
+  - node
+  - bun
+  - git
+  - curl
+  - jq
+  - docker
+  - chromium
+
+mcps: []
+env:
+  OPENROUTER_API_KEY:
+    required: true
+
+workspaces:
+  evidence:
+    required: true
+    access: read-write
+
+runtime: docker
+image:
+  build: ./Dockerfile
+  context: .
+docker:
+  engine:
+    mode: host

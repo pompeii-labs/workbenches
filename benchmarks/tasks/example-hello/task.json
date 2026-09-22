@@ -1,0 +1,19 @@
+{
+    "version": 1,
+    "id": "example-hello",
+    "workbench": "example",
+    "title": "Add a health check endpoint to a tiny HTTP server",
+    "fixture": {
+        "kind": "dir",
+        "path": "fixture"
+    },
+    "timeoutMinutes": 10,
+    "gates": [
+        {
+            "id": "health-endpoint",
+            "title": "GET /health returns ok",
+            "run": "bash ./checks/health-check.sh",
+            "timeoutSeconds": 60
+        }
+    ]
+}

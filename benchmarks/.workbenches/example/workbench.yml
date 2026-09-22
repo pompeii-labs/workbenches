@@ -1,0 +1,31 @@
+spec: 0
+version: 1.0.0
+
+name: example
+description: Minimal example Workbench used to demonstrate and test the harness.
+
+runner: opencode
+runner_config: ./opencode.json
+model:
+  id: openai/gpt-5.6-terra
+  routes:
+    - provider: openrouter
+      model: openai/gpt-5.6-terra
+
+instructions: ./instructions.md
+skills: []
+
+tools:
+  - node
+  - bun
+  - opencode
+
+mcps: []
+env:
+  OPENROUTER_API_KEY:
+    required: true
+
+runtime: docker
+image:
+  build: ./Dockerfile
+  context: .

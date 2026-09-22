@@ -1,0 +1,199 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Workbenchmark task",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "version": {
+            "const": 1
+        },
+        "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,79}$"
+        },
+        "workbench": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,79}$"
+        },
+        "title": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+        },
+        "fixture": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind": {
+                            "const": "empty"
+                        }
+                    },
+                    "required": ["kind"]
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind": {
+                            "const": "dir"
+                        },
+                        "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^(?!/)(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))[^\\r\\n\\u0000]+$"
+                        }
+                    },
+                    "required": ["kind", "path"]
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind": {
+                            "const": "git"
+                        },
+                        "url": {
+                            "type": "string",
+                            "pattern": "^https://"
+                        },
+                        "commit": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{40}$"
+                        },
+                        "subdir": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^(?!/)(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))[^\\r\\n\\u0000]+$"
+                        },
+                        "overlay": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^(?!/)(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))[^\\r\\n\\u0000]+$"
+                        }
+                    },
+                    "required": ["kind", "url", "commit"]
+                }
+            ]
+        },
+        "preloadImages": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/@-]*$"
+            }
+        },
+        "submissionExcludes": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!/)(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))[^\\r\\n\\u0000]+$"
+            }
+        },
+        "timeoutMinutes": {
+            "type": "number",
+            "exclusiveMinimum": 0
+        },
+        "setup": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+        },
+        "boot": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+        },
+        "retired": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+        },
+        "gates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]{0,79}$"
+                    },
+                    "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                    },
+                    "run": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                    },
+                    "timeoutSeconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                    }
+                },
+                "required": ["id", "title", "run"]
+            }
+        },
+        "criteria": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]{0,79}$"
+                    },
+                    "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                    },
+                    "practice": {
+                        "type": "boolean"
+                    },
+                    "source": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                    }
+                },
+                "required": ["id", "text"]
+            }
+        }
+    },
+    "required": ["version", "id", "workbench", "title", "fixture"],
+    "anyOf": [
+        {
+            "required": ["gates"],
+            "properties": {
+                "gates": {
+                    "minItems": 1
+                }
+            }
+        },
+        {
+            "required": ["criteria"],
+            "properties": {
+                "criteria": {
+                    "contains": {
+                        "not": {
+                            "required": ["practice"],
+                            "properties": {
+                                "practice": {
+                                    "const": true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ],
+    "$comment": "The CLI additionally checks unique IDs across gates and criteria, task/folder identity, and referenced files."
+}

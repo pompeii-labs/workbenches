@@ -1,0 +1,33 @@
+{
+    "version": 1,
+    "id": "migration-rename",
+    "workbench": "zero-downtime-migrations",
+    "title": "Rename users.fullname to display_name across a rolling deploy",
+    "fixture": {
+        "kind": "dir",
+        "path": "fixture"
+    },
+    "timeoutMinutes": 30,
+    "setup": "./checks/setup-seed.sh",
+    "boot": "bun install --silent",
+    "gates": [
+        {
+            "id": "rename-safety",
+            "title": "Old and new client versions both keep working, with zero errors, through the rollout",
+            "run": "./checks/gate-rename-safety.sh",
+            "timeoutSeconds": 180
+        },
+        {
+            "id": "functional",
+            "title": "Existing values are preserved",
+            "run": "./checks/gate-functional.sh",
+            "timeoutSeconds": 120
+        },
+        {
+            "id": "typecheck",
+            "title": "bun run check passes",
+            "run": "./checks/gate-check.sh",
+            "timeoutSeconds": 120
+        }
+    ]
+}

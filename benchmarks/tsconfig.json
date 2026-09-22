@@ -1,0 +1,13 @@
+{
+    "compilerOptions": {
+        "strict": true,
+        "skipLibCheck": true,
+        "target": "esnext",
+        "module": "preserve",
+        "moduleResolution": "bundler",
+        "allowImportingTsExtensions": true,
+        "noEmit": true,
+        "types": ["bun"]
+    },
+    "include": ["workbenchmark.ts", "lib/**/*.ts"]
+}

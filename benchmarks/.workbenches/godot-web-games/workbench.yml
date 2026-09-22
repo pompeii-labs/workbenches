@@ -1,0 +1,38 @@
+spec: 0
+version: 1.0.0
+
+name: godot-web-games
+description: Ship browser-playable 2D Godot games with a prepared export and play-check toolchain.
+
+runner: opencode
+runner_config: ./opencode.json
+model:
+  id: openai/gpt-5.6-terra
+  routes:
+    - provider: openrouter
+      model: openai/gpt-5.6-terra
+
+instructions: ./instructions.md
+skills:
+  - ./skills/godot-web-quickref
+
+tools:
+  - opencode
+  - node
+  - bun
+  - git
+  - curl
+  - jq
+  - godot
+  - game-export
+  - game-playcheck
+
+mcps: []
+env:
+  OPENROUTER_API_KEY:
+    required: true
+
+runtime: docker
+image:
+  build: ./Dockerfile
+  context: .

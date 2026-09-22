@@ -1,0 +1,39 @@
+{
+    "version": 1,
+    "id": "lux-announce-team",
+    "workbench": "lux-apps",
+    "title": "Team announcements with live updates and author-only editing",
+    "fixture": {
+        "kind": "git",
+        "url": "https://github.com/pompeii-labs/lux-starter",
+        "commit": "2f8b050fc3a2f39e680bf8d6013e9f29e314c636"
+    },
+    "preloadImages": [
+        "ghcr.io/lux-db/lux:latest",
+        "ghcr.io/lux-db/studio:latest"
+    ],
+    "timeoutMinutes": 40,
+    "submissionExcludes": [".env.local", "lux/.env-profiles", "lux/.lux-local.json"],
+    "setup": "bash ./checks/seed.sh",
+    "boot": "bun install && printf 'PUBLIC_LUX_URL=http://localhost:5890\\nPUBLIC_LUX_PUBLISHABLE_KEY=lux_pub_placeholder\\nPUBLIC_API_URL=http://localhost:3000\\n' > apps/web/.env",
+    "gates": [
+        {
+            "id": "check",
+            "title": "bun run check passes",
+            "run": "bun run check",
+            "timeoutSeconds": 600
+        },
+        {
+            "id": "web-builds",
+            "title": "The web app still builds",
+            "run": "bun run build",
+            "timeoutSeconds": 600
+        },
+        {
+            "id": "announcements",
+            "title": "Announcements are live, team-scoped, and author-only to edit",
+            "run": "bash ./checks/probe.sh",
+            "timeoutSeconds": 900
+        }
+    ]
+}

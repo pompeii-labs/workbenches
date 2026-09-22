@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
+templates_dir="$data_dir/godot/export_templates"
+mkdir -p "$templates_dir"
+if [ ! -e "$templates_dir/4.7.1.stable" ]; then
+    ln -s /opt/godot/templates/4.7.1.stable "$templates_dir/4.7.1.stable"
+fi
+exec /opt/godot/godot "$@"

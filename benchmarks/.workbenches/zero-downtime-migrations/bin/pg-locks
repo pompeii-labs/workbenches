@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# pg-locks "<sql>": runs the given statement inside a transaction against a
+# scratch clone of the project's current database, then rolls it back, and
+# prints the lock modes it took, flagging ACCESS EXCLUSIVE and likely table
+# rewrites. Generic: takes any SQL statement, no knowledge of any project.
+set -euo pipefail
+
+SQL="${1:-}"
+if [ -z "$SQL" ]; then
+    echo "usage: pg-locks \"<sql statement>\"" >&2
+    exit 2
+fi
+
+SOURCE_URL="${DATABASE_URL:-postgres://app:app@localhost:5432/app}"
+SCRATCH_NAME="pg-locks-$$"
+SCRATCH_PORT=$(( (RANDOM % 5000) + 25000 ))
+SCRATCH_URL="postgres://app:app@localhost:${SCRATCH_PORT}/app"
+
+cleanup() { docker rm -f "$SCRATCH_NAME" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+# Preflight: pg_dump can only dump from a server of the same or older major
+# version. If the client and the target server disagree, fail fast with one
+# clear line instead of letting pg_dump abort partway through cloning.
+CLIENT_MAJOR=$(pg_dump --version | grep -oE '[0-9]+' | head -1)
+SERVER_MAJOR=$(psql -Atq "$SOURCE_URL" -c "SHOW server_version" 2>/dev/null | grep -oE '^[0-9]+')
+if [ -z "$SERVER_MAJOR" ]; then
+    echo "pg-locks: cannot reach $SOURCE_URL to check its version" >&2
+    exit 2
+fi
+if [ -z "$CLIENT_MAJOR" ] || [ "$CLIENT_MAJOR" != "$SERVER_MAJOR" ]; then
+    echo "pg-locks: cannot run here (pg_dump ${CLIENT_MAJOR:-unknown} vs server ${SERVER_MAJOR}). Skip this tool; do not try to repair it." >&2
+    exit 2
+fi
+
+docker run -d --name "$SCRATCH_NAME" -p "${SCRATCH_PORT}:5432" \
+    -e POSTGRES_USER=app -e POSTGRES_PASSWORD=app -e POSTGRES_DB=app \
+    postgres:16 >/dev/null
+for i in $(seq 1 30); do
+    docker exec "$SCRATCH_NAME" pg_isready -U app -d app >/dev/null 2>&1 && break
+    sleep 1
+done
+pg_dump "$SOURCE_URL" | psql -q "$SCRATCH_URL" >/dev/null 2>&1 || {
+    echo "pg-locks: could not clone from $SOURCE_URL" >&2
+    exit 2
+}
+
+OUT=$(mktemp)
+psql -Atq "$SCRATCH_URL" >"$OUT" 2>&1 <<SQL || true
+BEGIN;
+SET lock_timeout = '5s';
+$SQL;
+SELECT pg_backend_pid();
+\gset
+SELECT l.mode, c.relname
+FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+WHERE l.pid = :pg_backend_pid AND c.relkind IN ('r','i')
+ORDER BY 1, 2;
+ROLLBACK;
+SQL
+
+echo "statement: $SQL"
+if grep -qi "cannot run inside a transaction block" "$OUT"; then
+    echo "not checked: CONCURRENTLY statements cannot run inside a transaction, so this tool cannot probe them here."
+    echo "(that is also why they are safe: they never take the heavy lock a plain version would.)"
+    rm -f "$OUT"
+    exit 0
+fi
+if grep -qi "error" "$OUT"; then
+    echo "FAILED:"
+    grep -i "error" "$OUT" | head -3
+    rm -f "$OUT"
+    exit 1
+fi
+
+echo "locks taken (rolled back, nothing persisted):"
+grep -E '^(AccessExclusiveLock|ExclusiveLock|ShareLock|ShareRowExclusiveLock|ShareUpdateExclusiveLock|RowExclusiveLock|RowShareLock|AccessShareLock)\|' "$OUT" | sed 's/^/  /'
+
+# The table(s) the statement actually names, so a lock on a brand-new index
+# object (harmless) is not confused with a lock on an existing table.
+TARGET_TABLES=$(echo "$SQL" | grep -oiE '(alter +table|create +(unique +)?index[a-z0-9_ ]* +on) +[a-z_."]+' | awk '{print $NF}' | tr -d '"')
+FLAGGED=0
+for t in $TARGET_TABLES; do
+    MODE_ON_TABLE=$(grep -iE "\|${t}\$" "$OUT" | awk -F'|' '{print $1}' | head -1)
+    case "$MODE_ON_TABLE" in
+        AccessExclusiveLock)
+            echo "FLAG: ACCESS EXCLUSIVE on $t - blocks reads and writes for the statement's duration"
+            FLAGGED=1
+            ;;
+        ShareLock|ShareRowExclusiveLock|ExclusiveLock)
+            echo "FLAG: $MODE_ON_TABLE on $t - blocks writes to $t for the statement's duration"
+            FLAGGED=1
+            ;;
+    esac
+done
+if [ "$FLAGGED" -eq 0 ]; then
+    echo "no write-blocking lock on an existing table; any ACCESS EXCLUSIVE above is on a new object only"
+fi
+if echo "$SQL" | grep -qiE 'alter +table.*(type|using)|alter +column.*type'; then
+    echo "FLAG: likely a full table rewrite (type change) - avoid on a live table"
+fi
+rm -f "$OUT"

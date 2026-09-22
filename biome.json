@@ -6,7 +6,11 @@
             "!!node_modules",
             "!!dist",
             "!!coverage",
-            "!!.workbenches/*-draft"
+            "!!.workbenches/*-draft",
+            "!!benchmarks/tasks",
+            "!!benchmarks/.workbenches",
+            "!!benchmarks/results",
+            "!!benchmarks/.work"
         ]
     },
     "formatter": {

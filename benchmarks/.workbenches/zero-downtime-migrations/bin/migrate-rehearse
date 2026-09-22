@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# migrate-rehearse: clones the project's current database into a scratch
+# container, runs its pending migrations against the clone under synthetic
+# concurrent reads/writes on the tables the migrations touch, and reports
+# per-statement duration, the longest lock wait seen by other sessions, and
+# any failed statements. Generic: discovers everything from the project's
+# own files and the database catalog. Run from the project root.
+set -euo pipefail
+set +m
+
+MIGRATIONS_DIR="${1:-migrations}"
+if [ ! -d "$MIGRATIONS_DIR" ]; then
+    echo "migrate-rehearse: no $MIGRATIONS_DIR directory here" >&2
+    exit 2
+fi
+
+SOURCE_URL="${DATABASE_URL:-postgres://app:app@localhost:5432/app}"
+SCRATCH_NAME="migrate-rehearse-$$"
+SCRATCH_PORT=$(( (RANDOM % 5000) + 20000 ))
+SCRATCH_URL="postgres://app:app@localhost:${SCRATCH_PORT}/app"
+
+cleanup() {
+    docker rm -f "$SCRATCH_NAME" >/dev/null 2>&1 || true
+    [ -n "${LOAD_PID:-}" ] && kill "$LOAD_PID" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+# Preflight: pg_dump can only dump from a server of the same or older major
+# version. If the client and the target server disagree, fail fast with one
+# clear line instead of letting pg_dump abort partway through cloning.
+CLIENT_MAJOR=$(pg_dump --version | grep -oE '[0-9]+' | head -1)
+SERVER_MAJOR=$(psql -Atq "$SOURCE_URL" -c "SHOW server_version" 2>/dev/null | grep -oE '^[0-9]+')
+if [ -z "$SERVER_MAJOR" ]; then
+    echo "migrate-rehearse: cannot reach $SOURCE_URL to check its version" >&2
+    exit 2
+fi
+if [ -z "$CLIENT_MAJOR" ] || [ "$CLIENT_MAJOR" != "$SERVER_MAJOR" ]; then
+    echo "migrate-rehearse: cannot run here (pg_dump ${CLIENT_MAJOR:-unknown} vs server ${SERVER_MAJOR}). Skip this tool; do not try to repair it." >&2
+    exit 2
+fi
+
+echo "cloning live database into scratch container..."
+docker run -d --name "$SCRATCH_NAME" -p "${SCRATCH_PORT}:5432" \
+    -e POSTGRES_USER=app -e POSTGRES_PASSWORD=app -e POSTGRES_DB=app \
+    postgres:16 >/dev/null
+for i in $(seq 1 30); do
+    docker exec "$SCRATCH_NAME" pg_isready -U app -d app >/dev/null 2>&1 && break
+    sleep 1
+done
+pg_dump "$SOURCE_URL" | psql -q "$SCRATCH_URL" >/dev/null 2>&1 || {
+    echo "migrate-rehearse: could not clone from $SOURCE_URL" >&2
+    exit 2
+}
+
+# Which migrations are pending: those the scratch clone's own ledger (any
+# table named schema_migrations / *_migrations) does not list as applied.
+APPLIED=$(psql -Atq "$SCRATCH_URL" -c \
+    "SELECT string_agg(name, ',') FROM schema_migrations" 2>/dev/null || true)
+PENDING=()
+for f in "$MIGRATIONS_DIR"/*.sql; do
+    base=$(basename "$f")
+    case ",$APPLIED," in *",$base,"*) ;; *) PENDING+=("$f") ;; esac
+done
+if [ "${#PENDING[@]}" -eq 0 ]; then
+    echo "migrate-rehearse: no pending migrations found in $MIGRATIONS_DIR"
+    exit 0
+fi
+
+# Discover affected tables from the pending SQL, for the synthetic load.
+TABLES=$(grep -hoE '(ALTER TABLE|CREATE (UNIQUE )?INDEX[A-Z ]*ON|UPDATE|INTO) [A-Za-z_."]+' \
+    "${PENDING[@]}" | awk '{print $NF}' | tr -d '"' | sort -u)
+if [ -z "$TABLES" ]; then
+    echo "migrate-rehearse: could not identify affected tables; skipping load"
+fi
+
+LOAD_PID=""
+if [ -n "$TABLES" ]; then
+    TABLE=$(echo "$TABLES" | head -1)
+    COL=$(psql -Atq "$SCRATCH_URL" -c \
+        "SELECT column_name FROM information_schema.columns WHERE table_name = '${TABLE}' ORDER BY ordinal_position LIMIT 1" 2>/dev/null || true)
+    if [ -n "$COL" ]; then
+        (
+            while true; do
+                psql -Atq "$SCRATCH_URL" -c \
+                    "UPDATE ${TABLE} SET ${COL} = ${COL} WHERE ctid = (SELECT ctid FROM ${TABLE} LIMIT 1)" \
+                    >/dev/null 2>&1 || true
+                sleep 0.05
+            done
+        ) &
+        LOAD_PID=$!
+    fi
+fi
+
+WAIT_FILE="/tmp/migrate-rehearse-wait.$$"
+echo 0 > "$WAIT_FILE"
+(
+    while true; do
+        w=$(psql -Atq "$SCRATCH_URL" -c \
+            "SELECT coalesce(max(extract(epoch from now() - query_start) * 1000)::int, 0) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid()" 2>/dev/null || echo 0)
+        prev=$(cat "$WAIT_FILE" 2>/dev/null || echo 0)
+        [ "${w:-0}" -gt "${prev:-0}" ] 2>/dev/null && echo "$w" > "$WAIT_FILE"
+        sleep 0.1
+    done
+) &
+SAMPLER_PID=$!
+
+echo "rehearsing ${#PENDING[@]} migration(s) against a clone, tables: ${TABLES:-none identified}"
+FAILED=0
+for f in "${PENDING[@]}"; do
+    START=$(date +%s)
+    if psql -v ON_ERROR_STOP=1 -q "$SCRATCH_URL" -f "$f" 2>/tmp/migrate-rehearse-err.$$; then
+        DUR=$(( $(date +%s) - START ))
+        echo "  ok   ${DUR}s  $(basename "$f")"
+    else
+        DUR=$(( $(date +%s) - START ))
+        FAILED=1
+        echo "  FAIL ${DUR}s  $(basename "$f"): $(tail -1 /tmp/migrate-rehearse-err.$$)"
+    fi
+    rm -f /tmp/migrate-rehearse-err.$$
+done
+
+kill "$SAMPLER_PID" >/dev/null 2>&1 || true
+WAIT_MS=$(cat "$WAIT_FILE" 2>/dev/null || echo 0)
+rm -f "$WAIT_FILE"
+echo "longest lock wait observed by another session: ${WAIT_MS:-0}ms"
+
+if [ "$FAILED" -ne 0 ]; then
+    echo "result: FAILED"
+    exit 1
+fi
+echo "result: clean"
