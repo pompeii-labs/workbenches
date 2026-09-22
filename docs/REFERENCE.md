@@ -1,0 +1,1024 @@
+<p align="center">
+  <img src="../assets/brand/workbench-mark-woodcut.png" alt="Workbench" width="220">
+</p>
+
+# Workbench reference
+
+[![CI](https://github.com/pompeii-labs/workbenches/actions/workflows/ci.yml/badge.svg)](https://github.com/pompeii-labs/workbenches/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/pompeii-labs/workbenches?include_prereleases)](https://github.com/pompeii-labs/workbenches/releases)
+
+This is the complete reference for the Workbench CLI and draft-0 execution
+model. For the shortest path from install to a useful run, start with the
+[project README](../README.md).
+
+A model is capable. A Workbench makes it prepared.
+
+General-purpose agents pay a knowledge ramp-up cost every time they enter an
+unfamiliar project. They spend time and model tokens rediscovering architecture,
+conventions, tooling, and operating procedures that maintainers already know. A
+Workbench packages that expertise once, so every compatible run begins
+prepared.
+
+Workbenches package the expertise, runner, model, tools, skills, integrations,
+runtime, and authorization requirements needed to perform a specific class of
+work. They give maintainers a portable way to publish not only documentation,
+but an executable expert environment for their project.
+
+A maintainer publishes the package alongside the project:
+
+```text
+.workbenches/
+  core/
+    workbench.yml
+    instructions.md
+    skills/
+```
+
+Any compatible host can then resolve the package, verify its requirements, and
+translate it into the selected runner's native interface.
+
+Workbench is not another agent framework. The standard does not define a DAG,
+task planner, chat product, or orchestration system. It defines the versioned,
+portable package that prepares an AI to do the work. Products can build their
+own workflows and interfaces around that package.
+
+## What a Workbench contains
+
+A Workbench can declare:
+
+- Maintainer-authored instructions
+- A runner and model selected for the work
+- Portable, on-demand skills
+- Required CLI tools
+- Remote MCP integrations
+- Environment-variable requirements without embedded secret values
+- Explicit named workspace requirements for multi-repository work
+- A local or isolated runtime and, where supported, an image
+
+The manifest is intentionally small:
+
+```yaml
+spec: 0
+version: 0.1.0
+
+name: migrations
+description: Design, review, and safely apply project migrations.
+
+runner: opencode
+model:
+  id: openai/gpt-5.6-terra
+
+instructions: ./instructions.md
+skills:
+  - ./skills/migrations
+
+tools:
+  - cargo
+  - dbctl
+
+mcps:
+  - name: database
+    transport: http
+    url: https://api.example.com/mcp
+    headers:
+      Authorization: Bearer ${DATABASE_API_TOKEN}
+
+env:
+  DATABASE_API_TOKEN:
+    required: false
+
+workspaces:
+  api:
+    required: true
+    access: read-write
+
+runtime: local
+```
+
+The Workbench engine reads this file. The selected runner does not. The engine
+validates and resolves the package, prepares the runtime, verifies its declared
+requirements before model execution, and translates the canonical Workbench
+into the runner's native configuration.
+
+## Reference CLI
+
+This repository contains `workbench`, also available as `wb`: the TypeScript
+reference engine and command-line client for the standard.
+
+The project is in public pre-alpha development. The draft-0 format, OpenCode and
+Pi adapters, and local, Docker, and E2B runtimes for one-shot, detached, and
+interactive execution are implemented. The format is not yet stable. Other
+runners and remote runtime providers are not yet supported by the reference
+engine.
+
+### Install the current prerelease
+
+Install the current prerelease on macOS or Linux:
+
+```sh
+curl -fsSL https://workbenches.dev/install.sh | sh
+```
+
+Release binaries are available for arm64 and x64. To inspect the installer
+before running it:
+
+```sh
+curl -fsSLO https://workbenches.dev/install.sh
+less install.sh
+sh install.sh
+rm install.sh
+```
+
+The installer selects the prerelease matching this repository, verifies its published SHA-256
+checksum, installs `workbench` to `~/.local/bin` by default, and creates the `wb`
+alias. It never invokes `sudo` or edits shell startup files. Use `--version` to
+install a specific release and `--bin-dir` to choose another destination.
+
+### Author a Workbench
+
+Run the official creator from a repository root for a native, interactive
+authoring session:
+
+```sh
+wb create migrations
+```
+
+The creator inspects the target repository and authors the complete package in
+`.workbenches/`. It receives the exact `wb` CLI build that opened the authoring
+session instead of another globally installed version. If `migrations` already
+exists in the current repository, the same command opens it for editing instead.
+The engine resolves and verifies the official creator through the Workbench
+registry and keeps its cache separate from the user's saved Workbenches.
+
+Finish an idle authoring session with `/quit` or `Ctrl+C`. The engine validates
+the candidate, checks its version and package scope, and runs `wb smoke` before
+closing the creator. A failed check leaves the creator open with the concrete
+error so it can repair the package. An active creator turn must be cancelled or
+allowed to finish before authoring can be completed.
+
+Candidates that declare environment values, named workspaces, or host Docker
+access can be verified with the same `--env-file`, repeatable `--env`, repeatable
+`--workspace`, and `--allow-host-docker` options accepted by `smoke` and `run`.
+Their values are used only for the final smoke and are never written to the
+authoring record or improvement evidence.
+
+Edit a local source package through the same authoring environment:
+
+```sh
+wb create .#migrations
+```
+
+`create` never mutates an immutable saved snapshot. Pass a local repository path
+or selector so the creator changes the source package directly.
+
+For deterministic scaffolding without a model run, use `init`:
+
+```sh
+wb init core
+wb init migrations --runner opencode --model openai/gpt-5.6-terra
+```
+
+Agents can use that same command without opening the terminal client. Supply
+exactly one brief as text, a UTF-8 file, or explicit stdin:
+
+```sh
+wb create migrations --task "Create a focused migration review expert" --json
+wb create .#migrations --task-file improvements.txt --detach --json
+wb wait wb_... --timeout 120 --json
+printf '%s\n' "Check failure cleanup more carefully" | \
+  wb create --from wb_... --stdin --detach --json
+```
+
+Without `--detach`, headless authoring waits for execution and engine-owned
+verification, then prints one result. With `--detach`, it prints a correlated
+session/run/operation receipt while a separate supervisor verifies the package
+after the creator finishes. `wb wait` waits for that verification too. Its
+`authoring` result reports package selectors and paths, changed files, and the
+improvement evidence path when applicable. A completed creator turn alone is
+not authoring success: invalid packages, out-of-scope edits, missing version
+increments, and failed smoke checks produce a failed result and nonzero exit.
+
+`--from` can infer improvements from stored session evidence without a brief.
+Other headless authoring calls require one. If the creator needs permission,
+`wait` reports the pending request with exit 2; answer it explicitly through
+`wb answer`, then wait again. Bare `wb create` keeps its interactive behavior.
+The creator remains a normal published Workbench, but running it directly does
+not provide the `create` command's scope and verification contract.
+
+### Discover and save Workbenches
+
+Local paths, GitHub URLs, and GitHub repository slugs are accepted:
+
+```sh
+wb list .
+wb list /path/to/repository
+wb list https://github.com/owner/repository
+wb list owner/repository
+
+wb validate owner/repository
+wb smoke owner/repository
+wb add owner/repository#core
+```
+
+Remote inspection uses the GitHub API and does not clone or create a temporary
+checkout. `add` is the explicit installation boundary: it saves only the
+selected Workbench package as a content-addressed local snapshot.
+
+Saved packages can be inspected and managed without returning to their source:
+
+```sh
+wb list
+wb view project-core
+wb view project-core --json
+wb remove project-core
+```
+
+CLI releases and saved Workbench snapshots have separate lifecycles:
+
+```sh
+wb update --check
+wb update
+wb upgrade project-core
+wb upgrade
+```
+
+`update` checks or replaces the installed Workbench CLI. `upgrade` refreshes one
+saved Workbench from its recorded source, or every saved Workbench when no alias
+is provided. An upgrade downloads and verifies the candidate package before it
+atomically repoints the saved alias. Existing snapshots remain unchanged if the
+upgrade fails.
+
+### Run a task
+
+Pass a positional task or use `--task` for a one-shot run:
+
+```sh
+wb run project-core "Explain the storage architecture"
+wb run project-core --task "Review this migration"
+```
+
+The default output is a colorized, terminal-safe Markdown stream normalized
+across runners. For integrations, `--json` emits the runner-neutral Workbench
+event protocol as NDJSON. `--final` emits only the final assistant response.
+
+```sh
+wb run project-core --task "Review this migration" --json
+wb run project-core --task "Review this migration" --final
+```
+
+Bind manifest-declared environment values from a dotenv file or with repeatable
+per-run overrides:
+
+```sh
+wb smoke project-core --env-file .env.workbench
+wb run project-core --task "Review this migration" --env-file .env.workbench
+wb run project-core --task "Review this migration" \
+  --env API_URL=https://api.example.com \
+  --env API_TOKEN=secret
+```
+
+Explicit `--env` values take precedence over `--env-file`, which takes
+precedence over inherited process environment. Dotenv entries not declared by
+the Workbench are ignored; an undeclared explicit override is rejected as a
+likely typo. Values are used only for that invocation and are not written to
+saved run metadata or normalized events. Prefer `--env-file` or inherited
+environment for secrets because command-line values may be retained in shell
+history.
+
+### Work on a GitHub repository
+
+Select a repository independently of the Workbench package or current directory:
+
+```sh
+wb run project-core --repo owner/project --task "Audit authentication"
+wb run project-core --repo owner/project --ref main \
+  --task "Add pagination and tests"
+```
+
+Repository access uses inherited `GH_TOKEN`, then `GITHUB_TOKEN`, or an existing
+`gh auth login`. No GitHub App, registry account, or hosted Workbench service is
+required. This authentication is separate from `wb connect`, which selects model
+provider connections. Private repositories require repository read access; PR
+creation also requires Contents and Pull requests write permissions. CI inspection
+requires Actions and Checks read permissions. Workflow changes may require
+additional GitHub permissions.
+
+The engine resolves the selected ref to an exact commit and checks it out under
+the session's managed storage. It never uploads or synchronizes your current
+project. The current directory remains the session-discovery scope. Repository
+mode cannot be combined with `--dir`, named host workspace bindings, host Docker
+access, or `--dry-run`.
+
+Workbench authors do not need to declare or install `git` or `gh`. For Docker
+and E2B repository runs, the engine builds a cached tooling layer on top of the
+Workbench image. The original image and package remain unchanged.
+
+Repository runs pass `GH_TOKEN` into the runner and configure Git to use `gh`
+for HTTPS authentication. The engine resolves the authenticated GitHub account
+and configures commits with that account's GitHub no-reply identity, without
+exposing its private email. The agent can use ordinary `git` and `gh`
+commands to commit, push, open or update a PR, and inspect CI. There is no
+Workbench-specific GitHub tool or automatic PR publication when a turn ends.
+The token retains its actual GitHub permissions; repository mode is not a
+technical restriction to PR operations. Use a suitably scoped token. Docker
+and E2B do not mount your GitHub CLI configuration or SSH agent. A local run can
+still access credentials already available on the host; local execution is not a
+security sandbox.
+
+`wait --json` includes repository provenance and any saved outcome. The TUI
+shows repository preparation separately from model work.
+From the home search, select any saved or published Workbench to choose its run
+target: the current directory, another local directory with path completion, or
+a GitHub repository. The repository choice asks for an optional base ref and
+uses your available GitHub credential. In the non-interactive CLI, the target remains the
+current directory unless `--dir` or `--repo` is passed.
+
+Repository sessions keep the target, base branch, and GitHub authentication
+status visible above the conversation. If the agent records a confirmed PR URL
+as a `pull_request` outcome link, `/pr`, `/checks`, `/logs` or Ctrl+G can inspect
+that PR without another model turn or sandbox launch. Refresh with `r`, toggle
+30-second watching with `w`, open the PR with `o`, or select a job with arrows
+and press Enter for its logs (`v` opens the job on GitHub). CI is an observed
+snapshot, not a live guarantee. Watching stops when the panel closes. The panel
+also offers `d` to inspect the saved diff. Outcome dialogs offer the same diff
+view; diff and CI log display are bounded to 128 KiB and indicate truncation.
+
+Resume retains the managed checkout and runner Git state. The agent decides
+when and whether to push, open a PR, update it, or take any other GitHub action
+allowed by the credential. Workbench never does those actions automatically.
+
+The initial checkout is shallow. Submodules are preserved but not initialized,
+and Git LFS pointer files are not automatically downloaded. Branches, tags, and
+commits are accepted as the starting ref;
+the credential's actual permissions determine which later GitHub operations work.
+Requested attachments continue to use the normal returned-results contract;
+project edits remain workspace changes.
+
+### Connect model and runtime providers
+
+The Workbench author selects the runner, model, allowed provider routes, and
+native runner configuration. Those choices cannot be overridden when the
+Workbench runs. Connect a runner once for each runtime where you use it. The
+default flow is independent of saved Workbenches and starts with the execution
+boundary:
+
+```sh
+wb connect
+# Model provider → runtime → harness → provider → authentication method
+# Or E2B runtime → masked API-key prompt
+wb run project-core --task "Review this migration"
+```
+
+The model-provider path is configuration-only. It does not launch a runner,
+start Docker, create an E2B sandbox, require an E2B key, contact a model
+provider, or ask for model credentials. The resulting default belongs to the
+runner and runtime, not a Workbench. Compatible Workbenches automatically reuse
+it. The same flow can be scripted explicitly:
+
+```sh
+wb connect --runtime e2b --harness opencode --provider openai --method chatgpt
+```
+
+The E2B runtime-provider path saves its host-only API key once, without
+starting a sandbox or incurring E2B usage:
+
+```sh
+wb connect --runtime e2b
+wb connect --runtime e2b --status
+```
+
+The terminal prompt masks the key. For automation, pipe it explicitly with
+`wb connect --runtime e2b --stdin`; there is no key-valued command-line flag
+that could enter shell history. Remove the saved key with
+`wb connect --runtime e2b --remove`. The key is stored in
+`~/.workbench/runtime.secrets.json` with mode `0600`, separately from model
+credentials. An inherited `E2B_API_KEY` overrides the saved key for one process.
+
+Passing a Workbench reference narrows the provider choices to routes allowed by
+that package; it still performs no runtime work.
+
+`wb connect` records which compatible provider and authentication method should
+be preferred for that runner and runtime. A single run can select a different
+configured or authenticated connection without changing the default:
+
+```sh
+wb run project-core --connection openrouter --task "Review this migration"
+```
+
+An override must match one of the provider routes allowed by the Workbench.
+Resolution order is the explicit
+`--connection` override, the runner/runtime default, then the first allowed
+authenticated route in manifest order. Connection defaults, including the
+selected authentication method, are stored in
+`~/.workbench/connections.json`. No login command is injected into a Workbench
+conversation, and no Workbench package or model is modified by selecting a
+default.
+
+If the selected OpenCode credential is missing, the first foreground or TUI run
+starts the real execution runtime, asks OpenCode for the configured browser or
+headless authorization flow, displays its URL and instructions, waits for
+completion, and then continues that same run. Detached execution refuses to
+start an invisible first-time login and directs the user to run interactively
+once. First-run Pi login and interactive API-key entry are not yet implemented;
+those routes must already be available through runner credentials or declared
+provider environment.
+
+The provider menu is the intersection of providers serving catalog models and
+the selected harness version's capability map; model availability alone never
+implies that a harness supports a provider. Versioned harness maps may be
+delivered with the verified model metadata, with an engine-bundled map for the
+pinned harness version as the offline and compatibility fallback. Runtime-specific
+constraints, such as browser versus headless authentication, remain enforced by
+the engine.
+
+Local Workbenches use the runner's normal local credential store. Docker keeps
+each runner's native credentials in a private named volume. E2B keeps each
+runner's native credentials beneath the private Workbench data directory,
+copies that store only into fresh E2B sandboxes using that runner, and
+synchronizes changes back during orderly cleanup. The E2B control key and native
+provider credentials are separate: `E2B_API_KEY` stays on the host, while the
+runner's provider credential must exist inside the sandbox so the runner can
+authenticate. Credentials are never written to the Workbench package, workspace,
+run records, normalized events, or artifacts.
+
+Environment-backed provider routes remain supported through inherited
+environment, `--env-file`, or `--env`. The CLI checks whether an allowed route
+is ready but does not interpret or rewrite provider tokens. Because some runners
+keep all provider logins in one native file, an E2B sandbox receives the native
+store for that runner rather than a parsed provider-specific subset. Treat the
+sandbox provider and Workbench image as part of the credential trust boundary.
+
+Pi is distributed separately by the Pi project and must be installed in the
+selected runtime:
+
+```sh
+npm install -g @earendil-works/pi-coding-agent
+```
+
+Bind additional repositories or directories only when the manifest declares
+them:
+
+```sh
+wb run project-core --dir ./app --workspace api=../api \
+  --workspace schemas=../schemas --task "Review the cross-repository change"
+```
+
+Required bindings fail before runner launch. Inside a local run, the resolved
+paths are exposed as `WORKBENCH_WORKSPACE_API` and
+`WORKBENCH_WORKSPACE_SCHEMAS`. Docker and E2B use the same names with
+deterministic paths such as `/workspaces/api`. Docker enforces read-only
+declarations at the mount boundary. E2B stages isolated copies and returns
+declared read-write changes as pending outcomes for explicit acceptance. Local access
+declarations are preflight checks, not an operating-system sandbox.
+
+Use `--dry-run` to inspect the translated runner invocation without executing
+it. An interactive terminal shows a concise summary; `--json` or piped output
+returns the complete translation:
+
+```sh
+wb run project-core --task "Review this migration" --dry-run
+```
+
+### Run in Docker
+
+A Docker Workbench can name a published OCI image or a Workbench-local
+Dockerfile:
+
+```yaml
+runtime: docker
+image:
+  build: ./Dockerfile.workbench
+  context: .
+```
+
+`run` automatically pulls or builds the declared image. Use `build` to prepare
+it explicitly, then `smoke` to verify the runner, declared tools,
+authorizations, instructions, and skills inside the container without making a
+model request:
+
+```sh
+wb build project-core
+wb smoke project-core
+wb run project-core --task "Review this migration"
+```
+
+Publish a locally built image to the Workbench OCI registry after signing in:
+
+```sh
+wb login
+docker build -t project-core-local .
+wb image push project-core-local \
+  --publisher example \
+  --as project-core \
+  --tag 0.4.0
+```
+
+`image push` exports the local image, skips blobs already present in the
+registry, uploads missing blobs in bounded chunks, and publishes the original
+OCI manifest under `images.workbenches.dev/example/project-core:0.4.0`. The
+source image can have any valid local name. Progress is written to stderr and
+the resulting image reference is written to stdout. Use `--client` to select an
+OCI-compatible client that supports the Docker `image save` interface.
+
+Standard OCI clients can authenticate explicitly too:
+
+```sh
+wb image login
+docker tag project-core-local \
+  images.workbenches.dev/example/project-core:0.4.0
+docker push images.workbenches.dev/example/project-core:0.4.0
+```
+
+Direct client pushes are subject to the registry edge's per-request body
+limit. Use `wb image push` for images with large layers because it controls the
+upload chunk size. Standard Docker pulls work for images published through
+either path.
+
+The Workbench can then declare the published image:
+
+```yaml
+runtime: docker
+image: images.workbenches.dev/example/project-core:0.4.0
+```
+
+Publishing requires a Workbench registry account with access to the selected
+publisher. Use a versioned tag for a published Workbench and avoid changing the
+image behind that tag.
+
+Published tags are pulled and execution uses the resolved repository digest.
+Local builds use a content-addressed cache and a staged build context that
+excludes common credential stores and secret-bearing files. The target
+workspace is mounted read-write and the Workbench package is read-only.
+Named workspaces are mounted beneath `/workspaces/<name>` with their declared
+read-only or read-write access.
+Generated runner state is isolated in a writable, ephemeral mount because some
+runners update their own configuration at launch. The container root filesystem
+is read-only and `/tmp` is a writable temporary filesystem. The engine does not
+impose a CPU, memory, or temporary-filesystem size limit in execution protocol
+draft 0.
+
+The reference binaries currently support macOS and Linux. On platforms that
+expose a numeric host user and group, containers run under that identity so
+workspace writes retain host ownership. Docker Desktop still mediates bind
+mounts through its virtual machine, so filesystem performance and permission
+details can differ from native Linux. Images must tolerate a read-only root and
+write caches beneath the provided temporary `HOME`.
+
+Interactive Docker sessions keep the runner inside the container. Pi uses its
+native stdin RPC transport. OpenCode's native HTTP service listens inside the
+container and is published only to a dynamically assigned host loopback port.
+Native session files live in the Workbench session's private host directory and
+are mounted read-write so a later container can resume the same native context.
+
+If the Workbench itself must use the host Docker engine, it must declare that
+high-risk requirement:
+
+```yaml
+runtime: docker
+image: ghcr.io/example/project-workbench:0.4.0
+docker:
+  engine:
+    mode: host
+```
+
+The declaration is not authorization. Every smoke or run requires an explicit
+grant:
+
+```sh
+wb smoke project-core --allow-host-docker
+wb run project-core --allow-host-docker --task "Start the local stack"
+```
+
+Host Docker access is effectively administrative access to the Docker host and
+can escape the Workbench container's isolation. The image must contain the
+Docker CLI; preflight verifies both the CLI and daemon before model execution.
+Host-engine runs preserve host workspace paths inside the Workbench container
+so nested Docker and Compose bind mounts resolve correctly. Other Docker engine
+modes and non-Unix contexts are rejected rather than silently substituted.
+
+### Run in E2B
+
+An E2B Workbench uses the same image declaration as Docker and requires an E2B
+API key on the host. Connect once, then run normally:
+
+```yaml
+runtime: e2b
+image:
+  build: ./Dockerfile.workbench
+  context: .
+```
+
+```sh
+wb connect --runtime e2b
+wb build project-core
+wb smoke project-core
+wb run project-core --task "Review this migration"
+```
+
+The image can be a public OCI reference or a Workbench-local Dockerfile. The
+reference engine builds and caches an E2B template for that image, then creates
+a fresh sandbox for each execution. Use versioned image tags or digests because
+an existing template identity is reused. Images must include the selected
+runner, every declared tool, `git`, and GNU `tar` with `--null` support.
+
+Before launch, the engine snapshots only the declared runtime assets. The
+primary workspace is staged at `/workspace`, named workspaces at
+`/workspaces/<name>`, and the Workbench package at `/workbench`. Gitignored
+workspace files, repository metadata, common credential stores, dependency
+trees, and common secret-bearing files such as `.env` are excluded. Read-only
+assets are copied into the sandbox and are never synchronized back. A separately
+staged asset nested beneath a writable directory is excluded from that parent
+snapshot. Remote edits, additions, modes, and deletions are collected against the
+original baseline as durable pending changesets, never automatically applied to
+the host. Read-write single-file assets are rejected.
+
+Input and output transfers each have a 512 MiB safety limit, enforced against
+uncompressed content. The saved E2B key, or an overriding `E2B_API_KEY`, is used
+only by the host control plane and is never sent to the sandbox. The sandbox
+receives manifest-declared environment values for allowed model routes and the
+private native credential store for its selected runner. Connecting E2B saves
+the key but performs no E2B work; the
+separate model-provider connection path does not require the key.
+If a configured OpenCode credential is missing, the first real foreground or
+TUI run performs the headless ChatGPT authorization inside the sandbox that was
+created for that run, then continues the run after authorization succeeds.
+
+E2B runner credentials live beneath
+`~/.workbench/runtime-credentials/e2b/<runner>`, with private directory
+permissions. They are staged separately from packages and workspaces, then
+synchronized back before the disposable sandbox is destroyed. Existing local
+credentials are not modified if staging or startup fails. A host process crash
+before cleanup can lose a newly completed remote login.
+
+Normal completion collects outcomes before destroying the sandbox. Failure and
+cancellation collect partial outcomes when possible. If collection fails, the
+engine retains a private recovery checkpoint and pauses the original sandbox
+when possible. The 60-minute provider timeout pauses a crash survivor
+without preserving its memory. `wb clean` can find managed E2B sandboxes in the
+same scoped Workbench data store and removes only those whose run is terminal,
+or whose run is missing and whose sandbox is paused, and only when `--apply` is
+passed. A running sandbox with no matching local run is protected because it
+may belong to another host using the same scoped store. Prepared E2B templates
+are cached and are outside the `wb clean` contract.
+
+Pending recovery checkpoints protect their run history and original sandbox
+from ordinary cleanup. Use `wb outcome <run-id> --recover` to collect partial
+work from that sandbox, or `--discard-recovery` to explicitly abandon it. These
+actions require the host's E2B key but create no new sandbox or model work.
+
+The provider does not automatically retry template builds, sandbox creation,
+command starts, transfers, or native-state synchronization because an ambiguous remote
+outcome could duplicate billable work or replay a mutation. Cleanup is still
+attempted after failure. Terminal run events include E2B duration, CPU and memory
+shape, and a clearly marked infrastructure cost estimate when sandbox metadata
+is available. This stays separate from model tokens and model cost in
+`usage.updated`.
+
+E2B is copy-based rather than mount-based. A resumed Workbench session runs in a
+fresh sandbox after its native session state and runner credential store are
+copied in. Outcome recovery is separate from conversation resume and requires
+the original checkpoint and provider filesystem to survive. Already-collected
+outcomes can be inspected, exported, and explicitly applied without a live
+sandbox or E2B key.
+
+### Returned results
+
+Each durable execution collects changesets, artifacts, and links into an
+immutable outcome before disposable runtime cleanup. Local and Docker changes
+are already present in mounted host directories. E2B changes remain pending
+until you accept them explicitly:
+
+```sh
+wb outcome wb_...
+wb outcome wbo_... --json
+wb outcome wbo_... --export ./review-bundle
+wb outcome wbo_... --apply
+```
+
+Apply checks the producing run's workspace bindings and original fingerprints
+before changing any file. Conflicts leave host files untouched. Export creates
+a self-contained bundle and refuses an existing destination. Neither action
+requires another model turn, harness login, or E2B key.
+
+A Workbench can write reports, screenshots, images, or other files beneath
+`WORKBENCH_OUTPUT_DIR` with its harness's existing tools. An optional top-level
+`outcome.json` adds summary, artifact metadata, and HTTP/HTTPS links. Original
+artifact bytes are preserved without image resizing or transcoding. The CLI and
+TUI link to local files rather than rendering images inline; `/outcome` inspects
+results from chat. A PR link is returned data, not permission for the engine to
+publish a branch or open a PR automatically.
+
+The result store enforces per-file, per-outcome, and aggregate storage limits
+before copying bytes. Quota failures do not silently remove retained outcomes.
+See [OUTCOMES.md](OUTCOMES.md) for the versioned contract, outbox JSON,
+receipt states, recovery limits, and explicit cleanup behavior.
+
+### Sessions and background work
+
+```sh
+wb run project-core --task "Perform the migration" --detach
+# wb_...
+
+wb attach wb_...
+wb attach              # latest session
+wb attach wb_... --json
+wb ps                  # active and resumable sessions
+wb ps --all            # all session history
+wb kill wb_...
+wb kill                # latest active session
+wb resume wb_...       # open or attach the terminal client
+wb resume wb_... "Review the latest change"
+wb resume wb_... --task "Run the checks" --detach
+wb resume wb_... --allow-host-docker # reauthorize a declared host engine
+wb clean                            # preview terminal history older than 30 days
+wb clean --older-than 7d --apply
+```
+
+Every execution belongs to one stable Workbench session. The first run shares
+its `wb_...` ID with the session; later resumes create internal runs while the
+session ID stays fixed. Detachment only controls whether the current terminal is
+watching the active run. A session can also have a user-defined display name.
+Names make interactive surfaces easier to scan, but the stable ID remains the
+only automation and resume key.
+
+Attaching observes or replays the latest run without taking control or starting
+model work. Resuming without a task opens the terminal client. If the latest run
+is active, the terminal attaches to that exact runner process. If it is closed,
+Workbench starts a new internal run from the runner's saved native context.
+
+Resuming with a task sends one non-interactive continuation through the same
+session. It joins an active run's follow-up queue or starts a linked internal run
+when the previous one is closed. `--detach` returns the stable session ID while
+that continuation runs in the background. Killing cooperatively terminates the
+active run without deleting the session or its resumable context.
+
+Headless callers can supervise the same engine without keeping a client attached:
+
+```sh
+wb run project-core --task "Review the migration" --detach --json
+wb wait wb_... --timeout 120 --json
+wb send wb_... "Check the rollback" --json
+wb send wb_... "Focus on cleanup" --steer --json
+wb send wb_... --task-file followup.txt --queue --json
+wb answer wb_... request_id allow --json
+```
+
+Detached `run` and `resume` with `--json` return one launch receipt, not an event
+stream. `send` returns a receipt containing session/run/input IDs and an
+`after_sequence` cursor. Ordinary sends reject an active turn instead of silently
+queuing it. `--steer` requires an active execution; `--queue` explicitly requests
+a FIFO follow-up. Sending to a closed resumable session starts a fresh run from
+its saved native context. `--task-file` and `--stdin` are explicit alternatives
+to text, not implicit fallbacks.
+
+Waiting with a session ID selects its latest run. A linked run ID selects that
+exact execution. The session and its first run share an ID, so use `--run` to
+explicitly pin any run, including the first. Sequence cursors belong to a single
+run; use the receipt's `run_id` with `--run --after` when observing a submitted
+input, even if the session is continued again:
+
+```sh
+wb wait wb_... --run --after 42 --timeout 120 --json
+```
+
+`wait` prints one snapshot with state, sequence, final response and usage,
+outcome ID, and pending permission/question/authentication requests. It returns
+the first completed turn after the cursor, even if queued work starts immediately.
+`turn_completed` means that turn replied, not that execution or runtime cleanup
+finished. Repeat with `--after` set to the returned `sequence` to observe the next
+boundary or final `completed` result. Without a cursor, observation starts at
+the beginning of that run. Headless authoring waits for execution and package
+verification instead of returning intermediate creator turns. Exit codes are
+0 for idle/turn_completed/completed, 1 for failed, 2 for input needed, 124 for timeout, and 130
+for cancellation or interruption. A timeout or interrupted wait never cancels
+the run. Waiting does not attach a controlling client, start authentication, or
+keep a runtime alive.
+
+`answer` resolves only a currently reported request ID. `allow` grants a
+permission once; `deny` rejects it. Multiple questions accept JSON string
+arrays, such as `[["First option"],["Second option"]]`. Use `--response-file`,
+`--stdin`, or `--reject` when appropriate. Authentication requests expose the
+runner's URL and instructions, never a credential-submission channel.
+`ps --json` includes `state`, `needs_input`, and pending requests. Native runner
+capabilities still apply: these commands do not invent permissions or questions
+for a harness that does not support them.
+
+Run and session data is never removed by `wb clean` until `--apply` is passed.
+The default policy selects terminal, non-resumable sessions and obsolete run
+history older than 30 days. Active runs are never eligible. Native resumable
+context and its latest run are protected unless `--include-sessions` is also
+passed. Repository sessions also retain all earlier attempt outcomes needed for
+cumulative delivery until the session is removed. To explicitly clear all
+terminal history, including resumable context,
+use `wb clean --older-than 0s --include-sessions --apply`. `--json` returns the
+same preview or result as a stable machine-readable report, including byte
+counts and protected resources.
+
+Durable Docker runner containers and E2B sandboxes carry Workbench ownership
+metadata scoped to the current data directory. Normal exits destroy them.
+`wb clean` detects scoped resources whose run is terminal. It also detects
+Docker containers whose run is missing and paused E2B sandboxes whose run is
+missing. Removal still requires `--apply`. It does not remove images, build
+caches, E2B templates, runner credential volumes, or unrelated runtime
+resources.
+
+### Interactive client
+
+Running `wb`, `workbench`, or `wb run <name>` without a task opens the
+terminal client:
+
+```sh
+wb
+wb run project-core
+```
+
+The OpenCode interactive adapter currently supports multi-turn context,
+streaming, image input, cancellation, tool events, explicit permission decisions,
+native questions, and native mid-turn steering in local, Docker, and E2B
+runtimes. The Pi adapter supports multi-turn context, streaming, image input,
+steering at Pi's next legal model boundary, follow-up input, cancellation, and
+tool events. Pi does not provide native question or permission request
+protocols, or native MCP transport.
+
+Questions use one runner-neutral contract for choices, free-form answers, and
+multi-select prompts when the selected runner exposes a native question protocol.
+The terminal client pauses on a normalized question and returns the response
+through that native protocol. Question prompts are part of the normalized event
+stream. The raw answer control message remains transient and is not written as
+event data. A runner can still reference the answer in later assistant output.
+OpenCode can submit a batch of prompts and multi-select choices.
+
+While a response is active, submitting another message steers the current turn.
+The message stays visibly queued until the runner confirms delivery. `Ctrl+C`
+cancels an active turn without closing the session. For image-capable runners,
+drag a PNG, JPEG, GIF, or WebP file into the composer, or paste its local path.
+Attachment bytes remain transient and are not copied into normalized events.
+Image generation and normalized image output are not implemented yet.
+
+Type `/` or press `Ctrl+K` to browse local terminal commands. The initial command
+set covers Workbench, runtime, model, capability, session, and staged attachment
+details; attachment and transcript clearing; turn cancellation; themes; and clean
+exit.
+Commands are handled by Workbench and are never sent to the runner as prompts.
+`/theme` includes the Workbench default, Flexoki, GitHub, Catppuccin, and Night
+Owl themes. The adapted themes are attributed in `NOTICE`.
+
+Use `/rename <name>` to give the current session a durable display name. The
+name appears in `/resume`, the active chat header, and `wb ps` without changing
+the Workbench package, native runner session, or stable `wb_...` ID. When the
+terminal client exits a native resumable session, it restores the terminal and
+prints the stable ID with a copyable `wb resume <id>` command. It does not print
+a resume handoff for a failed start or a runner without native resume support.
+
+Use `/improve [feedback]` from an idle local Workbench session to open the
+official creator with bounded, normalized evidence from that session. Feedback
+is optional. With plain `/improve`, the creator diagnoses improvements from the
+conversation, tool activity, and run outcome, and you can steer it normally in
+the creator session. The creator edits the source package, not the immutable
+package already loaded by the active run. Run evidence is treated as untrusted
+data, and the authoring record captures the creator version and digest, source
+session, package digests, and changed files. The same flow is available outside
+the terminal client:
+
+```sh
+wb create --from wb_... \
+  --feedback "The migration path missed our rollback convention"
+```
+
+Changes apply only to future runs. New sessions remain pinned to the exact
+package content they started with and will refuse to resume if that source was
+modified in place.
+
+Session-capable runs use one background session worker whether they begin in the
+terminal client, foreground CLI output, or detached mode. Normalized
+events survive a client disconnect. Another terminal client can take control of
+the same live runner, while `wb attach` can observe it without taking control.
+Exiting the terminal client detaches it; an active turn and queued follow-ups
+continue, then the unattended worker closes while its native context remains
+resumable. User prompts, permission decisions, and question answers are transient
+control messages, not durable run history.
+
+Supported sessions can be reopened with `wb resume <session-or-run-id>` or from
+the TUI's `/resume` browser. The browser is scoped to the active workspace. On a
+bare invocation that is the current working directory; a directory selected in
+the TUI, an explicit `--dir`, or a resumed session uses its recorded workspace.
+An active session is reattached instead of duplicated. A closed session creates a new durable run
+linked to the same stable session. Workbench keeps a small private session index
+and a disposable transcript presentation cache. The selected runner remains the
+source of truth for model context: OpenCode resumes from its session database and
+Pi resumes from its session file. Docker mounts native state into each new
+container. E2B copies native state into each new sandbox and synchronizes it back
+on orderly cleanup. A session remains locked to its original
+Workbench version, runner, model, runtime, workspace, and workspace bindings.
+Docker credentials remain in the runner's private named volume. E2B runner
+credentials persist in private runtime storage independently of native session
+state. A Workbench that declares host Docker access must be explicitly
+reauthorized with `--allow-host-docker` for each resumed run.
+
+## Source and authorization boundaries
+
+Remote `list`, `validate`, and `smoke` operations are read-only. Public GitHub
+repositories require no credentials. Private repositories can use
+`GITHUB_TOKEN` or `GH_TOKEN`; inaccessible private repositories and missing
+repositories are reported without pretending GitHub distinguishes them.
+
+Environment values never belong in `workbench.yml`. A manifest declares their
+names and whether they are required; the person or host starting the run
+provides the values through inherited environment, `--env-file`, or `--env`.
+Dry runs, saved package metadata, and normalized events do not expose those
+values.
+
+For `runtime: local`, declared tools must exist on the host. For `runtime:
+docker` or `runtime: e2b`, declared tools and the runner must exist inside the
+resolved image; host installations do not satisfy the requirement. Only
+manifest-declared environment values, credential variables for the selected
+model provider, and the selected runner's private native credential store are
+bound into the execution environment. `E2B_API_KEY` remains host-only. Secret
+values do not appear in Docker command arguments or durable Workbench metadata.
+Preflight failure stops execution before model tokens are spent.
+
+## Specification and documentation
+
+- [SPEC.md](../SPEC.md) defines the draft-0 Workbench package.
+- [EXECUTION.md](EXECUTION.md) defines the draft-0 execution protocol.
+- [OUTCOMES.md](OUTCOMES.md) defines portable run results and explicit
+  apply, export, and recovery behavior.
+- [SOURCES.md](SOURCES.md) documents reference-engine source and
+  workspace behavior.
+- [RELEASING.md](RELEASING.md) documents the versioned binary release
+  process.
+- [`schemas/`](../schemas) contains the normative JSON Schemas.
+
+The specification and schemas are the interoperability contract. The CLI is a
+reference implementation, not the only permitted host.
+
+## Development
+
+The reference CLI uses strict TypeScript, Citty, and Bun. From a clean checkout:
+
+```sh
+bun install --frozen-lockfile
+bun run check
+bun run test:coverage
+bun run test:docker
+bun run test:docker:sessions
+bun run test:e2b
+bun run test:e2b:sessions
+bun run test:outcomes:harnesses
+bun run build
+```
+
+`test:docker` requires a running Docker daemon and network access to pull its
+pinned fixture image. It exercises the real container boundary; the default
+test suite uses deterministic provider doubles and does not require Docker.
+`test:docker:sessions` additionally runs real multi-turn and native-resume probes
+for OpenCode and Pi. It requires previously connected runner credentials and
+makes model-provider requests.
+
+`test:e2b` requires `E2B_API_KEY`, builds a real E2B template, exercises remote
+streaming, PTY input, pending workspace outcomes, original-sandbox result recovery,
+cross-sandbox credential persistence, and sandbox destruction.
+`test:e2b:sessions` additionally starts OpenCode in two fresh sandboxes and
+verifies native session resume. It requires a supported model-provider key and
+makes model-provider requests.
+
+`test:outcomes:harnesses` exercises OpenCode and Pi through the public CLI on
+Local, Docker, and E2B. It requires `OPENROUTER_API_KEY`, a running Docker daemon,
+and `E2B_API_KEY`. It makes real model-provider requests and verifies tool-created
+changes in primary and named workspaces, exact binary artifact bytes, link
+metadata, outcome publication before completion, keyless inspection and export,
+explicit E2B application, and native context resume. Set
+`WORKBENCH_OUTCOME_RUNTIMES=local`, `docker`, or `e2b` to run a subset. Docker
+fixtures build native-runner images by default; existing images containing the
+corresponding runner may be reused through
+`WORKBENCH_OUTCOME_DOCKER_OPENCODE_IMAGE` and
+`WORKBENCH_OUTCOME_DOCKER_PI_IMAGE`. `WORKBENCH_OUTCOME_CLI` may point at an
+isolated compiled binary to run the same checks against release packaging.
+These overrides are test-only.
+
+`bun run check` runs type checking, Biome, and the unit and integration suite.
+The compiled `dist/workbench` binary is self-contained and does not require Bun
+on the target machine. Distribution builds include the repository license and
+notice.
+
+Both `workbench` and `wb` are package binary names. Commits use Conventional
+Commits and are checked by the repository's `commit-msg` hook and CI.
+
+## Project policies
+
+- Use [GitHub Issues](https://github.com/pompeii-labs/workbenches/issues) for
+  reproducible bugs and focused feature proposals.
+- Use [GitHub Discussions](https://github.com/pompeii-labs/workbenches/discussions)
+  for authoring questions and open-ended design discussion.
+- Read [CONTRIBUTING.md](../CONTRIBUTING.md) before submitting a change.
+- Report vulnerabilities privately according to [SECURITY.md](../SECURITY.md).
+- Project decisions and maintainership are described in
+  [GOVERNANCE.md](../GOVERNANCE.md) and [MAINTAINERS.md](../MAINTAINERS.md).
+- Participation is governed by [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md).
+
+## License
+
+The source code, schemas, conformance fixtures, specification, and documentation
+in this repository are licensed under the [Apache License 2.0](../LICENSE) unless a
+file states otherwise. Workbench packages published by other projects are
+independent works and remain subject to the licenses chosen by their publishers.
