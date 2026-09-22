@@ -881,19 +881,13 @@ describe.serial('Workbench TUI', () => {
             { width: 100, height: 40 }
         );
         renderers.push(setup.renderer);
-        // Restored Markdown waits for asynchronous syntax parsing; streamed
-        // text can render immediately. Wait for both actual replies.
-        for (let attempt = 0; attempt < 80; attempt++) {
-            await setup.flush();
-            const frame = setup.captureCharFrame();
-            if (
-                frame.includes('Original report created') &&
-                frame.includes('Version two')
-            )
-                break;
-            await Bun.sleep(25);
-        }
-        const frame = setup.captureCharFrame();
+        const frame = await waitForFrame(
+            setup,
+            (current) =>
+                current.includes('Original report created') &&
+                current.includes('Version two'),
+            'restored transcript replies'
+        );
         expect(frame).toContain('Make the original report');
         expect(frame).toContain('Original report created');
         expect(frame).toContain('Revise that report');
@@ -1106,9 +1100,14 @@ describe.serial('Workbench TUI', () => {
         const prompt = findPrompt(setup.renderer.root);
         prompt.setText('/outcome');
         prompt.submit();
-        await Bun.sleep(20);
-        await setup.flush();
-        const frame = setup.captureCharFrame();
+        const frame = await waitForFrame(
+            setup,
+            (current) =>
+                current.includes('Run outcome') &&
+                current.includes('Report.html') &&
+                current.includes('Pull request'),
+            'durable outcome details'
+        );
         expect(frame).toContain('Run outcome');
         expect(frame).toContain('Report.html');
         expect(frame).toContain('Pull request');
@@ -2382,16 +2381,14 @@ describe.serial('Workbench TUI', () => {
             { width: 100, height: 32 }
         );
         renderers.push(setup.renderer);
-        let frame = setup.captureCharFrame();
-        for (
-            let attempt = 0;
-            attempt < 200 && !frame.includes('Findings');
-            attempt += 1
-        ) {
-            await Bun.sleep(10);
-            await setup.renderOnce();
-            frame = setup.captureCharFrame();
-        }
+        const frame = await waitForFrame(
+            setup,
+            (current) =>
+                current.includes('Findings') &&
+                current.includes('This is important.') &&
+                current.includes('const safe = true'),
+            'rendered assistant Markdown'
+        );
         expect(frame).toContain('Findings');
         expect(frame).toContain('workbench-creator');
         expect(frame).not.toContain('WORKBENCH');
@@ -2429,16 +2426,14 @@ describe.serial('Workbench TUI', () => {
             { width: 100, height: 24 }
         );
         renderers.push(setup.renderer);
-        let frame = setup.captureCharFrame();
-        for (
-            let attempt = 0;
-            attempt < 200 && !frame.includes('const safe = true');
-            attempt += 1
-        ) {
-            await Bun.sleep(10);
-            await setup.renderOnce();
-            frame = setup.captureCharFrame();
-        }
+        const frame = await waitForFrame(
+            setup,
+            (current) =>
+                current.includes('Findings') &&
+                current.includes('This is important.') &&
+                current.includes('const safe = true'),
+            'streaming assistant Markdown'
+        );
 
         expect(frame).toContain('Findings');
         expect(frame).toContain('This is important.');
@@ -2804,6 +2799,24 @@ function deferred<T>() {
         resolve = accepted;
     });
     return { promise, resolve };
+}
+
+async function waitForFrame(
+    setup: Awaited<ReturnType<typeof testRender>>,
+    matches: (frame: string) => boolean,
+    description: string,
+    timeoutMilliseconds = 2_000
+): Promise<string> {
+    const deadline = Date.now() + timeoutMilliseconds;
+    let frame = setup.captureCharFrame();
+    while (!matches(frame) && Date.now() < deadline) {
+        await setup.flush();
+        await setup.renderOnce();
+        await Bun.sleep(5);
+        frame = setup.captureCharFrame();
+    }
+    if (!matches(frame)) throw new Error(`Timed out waiting for ${description}`);
+    return frame;
 }
 
 function fakeHandle(
