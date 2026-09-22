@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workbench Subagents"
+  short_description: "Delegate bounded work through the wb CLI"
+  default_prompt: "Use $workbench-subagents to delegate this bounded task through the wb CLI."
