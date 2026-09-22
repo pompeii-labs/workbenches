@@ -327,6 +327,27 @@ describe('E2B private recovery record parser', () => {
         const valid = record();
         const identity = { id: valid.runId, scope: valid.scope };
         expect(parseE2BRecoveryRecord(valid, identity)).toEqual(valid);
+        const repository = {
+            ...valid,
+            snapshots: [
+                ...valid.snapshots,
+                {
+                    binding: {
+                        hostPath: '/project.git',
+                        runtimePath: '/workspace/.git',
+                        kind: 'git' as const,
+                        access: 'read-write' as const,
+                        excludedHostPaths: [],
+                    },
+                    excludedPaths: ['.workbench-state'],
+                    syncExcludedPaths: [],
+                    sourceIsDirectory: true,
+                    stateVersion: `sha256:${'b'.repeat(64)}`,
+                },
+            ],
+            persistedState: [1],
+        };
+        expect(parseE2BRecoveryRecord(repository, identity)).toEqual(repository);
         for (const invalid of [
             null,
             { ...valid, ownerPid: -1 },
@@ -352,6 +373,10 @@ describe('E2B private recovery record parser', () => {
                 binding: { ...snapshot.binding, kind: 'state' },
                 archive: undefined,
                 stateVersion: 'anything',
+            },
+            {
+                ...repository.snapshots[1],
+                stateVersion: undefined,
             },
         ])
             expect(() =>

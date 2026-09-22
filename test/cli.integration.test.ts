@@ -705,11 +705,13 @@ describe('CLI integration', () => {
     });
 
     test('reports argument errors without dumping command help', async () => {
-        for (const arguments_ of [['unknown-command'], ['run']]) {
+        for (const arguments_ of [['unknown-command'], ['run'], ['--api-url']]) {
             const result = await executeCli(arguments_);
             expect(result.code).toBe(1);
             expect(result.stderr).toStartWith('error: ');
             expect(result.stderr).not.toContain('USAGE');
+            expect(result.stderr).not.toContain('Bun v');
+            expect(result.stderr).not.toContain('at extractApiUrl');
             expect(result.stdout).not.toContain('USAGE');
         }
     });
