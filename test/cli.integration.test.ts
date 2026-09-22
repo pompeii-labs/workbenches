@@ -148,35 +148,61 @@ describe('CLI integration', () => {
         ).toBeUndefined();
     }, 20_000);
 
-    for (const authoring of ['invalid', 'outside'] as const)
-        test(`headless authoring fails verification for ${authoring} candidates`, async () => {
-            const root = await temporaryDirectory('headless-invalid-');
-            const home = await temporaryDirectory('headless-invalid-home-');
-            await seedCreator(home, root);
-            const bin = await fakeBin([], { authoring });
-            const result = await executeCli(
-                [
-                    'create',
-                    'core',
-                    '--task',
-                    'Build the expert',
-                    '--json',
-                    '--api-url',
-                    'http://127.0.0.1:1',
-                ],
-                { PATH: `${bin}:${process.env.PATH}`, WORKBENCH_HOME: home },
-                root
-            );
-            expect(result.code).toBe(1);
-            expect(JSON.parse(result.stdout)).toMatchObject({
-                state: 'failed',
-                run_state: 'completed',
-                authoring: { status: 'failed' },
-            });
-            expect(JSON.parse(result.stdout).error).toContain(
-                authoring === 'outside' ? 'outside' : 'invalid'
-            );
+    test('headless authoring fails verification for an invalid candidate', async () => {
+        const root = await temporaryDirectory('headless-invalid-');
+        const home = await temporaryDirectory('headless-invalid-home-');
+        await seedCreator(home, root);
+        const bin = await fakeBin([], { authoring: 'invalid' });
+        const result = await executeCli(
+            [
+                'create',
+                'core',
+                '--task',
+                'Build the expert',
+                '--json',
+                '--api-url',
+                'http://127.0.0.1:1',
+            ],
+            { PATH: `${bin}:${process.env.PATH}`, WORKBENCH_HOME: home },
+            root
+        );
+        expect(result.code).toBe(1);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+            state: 'failed',
+            run_state: 'completed',
+            authoring: { status: 'failed' },
         });
+        expect(JSON.parse(result.stdout).error).toContain('invalid');
+    });
+
+    test('headless authoring ignores unrelated workspace changes', async () => {
+        const root = await temporaryDirectory('headless-scoped-');
+        const home = await temporaryDirectory('headless-scoped-home-');
+        await seedCreator(home, root);
+        const bin = await fakeBin([], { authoring: 'outside' });
+        const result = await executeCli(
+            [
+                'create',
+                'core',
+                '--task',
+                'Build the expert',
+                '--json',
+                '--api-url',
+                'http://127.0.0.1:1',
+            ],
+            { PATH: `${bin}:${process.env.PATH}`, WORKBENCH_HOME: home },
+            root
+        );
+        expect(result.code).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+            state: 'completed',
+            authoring: { status: 'completed' },
+        });
+        expect(await readFile(join(root, 'unrequested.txt'), 'utf8')).toBe('outside');
+        expect(JSON.parse(result.stdout).authoring.result.changed_files).not.toContain(
+            'unrequested.txt'
+        );
+    });
 
     test('supervises detached native turns with receipts, rejection, queue, and fresh continuation', async () => {
         const fixture = await createFixture();

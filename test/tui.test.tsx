@@ -2613,7 +2613,9 @@ describe.serial('Workbench TUI', () => {
         expect(frame).not.toContain('2 actions');
     });
 
-    test('renders a normalized runner question with choices', async () => {
+    test('renders multi-question progress without overlapping a long title', async () => {
+        const longHeader =
+            'The public site says Pompeii builds production agent infrastructure and open-sources what should exist for everyone';
         const setup = await testRender(
             () => (
                 <ThemeProvider controller={themes}>
@@ -2622,7 +2624,7 @@ describe.serial('Workbench TUI', () => {
                             id: 'question-1',
                             questions: [
                                 {
-                                    header: 'Environment',
+                                    header: longHeader,
                                     question: 'Where should this deploy?',
                                     options: [
                                         {
@@ -2634,6 +2636,13 @@ describe.serial('Workbench TUI', () => {
                                             description: 'Test it first',
                                         },
                                     ],
+                                    multiple: false,
+                                    custom: false,
+                                },
+                                {
+                                    header: 'Confirmation',
+                                    question: 'Continue?',
+                                    options: [{ label: 'Yes' }],
                                     multiple: false,
                                     custom: false,
                                 },
@@ -2649,7 +2658,9 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
 
         const frame = setup.captureCharFrame();
-        expect(frame).toContain('? Environment');
+        expect(frame).toContain('? The public site says Pompeii builds');
+        expect(frame).not.toContain(longHeader);
+        expect(frame).toContain('1/2');
         expect(frame).toContain('Where should this deploy?');
         expect(frame).toContain('Production');
         expect(frame).toContain('Deploy for customers');

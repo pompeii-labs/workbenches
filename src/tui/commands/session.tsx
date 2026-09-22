@@ -255,9 +255,9 @@ export class SessionCommands {
             ),
             this.#command(
                 'quit',
-                this.options.authoring ? 'Finish authoring' : 'Quit',
+                'Quit',
                 this.options.authoring
-                    ? 'Validate the candidate, close the creator, and exit'
+                    ? 'Validate current changes and exit'
                     : 'Detach this terminal and exit',
                 'Session',
                 () => this.options.actions.exit(),

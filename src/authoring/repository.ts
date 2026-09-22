@@ -6,14 +6,17 @@ export interface RepositoryFileState {
     digest: string;
 }
 
-const fallbackExcludedDirectories = new Set(['.git', 'node_modules']);
+const excludedPackageDirectories = new Set(['.git', 'node_modules']);
 
 export class AuthoringRepository {
     async snapshot(repository: string): Promise<RepositoryFileState[]> {
-        const gitPaths = await this.gitFiles(repository);
-        const paths = gitPaths
-            ? [...new Set([...gitPaths, ...(await this.workbenchFiles(repository))])]
-            : await this.files(repository);
+        // Authoring verification owns the Workbench collection, not the caller's
+        // entire workspace. The creator may inspect a broad workspace, including an
+        // umbrella directory containing several repositories, while its durable
+        // output remains scoped to .workbenches. Recursively hashing the workspace
+        // cannot attribute concurrent edits to the creator and becomes prohibitively
+        // expensive for large directory trees.
+        const paths = await this.workbenchFiles(repository);
         const states: RepositoryFileState[] = [];
         let index = 0;
         const workers = Array.from({ length: Math.min(paths.length, 16) }, async () => {
@@ -47,41 +50,17 @@ export class AuthoringRepository {
     }
 
     changes(before: RepositoryFileState[], after: RepositoryFileState[]): string[] {
-        const previous = new Map(before.map((file) => [file.path, file.digest]));
-        const current = new Map(after.map((file) => [file.path, file.digest]));
+        const inCollection = (file: RepositoryFileState) =>
+            file.path.startsWith('.workbenches/');
+        const previous = new Map(
+            before.filter(inCollection).map((file) => [file.path, file.digest])
+        );
+        const current = new Map(
+            after.filter(inCollection).map((file) => [file.path, file.digest])
+        );
         return [...new Set([...previous.keys(), ...current.keys()])]
             .filter((path) => previous.get(path) !== current.get(path))
             .toSorted();
-    }
-
-    private async gitFiles(repository: string): Promise<string[] | undefined> {
-        try {
-            const child = Bun.spawn(
-                [
-                    'git',
-                    '-C',
-                    repository,
-                    'ls-files',
-                    '--cached',
-                    '--others',
-                    '--exclude-standard',
-                    '-z',
-                    '--',
-                    '.',
-                ],
-                { stdout: 'pipe', stderr: 'ignore' }
-            );
-            const [exitCode, output] = await Promise.all([
-                child.exited,
-                new Response(child.stdout).text(),
-            ]);
-            if (exitCode !== 0) return undefined;
-            return output
-                .split('\0')
-                .filter((path) => path.length > 0 && !path.startsWith('../'));
-        } catch {
-            return undefined;
-        }
     }
 
     private async files(directory: string, relative = ''): Promise<string[]> {
@@ -90,7 +69,7 @@ export class AuthoringRepository {
         });
         const paths: string[] = [];
         for (const entry of entries) {
-            if (entry.isDirectory() && fallbackExcludedDirectories.has(entry.name)) {
+            if (entry.isDirectory() && excludedPackageDirectories.has(entry.name)) {
                 continue;
             }
             const path = relative ? `${relative}/${entry.name}` : entry.name;
