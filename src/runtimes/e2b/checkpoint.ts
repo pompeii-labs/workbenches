@@ -39,7 +39,7 @@ export function parseE2BRecoveryRecord(
     const persistedState = array(record.persistedState, 256).map((value) => {
         const index = snapshotIndex(value, snapshots);
         const kind = snapshots[index]?.binding.kind;
-        if (kind !== 'state' && kind !== 'credentials')
+        if (kind !== 'state' && kind !== 'credentials' && kind !== 'git')
             throw new Error('Invalid E2B outcome recovery native state index');
         return index;
     });
@@ -79,6 +79,7 @@ function parseSnapshot(value: unknown): E2BRecoverySnapshot {
         'credentials',
         'state',
         'outcome',
+        'git',
     ] as const);
     const workspace = raw.workspace === undefined ? undefined : string(raw.workspace);
     if (
@@ -106,7 +107,7 @@ function parseSnapshot(value: unknown): E2BRecoverySnapshot {
         throw new Error('Invalid E2B outcome recovery workspace archive');
     const stateVersion =
         record.stateVersion === undefined ? undefined : string(record.stateVersion);
-    if (kind === 'state' || kind === 'credentials') {
+    if (kind === 'state' || kind === 'credentials' || kind === 'git') {
         if (
             !stateVersion ||
             !/^(?:sha256:[a-f0-9]{64}|generation:[a-f0-9-]{36})$/.test(stateVersion)

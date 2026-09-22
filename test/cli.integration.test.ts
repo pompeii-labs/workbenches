@@ -705,11 +705,13 @@ describe('CLI integration', () => {
     });
 
     test('reports argument errors without dumping command help', async () => {
-        for (const arguments_ of [['unknown-command'], ['run']]) {
+        for (const arguments_ of [['unknown-command'], ['run'], ['--api-url']]) {
             const result = await executeCli(arguments_);
             expect(result.code).toBe(1);
             expect(result.stderr).toStartWith('error: ');
             expect(result.stderr).not.toContain('USAGE');
+            expect(result.stderr).not.toContain('Bun v');
+            expect(result.stderr).not.toContain('at extractApiUrl');
             expect(result.stdout).not.toContain('USAGE');
         }
     });
@@ -777,6 +779,82 @@ describe('CLI integration', () => {
             expect(result.stderr).toContain(`Unknown run option: ${option}`);
             await expect(stat(record)).rejects.toThrow();
         }
+    });
+
+    test('reads run tasks from a file without shell interpolation', async () => {
+        const fixture = await createFixture();
+        const record = join(fixture.root, 'runner');
+        const brief = join(fixture.root, 'brief.md');
+        const bin = await fakeBin();
+        await writeFile(brief, 'inspect the project\nwithout changing files\n');
+
+        const result = await executeCli(
+            ['run', fixture.packageDirectory, '--task-file', brief],
+            {
+                PATH: `${bin}:${process.env.PATH}`,
+                WB_TEST_RECORD: record,
+            },
+            fixture.root
+        );
+
+        expect(result.code).toBe(0);
+        expect(await readFile(`${record}.args`, 'utf8')).toContain(
+            'inspect the project\nwithout changing files\n'
+        );
+    });
+
+    test('reads run tasks from explicit stdin', async () => {
+        const fixture = await createFixture();
+        const record = join(fixture.root, 'runner');
+        const bin = await fakeBin();
+        const home = await temporaryDirectory('workbench-run-stdin-home-');
+        const child = await launchCli(
+            ['run', fixture.packageDirectory, '--stdin'],
+            {
+                PATH: `${bin}:${process.env.PATH}`,
+                WB_TEST_RECORD: record,
+                WORKBENCH_HOME: home,
+            },
+            fixture.root,
+            'pipe'
+        );
+        if (!child.stdin) throw new Error('Expected piped stdin');
+        child.stdin.write('inspect from stdin\n');
+        child.stdin.end();
+
+        const [code, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stderr).text(),
+        ]);
+        expect({ code, stderr }).toEqual({ code: 0, stderr: '' });
+        expect(await readFile(`${record}.args`, 'utf8')).toContain(
+            'inspect from stdin\n'
+        );
+    });
+
+    test('rejects multiple explicit run task sources', async () => {
+        const fixture = await createFixture();
+        const brief = join(fixture.root, 'brief.md');
+        const bin = await fakeBin();
+        await writeFile(brief, 'inspect from file');
+
+        const result = await executeCli(
+            [
+                'run',
+                fixture.packageDirectory,
+                '--task',
+                'inspect from argument',
+                '--task-file',
+                brief,
+            ],
+            { PATH: `${bin}:${process.env.PATH}` },
+            fixture.root
+        );
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(
+            'Pass exactly one text, file, or --stdin input'
+        );
     });
 
     test('runs the translated request through the selected local runner', async () => {
@@ -2027,7 +2105,8 @@ async function seedCreator(home: string, workspace: string): Promise<void> {
 async function launchCli(
     arguments_: string[],
     environment: Record<string, string | undefined>,
-    cwd = projectDirectory
+    cwd = projectDirectory,
+    stdin: 'ignore' | 'pipe' = 'ignore'
 ) {
     const home = environment.WORKBENCH_HOME;
     if (!home) throw new Error('CLI integration requires a Workbench home');
@@ -2040,6 +2119,7 @@ async function launchCli(
             ...environment,
             WORKBENCH_HOME: home,
         },
+        stdin,
         stdout: 'pipe',
         stderr: 'pipe',
     });
