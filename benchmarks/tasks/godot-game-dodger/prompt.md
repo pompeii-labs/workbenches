@@ -1,0 +1,1 @@
+Make a small Godot game called Meteor Dash. You steer a little ship left and right and dodge falling meteors, and it gets faster the longer you last. Show the score. I want to put it on my site, so leave me a web build I can upload.

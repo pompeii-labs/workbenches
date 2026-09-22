@@ -1,0 +1,4 @@
+TCREATE announcements id UUID PRIMARY KEY DEFAULT uuid(), created_at TIMESTAMP DEFAULT now(), team_id UUID REFERENCES teams(id) ON DELETE CASCADE, author_id STR REFERENCES auth.users(id) ON DELETE CASCADE, title STR NOT NULL, body STR NOT NULL
+
+# Team members can read and write their team's announcements
+GRANT read, write ON announcements WHERE team_id IN ( SELECT team_id FROM members WHERE user_id = auth.uid() )

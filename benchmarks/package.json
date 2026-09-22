@@ -1,0 +1,17 @@
+{
+    "name": "workbenchmark",
+    "private": true,
+    "type": "module",
+    "bin": {
+        "workbenchmark": "./workbenchmark.ts"
+    },
+    "scripts": {
+        "check": "bun workbenchmark.ts check",
+        "test": "bun test lib",
+        "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "@types/bun": "^1.4.2",
+        "typescript": "5.9.2"
+    }
+}

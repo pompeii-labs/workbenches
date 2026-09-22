@@ -1,0 +1,39 @@
+{
+    "version": 1,
+    "id": "perf-search",
+    "workbench": "web-performance",
+    "title": "Make product search fast as the catalog grows",
+    "fixture": {
+        "kind": "dir",
+        "path": "fixture"
+    },
+    "timeoutMinutes": 30,
+    "setup": "./checks/setup-seed.sh",
+    "boot": "bun install --silent",
+    "gates": [
+        {
+            "id": "speed",
+            "title": "Search is dramatically faster than baseline at 10x catalog scale",
+            "run": "./checks/gate-speed.sh",
+            "timeoutSeconds": 600
+        },
+        {
+            "id": "content",
+            "title": "Search's default page begins with the same results as baseline",
+            "run": "./checks/gate-content.sh",
+            "timeoutSeconds": 180
+        },
+        {
+            "id": "memory",
+            "title": "Server memory stays bounded during a search burst at 10x scale",
+            "run": "./checks/gate-memory.sh",
+            "timeoutSeconds": 300
+        },
+        {
+            "id": "typecheck",
+            "title": "bun run check passes",
+            "run": "./checks/gate-check.sh",
+            "timeoutSeconds": 120
+        }
+    ]
+}

@@ -1,0 +1,33 @@
+{
+    "version": 1,
+    "id": "migration-bigint",
+    "workbench": "zero-downtime-migrations",
+    "title": "Widen events.user_id to bigint on a live table",
+    "fixture": {
+        "kind": "dir",
+        "path": "fixture"
+    },
+    "timeoutMinutes": 30,
+    "setup": "./checks/setup-seed.sh",
+    "boot": "bun install --silent",
+    "gates": [
+        {
+            "id": "write-safety",
+            "title": "Widening a big, live events table does not stall or fail writes, and loses no rows",
+            "run": "./checks/gate-write-safety.sh",
+            "timeoutSeconds": 600
+        },
+        {
+            "id": "functional",
+            "title": "Column is really bigint and holds values above the old int range",
+            "run": "./checks/gate-functional.sh",
+            "timeoutSeconds": 180
+        },
+        {
+            "id": "typecheck",
+            "title": "bun run check passes",
+            "run": "./checks/gate-check.sh",
+            "timeoutSeconds": 120
+        }
+    ]
+}

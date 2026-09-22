@@ -1,0 +1,23 @@
+TCREATE profiles id STR REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY, created_at TIMESTAMP, username STR UNIQUE, full_name STR
+GRANT read, write ON profiles WHERE id = auth.uid()
+
+TCREATE teams id UUID PRIMARY KEY DEFAULT uuid(), created_at TIMESTAMP DEFAULT now(), slug STR UNIQUE NOT NULL, name STR NOT NULL, created_by STR REFERENCES auth.users(id)
+
+TCREATE members id UUID PRIMARY KEY DEFAULT uuid(), role STR, created_at TIMESTAMP DEFAULT now(), team_id UUID REFERENCES teams(id) ON DELETE CASCADE, user_id STR REFERENCES auth.users(id) ON DELETE CASCADE
+
+# Users can see teams they are a member of
+GRANT read ON teams WHERE id IN ( SELECT team_id FROM members WHERE user_id = auth.uid() )
+
+# Users can see other members of teams they are a member of
+GRANT read ON members WHERE team_id IN ( SELECT team_id FROM members WHERE user_id = auth.uid() )
+
+# Users can see the profiles of members they can see
+GRANT read ON profiles WHERE id IN ( SELECT user_id FROM members WHERE team_id IN ( SELECT team_id FROM members WHERE user_id = auth.uid() ) )
+
+TCREATE invites id UUID PRIMARY KEY DEFAULT uuid(), role STR, team_id UUID REFERENCES teams(id) ON DELETE CASCADE, email STR
+
+# Users can see the invites of teams they are a member of
+GRANT read ON invites WHERE team_id IN ( SELECT team_id FROM members WHERE user_id = auth.uid() )
+
+# Users can see invites associated with their email address
+GRANT read ON invites WHERE email = auth.email

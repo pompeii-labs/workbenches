@@ -1,0 +1,8 @@
+{
+    "name": "lux-baseline",
+    "private": true,
+    "type": "module",
+    "workspaces": [
+        "apps/*"
+    ]
+}

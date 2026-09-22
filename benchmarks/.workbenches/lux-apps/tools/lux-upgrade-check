@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Apply this project's pending migrations against a throwaway COPY of the
+# current local data, and report what would happen, without touching the
+# real running engine or its data. Requires the local engine to be up
+# (`lux-up`).
+set -euo pipefail
+
+if [ ! -d lux ]; then
+    echo "no lux/ directory here." >&2
+    exit 1
+fi
+
+. "$(dirname "$(command -v lux-upgrade-check)")/lux-net-preflight.sh"
+lux_net_preflight lux-upgrade-check
+
+if ! lux status >/dev/null 2>&1; then
+    echo "local engine is not running. Run 'lux-up' first." >&2
+    exit 1
+fi
+
+PROFILE=lux/.env-profiles/local.env
+[ -f "$PROFILE" ] || { echo "no local profile at $PROFILE; run 'lux-up' first." >&2; exit 1; }
+PASSWORD=$(grep -E '^LUX_SECRET_KEY=' "$PROFILE" | cut -d= -f2-)
+[ -n "$PASSWORD" ] || { echo "could not read the local secret key from $PROFILE" >&2; exit 1; }
+DIRECT_URL=$(grep -E '^LUX_DIRECT_URL=' "$PROFILE" | cut -d= -f2-)
+SRC_HOST=$(echo "$DIRECT_URL" | sed -E 's#^luxs?://[^@]*@([^:/]+):([0-9]+).*#\1#')
+SRC_PORT=$(echo "$DIRECT_URL" | sed -E 's#^luxs?://[^@]*@([^:/]+):([0-9]+).*#\2#')
+
+SRC_VOL=$(docker volume ls --format '{{.Name}}' | grep -E "^lux-$(basename "$PWD")-[0-9a-f]+-data$" | head -1)
+[ -n "$SRC_VOL" ] || { echo "could not find this project's local data volume." >&2; exit 1; }
+
+# Lux keeps hot data in memory and tiers cold data to disk, so a raw volume
+# copy can miss recent writes. SAVE flushes the real engine's own state to
+# disk first; it does not stop or otherwise disrupt it.
+lux exec local --host "$SRC_HOST" --port "$SRC_PORT" --password "$PASSWORD" SAVE >/dev/null
+
+SCRATCH_VOL="lux-upgrade-check-$$"
+SCRATCH_CONTAINER="lux-upgrade-check-$$"
+cleanup() {
+    docker rm -f "$SCRATCH_CONTAINER" >/dev/null 2>&1 || true
+    docker volume rm "$SCRATCH_VOL" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+docker volume create "$SCRATCH_VOL" >/dev/null
+docker run --rm -v "$SRC_VOL":/from:ro -v "$SCRATCH_VOL":/to alpine sh -c 'cp -a /from/. /to/' >/dev/null
+
+docker run -d --name "$SCRATCH_CONTAINER" -p 0:5890 -p 0:6379 -v "$SCRATCH_VOL":/data \
+    -e LUX_AUTH_ENABLED=1 -e "LUX_PASSWORD=$PASSWORD" -e LUX_HTTP_PORT=5890 -e LUX_BIND_HOST=0.0.0.0 \
+    -e LUX_DATA_DIR=/data ghcr.io/lux-db/lux:latest >/dev/null
+
+RESP_PORT=$(docker port "$SCRATCH_CONTAINER" 6379/tcp | head -1 | cut -d: -f2)
+for _ in $(seq 30); do
+    lux migrate status --host 127.0.0.1 --port "$RESP_PORT" --password "$PASSWORD" >/dev/null 2>&1 && break
+    sleep 1
+done
+
+echo "Pending on a copy of the current data:"
+lux migrate status --host 127.0.0.1 --port "$RESP_PORT" --password "$PASSWORD" || true
+echo
+echo "Applying..."
+if lux migrate run --host 127.0.0.1 --port "$RESP_PORT" --password "$PASSWORD"; then
+    echo "OK: pending migrations applied cleanly against a copy of the real data."
+else
+    echo "FAILED: see above. The real running engine was not touched."
+fi

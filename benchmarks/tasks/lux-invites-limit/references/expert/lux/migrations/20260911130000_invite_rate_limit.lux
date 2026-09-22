@@ -1,0 +1,3 @@
+# One row per invite created, used to count invites per team within a
+# trailing window. No grant: only the server (secret key) touches this table.
+TCREATE invite_events id UUID PRIMARY KEY DEFAULT uuid(), team_id UUID REFERENCES teams(id) ON DELETE CASCADE, created_at TIMESTAMP DEFAULT now()

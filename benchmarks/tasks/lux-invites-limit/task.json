@@ -1,0 +1,34 @@
+{
+    "version": 1,
+    "id": "lux-invites-limit",
+    "workbench": "lux-apps",
+    "title": "Cap invites per team",
+    "fixture": {
+        "kind": "git",
+        "url": "https://github.com/pompeii-labs/lux-starter",
+        "commit": "2f8b050fc3a2f39e680bf8d6013e9f29e314c636",
+        "overlay": "overlay"
+    },
+    "preloadImages": [
+        "ghcr.io/lux-db/lux:latest",
+        "ghcr.io/lux-db/studio:latest"
+    ],
+    "timeoutMinutes": 40,
+    "submissionExcludes": [".env.local", "lux/.env-profiles", "lux/.lux-local.json"],
+    "setup": "bash ./checks/seed.sh",
+    "boot": "bun install && printf 'PUBLIC_LUX_URL=http://localhost:5890\\nPUBLIC_LUX_PUBLISHABLE_KEY=lux_pub_placeholder\\nPUBLIC_API_URL=http://localhost:3000\\n' > apps/web/.env",
+    "gates": [
+        {
+            "id": "check",
+            "title": "bun run check passes",
+            "run": "bun run check",
+            "timeoutSeconds": 600
+        },
+        {
+            "id": "rate-limit",
+            "title": "Invite rate limit is enforced, durable, and per-team",
+            "run": "bash ./checks/probe.sh",
+            "timeoutSeconds": 900
+        }
+    ]
+}
