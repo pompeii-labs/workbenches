@@ -708,8 +708,8 @@ attached after completion.
 
 Attach is read-only and never starts model work. `wb ps` lists active sessions
 and completed sessions with resumable native context; `wb ps --all` also includes
-terminal one-shot history. `wb kill [id]` cooperatively cancels the active run in
-a session; without an ID it selects the latest active session. The worker observes
+terminal one-shot history. `wb kill <id>` cooperatively cancels the active run in
+the named session. The worker observes
 a private cancellation request, terminates the runner child, emits
 `run.cancelled`, and then marks the durable run cancelled. Session metadata and
 native resumable context remain available.

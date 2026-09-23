@@ -1650,7 +1650,7 @@ describe('CLI integration', () => {
         expect(new Set(events.map((event) => event.run_id)).size).toBe(1);
     }, 20_000);
 
-    test('stops the active run in the latest session and records a terminal event', async () => {
+    test('requires a session ID to stop an active run and records a terminal event', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-kill-');
         const bin = await fakeBin([], { block: true });
@@ -1666,7 +1666,13 @@ describe('CLI integration', () => {
         const id = dispatched.stdout.trim();
         expect(id).toMatch(/^wb_[a-z0-9]{20,64}$/);
 
-        const killed = await executeCli(['kill'], environment);
+        const missingId = await executeCli(['kill'], environment);
+        expect(missingId.code).toBe(1);
+        expect(missingId.stderr).toContain(
+            'Missing required positional argument: SESSION'
+        );
+
+        const killed = await executeCli(['kill', id], environment);
         expect(killed.code).toBe(0);
         expect(killed.stdout).toBe(`cancelled\t${id}\n`);
 

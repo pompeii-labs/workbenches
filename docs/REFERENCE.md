@@ -733,7 +733,6 @@ wb attach wb_... --json
 wb ps                  # active and resumable sessions
 wb ps --all            # all session history
 wb kill wb_...
-wb kill                # latest active session
 wb resume wb_...       # open or attach the terminal client
 wb resume wb_... "Review the latest change"
 wb resume wb_... --task "Run the checks" --detach
