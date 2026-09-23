@@ -1674,6 +1674,7 @@ describe('CLI integration', () => {
 
         const missingId = await executeCli(['kill'], environment);
         expect(missingId.code).toBe(1);
+        expect(missingId.stdout).toContain('workbench kill [OPTIONS] <SESSION>');
         expect(missingId.stderr).toContain(
             'Missing required positional argument: SESSION'
         );

@@ -108,14 +108,16 @@ if (import.meta.main) {
             ? `${colors.red('✗')} ${colors.red(message)}`
             : `error: ${message}`;
     console.error = (value?: unknown, ...optional: unknown[]) => {
-        if (value instanceof Error) {
-            process.stderr.write(`${formatError(value.message)}\n`);
-            return;
-        }
-        if (typeof value === 'string' && optional.length === 0) {
-            process.stderr.write(
-                `${formatError(value.startsWith('error: ') ? value.slice(7) : value)}\n`
-            );
+        const message =
+            value instanceof Error
+                ? value.message
+                : typeof value === 'string' && optional.length === 0
+                  ? value.startsWith('error: ')
+                      ? value.slice(7)
+                      : value
+                  : undefined;
+        if (message !== undefined) {
+            process.stderr.write(`${formatError(message)}\n`);
             return;
         }
         defaultConsoleError(value, ...optional);
@@ -148,7 +150,6 @@ if (import.meta.main) {
             await runMain(workbenchCommand, {
                 rawArgs: invocation.args,
                 showUsage: async (command, parent) => {
-                    if (!explicitHelp) return;
                     process.stdout.write(
                         `${commandUsage(await renderUsage(command, parent))}\n\n`
                     );
