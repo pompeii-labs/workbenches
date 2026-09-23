@@ -82,7 +82,7 @@ export async function renderWorkbenchTui(
         clearOnShutdown: true,
         targetFps: 30,
         maxFps: 60,
-        useMouse: true,
+        useMouse: false,
         backgroundColor: themes.current.background,
         onDestroy: finish,
     });
