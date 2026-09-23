@@ -138,7 +138,9 @@ if (import.meta.main) {
             rawArgs: invocation.args,
             showUsage: async (command, parent) => {
                 if (!explicitHelp) return;
-                process.stdout.write(`${await renderUsage(command, parent)}\n\n`);
+                process.stdout.write(
+                    `${commandUsage(await renderUsage(command, parent))}\n\n`
+                );
             },
         });
     } catch (error) {
@@ -151,6 +153,11 @@ if (import.meta.main) {
     } finally {
         console.error = defaultConsoleError;
     }
+}
+
+/** Citty renders the command summary in dim gray, which is hard to read in some terminals. */
+function commandUsage(usage: string): string {
+    return usage.replace(/^\x1b\[90m(.+?)\x1b\[39m/, '$1');
 }
 
 function usesModelCatalog(args: string[], bare: boolean): boolean {
