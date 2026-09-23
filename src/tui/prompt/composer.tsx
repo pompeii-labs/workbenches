@@ -1,6 +1,7 @@
 import {
     decodePasteBytes,
     type PasteEvent,
+    type ScrollBoxRenderable,
     type TextareaRenderable,
 } from '@opentui/core';
 import { useKeyboard } from '@opentui/solid';
@@ -40,6 +41,7 @@ export function Composer(props: ComposerProps) {
     const [value, setValue] = createSignal('');
     const [selected, setSelected] = createSignal(0);
     let input: TextareaRenderable | undefined;
+    let suggestionScroll: ScrollBoxRenderable | undefined;
     let focusTimer: ReturnType<typeof setTimeout> | undefined;
 
     onCleanup(() => {
@@ -76,7 +78,7 @@ export function Composer(props: ComposerProps) {
         const query = commandQuery();
         if (query === undefined) return [];
         const commands = props.commands.find(query);
-        return (query ? commands : featureCommands(commands)).slice(0, 8);
+        return query ? commands : featureCommands(commands);
     });
     const suggestionNameWidth = createMemo(() =>
         Math.max(12, ...suggestions().map((command) => command.name.length + 3))
@@ -133,6 +135,16 @@ export function Composer(props: ComposerProps) {
         void props.history.append(text);
         void props.onSubmit(text);
     };
+    const moveSuggestion = (direction: 1 | -1) => {
+        const commands = suggestions();
+        if (commands.length === 0) return;
+        const next = (selected() + direction + commands.length) % commands.length;
+        setSelected(next);
+        const command = commands[next];
+        if (command) {
+            suggestionScroll?.scrollChildIntoView(suggestionId(command));
+        }
+    };
     const moveHistory = (direction: 1 | -1) => {
         if (!input || input.lineCount > 1) return false;
         const next = props.history.move(direction, input.plainText);
@@ -184,8 +196,11 @@ export function Composer(props: ComposerProps) {
                 </box>
             </Show>
             <Show when={suggestions().length > 0}>
-                <box
-                    flexDirection="column"
+                <scrollbox
+                    ref={(value) => {
+                        suggestionScroll = value;
+                    }}
+                    maxHeight={8}
                     marginBottom={1}
                     width="100%"
                     backgroundColor={theme.backgroundPanel}
@@ -195,6 +210,7 @@ export function Composer(props: ComposerProps) {
                     <For each={suggestions()}>
                         {(command, index) => (
                             <box
+                                id={suggestionId(command)}
                                 flexDirection="row"
                                 paddingX={1}
                                 backgroundColor={
@@ -229,7 +245,7 @@ export function Composer(props: ComposerProps) {
                             </box>
                         )}
                     </For>
-                </box>
+                </scrollbox>
             </Show>
             <box
                 width="100%"
@@ -273,6 +289,7 @@ export function Composer(props: ComposerProps) {
                     onContentChange={() => {
                         setValue(input?.plainText ?? '');
                         setSelected(0);
+                        suggestionScroll?.scrollTo(0);
                         props.history.reset();
                     }}
                     onPaste={(event: PasteEvent) => {
@@ -302,18 +319,12 @@ export function Composer(props: ComposerProps) {
                         if (suggestions().length > 0) {
                             if (key.name === 'up') {
                                 key.preventDefault();
-                                setSelected(
-                                    (current) =>
-                                        (current - 1 + suggestions().length) %
-                                        suggestions().length
-                                );
+                                moveSuggestion(-1);
                                 return;
                             }
                             if (key.name === 'down') {
                                 key.preventDefault();
-                                setSelected(
-                                    (current) => (current + 1) % suggestions().length
-                                );
+                                moveSuggestion(1);
                                 return;
                             }
                             if (key.name === 'tab') {
@@ -346,7 +357,6 @@ export function Composer(props: ComposerProps) {
 
 const featuredCommands = [
     'resume',
-    'home',
     'rename',
     'improve',
     'clear',
@@ -354,6 +364,10 @@ const featuredCommands = [
     'theme',
     'help',
 ];
+
+function suggestionId(command: TuiCommand): string {
+    return `composer-command-${command.name}`;
+}
 
 function featureCommands(commands: TuiCommand[]): TuiCommand[] {
     const priorities = new Map(
