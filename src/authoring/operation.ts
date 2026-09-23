@@ -300,20 +300,20 @@ export class AuthoringOperation {
                 : selectors.length === 1
                   ? `.workbenches/${selectors[0]}`
                   : 'the created Workbench package';
-            return `Authoring changed files outside the requested ${boundary} package: ${outside.join(', ')}`;
+            return `Authoring changed files outside the requested ${boundary} package: ${summarizePaths(outside)}`;
         }
         const changedSelectors = new Set(
             changedFiles
                 .filter((path) => path.startsWith('.workbenches/'))
                 .map((path) => path.split('/')[1])
-                .filter(Boolean)
+                .filter((selector): selector is string => Boolean(selector))
         );
         if (this.record.target_selector) {
             const unexpected = [...changedSelectors].filter(
                 (selector) => selector !== this.record.target_selector
             );
             if (unexpected.length > 0) {
-                return `Authoring changed Workbench ${unexpected.join(', ')} outside the requested ${this.record.target_selector} package`;
+                return `Authoring changed Workbench ${summarizePaths(unexpected)} outside the requested ${this.record.target_selector} package`;
             }
         } else if (this.record.kind === 'create') {
             const existing = [...changedSelectors].filter((selector) =>
@@ -571,4 +571,10 @@ export class AuthoringOperation {
         await rename(temporary, this.#path);
         this.record = record;
     }
+}
+
+function summarizePaths(paths: string[], limit = 8): string {
+    const visible = paths.slice(0, limit);
+    const remaining = paths.length - visible.length;
+    return `${visible.join(', ')}${remaining > 0 ? `, and ${remaining} more` : ''}`;
 }

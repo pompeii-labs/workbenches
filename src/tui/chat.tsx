@@ -8,10 +8,6 @@ import {
     onMount,
     Show,
 } from 'solid-js';
-import type {
-    AuthoringOperation,
-    AuthoringOperationResult,
-} from '../authoring/index.js';
 import { RepositoryInspection } from '../repositories/index.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type {
@@ -21,10 +17,10 @@ import type {
     RunnerQuestionResponse,
 } from '../runners/session.js';
 import type { RunHandle } from '../runs/index.js';
-import { SessionStore, type StoredSession } from '../sessions/index.js';
-import type { ResolvedWorkbenchReference } from '../workbench/index.js';
+import { SessionStore } from '../sessions/index.js';
 import { startupLabel, usageLabel } from './activity.js';
 import { ChatHeader } from './chat-header.js';
+import type { ChatScreenProps } from './chat-types.js';
 import { SessionCommands } from './commands/session.js';
 import { Conversation } from './conversation.js';
 import { useDialog } from './dialog/index.js';
@@ -54,46 +50,6 @@ import { consumeEvents, eventData, TurnCancellation } from './session.js';
 import type { TranscriptCursor } from './session-transcript.js';
 import { SessionTranscript } from './session-transcript.js';
 import { useTheme } from './theme/index.js';
-
-export interface ChatScreenProps {
-    home: string;
-    alias: string;
-    resolved: ResolvedWorkbenchReference;
-    start: (options: {
-        resolved: ResolvedWorkbenchReference;
-        reference: string;
-        session?: StoredSession;
-        environment?: Record<string, string | undefined>;
-        authoring?: boolean;
-        connection?: string;
-    }) => Promise<RunHandle>;
-    session?: StoredSession;
-    initialPrompt?: string;
-    operation?: AuthoringOperation;
-    environment?: Record<string, string | undefined>;
-    connection?: string;
-    prepareImprovement?: (
-        sessionId: string,
-        feedback: string
-    ) => Promise<PreparedWorkbenchChat>;
-    onAuthoring?: (launch: PreparedWorkbenchChat) => void;
-    onAuthoringFinished?: (result: AuthoringOperationResult) => void;
-    onSessionObserved?: (id: string | undefined) => void;
-    onSessionUpdated?: (session: StoredSession) => void;
-    onBack: () => void;
-    onBrowseSessions: () => void;
-    onExit: () => void;
-    homeAvailable: boolean;
-    repositoryInspection?: (id: string) => RepositoryInspection;
-}
-
-export interface PreparedWorkbenchChat {
-    alias: string;
-    resolved: ResolvedWorkbenchReference;
-    prompt?: string;
-    operation?: AuthoringOperation;
-    environment?: Record<string, string | undefined>;
-}
 
 export function ChatScreen(props: ChatScreenProps) {
     const themes = useTheme();
@@ -218,9 +174,10 @@ export function ChatScreen(props: ChatScreenProps) {
                     return;
                 }
             }
+        } else {
+            await session?.detach().catch(() => {});
         }
         observation.abort();
-        if (!props.operation) await session?.detach().catch(() => {});
         await storedTranscript()
             ?.flush()
             .catch(() => {});

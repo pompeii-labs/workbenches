@@ -108,10 +108,12 @@ export function QuestionPrompt(props: QuestionPromptProps) {
             paddingX={1}
             flexDirection="column"
         >
-            <box flexDirection="row" justifyContent="space-between">
-                <text fg={theme.yellow}>? {current()?.header ?? 'Question'}</text>
+            <box flexDirection="row">
+                <text fg={theme.yellow} flexGrow={1} truncate={true}>
+                    ? {current()?.header ?? 'Question'}
+                </text>
                 <Show when={props.request.questions.length > 1} fallback={<text />}>
-                    <text fg={theme.faint}>
+                    <text fg={theme.faint} flexShrink={0}>
                         {index() + 1}/{props.request.questions.length}
                     </text>
                 </Show>

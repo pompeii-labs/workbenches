@@ -786,7 +786,7 @@ describe('native Workbench authoring', () => {
         );
     });
 
-    test('reloaded checkpoints still reject edits outside their target', async () => {
+    test('reloaded legacy checkpoints remain scoped to Workbench package output', async () => {
         const home = await temporaryDirectory('authoring-checkpoint-');
         const repository = await temporaryDirectory('authoring-checkpoint-repo-');
         await writeWorkbench(repository, 'core', '0.1.0');
@@ -807,12 +807,28 @@ describe('native Workbench authoring', () => {
             smoke
         );
         await operation.checkpoint();
+        const baselinePath = join(home, 'authoring', operation.id, 'baseline.json');
+        const baseline = JSON.parse(await readFile(baselinePath, 'utf8')) as Array<{
+            path: string;
+            digest: string;
+        }>;
+        await writeFile(
+            baselinePath,
+            JSON.stringify([
+                ...baseline,
+                { path: 'README.md', digest: 'legacy-workspace-digest' },
+                {
+                    path: '.codex/worktrees/unrelated/file.ts',
+                    digest: 'legacy-worktree-digest',
+                },
+            ])
+        );
         const loaded = await AuthoringOperation.load(home, operation.id, {}, smoke);
         await writeFile(join(repository, 'unexpected.txt'), 'unrequested change');
-        await expect(loaded.finish()).rejects.toThrow('outside');
-        expect((await loaded.fail('Scope validation failed')).changedFiles).toContain(
-            'unexpected.txt'
-        );
+        expect(await loaded.finish()).toMatchObject({
+            status: 'unchanged',
+            changedFiles: [],
+        });
     });
 
     test('rejects an unchanged invalid candidate and empty creation', async () => {
@@ -890,7 +906,7 @@ describe('native Workbench authoring', () => {
         );
     });
 
-    test('rejects repository source changes outside the requested package', async () => {
+    test('does not scan unrelated non-package repository source', async () => {
         const home = await temporaryDirectory('workbench-operation-home-');
         const repository = await temporaryDirectory('workbench-operation-repo-');
         const packageDirectory = await writeWorkbench(repository, 'core', '0.1.0');
@@ -921,12 +937,16 @@ describe('native Workbench authoring', () => {
             ),
         ]);
 
-        await expect(operation.finish()).rejects.toThrow(
-            'outside the requested .workbenches/core package: README.md'
-        );
+        expect(await operation.finish()).toMatchObject({
+            status: 'completed',
+            changedFiles: [
+                join('.workbenches', 'core', 'instructions.md'),
+                join('.workbenches', 'core', 'workbench.yml'),
+            ],
+        });
     });
 
-    test('enforces repository scope in a Git-backed authoring directory', async () => {
+    test('uses the same package boundary in a Git-backed authoring directory', async () => {
         const home = await temporaryDirectory('workbench-operation-home-');
         const repository = await temporaryDirectory('workbench-operation-git-repo-');
         const packageDirectory = await writeWorkbench(repository, 'core', '0.1.0');
@@ -959,9 +979,13 @@ describe('native Workbench authoring', () => {
             ),
         ]);
 
-        await expect(operation.finish()).rejects.toThrow(
-            'outside the requested .workbenches/core package: README.md'
-        );
+        expect(await operation.finish()).toMatchObject({
+            status: 'completed',
+            changedFiles: [
+                join('.workbenches', 'core', 'instructions.md'),
+                join('.workbenches', 'core', 'workbench.yml'),
+            ],
+        });
     });
 
     test('rejects files written directly to the Workbench collection root', async () => {
