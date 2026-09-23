@@ -832,11 +832,10 @@ resources.
 
 ### Interactive client
 
-Running `wb`, `workbench`, or `wb run <name>` without a task opens the
-terminal client:
+Running `wb run <name>` without a task opens the terminal client. `wb` and
+`workbench` show command help.
 
 ```sh
-wb
 wb run project-core
 ```
 

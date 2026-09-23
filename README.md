@@ -50,7 +50,7 @@ wb connect --runtime e2b
 
 An inherited `E2B_API_KEY` still overrides the saved value for a single process.
 
-### Launch a Workbench
+### Inspect commands and launch a Workbench
 
 ```sh
 wb

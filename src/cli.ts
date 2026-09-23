@@ -37,7 +37,7 @@ import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
 import { RunWorker } from './runs/index.js';
 import { workbenchHome } from './storage.js';
-import { assertWorkbenchTuiSupported, launchWorkbenchTui } from './tui.js';
+import { assertWorkbenchTuiSupported } from './tui.js';
 
 let bareInvocation = import.meta.main && process.argv.length === 2;
 
@@ -46,9 +46,6 @@ export const workbenchCommand = defineCommand({
         name: 'workbench',
         version: packageMetadata.version,
         description: 'Discover, save, verify, and run open Workbenches.',
-    },
-    async run() {
-        if (bareInvocation) await launchWorkbenchTui();
     },
     subCommands: {
         init: initCommand,
@@ -126,23 +123,28 @@ if (import.meta.main) {
             )
         );
         if (
-            !explicitHelp &&
-            (bareInvocation || (invocation.args[0] === 'create' && !headlessCreate))
+            !explicitHelp && invocation.args[0] === 'create' && !headlessCreate
         ) {
             assertWorkbenchTuiSupported();
         }
-        if (usesModelCatalog(invocation.args, bareInvocation)) {
+        if (usesModelCatalog(invocation.args)) {
             await new ModelCatalog({ home: workbenchHome() }).refresh();
         }
-        await runMain(workbenchCommand, {
-            rawArgs: invocation.args,
-            showUsage: async (command, parent) => {
-                if (!explicitHelp) return;
-                process.stdout.write(
-                    `${commandUsage(await renderUsage(command, parent))}\n\n`
-                );
-            },
-        });
+        if (bareInvocation) {
+            process.stdout.write(
+                `${commandUsage(await renderUsage(workbenchCommand))}\n\n`
+            );
+        } else {
+            await runMain(workbenchCommand, {
+                rawArgs: invocation.args,
+                showUsage: async (command, parent) => {
+                    if (!explicitHelp) return;
+                    process.stdout.write(
+                        `${commandUsage(await renderUsage(command, parent))}\n\n`
+                    );
+                },
+            });
+        }
     } catch (error) {
         console.error(
             error instanceof Error
@@ -160,8 +162,7 @@ function commandUsage(usage: string): string {
     return usage.replace(/^\x1b\[90m(.+?)\x1b\[39m/, '$1');
 }
 
-function usesModelCatalog(args: string[], bare: boolean): boolean {
-    if (bare) return true;
+function usesModelCatalog(args: string[]): boolean {
     return new Set([
         'build',
         'create',

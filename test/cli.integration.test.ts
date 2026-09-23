@@ -1314,7 +1314,7 @@ describe('CLI integration', () => {
         expect(final.stdout).toBe('fixture response\n');
     });
 
-    test('reserves taskless and bare invocations for an interactive TUI', async () => {
+    test('shows help for a bare invocation and reserves taskless runs for the TUI', async () => {
         const fixture = await createFixture();
         const result = await executeSavedCli(['run', fixture.packageDirectory]);
 
@@ -1324,10 +1324,12 @@ describe('CLI integration', () => {
         );
 
         const bare = await executeCli([]);
-        expect(bare.code).toBe(1);
-        expect(bare.stderr).toContain(
-            'The Workbench TUI requires an interactive terminal'
+        expect(bare.code).toBe(0);
+        expect(bare.stdout).toContain(
+            'Discover, save, verify, and run open Workbenches'
         );
+        expect(bare.stdout).toContain('COMMANDS');
+        expect(bare.stderr).toBe('');
 
         for (const args of [
             ['--api-url', 'http://localhost:57401'],
