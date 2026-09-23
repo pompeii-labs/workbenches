@@ -155,6 +155,21 @@ describe('OpenCode adapter translation', () => {
         });
     });
 
+    test('denies subagents in the inline config', () => {
+        const invocation = buildOpenCodeSessionInvocation(
+            workbench({}, true),
+            'Follow up',
+            'ses_123',
+            { PATH: '/bin' },
+            '/tmp/opencode-config',
+            '/workspace'
+        );
+
+        expect(
+            JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT ?? '{}').permission
+        ).toMatchObject({ task: 'deny' });
+    });
+
     test('rejects an empty native session identifier', () => {
         expect(() =>
             buildOpenCodeSessionInvocation(workbench(), 'Follow up', '   ')

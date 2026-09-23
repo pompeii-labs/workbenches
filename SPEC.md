@@ -318,3 +318,8 @@ the secret value in generated config or dry-run output.
 Draft 0 does not define setup hooks, knowledge-file semantics, orchestration,
 user interfaces, or registry behavior. Implementations must reject unsupported
 runners, runtimes, images, or integration transports explicitly.
+
+A Workbench run is one agent. Engines disable runner-native subagent tools, and
+neither a package's `runner_config` nor the workspace's own runner
+configuration can re-enable them. Delegation belongs to the host, which can
+start another Workbench run.

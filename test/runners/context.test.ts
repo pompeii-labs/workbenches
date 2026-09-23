@@ -252,7 +252,10 @@ describe('engine-owned runner context', () => {
                 expect(
                     JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT ?? '{}')
                         .permission
-                ).toEqual({ external_directory: { '/output/*': 'allow' } });
+                ).toEqual({
+                    task: 'deny',
+                    external_directory: { '/output/*': 'allow' },
+                });
                 expect(invocation.env.WORKBENCH_RUNTIME_CONTEXT).toContain('/output');
                 expect(invocation.env.WORKBENCH_CONTEXT_PREFIX).toBe(
                     staged.context.prefix
@@ -282,7 +285,7 @@ describe('engine-owned runner context', () => {
             });
             expect(
                 JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT ?? '{}').permission
-            ).toBeUndefined();
+            ).toEqual({ task: 'deny' });
         }
     });
 
