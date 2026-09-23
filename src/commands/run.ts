@@ -79,7 +79,7 @@ export const runCommand = defineCommand({
         repo: {
             type: 'string',
             description:
-                'Run in an isolated GitHub checkout with your GitHub credential',
+                'Run in an isolated GitHub checkout using GH_TOKEN, GITHUB_TOKEN, or gh auth login',
         },
         ref: {
             type: 'string',
