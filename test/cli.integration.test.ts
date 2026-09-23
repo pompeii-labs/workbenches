@@ -2005,6 +2005,13 @@ describe('CLI integration', () => {
             `saved\tfixture-saved\t${fixture.packageDirectory}`
         );
 
+        const currentAdd = await executeCli(
+            ['add', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
+            environment
+        );
+        expect(currentAdd.code).toBe(0);
+        expect(currentAdd.stdout).toContain('current\tfixture-saved\tsha256:');
+
         const conflictingName = await executeCli(
             ['add', `${fixture.root}#core`, '--name', 'core'],
             environment

@@ -38,6 +38,8 @@ export interface CatalogUpgrade {
     revision?: string;
     expectedDigest?: string;
     registry?: CatalogRegistryReference;
+    /** Requested Git branch/tag/commit, distinct from the resolved revision. */
+    ref?: string;
 }
 
 export interface CatalogUpgradeResult {
