@@ -25,7 +25,7 @@ export const addCommand = defineCommand({
         },
         name: {
             type: 'string',
-            description: 'Package selector in a multi-Workbench source',
+            description: 'Workbench name in a multi-Workbench source',
         },
         ref: { type: 'string', description: 'GitHub branch, tag, or commit' },
         as: {

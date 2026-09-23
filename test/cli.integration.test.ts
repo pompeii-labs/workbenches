@@ -728,6 +728,12 @@ describe('CLI integration', () => {
         expect(create.stdout).toContain('--workspace=<NAME=path>');
         expect(create.stdout).toContain('--allow-host-docker');
 
+        const add = await executeCli(['add', '--help']);
+        expect(add.code).toBe(0);
+        expect(add.stdout).toContain(
+            'Workbench name in a multi-Workbench repository'
+        );
+
         const run = await executeCli(['run', '--help']);
         expect(run.code).toBe(0);
         expect(run.stdout).toContain('--connection=<connection>');
@@ -1998,6 +2004,13 @@ describe('CLI integration', () => {
         expect(added.stdout).toContain(
             `saved\tfixture-saved\t${fixture.packageDirectory}`
         );
+
+        const conflictingName = await executeCli(
+            ['add', `${fixture.root}#core`, '--name', 'core'],
+            environment
+        );
+        expect(conflictingName.code).toBe(1);
+        expect(conflictingName.stderr).toContain('Use --name or #name, not both');
 
         const saved = await executeCli(['list'], environment);
         expect(saved.stdout).toContain('fixture-saved\tfixture-core@0.1.0');
