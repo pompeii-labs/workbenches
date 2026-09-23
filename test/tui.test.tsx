@@ -960,6 +960,10 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
 
         const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('/');
+        await setup.flush();
+        expect(setup.captureCharFrame()).not.toContain('/home');
+
         prompt.setText('/theme');
         await setup.flush();
         expect(setup.captureCharFrame()).toContain('/theme');
@@ -1874,46 +1878,6 @@ describe.serial('Workbench TUI', () => {
         await Bun.sleep(5);
         await setup.flush();
         expect(controller.selected).toBe('flexoki');
-    });
-
-    test('returns from a session to Workbench discovery with /home', async () => {
-        let detaches = 0;
-        const handle = fakeHandle(() => {}, event(1, 'turn.started', { index: 1 }));
-        handle.detach = async () => {
-            detaches += 1;
-            return receipt('detach_client', 'detached');
-        };
-        const setup = await testRender(
-            () => (
-                <ThemeProvider controller={themes}>
-                    <WorkbenchApp
-                        home="/tmp/workbench-tui-tests"
-                        entries={[entry('lux-core')]}
-                        initial={{
-                            alias: 'creator',
-                            resolved: resolvedWorkbench('creator', 'opencode'),
-                        }}
-                        resolve={async (alias) => homeWorkbench(alias)}
-                        start={async () => handle}
-                    />
-                </ThemeProvider>
-            ),
-            { width: 100, height: 32 }
-        );
-        renderers.push(setup.renderer);
-        await Bun.sleep(10);
-        await setup.flush();
-
-        const prompt = findPrompt(setup.renderer.root);
-        prompt.setText('/home');
-        prompt.submit();
-        await Bun.sleep(20);
-        await setup.flush();
-
-        expect(detaches).toBe(1);
-        expect(setup.captureCharFrame()).toContain(
-            'Search saved and published Workbenches'
-        );
     });
 
     test('lists and resumes a native interactive session', async () => {
