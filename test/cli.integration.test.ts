@@ -1421,6 +1421,7 @@ describe('CLI integration', () => {
         });
 
         const finished = await executeCli(['ps'], environment);
+        expect(finished.stdout).toContain('STATUS  SESSION  WORKBENCH');
         expect(finished.stdout).toContain(dispatched.stdout.trim());
         expect(finished.stdout).toContain('Dependency audit');
         expect(finished.stdout).toContain('completed');

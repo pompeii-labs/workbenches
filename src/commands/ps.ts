@@ -1,12 +1,7 @@
 import { defineCommand } from 'citty';
 
-import { RunStore } from '../runs/index.js';
 import { RunSupervision } from '../runs/supervision.js';
-import {
-    type SessionActivity,
-    SessionIdentity,
-    SessionLifecycle,
-} from '../sessions/index.js';
+import { SessionLifecycle } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
 import { CliPresenter } from './presenter.js';
 
@@ -30,7 +25,6 @@ export const psCommand = defineCommand({
     },
     async run({ args }) {
         const output = new CliPresenter();
-        const identity = new SessionIdentity();
         const activities = await new SessionLifecycle(workbenchHome()).list({
             all: args.all,
         });
@@ -42,6 +36,27 @@ export const psCommand = defineCommand({
                         : 'No active or resumable Workbench sessions.'
                 );
             }
+            return;
+        }
+        if (!args.json) {
+            const rows = activities.map((activity) => {
+                const run = activity.run;
+                return [
+                    run.status,
+                    activity.id,
+                    `${run.workbench}@${run.workbench_version}`,
+                    run.runner,
+                    String(run.pid ?? '-'),
+                    run.dispatched_at,
+                    activity.session?.name ?? '-',
+                ];
+            });
+            process.stdout.write(
+                renderTable(
+                    ['STATUS', 'SESSION', 'WORKBENCH', 'RUNNER', 'PID', 'STARTED', 'NAME'],
+                    rows
+                )
+            );
             return;
         }
         for (const activity of activities) {
@@ -61,43 +76,16 @@ export const psCommand = defineCommand({
                         pending_requests: snapshot.pending_requests,
                     })}\n`
                 );
-                continue;
             }
-            const fields = [
-                run.status,
-                activity.id,
-                `${run.workbench}@${run.workbench_version}`,
-                run.runner,
-                String(run.pid ?? '-'),
-                run.dispatched_at,
-                activity.session?.name,
-            ];
-            output.record({
-                machine: fields,
-                title: activity.session
-                    ? identity.label(activity.session)
-                    : activity.id,
-                details: [
-                    activity.session?.name ? activity.id : undefined,
-                    run.status,
-                    `${run.workbench}@${run.workbench_version}`,
-                    run.runner,
-                    action(activity),
-                ],
-                tone:
-                    run.status === 'failed'
-                        ? 'error'
-                        : run.status === 'cancelled'
-                          ? 'warning'
-                          : run.status === 'completed'
-                            ? 'success'
-                            : 'info',
-            });
         }
     },
 });
 
-function action(activity: SessionActivity): string {
-    if (!RunStore.isTerminal(activity.run.status)) return 'attach';
-    return activity.resumable ? 'resume' : 'replay';
+function renderTable(headers: string[], rows: string[][]): string {
+    const widths = headers.map((header, index) =>
+        Math.max(header.length, ...rows.map((row) => row[index]?.length ?? 0))
+    );
+    const format = (row: string[]) =>
+        row.map((value, index) => value.padEnd(widths[index] ?? value.length)).join('  ');
+    return `${format(headers)}\n${rows.map(format).join('\n')}\n`;
 }
