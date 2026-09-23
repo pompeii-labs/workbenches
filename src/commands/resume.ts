@@ -64,7 +64,7 @@ export const resumeCommand = defineCommand({
         },
         'allow-host-docker': {
             type: 'boolean',
-            description: 'Authorize a declared host Docker engine binding for this run',
+            description: 'Allow this Workbench to access the host Docker daemon',
             default: false,
         },
         connection: {
