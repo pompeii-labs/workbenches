@@ -10,9 +10,10 @@ import {
     TextRenderable,
 } from '@opentui/core';
 import { testRender } from '@opentui/solid';
-import type {
-    AuthoringOperation,
-    AuthoringOperationResult,
+import {
+    AuthoringCreateIncompleteError,
+    type AuthoringOperation,
+    type AuthoringOperationResult,
 } from '../src/authoring/index.js';
 import type { CatalogEntry } from '../src/catalog/index.js';
 import { OutcomeLifecycle } from '../src/outcomes/lifecycle.js';
@@ -1406,6 +1407,74 @@ describe.serial('Workbench TUI', () => {
         expect(environment?.PATH).toBe('/exact-authoring-cli');
         expect(authoring).toBe(true);
         expect(finishCalls).toBe(1);
+        expect(closeCalls).toBe(1);
+        expect(completed).toEqual(result);
+    });
+
+    test('exits a create operation that has not created a Workbench', async () => {
+        let failedWith: string | undefined;
+        let closeCalls = 0;
+        let completed: AuthoringOperationResult | undefined;
+        const result: AuthoringOperationResult = {
+            id: 'author_tui_empty_create',
+            kind: 'create',
+            status: 'failed',
+            packages: [],
+            changedFiles: [],
+            error: 'Creator exited before creating a Workbench.',
+        };
+        const operation = {
+            id: result.id,
+            finish: async () => {
+                throw new AuthoringCreateIncompleteError();
+            },
+            fail: async (message: string) => {
+                failedWith = message;
+                return result;
+            },
+        } as unknown as AuthoringOperation;
+        const handle = fakeHandle(() => {});
+        handle.close = async () => {
+            closeCalls += 1;
+            return receipt('close', 'closed');
+        };
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench(
+                                'workbench-creator',
+                                'opencode'
+                            ),
+                            operation,
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => handle}
+                        onAuthoringFinished={(value) => {
+                            completed = value;
+                        }}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28, exitOnCtrlC: false }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('/quit');
+        prompt.submit();
+        await Bun.sleep(10);
+        await setup.flush();
+
+        expect(failedWith).toBe('Creator exited before creating a Workbench.');
         expect(closeCalls).toBe(1);
         expect(completed).toEqual(result);
     });

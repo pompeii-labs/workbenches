@@ -15,6 +15,7 @@ export {
 export {
     type AuthoringFinishOptions,
     type AuthoringKind,
+    AuthoringCreateIncompleteError,
     AuthoringOperation,
     type AuthoringOperationResult,
     type AuthoringSmoke,

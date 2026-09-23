@@ -13,6 +13,7 @@ import { delimiter, join } from 'node:path';
 
 import {
     AuthoringCli,
+    AuthoringCreateIncompleteError,
     AuthoringOperation,
     type AuthoringSmokeOptions,
     ImprovementEvidence,
@@ -895,8 +896,8 @@ describe('native Workbench authoring', () => {
             },
             smoke
         );
-        await expect(create.finish()).rejects.toThrow(
-            'Workbench creation did not create a package'
+        await expect(create.finish()).rejects.toBeInstanceOf(
+            AuthoringCreateIncompleteError
         );
     });
 

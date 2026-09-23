@@ -1,4 +1,5 @@
 import { useKeyboard } from '@opentui/solid';
+import { AuthoringCreateIncompleteError } from '../authoring/index.js';
 import {
     type Accessor,
     createEffect,
@@ -168,10 +169,19 @@ export function ChatScreen(props: ChatScreenProps) {
                     await session?.close();
                     props.onAuthoringFinished?.(result);
                 } catch (cause) {
-                    leaving = false;
-                    setError(cause instanceof Error ? cause.message : String(cause));
-                    setState((current) => ({ ...current, status: 'Ready' }));
-                    return;
+                    const message = cause instanceof Error ? cause.message : String(cause);
+                    if (cause instanceof AuthoringCreateIncompleteError) {
+                        const result = await props.operation.fail(
+                            'Creator exited before creating a Workbench.'
+                        );
+                        await session?.close();
+                        props.onAuthoringFinished?.(result);
+                    } else {
+                        leaving = false;
+                        setError(message);
+                        setState((current) => ({ ...current, status: 'Ready' }));
+                        return;
+                    }
                 }
             }
         } else {
