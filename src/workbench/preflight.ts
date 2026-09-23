@@ -40,7 +40,9 @@ export class WorkbenchPreflight {
 
         const runnerPath = this.findExecutable(workbench.manifest.runner);
         if (!runnerPath) {
-            throw new Error(`Runner CLI is unavailable: ${workbench.manifest.runner}`);
+            throw new Error(
+                `Runner CLI is unavailable: ${workbench.manifest.runner}. Install ${workbench.manifest.runner} and rerun this command.`
+            );
         }
 
         const tools = workbench.manifest.tools.map((name) => {

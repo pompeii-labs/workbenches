@@ -8,6 +8,7 @@ import { workbenchHome } from '../storage.js';
 import { launchWorkbenchTui } from '../tui.js';
 import {
     WorkbenchEnvironment,
+    WorkbenchPreflight,
     WorkbenchResolver,
     WorkbenchWorkspaces,
 } from '../workbench/index.js';
@@ -167,17 +168,21 @@ export const runCommand = defineCommand({
                 resolved.workbench.manifest.docker?.engine !== undefined,
                 args['allow-host-docker']
             );
+            const environment = {
+                ...process.env,
+                ...workbenchEnvironment.bind(resolved.workbench, overrides),
+                ...workbenchWorkspaces.environment(workspaces),
+            };
+            if (resolved.workbench.manifest.runtime === 'local') {
+                new WorkbenchPreflight({ environment }).check(resolved.workbench);
+            }
             await launchWorkbenchTui({
                 initial: {
                     alias: args.workbench,
                     resolved,
                     ...(args.connection ? { connection: args.connection } : {}),
                 },
-                environment: {
-                    ...process.env,
-                    ...workbenchEnvironment.bind(resolved.workbench, overrides),
-                    ...workbenchWorkspaces.environment(workspaces),
-                },
+                environment,
                 workspaces,
                 allowHostDocker: args['allow-host-docker'],
             });

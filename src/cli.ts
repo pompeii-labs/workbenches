@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { defineCommand, renderUsage, runMain } from 'citty';
+import pc from 'picocolors';
 import packageMetadata from '../package.json' with { type: 'json' };
 import { AuthoringJob } from './authoring/job.js';
 
@@ -97,14 +98,23 @@ if (import.meta.main) {
         process.exit(await new RunWorker(home).executeDispatched(id));
     }
     const defaultConsoleError = console.error;
+    const colors = pc.createColors(
+        Boolean(process.stderr.isTTY) &&
+            process.env.NO_COLOR === undefined &&
+            process.env.TERM !== 'dumb'
+    );
+    const formatError = (message: string) =>
+        colors.isColorSupported
+            ? `${colors.red('✗')} ${colors.red(message)}`
+            : `error: ${message}`;
     console.error = (value?: unknown, ...optional: unknown[]) => {
         if (value instanceof Error) {
-            process.stderr.write(`error: ${value.message}\n`);
+            process.stderr.write(`${formatError(value.message)}\n`);
             return;
         }
         if (typeof value === 'string' && optional.length === 0) {
             process.stderr.write(
-                `${value.startsWith('error: ') ? value : `error: ${value}`}\n`
+                `${formatError(value.startsWith('error: ') ? value.slice(7) : value)}\n`
             );
             return;
         }
