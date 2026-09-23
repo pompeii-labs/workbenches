@@ -503,6 +503,9 @@ export function ChatScreen(props: ChatScreenProps) {
         if (key.ctrl && key.name === 'g' && repository.available) {
             key.preventDefault();
             showRepository();
+        } else if (key.name === 'escape' && (state().busy || cancellationPending())) {
+            key.preventDefault();
+            void cancelTurn();
         } else if (key.ctrl && key.name === 'c') {
             key.preventDefault();
             if (state().busy || cancellationPending()) void cancelTurn();
@@ -653,7 +656,7 @@ export function ChatScreen(props: ChatScreenProps) {
                     {question()
                         ? 'answer required · ctrl+c cancel'
                         : state().busy || cancellationPending()
-                          ? 'ctrl+c cancel'
+                          ? 'esc cancel'
                           : 'ctrl+c quit'}
                 </text>
             </box>

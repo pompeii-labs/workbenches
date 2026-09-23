@@ -2173,7 +2173,7 @@ describe.serial('Workbench TUI', () => {
         expect(secondFrame).not.toBe(firstFrame);
     });
 
-    test('shows an interrupted turn before runner cancellation settles', async () => {
+    test('interrupts an active turn with escape before runner cancellation settles', async () => {
         const cancellation = deferred<RunControlReceipt>();
         let cancelCalls = 0;
         const handle = fakeHandle(() => {}, event(1, 'turn.started', { index: 1 }));
@@ -2205,7 +2205,7 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
         expect(setup.captureCharFrame()).toContain('Thinking');
 
-        setup.mockInput.pressCtrlC();
+        setup.mockInput.pressEscape();
         await Bun.sleep(0);
         await setup.flush();
 
