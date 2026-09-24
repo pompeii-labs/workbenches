@@ -10,7 +10,6 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import packageMetadata from '../package.json' with { type: 'json' };
 import { resolveReleaseTarget } from '../scripts/release-support.js';
 
 const projectDirectory = resolve(import.meta.dir, '..');
@@ -73,24 +72,134 @@ describe('release installer', () => {
         );
     });
 
-    test('defaults to the prerelease matching the package version', async () => {
-        const stubs = await temporaryDirectory('workbench-install-default-');
-        const log = join(stubs, 'urls.log');
-        await executableFile(
-            join(stubs, 'curl'),
-            '#!/bin/sh\nfor argument do url="$argument"; done\nprintf "%s\\n" "$url" >> "$WORKBENCH_TEST_URL_LOG"\nexit 22\n'
-        );
-
-        const result = await runInstaller('', '', [], {
-            PATH: `${stubs}:${process.env.PATH ?? ''}`,
-            WORKBENCH_TEST_URL_LOG: log,
+    test('discovers the most recently published release including prereleases and pins both downloads', async () => {
+        const fixture = await releaseFixture();
+        const installation = await temporaryDirectory('workbench-install-latest-');
+        const discovery = await discoveryFixture([
+            release('v9.0.0', '2026-09-21T10:00:00Z'),
+            { ...release('v10.0.0', null), draft: true },
+            {
+                ...release('v0.1.0-alpha.8', '2026-09-24T10:00:00Z'),
+                prerelease: true,
+                body: 'Notes with "tag_name": "v999.0.0", braces {} and \\ escapes\n',
+                assets: [
+                    { tag_name: 'v999.0.0', published_at: '2099-01-01T00:00:00Z' },
+                ],
+            },
+        ]);
+        const result = await runInstaller('', installation, [], {
+            ...discovery.environment,
+            WORKBENCH_TEST_RELEASE: fixture.release,
         });
 
-        expect(result.code).not.toBe(0);
-        expect(await readFile(log, 'utf8')).toContain(
-            `https://github.com/pompeii-labs/workbenches/releases/download/v${packageMetadata.version}/${resolveReleaseTarget().name}.tar.gz`
-        );
+        expect(result.code).toBe(0);
+        expect(await discovery.urls()).toEqual([
+            'https://api.github.com/repos/pompeii-labs/workbenches/releases?per_page=100',
+            `https://github.com/pompeii-labs/workbenches/releases/download/v0.1.0-alpha.8/${fixture.archive}`,
+            'https://github.com/pompeii-labs/workbenches/releases/download/v0.1.0-alpha.8/checksums.txt',
+        ]);
+        expect(await readlink(join(installation, 'wb'))).toBe('workbench');
     });
+
+    test('explicit latest and a custom repository discover through that repository', async () => {
+        const discovery = await discoveryFixture([
+            release('v1.2.3', '2026-09-24T10:00:00Z'),
+        ]);
+        const result = await runInstaller(
+            '',
+            '',
+            ['--version', 'latest', '--repository', 'example/cli'],
+            discovery.environment
+        );
+        expect(result.code).not.toBe(0); // The fixture deliberately has no archive.
+        expect(await discovery.urls()).toEqual([
+            'https://api.github.com/repos/example/cli/releases?per_page=100',
+            `https://github.com/example/cli/releases/download/v1.2.3/${resolveReleaseTarget().name}.tar.gz`,
+        ]);
+    });
+
+    test('environment version and command-line override bypass discovery', async () => {
+        for (const args of [[], ['--version', '2.0.0']]) {
+            const discovery = await discoveryFixture([]);
+            await runInstaller('', '', args, {
+                ...discovery.environment,
+                WORKBENCH_VERSION: 'v1.2.3',
+            });
+            expect(await discovery.urls()).toEqual([
+                `https://github.com/pompeii-labs/workbenches/releases/download/${args.length ? 'v2.0.0' : 'v1.2.3'}/${resolveReleaseTarget().name}.tar.gz`,
+            ]);
+        }
+    });
+
+    test('a mirror bypasses discovery even when latest is selected', async () => {
+        const discovery = await discoveryFixture([]);
+        await runInstaller('', '', [], {
+            ...discovery.environment,
+            WORKBENCH_DOWNLOAD_ROOT: 'https://mirror.example/releases/',
+        });
+        expect(await discovery.urls()).toEqual([
+            `https://mirror.example/releases/${resolveReleaseTarget().name}.tar.gz`,
+        ]);
+    });
+
+    test('discovery HTTP failures stop before any artifact download', async () => {
+        const discovery = await discoveryFixture([
+            release('v1.2.3', '2026-09-24T10:00:00Z'),
+        ]);
+        const result = await runInstaller('', '', [], {
+            ...discovery.environment,
+            WORKBENCH_TEST_DISCOVERY_STATUS: '22',
+        });
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain('could not discover the latest release');
+        expect(await discovery.urls()).toHaveLength(1);
+    });
+
+    test.each([
+        ['empty list', '[]'],
+        ['invalid JSON', '<html>unavailable</html>'],
+        ['truncated JSON', '[{"tag_name":"v1.2.3"'],
+        ['wrong root', '{"tag_name":"v1.2.3"}'],
+        [
+            'trailing garbage',
+            `${JSON.stringify([release('v1.2.3', '2026-09-24T10:00:00Z')])}garbage`,
+        ],
+        ['missing publication fields', '[{"tag_name":"v1.2.3"}]'],
+        [
+            'wrong draft type',
+            JSON.stringify([
+                { ...release('v1.2.3', '2026-09-24T10:00:00Z'), draft: 'false' },
+            ]),
+        ],
+        [
+            'duplicate tag',
+            '[{"tag_name":"v1.2.3","tag_name":"v2.0.0","draft":false,"published_at":"2026-09-24T10:00:00Z"}]',
+        ],
+        [
+            'unsafe tag',
+            JSON.stringify([release('v1.2.3/../../other', '2026-09-24T10:00:00Z')]),
+        ],
+        [
+            'escaped tag',
+            '[{"tag_name":"v1.2.\\u0033","draft":false,"published_at":"2026-09-24T10:00:00Z"}]',
+        ],
+        [
+            'unpublished only',
+            JSON.stringify([{ ...release('v1.2.3', null), draft: true }]),
+        ],
+        ['invalid date', JSON.stringify([release('v1.2.3', 'tomorrow')])],
+    ])(
+        'rejects %s discovery metadata without downloading artifacts',
+        async (_name, metadata) => {
+            const discovery = await discoveryFixture(metadata);
+            const result = await runInstaller('', '', [], discovery.environment);
+            expect(result.code).toBe(1);
+            expect(result.stderr).toContain(
+                'latest release metadata is missing or invalid'
+            );
+            expect(await discovery.urls()).toHaveLength(1);
+        }
+    );
 
     test('fails clearly on an unsupported operating system', async () => {
         const stubs = await temporaryDirectory('workbench-install-platform-');
@@ -138,6 +247,10 @@ async function runInstaller(
         cwd: projectDirectory,
         env: {
             ...process.env,
+            WORKBENCH_VERSION: '',
+            WORKBENCH_REPOSITORY: '',
+            WORKBENCH_DOWNLOAD_ROOT: '',
+            WORKBENCH_ALLOW_INSECURE: '0',
             ...(release
                 ? {
                       WORKBENCH_ALLOW_INSECURE: '1',
@@ -155,6 +268,50 @@ async function runInstaller(
         child.exited,
     ]);
     return { code, stderr, stdout };
+}
+
+function release(tag: string, published: string | null) {
+    return { tag_name: tag, draft: false, published_at: published };
+}
+
+async function discoveryFixture(metadata: unknown) {
+    const directory = await temporaryDirectory('workbench-install-discovery-');
+    const response = join(directory, 'response.json');
+    const log = join(directory, 'urls.log');
+    await writeFile(
+        response,
+        typeof metadata === 'string' ? metadata : JSON.stringify(metadata)
+    );
+    await executableFile(
+        join(directory, 'curl'),
+        `#!/bin/sh
+output=''
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '-o' ]; then output="$2"; shift 2; else url="$1"; shift; fi
+done
+printf '%s\\n' "$url" >> "$WORKBENCH_TEST_URL_LOG"
+case "$url" in
+    https://api.github.com/*)
+        [ "\${WORKBENCH_TEST_DISCOVERY_STATUS:-0}" = '0' ] || exit "$WORKBENCH_TEST_DISCOVERY_STATUS"
+        cat "$WORKBENCH_TEST_RESPONSE"
+        ;;
+    *)
+        [ -n "\${WORKBENCH_TEST_RELEASE:-}" ] || exit 22
+        cp "$WORKBENCH_TEST_RELEASE/\${url##*/}" "$output"
+        ;;
+esac
+`
+    );
+    return {
+        environment: {
+            PATH: `${directory}:${process.env.PATH ?? ''}`,
+            WORKBENCH_TEST_URL_LOG: log,
+            WORKBENCH_TEST_RESPONSE: response,
+            WORKBENCH_TEST_DISCOVERY_STATUS: '0',
+            WORKBENCH_TEST_RELEASE: '',
+        },
+        urls: async () => (await readFile(log, 'utf8')).trim().split('\n'),
+    };
 }
 
 async function executableFile(path: string, contents: string) {
