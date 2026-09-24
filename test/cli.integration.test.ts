@@ -284,7 +284,8 @@ describe('CLI integration', () => {
     test('supervises detached native turns with receipts, rejection, queue, and fresh continuation', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('headless-cli-');
-        const bin = await fakeBin([], { delay: 1500 });
+        const releaseFirstTurn = join(fixture.root, 'release-first-turn');
+        const bin = await fakeBin([], { releaseFile: releaseFirstTurn });
         const environment = {
             PATH: `${bin}:${process.env.PATH}`,
             WORKBENCH_HOME: home,
@@ -318,12 +319,16 @@ describe('CLI integration', () => {
             run_id: launch.run_id,
             receipt: { disposition: 'queued' },
         });
-        const timeout = await executeCli(
-            ['wait', launch.session_id, '--timeout', '0', '--json'],
-            environment
-        );
-        expect(timeout.code).toBe(124);
-        expect(JSON.parse(timeout.stdout).state).toBe('timeout');
+        try {
+            const timeout = await executeCli(
+                ['wait', launch.session_id, '--timeout', '0', '--json'],
+                environment
+            );
+            expect(timeout.code).toBe(124);
+            expect(JSON.parse(timeout.stdout).state).toBe('timeout');
+        } finally {
+            await writeFile(releaseFirstTurn, 'release');
+        }
         const firstTurn = await executeCli(
             ['wait', launch.session_id, '--timeout', '10', '--json'],
             environment
@@ -2558,6 +2563,7 @@ async function fakeBin(
     options: {
         delay?: boolean | number;
         block?: boolean;
+        releaseFile?: string;
         response?: string;
         authoring?: 'valid' | 'invalid' | 'outside';
     } = {}
@@ -2577,6 +2583,7 @@ async function fakeBin(
             `const responseEvent = ${JSON.stringify(responseEvent)};`,
             `const delay = ${typeof options.delay === 'number' ? options.delay : options.delay ? 100 : 0};`,
             `const block = ${options.block ? 'true' : 'false'};`,
+            `const releaseFile = ${JSON.stringify(options.releaseFile ?? null)};`,
             `const authoring = ${JSON.stringify(options.authoring ?? null)};`,
             'const record = process.env.WB_TEST_RECORD;',
             'if (record) {',
@@ -2644,9 +2651,14 @@ async function fakeBin(
             '        if (authoring === "outside") await fs.writeFile(path.join(process.cwd(), "unrequested.txt"), "outside");',
             '      }',
             '      if (record) await Bun.write(record + ".args", text + "\\n");',
-            '      setTimeout(() => {',
+            '      setTimeout(async () => {',
             '        emit("session.status", { status: { type: "busy" } });',
             '        if (block) return;',
+            '        if (releaseFile) {',
+            '          const deadline = Date.now() + 30_000;',
+            '          while (!(await Bun.file(releaseFile).exists()) && Date.now() < deadline) await Bun.sleep(10);',
+            '          if (!(await Bun.file(releaseFile).exists())) process.exit(1);',
+            '        }',
             '        emit("message.updated", { info: { id: "assistant_" + input.messageID, role: "assistant", parentID: input.messageID } });',
             '        emit("message.part.updated", { part: { id: "part_" + input.messageID, messageID: "assistant_" + input.messageID, type: "text", text: "" } });',
             '        emit("message.part.delta", { messageID: "assistant_" + input.messageID, partID: "part_" + input.messageID, field: "text", delta: responseText });',
