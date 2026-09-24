@@ -5,7 +5,7 @@ import { parseRepository, RepositoryDeliveryStore } from '../repositories/index.
 import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
-import { launchWorkbenchTui } from '../tui.js';
+import { assertWorkbenchTuiSupported, launchWorkbenchTui } from '../tui.js';
 import {
     WorkbenchEnvironment,
     WorkbenchPreflight,
@@ -155,6 +155,7 @@ export const runCommand = defineCommand({
             if (args.detach || args.json || args.final || args['dry-run']) {
                 throw new Error('This run mode requires a non-empty task');
             }
+            assertWorkbenchTuiSupported();
             const resolved = await new WorkbenchResolver().resolve(args.workbench, {
                 savedOnly: true,
                 ...(args.dir ? { workspaceDirectory: args.dir } : {}),

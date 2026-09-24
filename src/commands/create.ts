@@ -5,7 +5,11 @@ import { AuthoringJob } from '../authoring/job.js';
 import { RunStore } from '../runs/store.js';
 import { workbenchHome } from '../storage.js';
 import { assertWorkbenchTuiSupported, launchWorkbenchTui } from '../tui.js';
-import { WorkbenchEnvironment, WorkbenchWorkspaces } from '../workbench/index.js';
+import {
+    WorkbenchEnvironment,
+    WorkbenchPreflight,
+    WorkbenchWorkspaces,
+} from '../workbench/index.js';
 import { CliInput } from './input.js';
 import { CliWait } from './waiting.js';
 
@@ -139,6 +143,11 @@ export const createCommand = defineCommand({
                 await launch.resolved.cleanup();
             }
             return;
+        }
+        if (launch.resolved.workbench.manifest.runtime === 'local') {
+            new WorkbenchPreflight({ environment: launch.environment }).check(
+                launch.resolved.workbench
+            );
         }
         await launchWorkbenchTui({
             initial: {

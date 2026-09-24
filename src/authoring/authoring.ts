@@ -2,11 +2,7 @@ import { stat } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 
 import { SessionLifecycle, type StoredSession } from '../sessions/index.js';
-import {
-    Workbench,
-    WorkbenchPreflight,
-    WorkbenchResolver,
-} from '../workbench/index.js';
+import { Workbench, WorkbenchResolver } from '../workbench/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/resolver.js';
 import { AuthoringCli } from './cli.js';
 import { ImprovementEvidence } from './evidence.js';
@@ -208,11 +204,6 @@ export class WorkbenchAuthoring {
         prompt?: string;
     }): Promise<AuthoringLaunch> {
         const creator = await this.#official.creator(options.repository);
-        if (creator.resolved.workbench.manifest.runtime === 'local') {
-            new WorkbenchPreflight({ environment: this.#environment }).check(
-                creator.resolved.workbench
-            );
-        }
         const operation = await AuthoringOperation.prepare(
             this.home,
             {
