@@ -106,6 +106,7 @@ export async function renderWorkbenchTui(
                             resolve={(alias) =>
                                 resolver.resolve(alias, {
                                     home,
+                                    savedOnly: true,
                                     workspaceDirectory: workspace,
                                 })
                             }

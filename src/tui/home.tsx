@@ -177,7 +177,7 @@ export function HomeScreen(props: HomeScreenProps) {
     };
     const showHelp = () => {
         setStatus({
-            text: '/resume [search] · /create · /help · /quit · arrows browse · s save',
+            text: '/resume [search] · /create · /help · /quit · arrows browse · s add',
             error: false,
         });
     };
@@ -289,13 +289,15 @@ export function HomeScreen(props: HomeScreenProps) {
                 <box flexDirection="row" justifyContent="space-between" paddingX={1}>
                     <text fg={theme.faint}>
                         {browsing()
-                            ? '↑↓ choose · s/space save · esc search'
+                            ? current()?.kind === 'registry'
+                                ? '↑↓ choose · s/space Add · esc search'
+                                : '↑↓ choose · esc search'
                             : 'type to search · ↑↓ browse · / commands'}
                     </text>
                     <text fg={theme.faint}>
                         {current()?.kind === 'registry'
-                            ? 'enter save + open'
-                            : 'enter open'}
+                            ? 'enter Add and run'
+                            : 'enter Run'}
                     </text>
                 </box>
                 <Show when={visibleResults().length > 0}>
@@ -409,7 +411,10 @@ function resultTitle(result: HomeLauncherResult): string {
 }
 
 function resultAside(result: HomeLauncherResult): string {
-    if (result.kind === 'saved') return `SAVED · v${result.entry.version}`;
+    if (result.kind === 'saved')
+        return result.entry.localPath
+            ? 'SAVED · LIVE LOCAL'
+            : `SAVED · v${result.entry.version}`;
     if (result.kind === 'registry') {
         const runs = result.workbench.runs;
         return runs > 0 ? `REGISTRY · ${compactCount(runs)} runs` : 'REGISTRY';
@@ -436,6 +441,7 @@ function compactCount(value: number): string {
 }
 
 function sourceLabel(entry: CatalogEntry): string {
+    if (entry.localPath) return `${entry.localPath} (live local)`;
     if (entry.registry) {
         return `${entry.registry.publisher}/${entry.registry.workbench}#${entry.selector}`;
     }

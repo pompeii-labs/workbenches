@@ -21,6 +21,7 @@ export interface WorkbenchResolverOptions {
     cwd?: string;
     home?: string;
     workspaceDirectory?: string;
+    savedOnly?: boolean;
 }
 
 export class WorkbenchResolver {
@@ -34,13 +35,21 @@ export class WorkbenchResolver {
             const saved = await new SavedWorkbenchCatalog(home).find(value);
             if (saved) {
                 return {
-                    workbench: await Workbench.load(saved.packagePath),
+                    workbench: await Workbench.load(
+                        saved.localPath ?? saved.packagePath
+                    ),
                     workspaceDirectory: resolve(options.workspaceDirectory ?? cwd),
                     cleanup: async () => {},
-                    source: 'saved',
+                    source: saved.localPath ? 'local' : 'saved',
                     ...(saved.registry ? { registry: saved.registry } : {}),
                 };
             }
+        }
+
+        if (options.savedOnly) {
+            throw new Error(
+                `Workbench is not saved: ${value}. Add it first with wb add <source>, then run its saved alias.`
+            );
         }
 
         const source = new WorkbenchSource(cwd);

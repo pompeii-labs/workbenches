@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import type { RemoteWorkbenchPackage } from '../sources/index.js';
 import type { ResolvedWorkbench, WorkbenchManifest } from '../types.js';
@@ -24,6 +24,7 @@ interface CatalogEntryInput {
     revision?: string;
     expectedDigest?: string;
     registry?: CatalogRegistryReference;
+    ref?: string;
 }
 
 export class SavedWorkbenchCatalog {
@@ -71,6 +72,7 @@ export class SavedWorkbenchCatalog {
         workbench: RemoteWorkbenchPackage;
         expectedDigest?: string;
         registry?: CatalogRegistryReference;
+        ref?: string;
     }): Promise<CatalogEntry> {
         return this.save({
             alias: options.alias,
@@ -83,7 +85,52 @@ export class SavedWorkbenchCatalog {
                 ? { expectedDigest: options.expectedDigest }
                 : {}),
             ...(options.registry ? { registry: options.registry } : {}),
+            ...(options.ref ? { ref: options.ref } : {}),
         });
+    }
+
+    async addLocal(options: {
+        alias?: string;
+        workbench: ResolvedWorkbench;
+    }): Promise<CatalogEntry> {
+        const localPath = resolve(options.workbench.packageDirectory);
+        const entries = await this.list();
+        const sameDirectory = entries.find((entry) => entry.localPath === localPath);
+        const alias =
+            options.alias ?? sameDirectory?.alias ?? options.workbench.manifest.name;
+        this.validateAlias(alias);
+        const previous = entries.find((entry) => entry.alias === alias);
+        // Explicit re-add is the migration boundary for frozen v1 local entries.
+        const legacyLocal =
+            previous &&
+            !previous.registry &&
+            previous.source.startsWith('/') &&
+            (previous.source === localPath ||
+                join(previous.source, '.workbenches', previous.selector) === localPath);
+        if (previous && previous.localPath !== localPath && !legacyLocal)
+            throw new Error(
+                `Saved Workbench already exists: ${alias}. Choose another alias with --as.`
+            );
+        const files = await new WorkbenchPackage(options.workbench).files();
+        const digest = WorkbenchPackage.digest(files);
+        if (previous?.localPath === localPath && previous.digest === digest)
+            return previous;
+        const entry: CatalogEntry = {
+            alias,
+            name: options.workbench.manifest.name,
+            version: options.workbench.manifest.version,
+            source: localPath,
+            selector: basename(localPath),
+            localPath,
+            packagePath: localPath,
+            digest,
+            addedAt: previous?.addedAt ?? new Date().toISOString(),
+        };
+        await this.write([
+            ...entries.filter((candidate) => candidate.alias !== alias),
+            entry,
+        ]);
+        return entry;
     }
 
     async upgrade(
@@ -107,6 +154,7 @@ export class SavedWorkbenchCatalog {
                 ? { expectedDigest: upgrade.expectedDigest }
                 : {}),
             ...(upgrade.registry ? { registry: upgrade.registry } : {}),
+            ...(previous.ref ? { ref: previous.ref } : {}),
         });
         if (entry.digest === previous.digest) {
             return { previous, entry: previous, changed: false };
@@ -128,7 +176,10 @@ export class SavedWorkbenchCatalog {
         if (!entry) throw new Error(`Saved Workbench does not exist: ${alias}`);
         const remaining = entries.filter((candidate) => candidate.alias !== alias);
         await this.write(remaining);
-        if (!remaining.some((candidate) => candidate.digest === entry.digest)) {
+        if (
+            !entry.localPath &&
+            !remaining.some((candidate) => candidate.digest === entry.digest)
+        ) {
             await this.#snapshots.remove(entry.digest);
         }
         return entry;
@@ -137,8 +188,25 @@ export class SavedWorkbenchCatalog {
     private async save(options: CatalogEntryInput): Promise<CatalogEntry> {
         this.validateAlias(options.alias);
         const entries = await this.list();
-        if (entries.some((entry) => entry.alias === options.alias)) {
-            throw new Error(`Saved Workbench already exists: ${options.alias}`);
+        const previous = entries.find((entry) => entry.alias === options.alias);
+        if (previous) {
+            const sameSource =
+                !previous.localPath &&
+                previous.source === options.source &&
+                previous.selector === options.selector &&
+                previous.registry?.url === options.registry?.url &&
+                previous.registry?.publisher === options.registry?.publisher &&
+                previous.registry?.workbench === options.registry?.workbench &&
+                previous.ref === options.ref;
+            const digest = WorkbenchPackage.digest(options.files);
+            if (options.expectedDigest && digest !== options.expectedDigest)
+                throw new Error('Registry package digest mismatch');
+            if (sameSource && previous.digest === digest) return previous;
+            throw new Error(
+                sameSource
+                    ? `Saved Workbench already exists: ${options.alias}. Run wb upgrade ${options.alias} to update it.`
+                    : `Saved Workbench already exists: ${options.alias}. Choose another alias with --as.`
+            );
         }
         const entry = await this.materialize(options);
         await this.write([...entries, entry]);
@@ -162,6 +230,7 @@ export class SavedWorkbenchCatalog {
             addedAt: options.addedAt ?? new Date().toISOString(),
             ...(options.revision ? { revision: options.revision } : {}),
             ...(options.registry ? { registry: options.registry } : {}),
+            ...(options.ref ? { ref: options.ref } : {}),
         };
     }
 

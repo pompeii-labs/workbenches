@@ -1,5 +1,5 @@
 import { basename } from 'node:path';
-
+import { WorkbenchPackage } from '../catalog/package.js';
 import { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import {
     ConnectionInspector,
@@ -36,6 +36,7 @@ export type WorkbenchOrigin =
           digest: string;
           added_at: string;
           package: string;
+          mode?: 'live' | 'snapshot';
       }
     | {
           kind: 'local';
@@ -177,6 +178,7 @@ export class WorkbenchInspection {
         this.field(lines, 'Selector', view.origin.selector);
         if (view.origin.revision) this.field(lines, 'Revision', view.origin.revision);
         if (view.origin.kind === 'saved') {
+            if (view.origin.mode) this.field(lines, 'Mode', view.origin.mode);
             this.field(lines, 'Digest', view.origin.digest);
             this.field(lines, 'Added', view.origin.added_at);
             this.field(lines, 'Package', view.origin.package);
@@ -328,7 +330,12 @@ export class WorkbenchInspector {
                 source: saved.source,
                 selector: saved.selector,
                 ...(saved.revision ? { revision: saved.revision } : {}),
-                digest: saved.digest,
+                digest: saved.localPath
+                    ? WorkbenchPackage.digest(
+                          await new WorkbenchPackage(workbench).files()
+                      )
+                    : saved.digest,
+                mode: saved.localPath ? 'live' : 'snapshot',
                 added_at: saved.addedAt,
                 package: saved.packagePath,
             });

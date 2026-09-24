@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 describe('saved Workbench upgrades', () => {
-    test('repoints a local alias only after the new snapshot is ready', async () => {
+    test('keeps legacy local aliases frozen until explicitly re-added', async () => {
         const fixture = await localFixture('0.1.0');
         const home = await temporaryDirectory('workbench-upgrade-local-');
         const saved = await new SavedWorkbenchCatalog(home).add({
@@ -31,16 +31,18 @@ describe('saved Workbench upgrades', () => {
         });
 
         await fixture.writeVersion('0.2.0', '# updated\n');
-        const result = await new SavedWorkbenchUpgrade(home).upgrade('fixture-core');
-
-        expect(result.changed).toBeTrue();
-        expect(result.previous.version).toBe('0.1.0');
-        expect(result.entry.version).toBe('0.2.0');
-        expect(result.entry.addedAt).toBe(saved.addedAt);
-        expect(
-            await readFile(join(result.entry.packagePath, 'instructions.md'), 'utf8')
-        ).toBe('# updated\n');
-        await expect(stat(saved.packagePath)).rejects.toThrow();
+        await expect(
+            new SavedWorkbenchUpgrade(home).upgrade('fixture-core')
+        ).rejects.toThrow('Local Workbenches are not upgraded');
+        expect(await new SavedWorkbenchCatalog(home).find('fixture-core')).toEqual(
+            saved
+        );
+        const live = await new SavedWorkbenchCatalog(home).addLocal({
+            alias: 'fixture-core',
+            workbench: await Workbench.load(fixture.packageDirectory),
+        });
+        expect(live.localPath).toBe(fixture.packageDirectory);
+        expect(live.version).toBe('0.2.0');
     });
 
     test('does not rewrite an alias when its package is already current', async () => {
@@ -53,7 +55,14 @@ describe('saved Workbench upgrades', () => {
             workbench: await Workbench.load(fixture.packageDirectory),
         });
 
-        const result = await new SavedWorkbenchUpgrade(home).upgrade('fixture-core');
+        const result = await catalog.upgrade('fixture-core', {
+            source: fixture.root,
+            selector: 'core',
+            manifest: (await Workbench.load(fixture.packageDirectory)).manifest,
+            files: await new WorkbenchPackage(
+                await Workbench.load(fixture.packageDirectory)
+            ).files(),
+        });
 
         expect(result.changed).toBeFalse();
         expect(result.entry).toEqual(saved);
@@ -77,10 +86,16 @@ describe('saved Workbench upgrades', () => {
         });
         await fixture.writeVersion('0.2.0', '# updated\n');
 
-        const upgrade = new SavedWorkbenchUpgrade(home);
-        await upgrade.upgrade('fixture-one');
+        const candidate = await Workbench.load(fixture.packageDirectory);
+        const upgrade = {
+            source: fixture.root,
+            selector: 'core',
+            manifest: candidate.manifest,
+            files: await new WorkbenchPackage(candidate).files(),
+        };
+        await catalog.upgrade('fixture-one', upgrade);
         expect((await stat(first.packagePath)).isDirectory()).toBeTrue();
-        await upgrade.upgrade('fixture-two');
+        await catalog.upgrade('fixture-two', upgrade);
         await expect(stat(first.packagePath)).rejects.toThrow();
     });
 

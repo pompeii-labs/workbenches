@@ -1,6 +1,6 @@
 import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
-
+import { SessionStore } from '../sessions/store.js';
 import { WorkbenchPackage } from './package.js';
 import type { SnapshotFile } from './types.js';
 
@@ -34,6 +34,15 @@ export class CatalogSnapshots {
     }
 
     async remove(digest: string): Promise<void> {
+        // Legacy sessions may still own a catalog snapshot. Never remove their
+        // only original package or substitute a newer alias on resume.
+        const root = join(this.home, 'packages', digest.slice('sha256:'.length));
+        if (
+            (await new SessionStore(this.home).list()).some((session) =>
+                session.workbench_path.startsWith(`${root}/`)
+            )
+        )
+            return;
         await rm(join(this.home, 'packages', digest.slice('sha256:'.length)), {
             recursive: true,
             force: true,

@@ -1,43 +1,44 @@
-import { basename } from 'node:path';
-
 import { defineCommand } from 'citty';
 
 import { WorkbenchPackage } from '../catalog/index.js';
 import { RegistryAccountStore } from '../registry/index.js';
-import { WorkbenchSource } from '../workbench/index.js';
+import { WorkbenchResolver } from '../workbench/index.js';
 import { CliPresenter } from './presenter.js';
 
 interface PublicationResponse {
-    workbenches: Array<{
-        publisher: { slug: string };
+    submissions: Array<{
+        id: string;
+        status: string;
+        publisher_slug: string;
         slug: string;
-        latest_version: { version: string; digest: string };
+        version: string;
+        digest: string;
+        dashboard_url: string;
+        latest_approved_version: string | null;
     }>;
 }
 
 export const publishCommand = defineCommand({
     meta: {
         name: 'publish',
-        description: 'Publish an immutable Workbench package to the registry.',
+        description: 'Submit a saved Workbench package for registry review.',
     },
     args: {
         source: {
             type: 'positional',
-            description:
-                'Local Workbench reference (defaults to the current directory)',
-            required: false,
+            description: 'Saved Workbench alias',
+            required: true,
         },
         publisher: {
             type: 'string',
             description: 'Publisher slug',
         },
-        as: {
-            type: 'string',
-            description: 'Registry Workbench slug (defaults to its directory name)',
-        },
     },
     async run({ args }) {
         const output = new CliPresenter();
+        const { workbench } = await new WorkbenchResolver().resolve(args.source, {
+            savedOnly: true,
+        });
         const accounts = new RegistryAccountStore();
         const account = await accounts.require();
         const profile = await accounts.profile(account);
@@ -62,17 +63,11 @@ export const publishCommand = defineCommand({
             );
         }
 
-        const workbenchSource = new WorkbenchSource();
-        const reference = workbenchSource.parse(args.source ?? '.');
-        const source = await workbenchSource.local(reference.source);
-        if (!source) throw new Error('wb publish requires a local Workbench');
-        const workbench = await workbenchSource.select(
-            source.directory,
-            reference.selector
-        );
-        const slug = args.as ?? basename(workbench.packageDirectory);
+        const slug = workbench.manifest.name;
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-            throw new Error(`Invalid registry Workbench slug: ${slug}`);
+            throw new Error(
+                `Workbench manifest name is not a valid registry slug: ${slug}`
+            );
         }
         output.progress(`Preparing ${publisher.slug}/${slug}`);
         const files = await new WorkbenchPackage(workbench).files();
@@ -89,9 +84,9 @@ export const publishCommand = defineCommand({
         }
 
         const digest = WorkbenchPackage.digest(files);
-        output.progress(`Publishing ${publisher.slug}/${slug}`);
+        output.progress(`Submitting ${publisher.slug}/${slug}`);
         const response = await accounts.client.request<PublicationResponse>(
-            '/v1/publications',
+            '/v1/submissions',
             {
                 method: 'POST',
                 token: account.token,
@@ -110,21 +105,35 @@ export const publishCommand = defineCommand({
                 },
             }
         );
-        const published = response.workbenches[0];
-        if (!published) throw new Error('The registry returned no Workbench');
-        if (`sha256:${published.latest_version.digest}` !== digest) {
+        const published = response.submissions[0];
+        if (!published) throw new Error('The registry returned no submission');
+        if (`sha256:${published.digest}` !== digest) {
             throw new Error('The registry returned a different package digest');
         }
-        const publishedReference = `${published.publisher.slug}/${published.slug}`;
+        const publishedReference = `${published.publisher_slug}/${published.slug}`;
         output.record({
             machine: [
-                'published',
+                'submitted',
                 publishedReference,
-                published.latest_version.version,
+                published.version,
                 digest,
+                published.status,
+                published.dashboard_url,
+                published.id,
+                published.latest_approved_version ?? '',
             ],
-            title: `Published ${publishedReference}`,
-            details: [published.latest_version.version, digest],
+            title: `Submitted ${publishedReference}: ${published.status}`,
+            details: [
+                published.version,
+                digest,
+                published.status === 'approved'
+                    ? 'Approved by the registry.'
+                    : 'Not published. Review status is available in the dashboard.',
+                published.latest_approved_version
+                    ? `Latest approved version: ${published.latest_approved_version}`
+                    : 'No approved version yet.',
+                published.dashboard_url,
+            ],
         });
     },
 });

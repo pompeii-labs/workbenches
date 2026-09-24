@@ -36,6 +36,90 @@ afterEach(async () => {
 });
 
 describe('CLI integration', () => {
+    test('live add edits feed new CLI runs while a resumed session keeps its package after removal and deletion', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('cli-pinned-home-');
+        const bin = await fakeBin();
+        const record = join(fixture.root, 'runner');
+        const environment = {
+            WORKBENCH_HOME: home,
+            PATH: `${bin}:${process.env.PATH}`,
+            WB_TEST_RECORD: record,
+        };
+        await writeFile(
+            join(fixture.packageDirectory, 'instructions.md'),
+            'ORIGINAL_PACKAGE_BYTES'
+        );
+        expect(
+            (
+                await executeCli(
+                    ['add', fixture.packageDirectory, '--as', 'pinned-expert'],
+                    environment,
+                    fixture.root
+                )
+            ).code
+        ).toBe(0);
+        const taskless = await executeCli(
+            ['run', 'pinned-expert'],
+            environment,
+            fixture.root
+        );
+        expect(taskless.stderr).toContain('requires an interactive terminal');
+        expect(taskless.stderr).not.toContain('Workbench is not saved');
+        expect(
+            (
+                await executeCli(
+                    ['run', 'pinned-expert', '--task', 'first', '--final'],
+                    environment,
+                    fixture.root
+                )
+            ).code
+        ).toBe(0);
+        expect(await readFile(`${record}.instructions`, 'utf8')).toContain(
+            'ORIGINAL_PACKAGE_BYTES'
+        );
+        const first = (await new SessionStore(home).list())[0];
+        if (!first) throw new Error('Missing original session');
+        expect(first.source_workbench_path).toBe(fixture.packageDirectory);
+        await writeFile(
+            join(fixture.packageDirectory, 'instructions.md'),
+            'EDITED_PACKAGE_BYTES'
+        );
+        expect(
+            (
+                await executeCli(
+                    ['run', 'pinned-expert', '--task', 'second', '--final'],
+                    environment,
+                    fixture.root
+                )
+            ).code
+        ).toBe(0);
+        expect(await readFile(`${record}.instructions`, 'utf8')).toContain(
+            'EDITED_PACKAGE_BYTES'
+        );
+        expect(
+            (await executeCli(['upgrade', 'pinned-expert'], environment, fixture.root))
+                .stderr
+        ).toContain('Local Workbenches are not upgraded');
+        expect(
+            (await executeCli(['remove', 'pinned-expert'], environment, fixture.root))
+                .code
+        ).toBe(0);
+        await rm(fixture.packageDirectory, { recursive: true });
+        const resumed = await executeCli(
+            ['resume', first.id, '--task', 'resume original', '--final'],
+            environment,
+            fixture.root
+        );
+        expect(resumed.code).toBe(0);
+        const instructions = await readFile(`${record}.instructions`, 'utf8');
+        expect(instructions).toContain('ORIGINAL_PACKAGE_BYTES');
+        expect(instructions).not.toContain('EDITED_PACKAGE_BYTES');
+        expect((await new SessionStore(home).read(first.id)).workbench_path).toBe(
+            first.workbench_path
+        );
+    });
+
     test('creates, edits, runs, and improves a Workbench entirely headlessly', async () => {
         const root = await temporaryDirectory('headless-authoring-');
         const home = await temporaryDirectory('headless-authoring-home-');
@@ -97,14 +181,7 @@ describe('CLI integration', () => {
             authoring: { status: 'completed', result: { kind: 'edit' } },
         });
         const execution = await executeCli(
-            [
-                'run',
-                join(root, '.workbenches', 'core'),
-                '--task',
-                'Audit the fixture',
-                '--detach',
-                '--json',
-            ],
+            ['run', 'audit-core', '--task', 'Audit the fixture', '--detach', '--json'],
             environment,
             root
         );
@@ -212,7 +289,7 @@ describe('CLI integration', () => {
             PATH: `${bin}:${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
-        const dispatched = await executeCli(
+        const dispatched = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'first', '--detach', '--json'],
             environment
         );
@@ -444,7 +521,7 @@ describe('CLI integration', () => {
             PATH: `${bin}:${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
-        const launched = await executeCli(
+        const launched = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'hello', '--detach', '--json'],
             environment,
             workspace
@@ -746,7 +823,7 @@ describe('CLI integration', () => {
         const fixture = await createFixture({ tools: ['missing-workbench-tool'] });
         const record = join(fixture.root, 'runner-was-called');
         const bin = await fakeBin();
-        const result = await executeCli(
+        const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'do work'],
             { PATH: `${bin}:${process.env.PATH}` }
         );
@@ -793,7 +870,7 @@ describe('CLI integration', () => {
             ['--model', ['--model=not-allowed']],
             ['--not-supported', ['--not-supported']],
         ] as const) {
-            const result = await executeCli(
+            const result = await executeSavedCli(
                 ['run', fixture.packageDirectory, ...args],
                 {
                     PATH: `${bin}:${process.env.PATH}`,
@@ -814,7 +891,7 @@ describe('CLI integration', () => {
         const bin = await fakeBin();
         await writeFile(brief, 'inspect the project\nwithout changing files\n');
 
-        const result = await executeCli(
+        const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task-file', brief],
             {
                 PATH: `${bin}:${process.env.PATH}`,
@@ -834,7 +911,7 @@ describe('CLI integration', () => {
         const record = join(fixture.root, 'runner');
         const bin = await fakeBin();
         const home = await temporaryDirectory('workbench-run-stdin-home-');
-        const child = await launchCli(
+        const child = await launchSavedCli(
             ['run', fixture.packageDirectory, '--stdin'],
             {
                 PATH: `${bin}:${process.env.PATH}`,
@@ -864,7 +941,7 @@ describe('CLI integration', () => {
         const bin = await fakeBin();
         await writeFile(brief, 'inspect from file');
 
-        const result = await executeCli(
+        const result = await executeSavedCli(
             [
                 'run',
                 fixture.packageDirectory,
@@ -887,7 +964,7 @@ describe('CLI integration', () => {
         const fixture = await createFixture({ tools: ['fixture-tool'] });
         const record = join(fixture.root, 'runner');
         const bin = await fakeBin(['fixture-tool']);
-        const result = await executeCli(
+        const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', '  inspect the project  '],
             {
                 PATH: `${bin}:${process.env.PATH}`,
@@ -936,7 +1013,7 @@ describe('CLI integration', () => {
             ].join('\n')
         );
 
-        const result = await executeCli(
+        const result = await executeSavedCli(
             [
                 'run',
                 fixture.packageDirectory,
@@ -980,7 +1057,7 @@ describe('CLI integration', () => {
         const secret = 'provider-secret-not-for-output';
         await writeFile(environmentFile, `OPENAI_API_KEY=${secret}\n`);
 
-        const result = await executeCli(
+        const result = await executeSavedCli(
             [
                 'run',
                 fixture.packageDirectory,
@@ -1032,7 +1109,7 @@ describe('CLI integration', () => {
         );
         expect(smoked.code).toBe(0);
 
-        const foreground = await executeCli(
+        const foreground = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', ...bindings],
             environment
         );
@@ -1044,7 +1121,7 @@ describe('CLI integration', () => {
             `${await realpath(schemas)}\n`
         );
 
-        const dispatched = await executeCli(
+        const dispatched = await executeSavedCli(
             [
                 'run',
                 fixture.packageDirectory,
@@ -1091,7 +1168,7 @@ describe('CLI integration', () => {
         expect(smoked.code).toBe(0);
         expect(smoked.stdout).toContain('ready\tfixture-core');
 
-        const rejected = await executeCli(
+        const rejected = await executeSavedCli(
             [
                 'run',
                 fixture.packageDirectory,
@@ -1125,7 +1202,7 @@ describe('CLI integration', () => {
             WORKBENCH_HOME: home,
         };
 
-        const dispatched = await executeCli(
+        const dispatched = await executeSavedCli(
             [
                 'run',
                 fixture.packageDirectory,
@@ -1156,14 +1233,14 @@ describe('CLI integration', () => {
             NO_COLOR: '1',
         };
 
-        const colored = await executeCli(
+        const colored = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--color'],
             environment
         );
         expect(colored.code).toBe(0);
         expect(colored.stdout).toContain('\u001B[');
 
-        const plain = await executeCli(
+        const plain = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--no-color'],
             environment
         );
@@ -1178,7 +1255,7 @@ describe('CLI integration', () => {
         const bin = await fakeBin([], { response });
         const environment = { PATH: `${bin}:${process.env.PATH}` };
 
-        const human = await executeCli(
+        const human = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--no-color'],
             environment
         );
@@ -1189,7 +1266,7 @@ describe('CLI integration', () => {
         expect(human.stdout).not.toContain('**');
         expect(human.stdout).not.toContain('# Result');
 
-        const final = await executeCli(
+        const final = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--final'],
             environment
         );
@@ -1202,7 +1279,7 @@ describe('CLI integration', () => {
         const bin = await fakeBin();
         const environment = { PATH: `${bin}:${process.env.PATH}` };
 
-        const json = await executeCli(
+        const json = await executeSavedCli(
             ['run', fixture.packageDirectory, 'inspect', '--json'],
             environment
         );
@@ -1224,7 +1301,7 @@ describe('CLI integration', () => {
         ]);
         expect(events.every((event) => event.protocol === 0)).toBeTrue();
 
-        const final = await executeCli(
+        const final = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--final'],
             environment
         );
@@ -1234,7 +1311,7 @@ describe('CLI integration', () => {
 
     test('reserves taskless and bare invocations for an interactive TUI', async () => {
         const fixture = await createFixture();
-        const result = await executeCli(['run', fixture.packageDirectory]);
+        const result = await executeSavedCli(['run', fixture.packageDirectory]);
 
         expect(result.code).toBe(1);
         expect(result.stderr).toContain(
@@ -1246,6 +1323,17 @@ describe('CLI integration', () => {
         expect(bare.stderr).toContain(
             'The Workbench TUI requires an interactive terminal'
         );
+
+        for (const args of [
+            ['--api-url', 'http://localhost:57401'],
+            ['--api-url=http://localhost:57401'],
+        ]) {
+            const configured = await executeCli(args);
+            expect(configured.code).toBe(1);
+            expect(configured.stderr).toContain(
+                'The Workbench TUI requires an interactive terminal'
+            );
+        }
 
         const home = await temporaryDirectory('workbench-create-non-tty-');
         const create = await executeCli(['create', 'core'], { WORKBENCH_HOME: home });
@@ -1265,7 +1353,7 @@ describe('CLI integration', () => {
             WORKBENCH_HOME: home,
         };
 
-        const dispatched = await executeCli(
+        const dispatched = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '-d'],
             environment
         );
@@ -1336,7 +1424,7 @@ describe('CLI integration', () => {
             PATH: `${bin}:${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
-        const child = await launchCli(
+        const child = await launchSavedCli(
             ['run', fixture.packageDirectory, '--task', 'keep working'],
             environment
         );
@@ -1373,7 +1461,7 @@ describe('CLI integration', () => {
             WB_TEST_RECORD: record,
         };
 
-        const dispatched = await executeCli(
+        const dispatched = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'first task', '-d'],
             environment
         );
@@ -1412,7 +1500,7 @@ describe('CLI integration', () => {
             WORKBENCH_HOME: home,
         };
 
-        const dispatched = await executeCli(
+        const dispatched = await executeSavedCli(
             ['run', fixture.packageDirectory, 'first task', '--detach'],
             environment
         );
@@ -1456,7 +1544,7 @@ describe('CLI integration', () => {
             PROJECT_TOKEN: 'initial-secret-not-for-storage',
         };
 
-        const first = await executeCli(
+        const first = await executeSavedCli(
             ['run', fixture.packageDirectory, 'first task', '--final'],
             environment
         );
@@ -1518,7 +1606,7 @@ describe('CLI integration', () => {
             PATH: `${bin}:${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
-        const initial = await executeCli(
+        const initial = await executeSavedCli(
             ['run', fixture.packageDirectory, 'initial task', '--final'],
             environment
         );
@@ -1564,7 +1652,7 @@ describe('CLI integration', () => {
             WORKBENCH_HOME: home,
         };
 
-        const dispatched = await executeCli(
+        const dispatched = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'wait', '-d'],
             environment
         );
@@ -1597,7 +1685,7 @@ describe('CLI integration', () => {
         const fixture = await createFixture({ skill: true });
         const record = join(fixture.root, 'runner');
         const bin = await fakeBin();
-        const result = await executeCli(
+        const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'use the fixture skill'],
             {
                 PATH: `${bin}:${process.env.PATH}`,
@@ -1615,7 +1703,7 @@ describe('CLI integration', () => {
         const fixture = await createFixture();
         const record = join(fixture.root, 'runner-was-called');
         const bin = await fakeBin();
-        const result = await executeCli(
+        const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--dry-run'],
             {
                 PATH: `${bin}:${process.env.PATH}`,
@@ -1635,7 +1723,7 @@ describe('CLI integration', () => {
     test('reports dry-run preflight failures instead of returning empty output', async () => {
         const fixture = await createFixture({ tools: ['missing-workbench-tool'] });
         const bin = await fakeBin();
-        const result = await executeCli(
+        const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--dry-run'],
             { PATH: `${bin}:${process.env.PATH}` }
         );
@@ -1713,7 +1801,7 @@ describe('CLI integration', () => {
         });
         const docker = await fakeDocker();
         const secret = 'do-not-place-this-value-in-docker-arguments';
-        const result = await executeCli(
+        const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--json'],
             {
                 PATH: `${docker.bin}:${process.env.PATH}`,
@@ -1772,7 +1860,7 @@ describe('CLI integration', () => {
             );
             expect(built.code).toBe(0);
 
-            const denied = await executeCli(
+            const denied = await executeSavedCli(
                 ['run', fixture.packageDirectory, '--task', 'inspect'],
                 environment
             );
@@ -1781,7 +1869,7 @@ describe('CLI integration', () => {
                 'Host Docker engine access requires explicit --allow-host-docker authorization'
             );
 
-            const allowed = await executeCli(
+            const allowed = await executeSavedCli(
                 [
                     'run',
                     fixture.packageDirectory,
@@ -1807,7 +1895,7 @@ describe('CLI integration', () => {
             expect(commands).toContain(`${fixture.root}:${fixture.root}`);
             expect(commands).toContain(`--workdir ${fixture.root}`);
 
-            const detached = await executeCli(
+            const detached = await executeSavedCli(
                 [
                     'run',
                     fixture.packageDirectory,
@@ -1843,7 +1931,7 @@ describe('CLI integration', () => {
             WORKBENCH_HOME: home,
         };
 
-        const dispatched = await executeCli(
+        const dispatched = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--detach'],
             environment
         );
@@ -1890,18 +1978,20 @@ describe('CLI integration', () => {
         expect(smoked.stdout).toContain('fixture-tool');
 
         const added = await executeCli(
-            ['add', `${fixture.root}#core`, '--as', 'fixture-saved'],
+            ['add', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
             environment
         );
         expect(added.code).toBe(0);
-        expect(added.stdout).toContain('saved\tfixture-saved\tsha256:');
+        expect(added.stdout).toContain(
+            `saved\tfixture-saved\t${fixture.packageDirectory}`
+        );
 
         const saved = await executeCli(['list'], environment);
         expect(saved.stdout).toContain('fixture-saved\tfixture-core@0.1.0');
 
         const current = await executeCli(['upgrade'], environment);
         expect(current.code).toBe(0);
-        expect(current.stdout).toContain('current\tfixture-saved\t0.1.0');
+        expect(current.stdout).not.toContain('current\tfixture-saved');
 
         await writeFile(
             join(fixture.packageDirectory, 'workbench.yml'),
@@ -1914,11 +2004,8 @@ describe('CLI integration', () => {
             '# upgraded fixture\n'
         );
         const upgraded = await executeCli(['upgrade', 'fixture-saved'], environment);
-        expect(upgraded.code).toBe(0);
-        expect(upgraded.stdout).toContain('upgraded\tfixture-saved\t0.1.0\t0.2.0');
-        expect((await executeCli(['list'], environment)).stdout).toContain(
-            'fixture-saved\tfixture-core@0.2.0'
-        );
+        expect(upgraded.code).toBe(1);
+        expect(upgraded.stderr).toContain('Local Workbenches are not upgraded');
 
         const viewed = await executeCli(
             ['view', 'fixture-saved', '--json'],
@@ -1929,7 +2016,7 @@ describe('CLI integration', () => {
             origin: {
                 kind: 'saved',
                 alias: 'fixture-saved',
-                source: fixture.root,
+                source: fixture.packageDirectory,
                 selector: 'core',
             },
             spec: 0,
@@ -2049,10 +2136,8 @@ describe('CLI integration', () => {
             'inspect',
         ]);
         expect(result.code).toBe(1);
-        expect(result.stderr).toContain(
-            'Remote Workbenches must be saved before running'
-        );
-        expect(result.stderr).toContain('wb add lux-db/lux#migrations');
+        expect(result.stderr).toContain('Workbench is not saved');
+        expect(result.stderr).toContain('wb add <source>');
         expect(result.stderr).not.toContain('at async');
         expect(result.stderr).not.toContain('/$bunfs/');
     });
@@ -2076,6 +2161,38 @@ async function executeCli(
         child.exited,
     ]);
     return { stdout, stderr, code };
+}
+
+// Runner tests explicitly cross acquisition before exercising their run mode.
+async function executeSavedCli(
+    arguments_: string[],
+    environment: Record<string, string | undefined> = {},
+    cwd = projectDirectory
+) {
+    const source = arguments_[1];
+    if (!source) throw new Error('Fixture source is required');
+    const home =
+        environment.WORKBENCH_HOME ?? (await temporaryDirectory('workbench-cli-home-'));
+    const env = { ...environment, WORKBENCH_HOME: home };
+    const added = await executeCli(['add', source, '--as', 'fixture-run'], env, cwd);
+    expect(added.code).toBe(0);
+    return executeCli(['run', 'fixture-run', ...arguments_.slice(2)], env, cwd);
+}
+
+async function launchSavedCli(
+    arguments_: string[],
+    environment: Record<string, string | undefined> = {},
+    cwd = projectDirectory,
+    stdin: 'ignore' | 'pipe' = 'ignore'
+) {
+    const source = arguments_[1];
+    if (!source) throw new Error('Fixture source is required');
+    const home =
+        environment.WORKBENCH_HOME ?? (await temporaryDirectory('workbench-cli-home-'));
+    const env = { ...environment, WORKBENCH_HOME: home };
+    const added = await executeCli(['add', source, '--as', 'fixture-run'], env, cwd);
+    expect(added.code).toBe(0);
+    return launchCli(['run', 'fixture-run', ...arguments_.slice(2)], env, cwd, stdin);
 }
 
 async function seedCreator(home: string, workspace: string): Promise<void> {
@@ -2467,6 +2584,7 @@ async function fakeBin(
             '    cwd: process.env.PWD ?? process.cwd(),',
             '    args: Bun.argv.slice(2).join("\\n"),',
             '    config: process.env.OPENCODE_CONFIG_CONTENT,',
+            '    instructions: (await Promise.all((JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? "{}").instructions ?? []).map((path: string) => Bun.file(path).text().catch(() => "")))).join("\\n"),',
             '    "config-dir": process.env.OPENCODE_CONFIG_DIR,',
             '    "native-config": process.env.OPENCODE_CONFIG,',
             '    "openai-key": process.env.OPENAI_API_KEY,',

@@ -39,7 +39,7 @@ import { RunWorker } from './runs/index.js';
 import { workbenchHome } from './storage.js';
 import { assertWorkbenchTuiSupported, launchWorkbenchTui } from './tui.js';
 
-const bareInvocation = import.meta.main && process.argv.length === 2;
+let bareInvocation = import.meta.main && process.argv.length === 2;
 
 export const workbenchCommand = defineCommand({
     meta: {
@@ -115,6 +115,7 @@ if (import.meta.main) {
     };
     try {
         const invocation = extractApiUrl(process.argv.slice(2));
+        bareInvocation = invocation.args.length === 0;
         RegistryClient.configureApiUrl(invocation.apiUrl);
         const explicitHelp = invocation.args.some(
             (argument) => argument === '--help' || argument === '-h'

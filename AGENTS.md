@@ -73,18 +73,23 @@ private repositories can use an existing `GITHUB_TOKEN` or `GH_TOKEN`.
 
 ## Save a reusable expert
 
-Run directly from a local Workbench when appropriate. To give a remote or local
-Workbench a stable name, save an immutable snapshot explicitly:
+Register a Workbench before running it. Remote packages are frozen; local
+directories remain live for each new session:
 
 ```sh
-wb add owner/repository#core --as project-core
+wb add publisher/core --as project-core
+wb add https://github.com/owner/repository --name core --ref main --as project-git
+wb add ./.workbenches/core --as project-local
 wb list
 wb view project-core
 ```
 
-`add` is the local materialization boundary. Saved aliases reference
-content-addressed package snapshots, so later source changes do not silently
-change an existing expert environment.
+Bare `publisher/name` resolves only through the registry, never GitHub. Git
+sources require a full HTTPS GitHub URL. `--name` selects a package and `--ref`
+selects a Git revision. Alias collisions require an explicit different `--as`;
+identical adds are idempotent. Local paths register their absolute package
+directory. A new run sees local edits, while every session owns frozen package
+bytes for resume. Existing frozen local registrations stay frozen until re-add.
 
 Remove an alias when it is no longer needed:
 
@@ -92,8 +97,8 @@ Remove an alias when it is no longer needed:
 wb remove project-core
 ```
 
-Refresh saved snapshots deliberately. `upgrade` changes the selected local
-snapshot; source changes never apply implicitly:
+Refresh saved remote snapshots deliberately. `upgrade` never updates local
+registrations; edit their source directly:
 
 ```sh
 wb upgrade project-core
@@ -119,9 +124,8 @@ wb run project-core \
   --final
 ```
 
-Local references and saved Workbenches use the current directory as the target
-workspace unless `--dir` is provided. Set it deliberately when the task concerns
-another project.
+`run` accepts a saved alias only. The current directory is the target workspace
+unless `--dir` or `--repo` is provided. Neither option changes the package source.
 
 If `wb view` reports named workspace requirements, bind them explicitly with a
 repeatable `--workspace NAME=PATH` argument. Never guess sibling repository

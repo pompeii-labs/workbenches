@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
-import { SessionLifecycle, SessionStore } from '../src/sessions/index.js';
+import {
+    SessionLifecycle,
+    SessionResolver,
+    SessionStore,
+} from '../src/sessions/index.js';
 import { SessionSupervision } from '../src/sessions/supervision.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
@@ -48,7 +52,7 @@ describe('Workbench session lifecycle', () => {
             native_session_id: 'native-session',
         });
         const resumed = await dispatcher.prepare({
-            resolved,
+            resolved: (await new SessionResolver(home).resolve(first.id)).resolved,
             mode: 'interactive',
             session: resumable,
         });
@@ -72,13 +76,15 @@ describe('Workbench session lifecycle', () => {
         const supervision = new SessionSupervision(home);
         const resolved = await fixtureReference(home);
         const first = await dispatcher.prepare({ resolved, mode: 'interactive' });
+        await sessions.update(first.id, { native_session_id: 'native-session' });
+        const pinned = (await new SessionResolver(home).resolve(first.id)).resolved;
         const second = await dispatcher.prepare({
-            resolved,
+            resolved: pinned,
             mode: 'interactive',
             session: await sessions.read(first.id),
         });
         const third = await dispatcher.prepare({
-            resolved,
+            resolved: pinned,
             mode: 'interactive',
             session: await sessions.read(first.id),
         });

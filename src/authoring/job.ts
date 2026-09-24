@@ -23,6 +23,7 @@ export interface AuthoringJobRecord {
         changed_files: string[];
         evidence_path?: string;
         error?: string;
+        warnings?: string[];
     };
 }
 
@@ -297,6 +298,7 @@ export class AuthoringJob {
                     path: join(operation.repository, '.workbenches', selector),
                 })),
                 changed_files: result.changedFiles,
+                ...(result.warnings ? { warnings: result.warnings } : {}),
                 ...(operation.evidencePath
                     ? { evidence_path: operation.evidencePath }
                     : {}),
