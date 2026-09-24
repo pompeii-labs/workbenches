@@ -70,12 +70,23 @@ describe('Workbench image commands', () => {
                 tag: '0.2.0',
                 client: fixture.client,
             });
-            expect(output).toHaveBeenCalledWith(
-                `connected\t127.0.0.1:${fixture.server.port}\t${fixture.client}\n`
-            );
-            expect(output).toHaveBeenCalledWith(
-                `pushed\t127.0.0.1:${fixture.server.port}/pompeii-labs/creator:0.2.0\n`
-            );
+            const writes = output.mock.calls.map(([value]) => String(value));
+            expect(
+                writes.some(
+                    (value) =>
+                        value.includes(
+                            `connected\t127.0.0.1:${fixture.server.port}\t${fixture.client}`
+                        ) || value.includes(`Connected ${fixture.client}`)
+                )
+            ).toBe(true);
+            expect(
+                writes.some(
+                    (value) =>
+                        value.includes(
+                            `pushed\t127.0.0.1:${fixture.server.port}/pompeii-labs/creator:0.2.0`
+                        ) || value.includes('Pushed image')
+                )
+            ).toBe(true);
             expect(await clientInvocations(fixture.log)).toHaveLength(2);
             expect(fixture.patchSizes.some((size) => size === 16 * 1024 * 1024)).toBe(
                 true

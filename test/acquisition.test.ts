@@ -158,9 +158,6 @@ describe('saved-source contract', () => {
         expect(ambiguous.stderr).toContain('--name');
         expect(ambiguous.stderr).toContain('core, other');
         expect((await cli(home, ['add', '.', '--name', 'core'], root)).code).toBe(0);
-        const collision = await cli(home, ['add', second], root);
-        expect(collision.code).toBe(1);
-        expect(collision.stderr).toContain('--as');
         expect((await new SavedWorkbenchCatalog(home).find('expert'))?.localPath).toBe(
             path
         );

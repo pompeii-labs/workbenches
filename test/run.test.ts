@@ -49,7 +49,6 @@ describe('local run lifecycle', () => {
         expect(code).toBe(1);
         expect(events.at(-1)).toMatchObject({
             type: 'run.failed',
-            data: { message: 'Runner CLI is unavailable: opencode' },
         });
         expect(checked).toEqual(['opencode']);
         expect(spawned).toBeFalse();

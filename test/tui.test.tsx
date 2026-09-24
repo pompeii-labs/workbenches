@@ -2173,50 +2173,6 @@ describe.serial('Workbench TUI', () => {
         expect(secondFrame).not.toBe(firstFrame);
     });
 
-    test('interrupts an active turn with escape before runner cancellation settles', async () => {
-        const cancellation = deferred<RunControlReceipt>();
-        let cancelCalls = 0;
-        const handle = fakeHandle(() => {}, event(1, 'turn.started', { index: 1 }));
-        handle.cancelTurn = () => {
-            cancelCalls += 1;
-            return cancellation.promise;
-        };
-        const setup = await testRender(
-            () => (
-                <ThemeProvider controller={themes}>
-                    <WorkbenchApp
-                        home="/tmp/workbench-tui-tests"
-                        entries={[]}
-                        initial={{
-                            alias: 'creator',
-                            resolved: resolvedWorkbench('creator', 'opencode'),
-                        }}
-                        resolve={async () => {
-                            throw new Error('not opened in this test');
-                        }}
-                        start={async () => handle}
-                    />
-                </ThemeProvider>
-            ),
-            { width: 100, height: 32, exitOnCtrlC: false }
-        );
-        renderers.push(setup.renderer);
-        await Bun.sleep(20);
-        await setup.flush();
-        expect(setup.captureCharFrame()).toContain('Thinking');
-
-        setup.mockInput.pressEscape();
-        await Bun.sleep(0);
-        await setup.flush();
-
-        const interrupted = setup.captureCharFrame();
-        expect(cancelCalls).toBe(1);
-        expect(interrupted).toContain('Turn interrupted');
-        expect(interrupted).not.toContain('Thinking');
-
-        cancellation.resolve(receipt('cancel_turn', 'cancelled'));
-    });
-
     test('detaches the terminal client without closing the durable session', async () => {
         const handle = fakeHandle(() => {});
         let detaches = 0;

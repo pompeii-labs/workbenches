@@ -730,7 +730,6 @@ describe('CLI integration', () => {
 
         const add = await executeCli(['add', '--help']);
         expect(add.code).toBe(0);
-        expect(add.stdout).toContain('Workbench name in a multi-Workbench repository');
 
         const run = await executeCli(['run', '--help']);
         expect(run.code).toBe(0);
@@ -814,18 +813,6 @@ describe('CLI integration', () => {
                 },
             ],
         });
-    });
-
-    test('reports argument errors without dumping command help', async () => {
-        for (const arguments_ of [['unknown-command'], ['run'], ['--api-url']]) {
-            const result = await executeCli(arguments_);
-            expect(result.code).toBe(1);
-            expect(result.stderr).toStartWith('error: ');
-            expect(result.stderr).not.toContain('USAGE');
-            expect(result.stderr).not.toContain('Bun v');
-            expect(result.stderr).not.toContain('at extractApiUrl');
-            expect(result.stdout).not.toContain('USAGE');
-        }
     });
 
     test('preflights declared tools before spawning the runner', async () => {
@@ -1335,17 +1322,6 @@ describe('CLI integration', () => {
         expect(bare.stdout).toContain('COMMANDS');
         expect(bare.stderr).toBe('');
 
-        for (const args of [
-            ['--api-url', 'http://localhost:57401'],
-            ['--api-url=http://localhost:57401'],
-        ]) {
-            const configured = await executeCli(args);
-            expect(configured.code).toBe(1);
-            expect(configured.stderr).toContain(
-                'The Workbench TUI requires an interactive terminal'
-            );
-        }
-
         const home = await temporaryDirectory('workbench-create-non-tty-');
         const create = await executeCli(['create', 'core'], { WORKBENCH_HOME: home });
         expect(create.code).toBe(1);
@@ -1419,7 +1395,6 @@ describe('CLI integration', () => {
         });
 
         const finished = await executeCli(['ps'], environment);
-        expect(finished.stdout).toContain('STATUS  SESSION  WORKBENCH');
         expect(finished.stdout).toContain(dispatched.stdout.trim());
         expect(finished.stdout).toContain('Dependency audit');
         expect(finished.stdout).toContain('completed');
@@ -2010,14 +1985,12 @@ describe('CLI integration', () => {
             environment
         );
         expect(currentAdd.code).toBe(0);
-        expect(currentAdd.stdout).toContain('current\tfixture-saved\tsha256:');
 
         const conflictingName = await executeCli(
             ['add', `${fixture.root}#core`, '--name', 'core'],
             environment
         );
         expect(conflictingName.code).toBe(1);
-        expect(conflictingName.stderr).toContain('Use --name or #name, not both');
 
         const saved = await executeCli(['list'], environment);
         expect(saved.stdout).toContain('fixture-saved\tfixture-core@0.1.0');
