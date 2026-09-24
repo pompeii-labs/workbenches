@@ -730,9 +730,7 @@ describe('CLI integration', () => {
 
         const add = await executeCli(['add', '--help']);
         expect(add.code).toBe(0);
-        expect(add.stdout).toContain(
-            'Workbench name in a multi-Workbench repository'
-        );
+        expect(add.stdout).toContain('Workbench name in a multi-Workbench repository');
 
         const run = await executeCli(['run', '--help']);
         expect(run.code).toBe(0);

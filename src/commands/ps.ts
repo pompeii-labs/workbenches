@@ -53,7 +53,15 @@ export const psCommand = defineCommand({
             });
             process.stdout.write(
                 renderTable(
-                    ['STATUS', 'SESSION', 'WORKBENCH', 'RUNNER', 'PID', 'STARTED', 'NAME'],
+                    [
+                        'STATUS',
+                        'SESSION',
+                        'WORKBENCH',
+                        'RUNNER',
+                        'PID',
+                        'STARTED',
+                        'NAME',
+                    ],
                     rows
                 )
             );
@@ -86,6 +94,8 @@ function renderTable(headers: string[], rows: string[][]): string {
         Math.max(header.length, ...rows.map((row) => row[index]?.length ?? 0))
     );
     const format = (row: string[]) =>
-        row.map((value, index) => value.padEnd(widths[index] ?? value.length)).join('  ');
+        row
+            .map((value, index) => value.padEnd(widths[index] ?? value.length))
+            .join('  ');
     return `${format(headers)}\n${rows.map(format).join('\n')}\n`;
 }

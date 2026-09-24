@@ -134,9 +134,7 @@ if (import.meta.main) {
                 argument
             )
         );
-        if (
-            !explicitHelp && invocation.args[0] === 'create' && !headlessCreate
-        ) {
+        if (!explicitHelp && invocation.args[0] === 'create' && !headlessCreate) {
             assertWorkbenchTuiSupported();
         }
         if (usesModelCatalog(invocation.args)) {
@@ -170,6 +168,7 @@ if (import.meta.main) {
 
 /** Citty renders the command summary in dim gray, which is hard to read in some terminals. */
 function commandUsage(usage: string): string {
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: Matches intentional ANSI escape sequences.
     return usage.replace(/^\x1b\[90m(.+?)\x1b\[39m/, '$1');
 }
 
