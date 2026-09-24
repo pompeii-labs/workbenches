@@ -200,7 +200,7 @@ describe('sources and saved catalog', () => {
         ).rejects.toThrow('Remote Workbenches must be saved before running');
     });
 
-    test('rejects duplicate aliases, invalid aliases, and package symlinks', async () => {
+    test('reuses identical aliases and rejects invalid aliases and package symlinks', async () => {
         const fixture = await createRepository(['core']);
         const home = await temporaryDirectory('workbench-catalog-invalid-');
         const catalog = new SavedWorkbenchCatalog(home);
@@ -218,7 +218,7 @@ describe('sources and saved catalog', () => {
                 source: fixture.root,
                 workbench,
             })
-        ).rejects.toThrow('already exists');
+        ).resolves.toMatchObject({ alias: 'fixture-core' });
         await expect(
             catalog.add({ alias: 'Bad Alias', source: fixture.root, workbench })
         ).rejects.toThrow('Invalid saved Workbench alias');

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkbenchEvent } from '../src/runs/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
-import { SessionStore } from '../src/sessions/index.js';
+import { SessionResolver, SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
 const temporaryDirectories: string[] = [];
@@ -316,7 +316,7 @@ describe('durable Workbench runs', () => {
             native_session_id: 'ses_native_1',
         });
         const second = await dispatcher.prepare({
-            resolved,
+            resolved: (await new SessionResolver(home).resolve(ready.id)).resolved,
             mode: 'interactive',
             session: ready,
         });

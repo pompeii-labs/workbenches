@@ -20,7 +20,15 @@ export const upgradeCommand = defineCommand({
         const output = new CliPresenter();
         const home = workbenchHome();
         const entries = await new SavedWorkbenchCatalog(home).list();
-        const aliases = args.alias ? [args.alias] : entries.map((entry) => entry.alias);
+        const aliases = args.alias
+            ? [args.alias]
+            : entries
+                  .filter(
+                      (entry) =>
+                          entry.registry ||
+                          (!entry.localPath && !entry.source.startsWith('/'))
+                  )
+                  .map((entry) => entry.alias);
         if (aliases.length === 0) {
             output.message('No saved Workbenches.');
             return;

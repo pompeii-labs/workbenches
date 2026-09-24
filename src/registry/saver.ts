@@ -28,15 +28,7 @@ export class RegistryWorkbenchSaver {
         this.#telemetry = options.telemetry ?? new RegistryTelemetry({ home });
     }
 
-    async save(reference: RegistryReference): Promise<CatalogEntry> {
-        const entries = await this.#catalog.list();
-        const existing = entries.find(
-            (entry) =>
-                entry.registry?.publisher === reference.publisher &&
-                entry.registry.workbench === reference.workbench
-        );
-        if (existing) return existing;
-
+    async save(reference: RegistryReference, alias?: string): Promise<CatalogEntry> {
         const registry = await this.#client.resolve(reference);
         if (!registry) {
             throw new Error(
@@ -54,23 +46,18 @@ export class RegistryWorkbenchSaver {
             workbench: registry.reference.workbench,
             version_id: registry.versionId,
         };
+        const savedAlias = alias ?? workbench.manifest.name;
+        const existing = (await this.#catalog.list()).find(
+            (entry) => entry.alias === savedAlias
+        );
         const entry = await this.#catalog.addRemote({
-            alias: this.alias(entries, reference),
+            alias: savedAlias,
             workbench,
             expectedDigest: registry.digest,
             registry: catalogRegistry,
         });
-        await this.#telemetry.report({ registry: catalogRegistry, kind: 'save' });
+        if (!existing)
+            await this.#telemetry.report({ registry: catalogRegistry, kind: 'save' });
         return entry;
-    }
-
-    private alias(entries: CatalogEntry[], reference: RegistryReference): string {
-        const occupied = new Set(entries.map((entry) => entry.alias));
-        if (!occupied.has(reference.workbench)) return reference.workbench;
-        const qualified = `${reference.publisher}-${reference.workbench}`;
-        if (!occupied.has(qualified)) return qualified;
-        let suffix = 2;
-        while (occupied.has(`${qualified}-${suffix}`)) suffix += 1;
-        return `${qualified}-${suffix}`;
     }
 }

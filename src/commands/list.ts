@@ -5,7 +5,7 @@ import { defineCommand } from 'citty';
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
-import { WorkbenchSource } from '../workbench/index.js';
+import { Workbench, WorkbenchSource } from '../workbench/index.js';
 import { CliPresenter } from './presenter.js';
 
 export const listCommand = defineCommand({
@@ -31,17 +31,17 @@ export const listCommand = defineCommand({
                 return;
             }
             for (const entry of entries) {
+                const current = entry.localPath
+                    ? await Workbench.load(entry.localPath).catch(() => undefined)
+                    : undefined;
+                const identity = `${current?.manifest.name ?? entry.name}@${current?.manifest.version ?? entry.version}`;
+                const source = entry.localPath
+                    ? `${entry.localPath} (live${current ? '' : ', unavailable'})`
+                    : `${entry.source} --name ${entry.selector}`;
                 output.record({
-                    machine: [
-                        entry.alias,
-                        `${entry.name}@${entry.version}`,
-                        `${entry.source}#${entry.selector}`,
-                    ],
+                    machine: [entry.alias, identity, source],
                     title: entry.alias,
-                    details: [
-                        `${entry.name}@${entry.version}`,
-                        `${entry.source}#${entry.selector}`,
-                    ],
+                    details: [identity, source],
                     tone: 'info',
                 });
             }

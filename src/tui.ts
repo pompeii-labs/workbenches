@@ -68,5 +68,6 @@ function presentAuthoringResults(results: AuthoringOperationResult[]): void {
             tone: result.status === 'failed' ? 'error' : 'success',
         });
         if (result.status === 'failed') process.exitCode = 1;
+        for (const warning of result.warnings ?? []) output.message(warning, 'warning');
     }
 }

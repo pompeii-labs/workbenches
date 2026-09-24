@@ -1,6 +1,7 @@
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { WorkbenchPackage } from '../catalog/index.js';
+import { CatalogSnapshots } from '../catalog/snapshots.js';
 import { modelLabel } from '../models/index.js';
 import { RepositoryGitHub, RepositoryWorkspace } from '../repositories/index.js';
 import { RunnerRegistry } from '../runners/index.js';
@@ -11,6 +12,7 @@ import {
 } from '../sessions/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import type { ResolvedWorkbenchReference } from '../workbench/index.js';
+import { Workbench } from '../workbench/workbench.js';
 import { type RunHandle, StoredRunHandle } from './handle.js';
 import { RunStore, type StoredRun } from './store.js';
 
@@ -43,15 +45,17 @@ export class RunDispatcher {
     }
 
     async prepare(options: PrepareRunOptions): Promise<StoredRun> {
-        const workbench = options.resolved.workbench;
+        const workbench =
+            !options.session && options.resolved.source === 'local'
+                ? await Workbench.load(options.resolved.workbench.packageDirectory)
+                : options.resolved.workbench;
         const id = RunStore.createId();
         const execution = this.executionFor(workbench.manifest.runner);
         const reference =
             options.session?.reference ?? options.reference ?? workbench.manifest.name;
         const workspaces = options.session?.workspaces ?? options.workspaces ?? [];
-        const digest = WorkbenchPackage.digest(
-            await new WorkbenchPackage(workbench).files()
-        );
+        const files = await new WorkbenchPackage(workbench).files();
+        const digest = WorkbenchPackage.digest(files);
         const suggestedName = options.task
             ? this.identity.fromPrompt(options.task)
             : undefined;
@@ -74,6 +78,18 @@ export class RunDispatcher {
                 process.env
             ).assertCredentialsOwnedByEngine(workbench);
         }
+        // Capture package bytes only. Workspace ownership and identity are unchanged.
+        const packagePath =
+            options.session?.workbench_path ??
+            join(
+                this.home,
+                'sessions',
+                id,
+                'packages',
+                digest.slice('sha256:'.length),
+                '.workbenches',
+                basename(workbench.packageDirectory)
+            );
         const session =
             options.session ??
             (await this.sessions.create({
@@ -85,7 +101,7 @@ export class RunDispatcher {
                 model: modelLabel(workbench.manifest.model),
                 runtime: workbench.manifest.runtime,
                 reference,
-                workbench_path: workbench.packageDirectory,
+                workbench_path: packagePath,
                 ...(options.resolved.source === 'local'
                     ? { source_workbench_path: workbench.packageDirectory }
                     : {}),
@@ -100,6 +116,12 @@ export class RunDispatcher {
             }));
         let stored: StoredRun;
         try {
+            if (!options.session)
+                await new CatalogSnapshots(join(this.home, 'sessions', id)).materialize(
+                    basename(workbench.packageDirectory),
+                    files,
+                    digest
+                );
             stored = await this.store.create({
                 id,
                 metadata: {
@@ -124,7 +146,7 @@ export class RunDispatcher {
                         : {}),
                 },
                 request: {
-                    workbench_path: workbench.packageDirectory,
+                    workbench_path: packagePath,
                     workspace: options.resolved.workspaceDirectory,
                     ...(repository ? { repository } : {}),
                     task: options.task ?? '',

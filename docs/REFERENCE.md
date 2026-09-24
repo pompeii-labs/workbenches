@@ -217,12 +217,17 @@ wb list owner/repository
 
 wb validate owner/repository
 wb smoke owner/repository
-wb add owner/repository#core
+wb add publisher/core
+wb add https://github.com/owner/repository --name core --ref main
+wb add ./.workbenches/core --as project-local
 ```
 
 Remote inspection uses the GitHub API and does not clone or create a temporary
-checkout. `add` is the explicit installation boundary: it saves only the
-selected Workbench package as a content-addressed local snapshot.
+checkout. `add` saves remote package snapshots or registers a live absolute local
+package directory. Bare `publisher/name` means registry only, never GitHub.
+Use `--name` for a source package selector, `--ref` for a Git revision, and `--as`
+for an explicit alias. The default alias is the manifest name. Identical additions
+are idempotent; collisions never overwrite and changed remotes require `upgrade`.
 
 Saved packages can be inspected and managed without returning to their source:
 
@@ -243,14 +248,17 @@ wb upgrade
 ```
 
 `update` checks or replaces the installed Workbench CLI. `upgrade` refreshes one
-saved Workbench from its recorded source, or every saved Workbench when no alias
+saved remote Workbench from its recorded source, or every saved remote when no alias
 is provided. An upgrade downloads and verifies the candidate package before it
 atomically repoints the saved alias. Existing snapshots remain unchanged if the
 upgrade fails.
 
 ### Run a task
 
-Pass a positional task or use `--task` for a one-shot run:
+Run a saved alias only. Local registrations read current package bytes for each
+new session; sessions retain their captured bytes for every resume. `--dir` and
+`--repo` select the workspace, not the package source. Pass a positional task or
+use `--task` for a one-shot run:
 
 ```sh
 wb run project-core "Explain the storage architecture"

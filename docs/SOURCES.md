@@ -1,47 +1,68 @@
 # Source and workspace behavior
 
-This document describes the reference engine. It is not part of the normative
-Workbench package format.
+This document describes the reference engine, not the normative package format.
 
-The reference engine recognizes:
+## Add and run
 
-```text
-/local/repository
-/local/repository#migrations
-https://github.com/lux-db/lux.git#migrations
-lux-db/lux#migrations
-lux-migrations
+```sh
+wb add publisher/name
+wb add https://github.com/owner/repository --name core --ref main --as project-core
+wb add ./.workbenches/core --as local-core
+wb run project-core --dir /path/to/workspace --task "Review this project"
 ```
 
-The final form is a saved alias. `#name` selects either the `.workbenches/`
-directory name or manifest `name` when a source publishes more than one package.
+Bare `publisher/name` is a registry identity only. A registry miss never falls
+back to GitHub. Git sources require full HTTPS GitHub repository URLs. `--name`
+selects a package; `--ref` selects a branch, tag, or commit. Multi-package sources
+offer an interactive picker or a non-interactive error listing the available
+`--name` choices. Source fragments (`#name`) are not acquisition syntax.
 
-For GitHub sources, `list`, `validate`, and `smoke` inspect repository metadata,
-trees, and blobs through the GitHub API. Responses stay in memory. These commands
-do not clone, create a temporary checkout, or write repository content locally.
-Public repositories require no credentials. Private repositories can use
-`GITHUB_TOKEN` or `GH_TOKEN`; a GitHub 404 is reported honestly as either missing
-or inaccessible because GitHub deliberately does not distinguish those cases.
+Aliases default to manifest names. `--as` selects another alias. Identical adds
+are idempotent, collisions never overwrite, and changed remote packages at an
+existing alias require `wb upgrade <alias>`.
 
-`wb add` is the explicit installation boundary. It fetches only the selected,
-self-contained Workbench package, writes it into a content-addressed local
-snapshot, and records its source, selector, package version, SHA-256 digest, and
-source Git revision. The package digest is the reproducibility authority. Source
-revisions are provenance metadata and may not include local uncommitted package
-content.
+Remote adds fetch only the selected package and store an immutable snapshot.
+Local adds register the absolute package directory without copying the workspace.
+Each new session reads current local instructions, skills, manifest, and package
+files. Existing v1 frozen local entries stay frozen until explicitly re-added.
+Deleted or invalid local sources fail clearly on the next new run.
 
-Instructions and skills used by a saved Workbench must live inside its package.
-The spec-0 parser still accepts repository-contained paths for backward
-compatibility, but such a package cannot be saved by this engine. Symlinks are
-rejected during save to prevent a snapshot from reaching outside its package.
+`wb run` accepts saved aliases only. The engine-managed official creator is
+launched through `wb create`. `--dir` and `--repo` select work targets, not package
+sources. The default target is the current directory.
 
-Both direct local references and saved aliases run against the current directory
-by default. The package provides expertise while the current directory is the
-work target. `wb run <ref> --dir <workspace>` makes the target explicit. Direct
-remote runs are rejected with an instruction to save the package first; the engine never creates
-a disposable remote work target.
+## Session ownership
 
-Remote inspection follows the GitHub default branch. The reference engine does
-not currently support other Git hosts, exact ref selection, signature
-verification, or registry trust decisions. Remote ingestion is therefore not a
-hardened software-supply-chain boundary.
+At session creation the engine captures package bytes in session-owned storage.
+It does not snapshot, copy, or hash the workspace for this purpose. Resumes use
+that package even after source edits, upgrade, alias removal, or source deletion.
+Legacy sessions keep their exact available original package; the engine does not
+substitute a newer alias when their original package is missing or changed.
+
+`wb upgrade` updates saved remotes only. Local registrations need no upgrade.
+`wb update` checks or replaces the CLI itself. Removing an alias never removes
+the original live source or a package still owned by a resumable session.
+
+## Authoring and publishing
+
+Successful `wb create` verification auto-registers the live local package. An
+improvement at the same directory preserves its alias. Alias collisions do not
+turn a verified creation into failure: the result includes the package path and
+an explicit `wb add ... --as ...` instruction.
+
+`wb publish <saved-alias>` submits package bytes to the registry for review as
+`publisher/<workbench.yml name>`, independent of the local alias and package
+directory. `--as` is only for local aliases when adding a Workbench. Publish
+reports the submission status, dashboard URL, and latest approved version when
+available. A pending submission is not a published release.
+
+## Inspection and safety
+
+Inspection commands retain local/source references for authoring and validation.
+GitHub inspection uses metadata, trees, and blobs through the GitHub API, not a
+clone. Public repositories need no credentials; private repositories may use
+`GITHUB_TOKEN` or `GH_TOKEN`. GitHub 404s can mean missing or inaccessible.
+
+Saved and session-owned packages must keep instructions and skills within the
+package. Symlinks are rejected. Other Git hosts and signature verification are
+not supported; remote ingestion is not a hardened supply-chain boundary.

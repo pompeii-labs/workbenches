@@ -17,6 +17,20 @@ verified.
 
 ## Dispatch
 
+Add the package first; `run` accepts only a saved alias:
+
+```sh
+wb add publisher/name --as expert
+wb add https://github.com/owner/repository --name core --ref main --as git-expert
+wb add ./.workbenches/core --as local-expert
+```
+
+Bare `publisher/name` is registry-only. Use `--name`, not `#name`, for acquisition.
+Local registrations stay live for new sessions. Remote packages change only on
+`wb upgrade`; `wb update` updates the CLI. Sessions capture package bytes once,
+so edits, alias removal, and upgrades do not change a resumed session. Never use
+`--dir` or `--repo` to select the package; they identify only the work target.
+
 Write substantial briefs to a UTF-8 file. This avoids shell quoting problems
 and leaves an inspectable handoff:
 

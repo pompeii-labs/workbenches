@@ -56,12 +56,14 @@ An inherited `E2B_API_KEY` still overrides the saved value for a single process.
 wb
 ```
 
-Search the registry, choose a Workbench, then choose where it should work: your current directory, another local directory, or an isolated GitHub checkout.
+Search the registry, choose Add or Add and run, then choose where it should work: your current directory, another local directory, or an isolated GitHub checkout. Saved Workbenches offer Run.
 
 You can also save and run a Workbench directly from the shell:
 
 ```sh
-wb add owner/repository#core --as project-core
+wb add publisher/core --as project-core
+wb add https://github.com/owner/repository --name core --as project-core-git
+wb add ./.workbenches/core --as project-core-local
 wb run project-core "Explain this repository's architecture"
 ```
 
@@ -71,6 +73,15 @@ Use `--final` when you only want the final response or `--json` for normalized N
 wb run project-core --task "Review this migration" --final
 wb run project-core --task "Review this migration" --json
 ```
+
+Remote additions are frozen until `wb upgrade`. Local additions are live: each
+new run reads the registered absolute package directory. Every session captures
+its own package bytes, so resumed sessions keep their original package even
+after edits, upgrades, or removal. `run` accepts saved aliases only; `--dir` and
+`--repo` select the work target, never the package source. `wb publish <alias>`
+submits package bytes under `publisher/<manifest-name>` for registry review and
+reports the returned status. `--as` only names a local alias when adding a
+Workbench; it does not rename a registry publication.
 
 ## What is in a Workbench?
 

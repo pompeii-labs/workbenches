@@ -1,7 +1,5 @@
 import { RegistryClient } from '../registry/client.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
-import { WorkbenchSource } from '../workbench/source.js';
-import { WorkbenchPackage } from './package.js';
 import { SavedWorkbenchCatalog } from './saved.js';
 import type { CatalogEntry, CatalogUpgradeResult } from './types.js';
 
@@ -67,20 +65,17 @@ export class SavedWorkbenchUpgrade {
     }
 
     private async upgradeSource(entry: CatalogEntry): Promise<CatalogUpgradeResult> {
-        const source = new WorkbenchSource();
-        const local = await source.local(entry.source);
-        if (local) {
-            const workbench = await source.select(local.directory, entry.selector);
-            return this.#catalog.upgrade(entry.alias, {
-                source: local.source,
-                ...(local.revision ? { revision: local.revision } : {}),
-                selector: entry.selector,
-                manifest: workbench.manifest,
-                files: await new WorkbenchPackage(workbench).files(),
-            });
+        if (entry.localPath || entry.source.startsWith('/')) {
+            throw new Error(
+                `Local Workbenches are not upgraded. Edit the source directly, or re-add a frozen local entry with wb add ${entry.source} --name ${entry.selector} --as ${entry.alias}.`
+            );
         }
 
-        const workbench = await this.github().fetch(entry.source, entry.selector);
+        const workbench = await this.github().fetch(
+            entry.source,
+            entry.selector,
+            entry.ref ? { revision: entry.ref } : {}
+        );
         return this.#catalog.upgrade(entry.alias, {
             source: workbench.source,
             revision: workbench.revision,

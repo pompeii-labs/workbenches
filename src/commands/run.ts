@@ -23,7 +23,7 @@ export const runCommand = defineCommand({
     args: {
         workbench: {
             type: 'positional',
-            description: 'Saved alias or local Workbench reference',
+            description: 'Saved Workbench alias',
             required: true,
         },
         prompt: {
@@ -155,6 +155,7 @@ export const runCommand = defineCommand({
                 throw new Error('This run mode requires a non-empty task');
             }
             const resolved = await new WorkbenchResolver().resolve(args.workbench, {
+                savedOnly: true,
                 ...(args.dir ? { workspaceDirectory: args.dir } : {}),
             });
             if (repository) resolved.repository = repository;
@@ -187,6 +188,7 @@ export const runCommand = defineCommand({
         }
 
         const resolved = await new WorkbenchResolver().resolve(args.workbench, {
+            savedOnly: true,
             ...(args.dir ? { workspaceDirectory: args.dir } : {}),
         });
         if (repository) resolved.repository = repository;

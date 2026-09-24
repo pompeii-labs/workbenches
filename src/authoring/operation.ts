@@ -1,7 +1,11 @@
 import { lstat, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { type SnapshotFile, WorkbenchPackage } from '../catalog/index.js';
+import {
+    SavedWorkbenchCatalog,
+    type SnapshotFile,
+    WorkbenchPackage,
+} from '../catalog/index.js';
 import { SemanticVersion } from '../releases/index.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
@@ -38,6 +42,7 @@ export interface AuthoringOperationResult {
     packages: string[];
     changedFiles: string[];
     error?: string;
+    warnings?: string[];
 }
 
 export type AuthoringSmoke = (
@@ -256,12 +261,26 @@ export class AuthoringOperation {
             finished_at: new Date().toISOString(),
         });
         if (error) throw new Error(error);
+        const warnings: string[] = [];
+        for (const selector of candidates) {
+            const path = join(this.record.repository, '.workbenches', selector);
+            try {
+                await new SavedWorkbenchCatalog(this.home).addLocal({
+                    workbench: await Workbench.load(path),
+                });
+            } catch (cause) {
+                warnings.push(
+                    `Package verified at ${path}, but not added: ${cause instanceof Error ? cause.message : String(cause)} Run wb add ${JSON.stringify(path)} --as <alias>.`
+                );
+            }
+        }
         return {
             id: this.record.id,
             kind: this.record.kind,
             status,
             packages: candidates,
             changedFiles,
+            ...(warnings.length ? { warnings } : {}),
         };
     }
 

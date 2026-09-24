@@ -24,6 +24,10 @@ export interface CatalogEntry {
     addedAt: string;
     revision?: string;
     registry?: CatalogRegistryReference;
+    /** Present only for live local registrations. Older v1 entries stay frozen. */
+    localPath?: string;
+    /** Requested Git branch/tag/commit, distinct from the resolved revision. */
+    ref?: string;
 }
 
 export interface CatalogUpgrade {
