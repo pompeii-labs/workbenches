@@ -354,9 +354,6 @@ export class AuthoringOperation {
             if (selectors.length === 0) {
                 return new AuthoringCreateIncompleteError();
             }
-            if (selectors.length > 1) {
-                return `Workbench creation created multiple packages: ${selectors.join(', ')}`;
-            }
         }
         for (const selector of selectors) {
             const before = this.record.before.find(
