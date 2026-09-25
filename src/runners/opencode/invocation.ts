@@ -187,19 +187,25 @@ function buildOpenCodeEnvironment(
         ? instructionsPath
         : instructionRelativePath;
     const outbox = baseEnv.WORKBENCH_OUTPUT_DIR;
+    // A Workbench is one agent: deny OpenCode's subagent tool. The engine only
+    // brokers permissions for the root session, so a subagent's request would
+    // otherwise wait forever. Inline config outranks package and repository
+    // config, so neither can re-enable it.
     // Approve only the engine-owned result directory. Keep all other native
     // permission defaults and package settings intact, including tool approval.
-    const outboxPermission =
-        outbox && !/[?*\\]/.test(outbox)
-            ? { permission: { external_directory: { [`${outbox}/*`]: 'allow' } } }
-            : {};
+    const permission = {
+        task: 'deny',
+        ...(outbox && !/[?*\\]/.test(outbox)
+            ? { external_directory: { [`${outbox}/*`]: 'allow' } }
+            : {}),
+    };
     const config = {
         $schema: 'https://opencode.ai/config.json',
         autoupdate: false,
         share: 'disabled',
         model,
         instructions: [instructionPath],
-        ...outboxPermission,
+        permission,
         ...(Object.keys(mcp).length > 0 ? { mcp } : {}),
     };
 
