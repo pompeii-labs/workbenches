@@ -86,7 +86,7 @@ describe('Workbench registry provider', () => {
                 model: 'openai/gpt-5.6-terra',
                 version: '0.1.0',
                 sourceReference: 'lux-db/lux#auth',
-                sourceUrl: 'https://workbenches.dev/lux/auth',
+                sourceUrl: 'https://workbenches.dev/p/lux/auth',
                 publisherName: 'Lux',
                 verifiedPublisher: true,
                 saves: 12,
@@ -267,7 +267,7 @@ function searchResult() {
         runtime: 'local',
         model: 'openai/gpt-5.6-terra',
         source_reference: 'lux-db/lux#auth',
-        source_url: 'https://workbenches.dev/lux/auth',
+        source_url: 'https://workbenches.dev/p/lux/auth',
         publisher: {
             slug: 'lux',
             name: 'Lux',
