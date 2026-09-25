@@ -3,7 +3,7 @@
 set -eu
 
 repository="${WORKBENCH_REPOSITORY:-pompeii-labs/workbenches}"
-version="${WORKBENCH_VERSION:-0.1.0-alpha.7}"
+version="${WORKBENCH_VERSION:-latest}"
 bin_dir="${WORKBENCH_INSTALL_DIR:-${XDG_BIN_HOME:-${HOME:-}/.local/bin}}"
 download_root="${WORKBENCH_DOWNLOAD_ROOT:-}"
 allow_insecure="${WORKBENCH_ALLOW_INSECURE:-0}"
@@ -16,10 +16,13 @@ usage() {
         '                  [--repository OWNER/REPOSITORY]' \
         '' \
         'Environment:' \
-        '  WORKBENCH_VERSION         Release version or latest (default: 0.1.0-alpha.7)' \
+        '  WORKBENCH_VERSION         Release version or latest (default: latest)' \
         '  WORKBENCH_INSTALL_DIR     Installation directory' \
         '  WORKBENCH_REPOSITORY      GitHub owner/repository' \
-        '  WORKBENCH_DOWNLOAD_ROOT   HTTPS release mirror root'
+        '  WORKBENCH_DOWNLOAD_ROOT   HTTPS release mirror root' \
+        '' \
+        'latest selects the most recently published release, including prereleases,' \
+        'among the 100 newest GitHub release records, not the highest version.'
 }
 
 fail() {
@@ -73,10 +76,110 @@ esac
 target="workbench-${os}-${architecture}"
 archive_name="${target}.tar.gz"
 
+latest_tag() {
+    # Do not use /releases/latest: GitHub excludes prereleases from that endpoint.
+    # Fetch separately from parsing so an HTTP failure cannot be hidden by a pipe.
+    metadata="$(curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+        --connect-timeout 10 --max-time 30 --max-filesize 8388608 \
+        -H 'Accept: application/vnd.github+json' \
+        "https://api.github.com/repos/${repository}/releases?per_page=100")" ||
+        fail 'could not discover the latest release; retry or specify --version'
+    # Parse JSON rather than matching tag_name in release notes or nested objects.
+    # No external JSON runtime is required. Strings remain escaped: selected tags
+    # and timestamps must have GitHub canonical, unescaped values to pass validation.
+    printf '%s' "$metadata" | LC_ALL=C awk '
+        function bad() { invalid = 1; exit 1 }
+        function space() { while (substr(json, pos, 1) ~ /^[ \t\r\n]$/) pos++ }
+        function string(    start, c, escape, digits) {
+            start = ++pos
+            while (pos <= length(json)) {
+                c = substr(json, pos++, 1)
+                if (c == "\"") return substr(json, start, pos - start - 1)
+                if (c ~ /[[:cntrl:]]/) bad()
+                if (c == "\\") {
+                    escape = substr(json, pos++, 1)
+                    if (escape == "u") {
+                        digits = substr(json, pos, 4)
+                        if (length(digits) != 4 || digits ~ /[^0-9a-fA-F]/) bad()
+                        pos += 4
+                    } else if (escape !~ /^["\\\/bfnrt]$/) bad()
+                }
+            }
+            bad()
+        }
+        function value(depth,    c, key, result, seen, tag, date, draft, count) {
+            if (depth > 100) bad()
+            space()
+            c = substr(json, pos, 1)
+            if (c == "\"") { result = string(); kind = "string"; return result }
+            if (c == "{" || c == "[") {
+                pos++; space()
+                if (substr(json, pos, 1) != (c == "{" ? "}" : "]")) {
+                    while (1) {
+                        if (c == "{") {
+                            if (substr(json, pos, 1) != "\"") bad()
+                            key = string(); space()
+                            if (substr(json, pos++, 1) != ":") bad()
+                        }
+                        result = value(depth + 1)
+                        if (depth == 1 && kind != "object") bad()
+                        if (depth == 2 && c == "{") {
+                            if (key == "tag_name" || key == "published_at" || key == "draft") {
+                                if (index(seen, "|" key "|")) bad()
+                                seen = seen "|" key "|"; count++
+                                if (key == "tag_name") {
+                                    if (kind != "string") bad()
+                                    tag = result
+                                } else if (key == "draft") {
+                                    if (kind != "boolean") bad()
+                                    draft = result
+                                } else {
+                                    if (kind != "string" && kind != "null") bad()
+                                    date = result
+                                }
+                            }
+                        }
+                        space()
+                        if (substr(json, pos, 1) != ",") break
+                        pos++; space()
+                    }
+                }
+                if (substr(json, pos++, 1) != (c == "{" ? "}" : "]")) bad()
+                if (depth == 2 && c == "{") {
+                    if (count != 3) bad()
+                    if (draft == "false") {
+                        if (date !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) bad()
+                        if (date > newest) { newest = date; selected = tag }
+                    }
+                }
+                kind = c == "{" ? "object" : "array"
+                return ""
+            }
+            if (match(substr(json, pos), /^(true|false|null|-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?)/)) {
+                result = substr(json, pos, RLENGTH); pos += RLENGTH
+                kind = result == "null" ? "null" : result ~ /^(true|false)$/ ? "boolean" : "number"
+                return result
+            }
+            bad()
+        }
+        { json = json $0 "\n" }
+        END {
+            if (invalid) exit 1
+            pos = 1; space()
+            if (substr(json, pos, 1) != "[") bad()
+            value(1); space()
+            if (pos <= length(json)) bad()
+            if (selected !~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/) bad()
+            print selected
+        }
+    ' || fail 'latest release metadata is missing or invalid; specify --version'
+}
+
 if [ -n "$download_root" ]; then
     base="${download_root%/}"
 elif [ "$version" = 'latest' ]; then
-    base="https://github.com/${repository}/releases/latest/download"
+    tag="$(latest_tag)" || exit 1
+    base="https://github.com/${repository}/releases/download/${tag}"
 else
     case "$version" in
         v*) tag="$version" ;;
