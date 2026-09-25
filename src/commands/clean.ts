@@ -24,7 +24,8 @@ export const cleanCommand = defineCommand({
         },
         'include-sessions': {
             type: 'boolean',
-            description: 'Also select native resumable session context',
+            description:
+                'Also remove resumable sessions, so they can no longer be continued with wb resume',
             default: false,
         },
         apply: {

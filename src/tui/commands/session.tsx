@@ -195,13 +195,6 @@ export class SessionCommands {
                 ? []
                 : [
                       this.#command(
-                          'home',
-                          'Workbench home',
-                          'Detach this terminal and return to discovery',
-                          'Session',
-                          () => this.options.actions.home()
-                      ),
-                      this.#command(
                           'resume',
                           'Resume session',
                           'Detach this terminal and browse previous sessions',

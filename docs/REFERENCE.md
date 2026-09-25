@@ -733,7 +733,6 @@ wb attach wb_... --json
 wb ps                  # active and resumable sessions
 wb ps --all            # all session history
 wb kill wb_...
-wb kill                # latest active session
 wb resume wb_...       # open or attach the terminal client
 wb resume wb_... "Review the latest change"
 wb resume wb_... --task "Run the checks" --detach
@@ -832,11 +831,10 @@ resources.
 
 ### Interactive client
 
-Running `wb`, `workbench`, or `wb run <name>` without a task opens the
-terminal client:
+Running `wb run <name>` without a task opens the terminal client. `wb` and
+`workbench` show command help.
 
 ```sh
-wb
 wb run project-core
 ```
 

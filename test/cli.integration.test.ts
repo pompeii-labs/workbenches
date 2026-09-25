@@ -728,6 +728,9 @@ describe('CLI integration', () => {
         expect(create.stdout).toContain('--workspace=<NAME=path>');
         expect(create.stdout).toContain('--allow-host-docker');
 
+        const add = await executeCli(['add', '--help']);
+        expect(add.code).toBe(0);
+
         const run = await executeCli(['run', '--help']);
         expect(run.code).toBe(0);
         expect(run.stdout).toContain('--connection=<connection>');
@@ -810,18 +813,6 @@ describe('CLI integration', () => {
                 },
             ],
         });
-    });
-
-    test('reports argument errors without dumping command help', async () => {
-        for (const arguments_ of [['unknown-command'], ['run'], ['--api-url']]) {
-            const result = await executeCli(arguments_);
-            expect(result.code).toBe(1);
-            expect(result.stderr).toStartWith('error: ');
-            expect(result.stderr).not.toContain('USAGE');
-            expect(result.stderr).not.toContain('Bun v');
-            expect(result.stderr).not.toContain('at extractApiUrl');
-            expect(result.stdout).not.toContain('USAGE');
-        }
     });
 
     test('preflights declared tools before spawning the runner', async () => {
@@ -1314,7 +1305,7 @@ describe('CLI integration', () => {
         expect(final.stdout).toBe('fixture response\n');
     });
 
-    test('reserves taskless and bare invocations for an interactive TUI', async () => {
+    test('shows help for a bare invocation and reserves taskless runs for the TUI', async () => {
         const fixture = await createFixture();
         const result = await executeSavedCli(['run', fixture.packageDirectory]);
 
@@ -1324,21 +1315,12 @@ describe('CLI integration', () => {
         );
 
         const bare = await executeCli([]);
-        expect(bare.code).toBe(1);
-        expect(bare.stderr).toContain(
-            'The Workbench TUI requires an interactive terminal'
+        expect(bare.code).toBe(0);
+        expect(bare.stdout).toContain(
+            'Discover, save, verify, and run open Workbenches'
         );
-
-        for (const args of [
-            ['--api-url', 'http://localhost:57401'],
-            ['--api-url=http://localhost:57401'],
-        ]) {
-            const configured = await executeCli(args);
-            expect(configured.code).toBe(1);
-            expect(configured.stderr).toContain(
-                'The Workbench TUI requires an interactive terminal'
-            );
-        }
+        expect(bare.stdout).toContain('COMMANDS');
+        expect(bare.stderr).toBe('');
 
         const home = await temporaryDirectory('workbench-create-non-tty-');
         const create = await executeCli(['create', 'core'], { WORKBENCH_HOME: home });
@@ -1648,7 +1630,7 @@ describe('CLI integration', () => {
         expect(new Set(events.map((event) => event.run_id)).size).toBe(1);
     }, 20_000);
 
-    test('stops the active run in the latest session and records a terminal event', async () => {
+    test('requires a session ID to stop an active run and records a terminal event', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-kill-');
         const bin = await fakeBin([], { block: true });
@@ -1664,7 +1646,14 @@ describe('CLI integration', () => {
         const id = dispatched.stdout.trim();
         expect(id).toMatch(/^wb_[a-z0-9]{20,64}$/);
 
-        const killed = await executeCli(['kill'], environment);
+        const missingId = await executeCli(['kill'], environment);
+        expect(missingId.code).toBe(1);
+        expect(missingId.stdout).toContain('workbench kill [OPTIONS] <SESSION>');
+        expect(missingId.stderr).toContain(
+            'Missing required positional argument: SESSION'
+        );
+
+        const killed = await executeCli(['kill', id], environment);
         expect(killed.code).toBe(0);
         expect(killed.stdout).toBe(`cancelled\t${id}\n`);
 
@@ -1990,6 +1979,18 @@ describe('CLI integration', () => {
         expect(added.stdout).toContain(
             `saved\tfixture-saved\t${fixture.packageDirectory}`
         );
+
+        const currentAdd = await executeCli(
+            ['add', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
+            environment
+        );
+        expect(currentAdd.code).toBe(0);
+
+        const conflictingName = await executeCli(
+            ['add', `${fixture.root}#core`, '--name', 'core'],
+            environment
+        );
+        expect(conflictingName.code).toBe(1);
 
         const saved = await executeCli(['list'], environment);
         expect(saved.stdout).toContain('fixture-saved\tfixture-core@0.1.0');

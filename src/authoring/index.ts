@@ -13,6 +13,7 @@ export {
     type ResolvedOfficialWorkbench,
 } from './official.js';
 export {
+    AuthoringCreateIncompleteError,
     type AuthoringFinishOptions,
     type AuthoringKind,
     AuthoringOperation,

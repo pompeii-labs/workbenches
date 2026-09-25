@@ -10,9 +10,10 @@ import {
     TextRenderable,
 } from '@opentui/core';
 import { testRender } from '@opentui/solid';
-import type {
-    AuthoringOperation,
-    AuthoringOperationResult,
+import {
+    AuthoringCreateIncompleteError,
+    type AuthoringOperation,
+    type AuthoringOperationResult,
 } from '../src/authoring/index.js';
 import type { CatalogEntry } from '../src/catalog/index.js';
 import { OutcomeLifecycle } from '../src/outcomes/lifecycle.js';
@@ -959,6 +960,10 @@ describe.serial('Workbench TUI', () => {
         await setup.flush();
 
         const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('/');
+        await setup.flush();
+        expect(setup.captureCharFrame()).not.toContain('/home');
+
         prompt.setText('/theme');
         await setup.flush();
         expect(setup.captureCharFrame()).toContain('/theme');
@@ -1410,6 +1415,74 @@ describe.serial('Workbench TUI', () => {
         expect(completed).toEqual(result);
     });
 
+    test('exits a create operation that has not created a Workbench', async () => {
+        let failedWith: string | undefined;
+        let closeCalls = 0;
+        let completed: AuthoringOperationResult | undefined;
+        const result: AuthoringOperationResult = {
+            id: 'author_tui_empty_create',
+            kind: 'create',
+            status: 'failed',
+            packages: [],
+            changedFiles: [],
+            error: 'Creator exited before creating a Workbench.',
+        };
+        const operation = {
+            id: result.id,
+            finish: async () => {
+                throw new AuthoringCreateIncompleteError();
+            },
+            fail: async (message: string) => {
+                failedWith = message;
+                return result;
+            },
+        } as unknown as AuthoringOperation;
+        const handle = fakeHandle(() => {});
+        handle.close = async () => {
+            closeCalls += 1;
+            return receipt('close', 'closed');
+        };
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench(
+                                'workbench-creator',
+                                'opencode'
+                            ),
+                            operation,
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => handle}
+                        onAuthoringFinished={(value) => {
+                            completed = value;
+                        }}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 28, exitOnCtrlC: false }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(10);
+        await setup.flush();
+
+        const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('/quit');
+        prompt.submit();
+        await Bun.sleep(10);
+        await setup.flush();
+
+        expect(failedWith).toBe('Creator exited before creating a Workbench.');
+        expect(closeCalls).toBe(1);
+        expect(completed).toEqual(result);
+    });
+
     test('does not finalize authoring while the creator turn is active', async () => {
         let finishCalls = 0;
         let closeCalls = 0;
@@ -1807,46 +1880,6 @@ describe.serial('Workbench TUI', () => {
         expect(controller.selected).toBe('flexoki');
     });
 
-    test('returns from a session to Workbench discovery with /home', async () => {
-        let detaches = 0;
-        const handle = fakeHandle(() => {}, event(1, 'turn.started', { index: 1 }));
-        handle.detach = async () => {
-            detaches += 1;
-            return receipt('detach_client', 'detached');
-        };
-        const setup = await testRender(
-            () => (
-                <ThemeProvider controller={themes}>
-                    <WorkbenchApp
-                        home="/tmp/workbench-tui-tests"
-                        entries={[entry('lux-core')]}
-                        initial={{
-                            alias: 'creator',
-                            resolved: resolvedWorkbench('creator', 'opencode'),
-                        }}
-                        resolve={async (alias) => homeWorkbench(alias)}
-                        start={async () => handle}
-                    />
-                </ThemeProvider>
-            ),
-            { width: 100, height: 32 }
-        );
-        renderers.push(setup.renderer);
-        await Bun.sleep(10);
-        await setup.flush();
-
-        const prompt = findPrompt(setup.renderer.root);
-        prompt.setText('/home');
-        prompt.submit();
-        await Bun.sleep(20);
-        await setup.flush();
-
-        expect(detaches).toBe(1);
-        expect(setup.captureCharFrame()).toContain(
-            'Search saved and published Workbenches'
-        );
-    });
-
     test('lists and resumes a native interactive session', async () => {
         const home = await mkdtemp(join(tmpdir(), 'workbench-tui-sessions-'));
         temporaryDirectories.push(home);
@@ -2138,50 +2171,6 @@ describe.serial('Workbench TUI', () => {
         const secondFrame = setup.captureCharFrame();
         expect(secondFrame).toContain('Thinking');
         expect(secondFrame).not.toBe(firstFrame);
-    });
-
-    test('shows an interrupted turn before runner cancellation settles', async () => {
-        const cancellation = deferred<RunControlReceipt>();
-        let cancelCalls = 0;
-        const handle = fakeHandle(() => {}, event(1, 'turn.started', { index: 1 }));
-        handle.cancelTurn = () => {
-            cancelCalls += 1;
-            return cancellation.promise;
-        };
-        const setup = await testRender(
-            () => (
-                <ThemeProvider controller={themes}>
-                    <WorkbenchApp
-                        home="/tmp/workbench-tui-tests"
-                        entries={[]}
-                        initial={{
-                            alias: 'creator',
-                            resolved: resolvedWorkbench('creator', 'opencode'),
-                        }}
-                        resolve={async () => {
-                            throw new Error('not opened in this test');
-                        }}
-                        start={async () => handle}
-                    />
-                </ThemeProvider>
-            ),
-            { width: 100, height: 32, exitOnCtrlC: false }
-        );
-        renderers.push(setup.renderer);
-        await Bun.sleep(20);
-        await setup.flush();
-        expect(setup.captureCharFrame()).toContain('Thinking');
-
-        setup.mockInput.pressCtrlC();
-        await Bun.sleep(0);
-        await setup.flush();
-
-        const interrupted = setup.captureCharFrame();
-        expect(cancelCalls).toBe(1);
-        expect(interrupted).toContain('Turn interrupted');
-        expect(interrupted).not.toContain('Thinking');
-
-        cancellation.resolve(receipt('cancel_turn', 'cancelled'));
     });
 
     test('detaches the terminal client without closing the durable session', async () => {

@@ -154,7 +154,11 @@ export class SavedWorkbenchCatalog {
                 ? { expectedDigest: upgrade.expectedDigest }
                 : {}),
             ...(upgrade.registry ? { registry: upgrade.registry } : {}),
-            ...(previous.ref ? { ref: previous.ref } : {}),
+            ...(upgrade.ref
+                ? { ref: upgrade.ref }
+                : previous.ref
+                  ? { ref: previous.ref }
+                  : {}),
         });
         if (entry.digest === previous.digest) {
             return { previous, entry: previous, changed: false };

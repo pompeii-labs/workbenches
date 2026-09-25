@@ -45,6 +45,14 @@ export interface AuthoringOperationResult {
     warnings?: string[];
 }
 
+/** A create operation was finalized before the creator made a package. */
+export class AuthoringCreateIncompleteError extends Error {
+    constructor() {
+        super('Workbench creation did not create a package');
+        this.name = 'AuthoringCreateIncompleteError';
+    }
+}
+
 export type AuthoringSmoke = (
     workbench: Workbench,
     options: AuthoringSmokeOptions
@@ -232,7 +240,8 @@ export class AuthoringOperation {
         );
         const status = changedFiles.length === 0 ? 'unchanged' : 'completed';
         const candidates = this.candidateSelectors(after, changedFiles);
-        let error = this.validateCandidate(after, changedFiles, candidates);
+        const validation = this.validateCandidate(after, changedFiles, candidates);
+        let error = validation instanceof Error ? validation.message : validation;
         if (!error) {
             for (const selector of candidates) {
                 try {
@@ -260,6 +269,7 @@ export class AuthoringOperation {
             ...(error ? { error } : {}),
             finished_at: new Date().toISOString(),
         });
+        if (validation instanceof Error) throw validation;
         if (error) throw new Error(error);
         const warnings: string[] = [];
         for (const selector of candidates) {
@@ -305,7 +315,7 @@ export class AuthoringOperation {
         after: PackageState[],
         changedFiles: string[],
         selectors: string[]
-    ): string | undefined {
+    ): string | AuthoringCreateIncompleteError | undefined {
         const allowed = new Set(
             this.record.target_selector ? [this.record.target_selector] : selectors
         );
@@ -342,10 +352,7 @@ export class AuthoringOperation {
                 return `Workbench creation modified existing package ${existing.join(', ')}`;
             }
             if (selectors.length === 0) {
-                return 'Workbench creation did not create a package';
-            }
-            if (selectors.length > 1) {
-                return `Workbench creation created multiple packages: ${selectors.join(', ')}`;
+                return new AuthoringCreateIncompleteError();
             }
         }
         for (const selector of selectors) {

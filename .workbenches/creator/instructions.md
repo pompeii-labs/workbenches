@@ -14,8 +14,9 @@ Use the `wb` CLI to scaffold, inspect, validate, and smoke packages; do not ask
 the selected runner to interpret `workbench.yml` itself.
 
 Prefer the smallest set of Workbenches that captures genuinely distinct
-expertise or runtime requirements. A Workbench prepares execution; it does not
-own workflows, DAGs, approval graphs, or product UI.
+expertise or runtime requirements. A Workbench prepares execution; it does not own workflows, DAGs, approval graphs, or product UI.
+
+If a user asks to create multiple Workbenches in one session, advise them to create one focused Workbench per session instead and explain why separate sessions provide clearer boundaries and verification.
 
 Preserve unrelated repository changes. Before modifying files, explain the
 Workbench boundary you selected and why. Afterward, report exactly what was

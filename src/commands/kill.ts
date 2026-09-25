@@ -13,8 +13,8 @@ export const killCommand = defineCommand({
     args: {
         session: {
             type: 'positional',
-            description: 'Session ID (defaults to the latest active session)',
-            required: false,
+            description: 'Active session ID to stop',
+            required: true,
         },
     },
     async run({ args }) {
@@ -22,9 +22,7 @@ export const killCommand = defineCommand({
         const home = workbenchHome();
         const store = new RunStore(home);
         const lifecycle = new SessionLifecycle(home);
-        const activity = args.session
-            ? await lifecycle.resolve(args.session)
-            : await lifecycle.latestActive();
+        const activity = await lifecycle.resolve(args.session);
         if (RunStore.isTerminal(activity.run.status)) {
             throw new Error(
                 `Workbench session is already ${activity.run.status}: ${activity.id}`

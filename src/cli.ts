@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { defineCommand, renderUsage, runMain } from 'citty';
+import pc from 'picocolors';
 import packageMetadata from '../package.json' with { type: 'json' };
 import { AuthoringJob } from './authoring/job.js';
 
@@ -37,7 +38,7 @@ import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
 import { RunWorker } from './runs/index.js';
 import { workbenchHome } from './storage.js';
-import { assertWorkbenchTuiSupported, launchWorkbenchTui } from './tui.js';
+import { assertWorkbenchTuiSupported } from './tui.js';
 
 let bareInvocation = import.meta.main && process.argv.length === 2;
 
@@ -46,9 +47,6 @@ export const workbenchCommand = defineCommand({
         name: 'workbench',
         version: packageMetadata.version,
         description: 'Discover, save, verify, and run open Workbenches.',
-    },
-    async run() {
-        if (bareInvocation) await launchWorkbenchTui();
     },
     subCommands: {
         init: initCommand,
@@ -100,15 +98,26 @@ if (import.meta.main) {
         process.exit(await new RunWorker(home).executeDispatched(id));
     }
     const defaultConsoleError = console.error;
+    const colors = pc.createColors(
+        Boolean(process.stderr.isTTY) &&
+            process.env.NO_COLOR === undefined &&
+            process.env.TERM !== 'dumb'
+    );
+    const formatError = (message: string) =>
+        colors.isColorSupported
+            ? `${colors.red('✗')} ${colors.red(message)}`
+            : `error: ${message}`;
     console.error = (value?: unknown, ...optional: unknown[]) => {
-        if (value instanceof Error) {
-            process.stderr.write(`error: ${value.message}\n`);
-            return;
-        }
-        if (typeof value === 'string' && optional.length === 0) {
-            process.stderr.write(
-                `${value.startsWith('error: ') ? value : `error: ${value}`}\n`
-            );
+        const message =
+            value instanceof Error
+                ? value.message
+                : typeof value === 'string' && optional.length === 0
+                  ? value.startsWith('error: ')
+                      ? value.slice(7)
+                      : value
+                  : undefined;
+        if (message !== undefined) {
+            process.stderr.write(`${formatError(message)}\n`);
             return;
         }
         defaultConsoleError(value, ...optional);
@@ -125,22 +134,26 @@ if (import.meta.main) {
                 argument
             )
         );
-        if (
-            !explicitHelp &&
-            (bareInvocation || (invocation.args[0] === 'create' && !headlessCreate))
-        ) {
+        if (!explicitHelp && invocation.args[0] === 'create' && !headlessCreate) {
             assertWorkbenchTuiSupported();
         }
-        if (usesModelCatalog(invocation.args, bareInvocation)) {
+        if (usesModelCatalog(invocation.args)) {
             await new ModelCatalog({ home: workbenchHome() }).refresh();
         }
-        await runMain(workbenchCommand, {
-            rawArgs: invocation.args,
-            showUsage: async (command, parent) => {
-                if (!explicitHelp) return;
-                process.stdout.write(`${await renderUsage(command, parent)}\n\n`);
-            },
-        });
+        if (bareInvocation) {
+            process.stdout.write(
+                `${commandUsage(await renderUsage(workbenchCommand))}\n\n`
+            );
+        } else {
+            await runMain(workbenchCommand, {
+                rawArgs: invocation.args,
+                showUsage: async (command, parent) => {
+                    process.stdout.write(
+                        `${commandUsage(await renderUsage(command, parent))}\n\n`
+                    );
+                },
+            });
+        }
     } catch (error) {
         console.error(
             error instanceof Error
@@ -153,8 +166,13 @@ if (import.meta.main) {
     }
 }
 
-function usesModelCatalog(args: string[], bare: boolean): boolean {
-    if (bare) return true;
+/** Citty renders the command summary in dim gray, which is hard to read in some terminals. */
+function commandUsage(usage: string): string {
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: Matches intentional ANSI escape sequences.
+    return usage.replace(/^\x1b\[90m(.+?)\x1b\[39m/, '$1');
+}
+
+function usesModelCatalog(args: string[]): boolean {
     return new Set([
         'build',
         'create',

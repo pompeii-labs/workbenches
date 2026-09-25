@@ -26,7 +26,7 @@ describe('creator Workbench', () => {
 
         expect(workbench.manifest).toEqual({
             spec: 0,
-            version: '0.1.6',
+            version: '0.1.7',
             name: 'workbench-creator',
             description:
                 'Design, author, review, and test repository-owned Workbenches.',

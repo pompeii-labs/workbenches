@@ -8,6 +8,7 @@ import {
     onMount,
     Show,
 } from 'solid-js';
+import { AuthoringCreateIncompleteError } from '../authoring/index.js';
 import { RepositoryInspection } from '../repositories/index.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type {
@@ -168,10 +169,20 @@ export function ChatScreen(props: ChatScreenProps) {
                     await session?.close();
                     props.onAuthoringFinished?.(result);
                 } catch (cause) {
-                    leaving = false;
-                    setError(cause instanceof Error ? cause.message : String(cause));
-                    setState((current) => ({ ...current, status: 'Ready' }));
-                    return;
+                    const message =
+                        cause instanceof Error ? cause.message : String(cause);
+                    if (cause instanceof AuthoringCreateIncompleteError) {
+                        const result = await props.operation.fail(
+                            'Creator exited before creating a Workbench.'
+                        );
+                        await session?.close();
+                        props.onAuthoringFinished?.(result);
+                    } else {
+                        leaving = false;
+                        setError(message);
+                        setState((current) => ({ ...current, status: 'Ready' }));
+                        return;
+                    }
                 }
             }
         } else {
@@ -493,6 +504,9 @@ export function ChatScreen(props: ChatScreenProps) {
         if (key.ctrl && key.name === 'g' && repository.available) {
             key.preventDefault();
             showRepository();
+        } else if (key.name === 'escape' && (state().busy || cancellationPending())) {
+            key.preventDefault();
+            void cancelTurn();
         } else if (key.ctrl && key.name === 'c') {
             key.preventDefault();
             if (state().busy || cancellationPending()) void cancelTurn();
@@ -643,7 +657,7 @@ export function ChatScreen(props: ChatScreenProps) {
                     {question()
                         ? 'answer required · ctrl+c cancel'
                         : state().busy || cancellationPending()
-                          ? 'ctrl+c cancel'
+                          ? 'esc cancel'
                           : 'ctrl+c quit'}
                 </text>
             </box>

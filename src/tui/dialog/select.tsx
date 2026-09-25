@@ -1,4 +1,4 @@
-import type { InputRenderable } from '@opentui/core';
+import type { InputRenderable, ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/solid';
 import { createMemo, createSignal, For, onCleanup, Show } from 'solid-js';
 import { useTheme } from '../theme/index.js';
@@ -41,6 +41,7 @@ export function SelectDialog<T>(props: SelectDialogProps<T>) {
         });
     });
     let input: InputRenderable | undefined;
+    let scroll: ScrollBoxRenderable | undefined;
     let focusTimer: ReturnType<typeof setTimeout> | undefined;
 
     onCleanup(() => {
@@ -52,6 +53,7 @@ export function SelectDialog<T>(props: SelectDialogProps<T>) {
         if (list.length === 0) return;
         const next = (selected() + direction + list.length) % list.length;
         setSelected(next);
+        scroll?.scrollChildIntoView(optionId(next));
         const option = list[next];
         if (option) props.onMove?.(option);
     };
@@ -110,12 +112,18 @@ export function SelectDialog<T>(props: SelectDialogProps<T>) {
                     onInput={(value) => {
                         setFilter(value);
                         setSelected(0);
+                        scroll?.scrollTo(0);
                     }}
                     onSubmit={submit}
                 />
             </box>
             <box height={1} />
-            <scrollbox maxHeight={14}>
+            <scrollbox
+                ref={(value) => {
+                    scroll = value;
+                }}
+                maxHeight={14}
+            >
                 <Show
                     when={options().length > 0}
                     fallback={
@@ -127,6 +135,7 @@ export function SelectDialog<T>(props: SelectDialogProps<T>) {
                     <For each={options()}>
                         {(option, index) => (
                             <box
+                                id={optionId(index())}
                                 flexDirection="column"
                                 paddingX={3}
                                 paddingY={option.description ? 1 : 0}
@@ -179,4 +188,8 @@ export function SelectDialog<T>(props: SelectDialogProps<T>) {
             </box>
         </box>
     );
+}
+
+function optionId(index: number): string {
+    return `select-option-${index}`;
 }

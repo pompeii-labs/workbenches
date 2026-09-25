@@ -5,9 +5,10 @@ import { parseRepository, RepositoryDeliveryStore } from '../repositories/index.
 import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
-import { launchWorkbenchTui } from '../tui.js';
+import { assertWorkbenchTuiSupported, launchWorkbenchTui } from '../tui.js';
 import {
     WorkbenchEnvironment,
+    WorkbenchPreflight,
     WorkbenchResolver,
     WorkbenchWorkspaces,
 } from '../workbench/index.js';
@@ -78,7 +79,7 @@ export const runCommand = defineCommand({
         repo: {
             type: 'string',
             description:
-                'Run in an isolated GitHub checkout with your GitHub credential',
+                'Run in an isolated GitHub checkout using GH_TOKEN, GITHUB_TOKEN, or gh auth login',
         },
         ref: {
             type: 'string',
@@ -103,7 +104,7 @@ export const runCommand = defineCommand({
         },
         'allow-host-docker': {
             type: 'boolean',
-            description: 'Authorize a declared host Docker engine binding for this run',
+            description: 'Allow this Workbench to access the host Docker daemon',
             default: false,
         },
         connection: {
@@ -154,6 +155,7 @@ export const runCommand = defineCommand({
             if (args.detach || args.json || args.final || args['dry-run']) {
                 throw new Error('This run mode requires a non-empty task');
             }
+            assertWorkbenchTuiSupported();
             const resolved = await new WorkbenchResolver().resolve(args.workbench, {
                 savedOnly: true,
                 ...(args.dir ? { workspaceDirectory: args.dir } : {}),
@@ -167,17 +169,21 @@ export const runCommand = defineCommand({
                 resolved.workbench.manifest.docker?.engine !== undefined,
                 args['allow-host-docker']
             );
+            const environment = {
+                ...process.env,
+                ...workbenchEnvironment.bind(resolved.workbench, overrides),
+                ...workbenchWorkspaces.environment(workspaces),
+            };
+            if (resolved.workbench.manifest.runtime === 'local') {
+                new WorkbenchPreflight({ environment }).check(resolved.workbench);
+            }
             await launchWorkbenchTui({
                 initial: {
                     alias: args.workbench,
                     resolved,
                     ...(args.connection ? { connection: args.connection } : {}),
                 },
-                environment: {
-                    ...process.env,
-                    ...workbenchEnvironment.bind(resolved.workbench, overrides),
-                    ...workbenchWorkspaces.environment(workspaces),
-                },
+                environment,
                 workspaces,
                 allowHostDocker: args['allow-host-docker'],
             });
