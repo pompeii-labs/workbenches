@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Start (or reuse) the local Lux engine for the project in the current
+# directory, applying pending migrations, and say where the connection
+# values live.
+set -euo pipefail
+
+if [ ! -d lux ]; then
+    echo "no lux/ directory here. Run 'lux init' first." >&2
+    exit 1
+fi
+
+. "$(dirname "$(command -v lux-up)")/lux-net-preflight.sh"
+lux_net_preflight lux-up
+
+lux start --no-studio
+
+echo
+echo "Connection env vars: LUX_URL LUX_DIRECT_URL LUX_PUBLISHABLE_KEY LUX_SECRET_KEY"
+echo "Values: lux/.env-profiles/local.env"
+echo "Print them:   lux env export local"
+echo "Copy what each app's .env needs from that output; never commit .env."

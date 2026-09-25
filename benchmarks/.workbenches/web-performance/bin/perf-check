@@ -1,0 +1,44 @@
+#!/usr/bin/env node
+// perf-check <url>: the same measurements as perf-audit, printed as plain
+// numbers only, so calling it before and after a change makes the diff
+// obvious at a glance. Generic: no knowledge of any specific project.
+const { measure } = require('/usr/local/lib/perf-tools/perf-lib.js');
+
+async function main() {
+    const url = process.argv[2];
+    if (!url) {
+        console.error('usage: perf-check <url>');
+        process.exit(2);
+    }
+    const r = await measure(url);
+
+    console.log(`url: ${url}`);
+    if (r.timing.error) {
+        console.log(`response_time_ms: FAILED (${r.timing.error})`);
+    } else {
+        console.log(`response_time_ms_median: ${r.timing.medianMs}`);
+        console.log(`response_time_ms_min: ${r.timing.minMs}`);
+        console.log(`response_time_ms_max: ${r.timing.maxMs}`);
+    }
+    console.log(`sql_statements: ${r.sql.available ? r.sql.totalStatements : 'n/a (' + r.sql.reason + ')'}`);
+    if (r.page.available) {
+        if (r.page.incomplete) {
+            console.log(`page_load_incomplete: ${r.page.incompleteSummary}`);
+            console.log(`lcp_ms: ${r.page.lcpMs} (not final)`);
+            console.log(`cls: ${r.page.cls}`);
+            console.log(`total_bytes: ${r.page.totalBytes} (at least, still loading)`);
+        } else {
+            console.log(`lcp_ms: ${r.page.lcpMs}`);
+            console.log(`cls: ${r.page.cls}`);
+            console.log(`total_bytes: ${r.page.totalBytes}`);
+        }
+        console.log(`render_blocking_count: ${r.page.renderBlocking.length}`);
+    } else {
+        console.log(`lcp_ms: n/a (${r.page.reason})`);
+    }
+}
+
+main().catch((err) => {
+    console.error('perf-check: ' + err.message);
+    process.exit(1);
+});

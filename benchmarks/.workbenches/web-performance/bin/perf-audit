@@ -1,0 +1,86 @@
+#!/usr/bin/env node
+// perf-audit <url>: one call, everything you need to find the dominant
+// cost. Response time, SQL statements grouped by query (when Postgres is
+// reachable), and for HTML pages: LCP, CLS, bytes, biggest resources, and
+// render-blocking resources under mobile network+CPU throttling. Ends with a
+// ranked biggest-costs list. Generic: no knowledge of any specific project.
+const { measure } = require('/usr/local/lib/perf-tools/perf-lib.js');
+
+async function main() {
+    const url = process.argv[2];
+    if (!url) {
+        console.error('usage: perf-audit <url>');
+        process.exit(2);
+    }
+    const r = await measure(url);
+    const costs = [];
+
+    if (r.timing.error) {
+        console.log(`request: FAILED (${r.timing.error})`);
+    } else {
+        console.log(`response time: median ${r.timing.medianMs}ms (min ${r.timing.minMs}, max ${r.timing.maxMs}), status ${r.timing.status}`);
+        costs.push({ label: `server response time (${r.timing.medianMs}ms)`, score: r.timing.medianMs });
+    }
+
+    if (r.sql.available) {
+        console.log(`sql: ${r.sql.totalStatements} statement(s) during one request`);
+        for (const q of r.sql.byQuery.slice(0, 5)) {
+            console.log(`  ${q.calls}x  ${q.totalMs}ms  ${q.query}`);
+        }
+        if (r.sql.totalStatements > 10) {
+            costs.push({ label: `${r.sql.totalStatements} SQL statements for one request`, score: r.sql.totalStatements * 5 });
+        }
+    } else {
+        console.log(`sql: not measured (${r.sql.reason})`);
+    }
+
+    if (r.page.available) {
+        if (r.page.incomplete) {
+            console.log(`page load (mobile, throttled): ${r.page.incompleteSummary}`);
+            console.log(
+                `  LCP ${r.page.lcpMs}ms (not final) on <${r.page.lcpElement || '?'}>, CLS ${r.page.cls}, total: at least ${(r.page.totalBytes / 1024 / 1024).toFixed(2)} MB (still loading)`
+            );
+        } else {
+            console.log(`page load (mobile, throttled): LCP ${r.page.lcpMs}ms on <${r.page.lcpElement || '?'}>, CLS ${r.page.cls}, total ${(r.page.totalBytes / 1024 / 1024).toFixed(2)}MB`);
+        }
+        console.log('largest resources:');
+        for (const res of r.page.largestResources) {
+            if (res.pending) {
+                const sizeDesc = res.contentLength
+                    ? `${(res.bytes / 1024).toFixed(0)}KB of ${(res.contentLength / 1024).toFixed(0)}KB`
+                    : `${(res.bytes / 1024).toFixed(0)}KB of unknown total`;
+                console.log(`  [INCOMPLETE] ${sizeDesc} (still downloading)  ${res.mimeType || ''}  ${res.url}`);
+            } else {
+                console.log(`  ${(res.bytes / 1024).toFixed(0)}KB  ${res.mimeType}  ${res.url}`);
+            }
+        }
+        if (r.page.renderBlocking.length) {
+            console.log(`render-blocking in <head>: ${r.page.renderBlocking.join(', ')}`);
+        }
+        if (r.page.incomplete) {
+            // An unfinished load is always the dominant cost: it means the
+            // numbers below it cannot be trusted as final either.
+            costs.push({ label: r.page.incompleteSummary, score: Number.MAX_SAFE_INTEGER });
+            costs.push({ label: `LCP ${r.page.lcpMs}ms (not final)`, score: r.page.lcpMs });
+            costs.push({ label: `at least ${(r.page.totalBytes / 1024).toFixed(0)}KB transferred (still loading)`, score: r.page.totalBytes / 1024 });
+        } else {
+            costs.push({ label: `LCP ${r.page.lcpMs}ms`, score: r.page.lcpMs });
+            costs.push({ label: `${(r.page.totalBytes / 1024).toFixed(0)}KB transferred`, score: r.page.totalBytes / 1024 });
+        }
+        if (r.page.cls >= 0.1) costs.push({ label: `layout shift ${r.page.cls}`, score: r.page.cls * 10000 });
+        if (r.page.renderBlocking.length) {
+            costs.push({ label: `${r.page.renderBlocking.length} render-blocking resource(s)`, score: r.page.renderBlocking.length * 500 });
+        }
+    } else {
+        console.log(`page load: not measured (${r.page.reason})`);
+    }
+
+    costs.sort((a, b) => b.score - a.score);
+    console.log('biggest costs:');
+    costs.slice(0, 5).forEach((c, i) => console.log(`  ${i + 1}. ${c.label}`));
+}
+
+main().catch((err) => {
+    console.error('perf-audit: ' + err.message);
+    process.exit(1);
+});

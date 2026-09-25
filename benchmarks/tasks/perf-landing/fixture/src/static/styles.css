@@ -1,0 +1,26 @@
+@font-face {
+  font-family: 'StoreSans';
+  src: url('/static/font.bin') format('woff2');
+}
+
+* { box-sizing: border-box; }
+body {
+  font-family: 'StoreSans', system-ui, sans-serif;
+  margin: 0;
+  color: #222;
+  background: #fafaf7;
+}
+.site-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #eee;
+}
+.brand { font-weight: 700; font-size: 1.25rem; }
+nav a { margin-left: 1rem; color: #333; text-decoration: none; }
+main { max-width: 720px; margin: 0 auto; padding: 1.5rem; }
+.hero { width: 100%; height: auto; border-radius: 8px; }
+.featured ul { list-style: none; padding: 0; }
+.product { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #eee; }
+footer { text-align: center; padding: 1.5rem; color: #888; }

@@ -1,0 +1,33 @@
+{
+    "version": 1,
+    "id": "perf-landing",
+    "workbench": "web-performance",
+    "title": "Make the landing page fast on mobile",
+    "fixture": {
+        "kind": "dir",
+        "path": "fixture"
+    },
+    "timeoutMinutes": 30,
+    "setup": "./checks/setup-seed.sh",
+    "boot": "bun install --silent",
+    "gates": [
+        {
+            "id": "speed",
+            "title": "LCP and transferred bytes are dramatically better than baseline on a throttled mobile connection, and CLS stays low",
+            "run": "./checks/gate-speed.sh",
+            "timeoutSeconds": 600
+        },
+        {
+            "id": "visual",
+            "title": "Landing page looks the same as baseline at a fixed mobile viewport",
+            "run": "./checks/gate-visual.sh",
+            "timeoutSeconds": 180
+        },
+        {
+            "id": "typecheck",
+            "title": "bun run check passes",
+            "run": "./checks/gate-check.sh",
+            "timeoutSeconds": 120
+        }
+    ]
+}

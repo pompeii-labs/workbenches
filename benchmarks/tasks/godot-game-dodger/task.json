@@ -1,0 +1,40 @@
+{
+    "version": 1,
+    "id": "godot-game-dodger",
+    "workbench": "godot-web-games",
+    "title": "Ship a browser-playable dodging game (Meteor Dash)",
+    "fixture": { "kind": "empty" },
+    "timeoutMinutes": 60,
+    "gates": [
+        {
+            "id": "web-build-present",
+            "title": "Repo contains a complete web export",
+            "run": "bash ./checks/web-build-present.sh",
+            "timeoutSeconds": 60
+        },
+        {
+            "id": "loads-on-plain-static-host",
+            "title": "Loads with no COOP/COEP and no engine-fatal errors",
+            "run": "bash ./checks/loads-on-plain-static-host.sh",
+            "timeoutSeconds": 180
+        },
+        {
+            "id": "renders",
+            "title": "Canvas is not blank or a flat color",
+            "run": "bash ./checks/renders.sh",
+            "timeoutSeconds": 90
+        },
+        {
+            "id": "responds-to-input",
+            "title": "Canvas visibly reacts to a player, above an idle noise floor",
+            "run": "bash ./checks/responds-to-input.sh",
+            "timeoutSeconds": 600
+        },
+        {
+            "id": "survives-play",
+            "title": "60s of mixed input: no errors, no crash, no freeze",
+            "run": "bash ./checks/survives-play.sh",
+            "timeoutSeconds": 240
+        }
+    ]
+}

@@ -1,0 +1,40 @@
+spec: 0
+version: 1.0.0
+
+name: lux-apps
+description: Build and operate applications on Lux the way its maintainers do.
+
+runner: opencode
+runner_config: ./opencode.json
+model:
+  id: openai/gpt-5.6-terra
+  routes:
+    - provider: openrouter
+      model: openai/gpt-5.6-terra
+
+instructions: ./instructions.md
+skills:
+  - ./skills/lux-jobs
+  - ./skills/lux-schema-realtime
+
+tools:
+  - lux
+  - bun
+  - docker
+  - opencode
+
+mcps: []
+env:
+  OPENROUTER_API_KEY:
+    required: true
+
+runtime: docker
+image:
+  build: ./Dockerfile
+  context: .
+# `lux start` runs the engine as a sibling container, so this Workbench needs
+# the engine of the host it runs on. Inert until the person starting the run
+# grants it.
+docker:
+  engine:
+    mode: host

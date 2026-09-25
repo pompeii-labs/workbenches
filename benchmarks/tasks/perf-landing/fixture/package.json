@@ -1,0 +1,19 @@
+{
+    "name": "corner-store",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "bun run src/server.ts",
+        "migrate": "bun run scripts/migrate.ts",
+        "seed": "bun run scripts/seed.ts",
+        "check": "tsc --noEmit"
+    },
+    "dependencies": {
+        "pg": "^8.13.1"
+    },
+    "devDependencies": {
+        "@types/bun": "^1.4.2",
+        "@types/pg": "^8.11.10",
+        "typescript": "5.9.2"
+    }
+}

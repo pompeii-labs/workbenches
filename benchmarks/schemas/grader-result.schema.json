@@ -1,0 +1,53 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Workbenchmark grader result",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "version": {
+            "const": 1
+        },
+        "verdicts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]{0,79}$"
+                    },
+                    "status": {
+                        "enum": ["pass", "fail", "not-tested"]
+                    },
+                    "evidence": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                    },
+                    "detail": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                    }
+                },
+                "required": ["id", "status", "evidence"],
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": {
+                                "status": {
+                                    "enum": ["fail", "not-tested"]
+                                }
+                            }
+                        },
+                        "then": {
+                            "required": ["detail"]
+                        }
+                    }
+                ]
+            }
+        }
+    },
+    "required": ["version", "verdicts"]
+}
