@@ -308,7 +308,13 @@ describe('native Workbench authoring', () => {
         const registry = registryPackage(WorkbenchPackage.digest(remote.files));
         const online = new OfficialWorkbenchResolver(home, {
             registry: {
-                resolve: async () => registry,
+                resolve: async (reference) => {
+                    expect(reference).toEqual({
+                        publisher: 'pompeii',
+                        workbench: 'creator',
+                    });
+                    return registry;
+                },
                 fetchWorkbench: async () => remote,
             },
         });
@@ -338,6 +344,22 @@ describe('native Workbench authoring', () => {
         const cached = await offline.creator(workspace);
         expect(cached.cached).toBe(true);
         expect(cached.digest).toBe(first.digest);
+        expect(cached.registry.reference.publisher).toBe('pompeii');
+
+        const pointerPath = join(home, 'official', 'creator.json');
+        const pointer: { registry: RegistryPackage } = JSON.parse(
+            await readFile(pointerPath, 'utf8')
+        );
+        pointer.registry.reference.publisher = 'pompeii-labs';
+        await writeFile(pointerPath, JSON.stringify(pointer));
+        const legacy = await offline.creator(workspace);
+        expect(legacy.cached).toBe(true);
+        expect(legacy.digest).toBe(first.digest);
+        expect(legacy.registry.reference.publisher).toBe('pompeii-labs');
+
+        pointer.registry.reference.publisher = 'unrelated';
+        await writeFile(pointerPath, JSON.stringify(pointer));
+        await expect(offline.creator(workspace)).rejects.toThrow('not been cached');
     });
 
     test('refuses a modified official creator cache', async () => {
@@ -1216,7 +1238,7 @@ function creatorPackage() {
 
 function registryPackage(digest: string): RegistryPackage {
     return {
-        reference: { publisher: 'pompeii-labs', workbench: 'creator' },
+        reference: { publisher: 'pompeii', workbench: 'creator' },
         registryUrl: 'https://api.workbenches.dev',
         versionId: 'version-id',
         version: '0.1.4',

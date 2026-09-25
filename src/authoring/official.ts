@@ -13,7 +13,7 @@ import { Workbench } from '../workbench/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/resolver.js';
 
 const creatorReference: RegistryReference = {
-    publisher: 'pompeii-labs',
+    publisher: 'pompeii',
     workbench: 'creator',
 };
 const minimumCreatorVersion = '0.1.4';
@@ -70,7 +70,7 @@ export class OfficialWorkbenchResolver {
     ): Promise<ResolvedOfficialWorkbench> {
         const registry = await this.#registry.resolve(creatorReference);
         if (!registry) {
-            throw new Error('The registry does not publish pompeii-labs/creator');
+            throw new Error('The registry does not publish pompeii/creator');
         }
         if (SemanticVersion.compare(registry.version, minimumCreatorVersion) < 0) {
             throw new Error(
@@ -204,7 +204,9 @@ export class OfficialWorkbenchResolver {
             reference !== null &&
             typeof reference === 'object' &&
             !Array.isArray(reference) &&
-            Reflect.get(reference, 'publisher') === creatorReference.publisher &&
+            // Older releases cached the same official publisher under its previous slug.
+            (Reflect.get(reference, 'publisher') === creatorReference.publisher ||
+                Reflect.get(reference, 'publisher') === 'pompeii-labs') &&
             Reflect.get(reference, 'workbench') === creatorReference.workbench
         );
     }

@@ -2235,7 +2235,7 @@ async function seedCreator(home: string, workspace: string): Promise<void> {
     const official = new OfficialWorkbenchResolver(home, {
         registry: {
             resolve: async () => ({
-                reference: { publisher: 'pompeii-labs', workbench: 'creator' },
+                reference: { publisher: 'pompeii', workbench: 'creator' },
                 registryUrl: 'http://127.0.0.1:1',
                 versionId: 'fixture-version',
                 version: '0.1.4',
