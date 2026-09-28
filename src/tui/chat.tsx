@@ -432,6 +432,14 @@ export function ChatScreen(props: ChatScreenProps) {
                 }
                 const requested = permissionFromEvent(event);
                 if (requested) setPermission({ request: requested });
+                if (
+                    event.type === 'input.accepted' &&
+                    eventData(event.data)?.kind === 'permission' &&
+                    eventData(event.data)?.id === permission()?.request.id
+                ) {
+                    setPermission(undefined);
+                    setState((current) => ({ ...current, status: 'Working' }));
+                }
                 const asked = questionFromEvent(event);
                 if (asked) setQuestion(asked);
                 if (

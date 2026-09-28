@@ -241,7 +241,7 @@ The E2B control key remains on the host. Harness credentials are staged only for
 ## Command overview
 
 ```sh
-wb                         # browse and launch
+wb                         # show command help
 wb list                    # list saved Workbenches
 wb view project-core       # inspect configuration and readiness
 wb validate project-core   # validate a package
