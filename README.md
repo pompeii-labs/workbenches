@@ -13,6 +13,17 @@ Models are generalists. Projects are not. Every time a general-purpose agent ent
 
 Workbench packages that knowledge once, together with the skills, tools, runtime, harness, and model configuration needed to use it. Every compatible run starts prepared instead of paying the same knowledge ramp-up cost again.
 
+**Same model, same spend: 36 working results with Workbenches, 20 without.**
+
+| Tab | Plain | Workbench |
+| --- | --- | --- |
+| Ship a Godot game | 5 of 10, $0.45 each | **9 of 10, $0.19 each** |
+| Build on Lux | 5 of 10, $0.80 each | **9 of 10, $0.47 each** |
+| Zero-downtime migration | 4 of 10, $0.61 each | **8 of 10, $0.32 each** |
+| Make it fast | 6 of 10, $0.31 each | **10 of 10, $0.22 each** |
+
+Both sides run the same agent (OpenCode) on the same model (`openai/gpt-5.6-terra`); the only difference is the Workbench. Identical requests and starting projects, five attempts per task, graded by running the result. Cost per working result includes failed attempts. Tasks, methodology, and how to reproduce: [workbenchmarks](https://github.com/pompeii-labs/workbenchmarks).
+
 A Workbench can run in your current directory, inside Docker, in an E2B sandbox, or against an isolated GitHub checkout. The package belongs to its author, and the user brings their own model and runtime credentials. Runs execute through the selected harness, not a hosted Workbench agent service. The CLI downloads and caches model-routing metadata; first use requires an internet connection, and subsequent commands can use cached metadata if that service is unavailable.
 
 > Workbench is currently a public alpha implementing the draft-0 specification. Package and execution contracts may still change before 1.0.
