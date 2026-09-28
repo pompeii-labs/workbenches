@@ -200,9 +200,13 @@ Use a receipt's `run_id` with `wait --run --after` to keep its cursor on that
 execution. Session IDs select the latest run; linked run IDs select the exact
 run. `--run` also pins the first run, whose ID is shared with the session.
 
-`wait` is read-only and prints one result with a turn's final response, usage,
-outcome ID, and pending input requests. It returns the first completed turn after
-the cursor, even when a queued follow-up starts immediately. `turn_completed`
+`wait` is read-only. With one run it prints one result with a turn's final
+response, usage, outcome ID, and pending input requests. Multiple run IDs wait
+for all listed runs and return an `all` result containing their snapshots. Use
+comma-separated `--after` cursors in run order when they differ, or `--first` to
+return the first boundary with that snapshot and `remaining_run_ids`. A single
+run result returns the first completed turn after the cursor, even when a queued
+follow-up starts immediately. `turn_completed`
 means that turn replied, not that execution or runtime cleanup finished. Repeat
 with `--after` set to the returned `sequence` to advance to the next boundary or
 terminal result. Without a cursor, observation starts at the beginning of that

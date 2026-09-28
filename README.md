@@ -156,7 +156,7 @@ wb send wb_... --task-file ./followup.md --json
 wb wait wb_... --run --after 42 --timeout 120 --json
 ```
 
-Each command returns correlated session and run IDs. Sequence cursors belong to one run, so wait on the `run_id` and `after_sequence` returned by the command you just issued.
+Each command returns correlated session and run IDs. Sequence cursors belong to one run, so wait on the `run_id` and `after_sequence` returned by the command you just issued. To supervise concurrent runs, list their run IDs with `--run`; use comma-separated `--after` cursors in the same order and add `--first` to return when any one reaches a boundary.
 
 The repository includes a ready-to-use [Workbench subagents skill](docs/skills/workbench-subagents/SKILL.md) for coding agents that support skills. Install it globally to delegate through `wb` from any project:
 

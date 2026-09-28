@@ -788,9 +788,13 @@ input, even if the session is continued again:
 wb wait wb_... --run --after 42 --timeout 120 --json
 ```
 
-`wait` prints one snapshot with state, sequence, final response and usage,
-outcome ID, and pending permission/question/authentication requests. It returns
-the first completed turn after the cursor, even if queued work starts immediately.
+`wait` with one ID prints one snapshot with state, sequence, final response and
+usage, outcome ID, and pending permission/question/authentication requests.
+Multiple IDs wait for every listed run and print `{ "mode": "all", "results": [...] }`.
+Use comma-separated `--after` sequences in the same order when their cursors
+differ. Add `--first` to return after any listed run reaches a boundary; it
+prints `{ "mode": "first", "results": [snapshot], "remaining_run_ids": [...] }`.
+It returns the first completed turn after a cursor, even if queued work starts immediately.
 `turn_completed` means that turn replied, not that execution or runtime cleanup
 finished. Repeat with `--after` set to the returned `sequence` to observe the next
 boundary or final `completed` result. Without a cursor, observation starts at

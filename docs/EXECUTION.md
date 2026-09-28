@@ -472,9 +472,14 @@ that exact execution. `wait --run` explicitly selects an exact run, including
 the first run whose ID is shared with the session. Event cursors are run-scoped;
 use the receipt's run ID with `--run --after` to observe a submitted input.
 
-`wait` is a read-only observer. It returns the first completed turn after its
-cursor, an idle boundary, terminal execution, or pending native input request.
-Without a cursor, observation starts at the beginning of that run. A
+`wait` is a read-only observer. With one run it returns the first completed
+turn after its cursor, an idle boundary, terminal execution, or pending native
+input request. With multiple run IDs it waits for all listed runs and returns
+an `all` result containing their snapshots. `--first` returns as soon as one
+listed run reaches a boundary, with that snapshot and the remaining run IDs.
+A comma-separated `--after` value maps cursors to listed runs in order; one
+value applies to every run. Without a cursor, observation starts at the
+beginning of that run. A
 `turn_completed` snapshot preserves that turn's final response, usage, outcome,
 and boundary sequence even when queued work starts immediately. It does not
 claim execution or runtime cleanup has finished. Repeat with `--after` set to

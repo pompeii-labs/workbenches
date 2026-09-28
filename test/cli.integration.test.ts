@@ -487,6 +487,48 @@ describe('CLI integration', () => {
         expect(pinnedSecond.code).toBe(0);
         expect(JSON.parse(pinnedSecond.stdout)).toEqual(boundary);
 
+        const multiple = await executeCli(
+            [
+                'wait',
+                first.id,
+                second.id,
+                '--run',
+                '--after',
+                `0,${boundary.sequence}`,
+                '--json',
+            ],
+            environment
+        );
+        expect(multiple.code).toBe(0);
+        expect(JSON.parse(multiple.stdout)).toMatchObject({
+            mode: 'all',
+            results: [
+                { run_id: first.id, state: 'completed' },
+                { run_id: second.id, state: 'completed', final: 'second final' },
+            ],
+        });
+        const firstOfMultiple = await executeCli(
+            [
+                'wait',
+                first.id,
+                second.id,
+                '--run',
+                '--after',
+                `0,${boundary.sequence}`,
+                '--first',
+                '--json',
+            ],
+            environment
+        );
+        expect(firstOfMultiple.code).toBe(0);
+        const firstResult = JSON.parse(firstOfMultiple.stdout);
+        expect(firstResult.mode).toBe('first');
+        expect(firstResult.results).toHaveLength(1);
+        expect([first.id, second.id]).toContain(firstResult.results[0]?.run_id);
+        expect(firstResult.remaining_run_ids).toEqual(
+            [first.id, second.id].filter((id) => id !== firstResult.results[0]?.run_id)
+        );
+
         const before = await store.readEvents(second.id);
         const metadata = await store.read(second.id);
         const exhausted = await executeCli(

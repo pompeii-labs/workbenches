@@ -13,12 +13,18 @@ export const waitCommand = defineCommand({
         session: {
             type: 'positional',
             required: true,
-            description: 'Session or run ID',
+            description: 'One or more session or run IDs',
         },
         run: {
             type: 'boolean',
             description:
                 "Treat the ID as an exact run, including a session's first run",
+            default: false,
+        },
+        first: {
+            type: 'boolean',
+            description:
+                'With multiple IDs, return when the first run reaches a boundary',
             default: false,
         },
         json: {
@@ -32,20 +38,42 @@ export const waitCommand = defineCommand({
         },
         after: {
             type: 'string',
-            description: 'Wait past an event sequence returned by send or wait',
+            description:
+                'Wait past a sequence, or comma-separated sequences matching multiple IDs',
         },
     },
     async run({ args }) {
+        const ids = args._;
+        if (new Set(ids).size !== ids.length)
+            throw new Error('Each ID may be waited on only once');
+        const afterSequences = parseAfter(args.after, ids.length);
         const home = workbenchHome();
-        const run = await new SessionSupervision(home).resolve(args.session, {
-            exactRun: args.run,
-        });
-        await new CliWait().execute(home, run, {
+        const supervision = new SessionSupervision(home);
+        const runs = await Promise.all(
+            ids.map((id) => supervision.resolve(id, { exactRun: args.run }))
+        );
+        if (new Set(runs.map((run) => run.id)).size !== runs.length)
+            throw new Error('Each resolved run may be waited on only once');
+        await new CliWait().execute(home, runs, {
             json: args.json,
-            ...(args.after !== undefined ? { afterSequence: Number(args.after) } : {}),
+            first: args.first,
+            ...(afterSequences ? { afterSequences } : {}),
             ...(args.timeout !== undefined
                 ? { timeoutMilliseconds: Number(args.timeout) * 1000 }
                 : {}),
         });
     },
 });
+
+function parseAfter(after: string | undefined, count: number): number[] | undefined {
+    if (after === undefined) return undefined;
+    const parts = after.split(',');
+    if (parts.some((part) => part.trim() === ''))
+        throw new Error('--after must be a non-negative integer');
+    const values = parts.map((value) => Number(value));
+    if (values.length !== 1 && values.length !== count)
+        throw new Error('--after must provide one sequence or one sequence per run');
+    if (values.some((value) => !Number.isSafeInteger(value) || value < 0))
+        throw new Error('--after must be a non-negative integer');
+    return values.length === 1 ? Array(count).fill(values[0] ?? 0) : values;
+}

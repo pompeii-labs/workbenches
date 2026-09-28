@@ -55,6 +55,13 @@ readiness, or model routing is uncertain; it performs no model turn.
 
 ## Wait for a boundary
 
+**When supervising two or more Workbenches, always use one multi-run `wb wait`
+with `--first`. Do not issue sequential waits or wait for every Workbench by
+default.** A serial or all-run wait prevents the harness from reacting to the
+first completed report, pending permission, question, or authentication request.
+After handling that boundary, start or continue the relevant Workbench, then
+wait again with its new receipt and the still-pending runs.
+
 Wait on the exact run and cursor from the most recent receipt:
 
 ```sh
@@ -65,7 +72,38 @@ wb wait <run_id> \
   --json
 ```
 
-`wait` is read-only. A timeout leaves the run active. Branch on `state`:
+To supervise concurrent Workbenches together, list their run IDs. Provide a
+comma-separated `--after` value in the same order when their cursors differ:
+
+```sh
+wb wait <backend_run_id> <frontend_run_id> \
+  --run \
+  --after <backend_after>,<frontend_after> \
+  --timeout 900 \
+  --json
+```
+
+Without `--first`, this waits for every listed run and returns
+`{ "mode": "all", "results": [...] }`. That is appropriate only when the
+harness deliberately needs every result before it can act. **For ordinary
+multi-Workbench supervision, include `--first`:**
+
+```sh
+wb wait <backend_run_id> <frontend_run_id> \
+  --run \
+  --after <backend_after>,<frontend_after> \
+  --first \
+  --timeout 900 \
+  --json
+```
+
+It returns the first run that reaches a boundary with `mode: "first"`, one
+entry in `results`, and `remaining_run_ids` for the runs that must still be
+supervised. Keep their existing cursors, or replace a returned run with the new
+run and cursor from a subsequent `send` receipt.
+
+`wait` is read-only. A timeout leaves the run active. For a single result,
+branch on `state`; for a multiple-run result, branch on each `results` entry:
 
 | State | Meaning | Response |
 | --- | --- | --- |
