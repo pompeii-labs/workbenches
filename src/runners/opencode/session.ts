@@ -10,30 +10,18 @@ import type {
     RunnerTurnResult,
 } from '../session.js';
 import { normalizeRunnerInput } from '../session.js';
-import { OpenCodeEventAdapter } from './events.js';
+import { OpenCodeChildren } from './children.js';
 import { openCodeParts } from './input.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
 import { isOutboxPermission } from './outbox.js';
 import { OpenCodeQuestion } from './question.js';
 import type { OpenCodeFetch, OpenCodeServerLauncher } from './server.js';
 import { OpenCodeServer } from './server.js';
-import { withTimeout } from './timing.js';
-
-interface ActiveTurn {
-    adapter: OpenCodeEventAdapter;
-    inputMessageIds: Set<string>;
-    assistantOutputIds: Map<string, string>;
-    steeringDeliveries: Map<string, ReturnType<typeof deferred<void>>>;
-    steeringOrder: string[];
-    promise: Promise<RunnerTurnResult>;
-    resolve: (result: RunnerTurnResult) => void;
-    reject: (error: Error) => void;
-    cancelRequested: boolean;
-    seenActivity: boolean;
-    settled: boolean;
-}
+import { deferred, withTimeout } from './timing.js';
+import { type ActiveTurn, createActiveTurn, OpenCodeMessageIds } from './turn.js';
 
 interface AlwaysPermission {
+    sessionId: string;
     action: string;
     resources: Set<string>;
 }
@@ -60,6 +48,8 @@ export class OpenCodeServerSession implements RunnerSession {
     private readonly alwaysPermissions: AlwaysPermission[] = [];
     private readonly questions = new OpenCodeQuestion();
     private readonly messageIds = new OpenCodeMessageIds();
+    private readonly children: OpenCodeChildren;
+    private requests: Promise<void> = Promise.resolve();
     private nativeSessionId: string | undefined;
     private active: ActiveTurn | undefined;
     private closed = false;
@@ -83,6 +73,7 @@ export class OpenCodeServerSession implements RunnerSession {
             password: options.password,
             startupTimeoutMs: options.startupTimeoutMs,
         });
+        this.children = new OpenCodeChildren(this.server, () => this.nativeSessionId);
     }
 
     get id(): string | undefined {
@@ -303,18 +294,42 @@ export class OpenCodeServerSession implements RunnerSession {
         const properties = record(event?.properties);
         if (!type || !properties) return;
 
-        if (type === 'permission.asked') {
-            await this.answerPermission(properties);
+        if (type === 'session.created' || type === 'session.updated') {
+            await this.children.observe(record(properties.info));
             return;
         }
-        if (type === 'question.asked') {
-            await this.answerQuestion(properties);
+
+        if (type === 'permission.asked' || type === 'question.asked') {
+            // An unanswered prompt must not block usage from other native branches.
+            const active = this.active;
+            this.requests = this.requests
+                .then(async () => {
+                    if (this.closed || !active || this.active !== active) return;
+                    if (type === 'permission.asked')
+                        await this.answerPermission(properties);
+                    else await this.answerQuestion(properties);
+                })
+                .catch((error) => {
+                    if (this.closed || this.active !== active) return;
+                    this.fail(
+                        error instanceof Error
+                            ? error
+                            : new Error('OpenCode input request failed')
+                    );
+                });
             return;
         }
         if (type === 'question.replied' || type === 'question.rejected') return;
 
         const sessionId = string(properties.sessionID);
-        if (!sessionId || sessionId !== this.nativeSessionId) return;
+        if (!sessionId) return;
+        if (sessionId !== this.nativeSessionId) {
+            if (this.active && (await this.children.owns(sessionId))) {
+                const drafts = this.children.consume(type, properties, sessionId);
+                for (const draft of drafts) await this.options.host.emit(draft);
+            }
+            return;
+        }
         if (type === 'message.updated') {
             const info = record(properties.info);
             const messageId = string(info?.id);
@@ -422,10 +437,20 @@ export class OpenCodeServerSession implements RunnerSession {
     }
 
     private async answerPermission(properties: Record<string, unknown>) {
+        const active = this.active;
         const id = string(properties.id);
         const action = string(properties.permission);
         const sessionId = string(properties.sessionID);
-        if (!id || !action || sessionId !== this.nativeSessionId) return;
+        if (
+            !active ||
+            !id ||
+            !action ||
+            !sessionId ||
+            !(await this.children.owns(sessionId)) ||
+            this.active !== active ||
+            active.settled
+        )
+            return;
         const resources = stringArray(properties.patterns);
         if (
             isOutboxPermission(
@@ -437,7 +462,7 @@ export class OpenCodeServerSession implements RunnerSession {
             await this.replyPermission(id, 'allow_once');
             return;
         }
-        if (this.isAlwaysAllowed(action, resources)) return;
+        if (this.isAlwaysAllowed(sessionId, action, resources)) return;
         const always = stringArray(properties.always);
         const decision = await Promise.race([
             this.options.host.requestPermission({
@@ -448,11 +473,16 @@ export class OpenCodeServerSession implements RunnerSession {
                 allowAlways: always.length > 0,
             }),
             this.closing.promise.then(() => undefined),
+            active.promise.then(
+                () => undefined,
+                () => undefined
+            ),
         ]);
         if (!decision || this.closed) return;
         const replied = await this.replyPermission(id, decision);
         if (replied && decision === 'allow_always') {
             this.alwaysPermissions.push({
+                sessionId,
                 action,
                 resources: new Set(always.length > 0 ? always : resources),
             });
@@ -460,9 +490,18 @@ export class OpenCodeServerSession implements RunnerSession {
     }
 
     private async answerQuestion(properties: Record<string, unknown>) {
+        const active = this.active;
         const id = string(properties.id);
         const sessionId = string(properties.sessionID);
-        if (!id || !sessionId || sessionId !== this.nativeSessionId) return;
+        if (
+            !active ||
+            !id ||
+            !sessionId ||
+            !(await this.children.owns(sessionId)) ||
+            this.active !== active ||
+            active.settled
+        )
+            return;
         let questions: RunnerQuestionPrompt[];
         try {
             questions = this.questions.fromNative(properties.questions);
@@ -475,6 +514,10 @@ export class OpenCodeServerSession implements RunnerSession {
         const response = await Promise.race([
             this.options.host.requestQuestion({ id, questions }),
             this.closing.promise.then(() => undefined),
+            active.promise.then(
+                () => undefined,
+                () => undefined
+            ),
         ]);
         if (!response || this.closed) return;
         if (response.outcome === 'rejected') {
@@ -507,10 +550,15 @@ export class OpenCodeServerSession implements RunnerSession {
         );
     }
 
-    private isAlwaysAllowed(action: string, resources: string[]): boolean {
+    private isAlwaysAllowed(
+        sessionId: string,
+        action: string,
+        resources: string[]
+    ): boolean {
         if (resources.length === 0) return false;
         return this.alwaysPermissions.some(
             (permission) =>
+                permission.sessionId === sessionId &&
                 permission.action === action &&
                 resources.every((resource) => permission.resources.has(resource))
         );
@@ -599,47 +647,6 @@ export class OpenCodeServerSession implements RunnerSession {
     }
 }
 
-function createActiveTurn(messageId: string): ActiveTurn {
-    let resolve!: (result: RunnerTurnResult) => void;
-    let reject!: (error: Error) => void;
-    const promise = new Promise<RunnerTurnResult>((accepted, rejected) => {
-        resolve = accepted;
-        reject = rejected;
-    });
-    return {
-        adapter: new OpenCodeEventAdapter(),
-        inputMessageIds: new Set([messageId]),
-        assistantOutputIds: new Map(),
-        steeringDeliveries: new Map(),
-        steeringOrder: [],
-        promise,
-        resolve,
-        reject,
-        cancelRequested: false,
-        seenActivity: false,
-        settled: false,
-    };
-}
-
-class OpenCodeMessageIds {
-    private timestamp = 0;
-    private sequence = 0;
-
-    next(): string {
-        const timestamp = Date.now();
-        if (timestamp !== this.timestamp) {
-            this.timestamp = timestamp;
-            this.sequence = 0;
-        }
-        this.sequence += 1;
-        const ordered =
-            (BigInt(timestamp) * 0x1000n + BigInt(this.sequence)) & 0xffffffffffffn;
-        const prefix = ordered.toString(16).padStart(12, '0');
-        const random = crypto.randomUUID().replaceAll('-', '').slice(0, 14);
-        return `msg_${prefix}${random}`;
-    }
-}
-
 function createOutputId(): string {
     return `output_${crypto.randomUUID()}`;
 }
@@ -666,16 +673,6 @@ function parseModel(model: string) {
         providerID: model.slice(0, separator),
         modelID: model.slice(separator + 1),
     };
-}
-
-function deferred<T>() {
-    let resolve!: (value: T) => void;
-    let reject!: (error: Error) => void;
-    const promise = new Promise<T>((accepted, rejected) => {
-        resolve = accepted;
-        reject = rejected;
-    });
-    return { promise, resolve, reject };
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

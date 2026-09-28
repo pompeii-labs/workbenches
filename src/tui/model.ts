@@ -463,10 +463,15 @@ export function reduceTranscript(
     if (event.type === 'usage.updated') {
         const tokens = numeric(event.data, 'total_tokens');
         const cost = numeric(event.data, 'cost_usd');
+        const delta = field(event.data, 'kind') === 'delta';
         return {
             ...state,
-            ...(tokens === undefined ? {} : { totalTokens: tokens }),
-            ...(cost === undefined ? {} : { costUsd: cost }),
+            ...(tokens === undefined
+                ? {}
+                : { totalTokens: tokens + (delta ? (state.totalTokens ?? 0) : 0) }),
+            ...(cost === undefined
+                ? {}
+                : { costUsd: cost + (delta ? (state.costUsd ?? 0) : 0) }),
         };
     }
     if (event.type === 'outcome.available') {

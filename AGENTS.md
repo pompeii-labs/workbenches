@@ -210,7 +210,10 @@ run. Headless authoring waits for execution and package verification instead of
 intermediate creator turns. Exit codes are 0 for idle/turn_completed/completed,
 1 for failure, 130 for cancellation or interruption, 2 for input needed, and
 124 for timeout. Interrupting or timing out a wait does not cancel execution.
-Terminal executions and currently pending requests remain observable.
+Terminal executions and currently pending requests remain observable. `usage`
+is a delta strictly after `--after` through the returned sequence; `usage_total`
+is the cumulative run total at that sequence. Always advance the cursor before
+summing another wait's delta. Repeating the same cursor repeats its interval.
 
 Only answer reported requests. `allow` grants permission once and `deny`
 rejects it. `allow_always` must be explicitly offered by the runner. A question
@@ -221,8 +224,9 @@ Authentication requests report the runner's URL and instructions; never send
 credentials through `answer`. `ps --json` includes `needs_input` and pending
 request metadata.
 
-Running `wb` or `wb run <name>` without a task opens the experimental terminal
-client. Agents should normally use an explicit one-shot task, `--final`, or
+Running `wb run <name>` without a task opens the experimental terminal
+client. Bare `wb` displays command help. Agents should normally use an explicit
+one-shot task, `--final`, or
 `--json`; the interactive interface is intended for a human who wants a
 multi-turn session and explicit permission prompts.
 

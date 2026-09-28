@@ -14,6 +14,44 @@ import {
 } from '../src/tui/model.js';
 
 describe('TUI transcript model', () => {
+    test('accumulates usage deltas across steps and turns, including cancellation', () => {
+        let state = emptyTranscript();
+        state = reduceTranscript(state, event(1, 'turn.started', {}));
+        state = reduceTranscript(
+            state,
+            event(2, 'usage.updated', {
+                kind: 'delta',
+                total_tokens: 100,
+                cost_usd: 1,
+            })
+        );
+        state = reduceTranscript(
+            state,
+            event(3, 'usage.updated', {
+                kind: 'delta',
+                total_tokens: 200,
+                cost_usd: 0.5,
+            })
+        );
+        expect(state).toMatchObject({ totalTokens: 300, costUsd: 1.5 });
+        state = reduceTranscript(state, event(4, 'turn.completed', {}));
+        state = reduceTranscript(state, event(5, 'turn.started', {}));
+        state = reduceTranscriptDuringCancellation(
+            state,
+            event(6, 'usage.updated', {
+                kind: 'delta',
+                total_tokens: 50,
+                cost_usd: 0.25,
+            })
+        );
+        expect(state).toMatchObject({ totalTokens: 350, costUsd: 1.75 });
+        state = reduceTranscript(
+            state,
+            event(7, 'usage.updated', { kind: 'delta', input_tokens: 1 })
+        );
+        expect(state).toMatchObject({ totalTokens: 350, costUsd: 1.75 });
+    });
+
     test('preserves a durable outcome card during cancellation and completion', () => {
         let state = interruptTranscript(
             addUserMessage(emptyTranscript(), 'Make a report')

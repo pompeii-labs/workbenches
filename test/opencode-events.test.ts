@@ -3,6 +3,21 @@ import { describe, expect, test } from 'bun:test';
 import { OpenCodeEventAdapter } from '../src/runners/opencode/events.js';
 
 describe('OpenCode event adapter', () => {
+    test('counts an identified step only once and retains cost without token metadata', () => {
+        const adapter = new OpenCodeEventAdapter();
+        const step = {
+            type: 'step_finish',
+            part: { id: 'step_1', reason: 'tool-calls', cost: 0.5 },
+        };
+        expect(adapter.consume(step).events).toEqual([
+            { type: 'usage.updated', data: { kind: 'delta', cost_usd: 0.5 } },
+        ]);
+        expect(adapter.consume(step).events).toEqual([]);
+        expect(
+            adapter.consume({ ...step, part: { ...step.part, id: 'step_2' } }).events
+        ).toHaveLength(1);
+    });
+
     test('normalizes text and terminal usage without retaining provider metadata', () => {
         const adapter = new OpenCodeEventAdapter();
         const text = adapter.consume({

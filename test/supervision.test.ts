@@ -49,6 +49,102 @@ async function fixture(mode: 'interactive' | 'detached' = 'interactive') {
 }
 
 describe('read-only run supervision', () => {
+    test('wait usage covers only events after its cursor, including at run completion', async () => {
+        const f = await fixture('detached');
+        await f.emit('turn.started');
+        const first = await f.emit('usage.updated', {
+            kind: 'delta',
+            total_tokens: 100,
+            cost_usd: 1,
+        });
+        const second = await f.emit('usage.updated', {
+            kind: 'delta',
+            total_tokens: 50,
+            cost_usd: 0.5,
+        });
+        await f.emit('turn.completed');
+        const end = await f.emit('run.completed');
+        await f.store.update(f.run.id, { status: 'completed' });
+        for (const [afterSequence, total_tokens, cost_usd] of [
+            [0, 150, 1.5],
+            [first.sequence, 50, 0.5],
+            [second.sequence, 0, 0],
+            [end.sequence, 0, 0],
+        ] as const) {
+            expect(await f.supervision.wait(f.run, { afterSequence })).toMatchObject({
+                usage: { kind: 'delta', total_tokens, cost_usd },
+                usage_total: { kind: 'total', total_tokens: 150, cost_usd: 1.5 },
+            });
+        }
+    });
+
+    test('advancing timeout and permission cursors never counts spend twice', async () => {
+        const f = await fixture();
+        await f.emit('turn.started');
+        await f.emit('usage.updated', { kind: 'delta', cost_usd: 1 });
+        const first = await f.supervision.wait(f.run, { timeoutMilliseconds: 0 });
+        expect(first).toMatchObject({
+            state: 'timeout',
+            usage: { kind: 'delta', cost_usd: 1 },
+        });
+        await f.emit('usage.updated', { kind: 'delta', cost_usd: 0.5 });
+        await f.emit('input.requested', { id: 'permission' });
+        const second = await f.supervision.wait(f.run, {
+            afterSequence: first.sequence,
+        });
+        expect(second).toMatchObject({
+            state: 'needs_input',
+            usage: { kind: 'delta', cost_usd: 0.5 },
+        });
+        const repeated = await f.supervision.wait(f.run, {
+            afterSequence: second.sequence,
+        });
+        expect(repeated).toMatchObject({
+            usage: { kind: 'delta', cost_usd: 0 },
+            usage_total: { kind: 'total', cost_usd: 1.5 },
+        });
+        expect(
+            Number(first.usage.cost_usd) +
+                Number(second.usage.cost_usd) +
+                Number(repeated.usage.cost_usd)
+        ).toBe(1.5);
+    });
+
+    test('run totals survive turn resets and old turn boundaries retain their own accounting', async () => {
+        const f = await fixture('detached');
+        await f.emit('turn.started');
+        await f.emit('usage.updated', { kind: 'delta', cost_usd: 1 });
+        await f.emit('turn.completed');
+        await f.emit('turn.started');
+        await f.emit('usage.updated', { kind: 'delta', cost_usd: 0.5 });
+        await f.emit('turn.completed');
+        const first = await f.supervision.wait(f.run);
+        expect(first).toMatchObject({
+            usage: { kind: 'delta', cost_usd: 1 },
+            usage_total: { kind: 'total', cost_usd: 1 },
+        });
+        expect(
+            await f.supervision.wait(f.run, { afterSequence: first.sequence })
+        ).toMatchObject({
+            usage: { kind: 'delta', cost_usd: 0.5 },
+            usage_total: { kind: 'total', cost_usd: 1.5 },
+        });
+    });
+
+    test('snapshot usage events are differenced before adding them to an interval', async () => {
+        const f = await fixture();
+        await f.emit('turn.started');
+        const first = await f.emit('usage.updated', { kind: 'total', cost_usd: 1 });
+        await f.emit('usage.updated', { kind: 'total', cost_usd: 1.5 });
+        await f.emit('turn.completed');
+        expect(
+            await f.supervision.wait(f.run, { afterSequence: first.sequence })
+        ).toMatchObject({
+            usage: { kind: 'delta', cost_usd: 0.5 },
+            usage_total: { kind: 'total', cost_usd: 1.5 },
+        });
+    });
+
     test('idle, final response, usage, and outcome come from the last turn', async () => {
         const f = await fixture();
         await f.emit('run.ready');
@@ -218,6 +314,7 @@ describe('read-only run supervision', () => {
                 if (first) {
                     first = false;
                     await f.emit('output.text', { text: 'final response' });
+                    await f.emit('usage.updated', { kind: 'delta', cost_usd: 0.5 });
                     await f.emit('outcome.available', { outcome_id: 'latest' });
                     await f.emit('turn.completed');
                     await f.emit('run.completed');
@@ -231,7 +328,9 @@ describe('read-only run supervision', () => {
                 state: 'completed',
                 final: 'final response',
                 outcome_id: 'latest',
-                sequence: 5,
+                sequence: 6,
+                usage: { kind: 'delta', cost_usd: 0.5 },
+                usage_total: { kind: 'total', cost_usd: 0.5 },
             });
         } finally {
             observer.mockRestore();
@@ -274,12 +373,15 @@ describe('read-only run supervision', () => {
             const f = await fixture();
             await f.emit('input.requested', { id: 'p' });
             await f.emit('output.text', { text: 'partial' });
+            await f.emit('usage.updated', { kind: 'delta', cost_usd: 0.5 });
             await f.emit(`run.${status}`, { message: 'failure' });
             await f.store.update(f.run.id, { status });
             expect(await f.supervision.wait(f.run)).toMatchObject({
                 state: status,
                 final: 'partial',
                 pending_requests: [],
+                usage: { kind: 'delta', cost_usd: 0.5 },
+                usage_total: { kind: 'total', cost_usd: 0.5 },
             });
         });
 

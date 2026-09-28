@@ -479,8 +479,16 @@ Without a cursor, observation starts at the beginning of that run. A
 and boundary sequence even when queued work starts immediately. It does not
 claim execution or runtime cleanup has finished. Repeat with `--after` set to
 the returned sequence to observe subsequent boundaries or terminal completion.
+`usage` is labelled `kind: delta` and counts usage events strictly after `--after`
+through the returned `sequence`. `usage_total`, labelled `kind: total`, counts
+the run's usage through that same sequence, across all turns. Advance the cursor
+to the returned sequence before summing another wait's `usage`; observing the
+same cursor again repeats the same interval. A cursor at the final sequence
+returns zero for previously reported usage fields. Costs are provider-reported
+model costs, not a billing reconciliation or runtime infrastructure charges.
+
 Terminal state and currently pending requests remain visible. Terminal snapshots
-drain the durable event tail before reporting final response, latest-turn usage,
+drain the durable event tail before reporting final response, usage,
 and outcome. Waiting does not attach an audience, restart an execution, or
 initiate authentication. Timeouts and interruptions stop observation only.
 `answer` validates a pending request's
@@ -613,6 +621,15 @@ may also provide a safe display title, target, short description, duration, and
 normalized failure. These fields let clients show concrete activity such as a
 file read or search without persisting arbitrary commands, file contents, or
 tool output in the portable event log.
+
+OpenCode descendant sessions contribute their own usage deltas and tool activity
+to the owning run as native events arrive. Child activity includes
+`native_session_id`; child tool IDs are scoped to that session. A child reply
+or completion does not replace the parent's final response or complete its turn.
+Descendant permissions and questions use the same headless input controls.
+Waiting for an answer does not stop the adapter from receiving usage from other
+branches. Usage is reported at native step completion, not token by token;
+budget guards cannot account for unfinished provider requests in real time.
 
 Exactly one of `run.completed`, `run.failed`, or `run.cancelled` terminates the
 event stream. The `result` promise resolves to the matching status.

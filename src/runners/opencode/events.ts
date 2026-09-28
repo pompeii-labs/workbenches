@@ -10,6 +10,7 @@ export interface OpenCodeAdapterResult {
 export class OpenCodeEventAdapter {
     private readonly startedTools = new Set<string>();
     private readonly completedTools = new Set<string>();
+    private readonly finishedSteps = new Set<string>();
     private turnCompleted = false;
     private finalText = '';
     private sessionId: string | undefined;
@@ -109,18 +110,21 @@ export class OpenCodeEventAdapter {
 
     private stepFinish(event: Record<string, unknown>): OpenCodeAdapterResult {
         const part = record(event.part);
+        const id = string(part?.id);
+        if (id && this.finishedSteps.has(id)) return this.result([]);
         const events: WorkbenchEventDraft[] = [];
         const tokens = record(part?.tokens);
-        if (tokens) {
-            const cache = record(tokens.cache);
+        if (tokens || number(part?.cost) !== undefined) {
+            if (id) this.finishedSteps.add(id);
+            const cache = record(tokens?.cache);
             events.push({
                 type: 'usage.updated',
                 data: compact({
                     kind: 'delta',
-                    total_tokens: number(tokens.total),
-                    input_tokens: number(tokens.input),
-                    output_tokens: number(tokens.output),
-                    reasoning_tokens: number(tokens.reasoning),
+                    total_tokens: number(tokens?.total),
+                    input_tokens: number(tokens?.input),
+                    output_tokens: number(tokens?.output),
+                    reasoning_tokens: number(tokens?.reasoning),
                     cache_read_tokens: number(cache?.read),
                     cache_write_tokens: number(cache?.write),
                     cost_usd: number(part?.cost),

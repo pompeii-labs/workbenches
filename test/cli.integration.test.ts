@@ -422,6 +422,7 @@ describe('CLI integration', () => {
             for (const text of replies) {
                 await events.emit('turn.started', {});
                 await events.emit('output.text', { text });
+                await events.emit('usage.updated', { kind: 'delta', cost_usd: 0.25 });
                 await events.emit('turn.completed', {});
             }
             await events.emit('run.completed', {});
@@ -452,7 +453,9 @@ describe('CLI integration', () => {
             run_id: second.id,
             state: 'turn_completed',
             final: 'second early',
-            sequence: 3,
+            sequence: 4,
+            usage: { kind: 'delta', cost_usd: 0.25 },
+            usage_total: { kind: 'total', cost_usd: 0.25 },
         });
         const secondFinal = await executeCli(
             ['wait', second.id, '--after', String(boundary.sequence), '--json'],
@@ -463,6 +466,24 @@ describe('CLI integration', () => {
             run_id: second.id,
             state: 'completed',
             final: 'second final',
+            usage: { kind: 'delta', cost_usd: 0.25 },
+            usage_total: { kind: 'total', cost_usd: 0.5 },
+        });
+        const replay = await executeCli(
+            [
+                'wait',
+                second.id,
+                '--run',
+                '--after',
+                String(JSON.parse(secondFinal.stdout).sequence),
+                '--json',
+            ],
+            environment
+        );
+        expect(replay.code).toBe(0);
+        expect(JSON.parse(replay.stdout)).toMatchObject({
+            usage: { kind: 'delta', cost_usd: 0 },
+            usage_total: { kind: 'total', cost_usd: 0.5 },
         });
         const latest = await executeCli(['wait', sessionId, '--json'], environment);
         expect(latest.code).toBe(0);
