@@ -16,7 +16,6 @@ import type { OutcomeChangeset, OutcomeWorkspace } from '../../outcomes/contract
 import type { OutcomeStore } from '../../outcomes/store.js';
 import { WorkspaceSnapshot } from '../../outcomes/workspace.js';
 import { extractArchive } from './archive.js';
-import { safeProjectNpmrc } from './npmrc.js';
 import type { E2BAssetBinding } from './paths.js';
 import { type E2BStateSource, E2BStateStore, selectedStateFiles } from './state.js';
 
@@ -582,6 +581,37 @@ function validateSymlink(
             `Escaping symlink is not allowed in E2B transfer: ${displayPath}`
         );
     }
+}
+
+function safeProjectNpmrc(content: Uint8Array): boolean {
+    // Only known non-secret project settings may cross the workspace boundary.
+    // Authentication, URLs, paths, interpolation, and unknown settings stay blocked.
+    const booleanSettings = new Set([
+        'engine-strict',
+        'strict-peer-dependencies',
+        'auto-install-peers',
+        'shamefully-hoist',
+        'legacy-peer-deps',
+        'ignore-scripts',
+        'save-exact',
+        'package-lock',
+        'fund',
+        'audit',
+    ]);
+    if (content.byteLength > 64 * 1024) return false;
+    const source = new TextDecoder('utf-8', { fatal: true });
+    let text: string;
+    try {
+        text = source.decode(content);
+    } catch {
+        return false;
+    }
+    return text.split(/\r?\n/).every((line) => {
+        const setting = line.trim();
+        if (!setting) return true;
+        const match = /^([a-z-]+)\s*=\s*(true|false)$/.exec(setting);
+        return !!match && booleanSettings.has(match[1] ?? '');
+    });
 }
 
 function projectNpmrcPath(path: string): boolean {
