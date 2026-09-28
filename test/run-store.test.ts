@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkbenchEvent } from '../src/runs/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
+import { RunReconciliationLease } from '../src/runs/reconciliation.js';
 import { SessionResolver, SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
 
@@ -152,6 +153,58 @@ describe('durable Workbench runs', () => {
             type: 'run.failed',
             data: { message: 'Workbench run worker exited unexpectedly' },
         });
+    });
+
+    for (const code of ['EPERM', 'EACCES', 'EIO']) {
+        test(`does not fail a worker when process inspection returns ${code}`, async () => {
+            const home = await temporaryHome();
+            const store = new RunStore(home);
+            const run = await fixtureRun(home);
+            const running = await store.update(run.id, {
+                status: 'running',
+                pid: process.pid,
+            });
+            const probe = spyOn(process, 'kill').mockImplementation(() => {
+                throw Object.assign(new Error('inspection failed'), { code });
+            });
+            try {
+                expect(() => store.assertWorkerAlive(running)).not.toThrow();
+                expect((await store.reconcile(running)).status).toBe('running');
+                expect(await store.readEvents(run.id)).toEqual([]);
+            } finally {
+                probe.mockRestore();
+            }
+        });
+    }
+
+    test('does not steal a reconciliation lease from an inaccessible process', async () => {
+        const home = await temporaryHome();
+        const directory = join(home, 'lease');
+        const lock = join(directory, '.reconcile');
+        await mkdir(lock, { recursive: true });
+        const owner = JSON.stringify({ token: 'existing', pid: process.pid });
+        await writeFile(join(lock, 'owner.json'), owner);
+        const inspected = Promise.withResolvers<void>();
+        const probe = spyOn(process, 'kill').mockImplementation(() => {
+            inspected.resolve();
+            throw Object.assign(new Error('inspection denied'), { code: 'EPERM' });
+        });
+        let entered = false;
+        const pending = new RunReconciliationLease('test', directory).exclusive(
+            async () => {
+                entered = true;
+            }
+        );
+        try {
+            await inspected.promise;
+            expect(await readFile(join(lock, 'owner.json'), 'utf8')).toBe(owner);
+            expect(entered).toBeFalse();
+        } finally {
+            probe.mockRestore();
+            await rm(lock, { recursive: true, force: true });
+            await pending;
+        }
+        expect(entered).toBeTrue();
     });
 
     test('reconciles an abandoned worker exactly once across concurrent readers', async () => {

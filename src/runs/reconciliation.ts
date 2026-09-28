@@ -81,8 +81,9 @@ function processIsAlive(pid: number): boolean {
     try {
         process.kill(pid, 0);
         return true;
-    } catch {
-        return false;
+    } catch (error) {
+        // Never steal a lease just because its owner's process is inaccessible.
+        return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
     }
 }
 

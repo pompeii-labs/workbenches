@@ -423,8 +423,13 @@ export class RunStore {
         try {
             process.kill(pid, 0);
             return true;
-        } catch {
-            return false;
+        } catch (error) {
+            // EPERM (or an unknown inspection failure) does not prove an exit.
+            return !(
+                error instanceof Error &&
+                'code' in error &&
+                error.code === 'ESRCH'
+            );
         }
     }
 

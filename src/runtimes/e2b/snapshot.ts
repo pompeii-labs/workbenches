@@ -3,7 +3,7 @@ import {
     createReadStream as readStream,
     createWriteStream as writeStream,
 } from 'node:fs';
-import { lstat, mkdtemp, readdir, readlink, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, readdir, readFile, readlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -16,6 +16,7 @@ import type { OutcomeChangeset, OutcomeWorkspace } from '../../outcomes/contract
 import type { OutcomeStore } from '../../outcomes/store.js';
 import { WorkspaceSnapshot } from '../../outcomes/workspace.js';
 import { extractArchive } from './archive.js';
+import { safeProjectNpmrc } from './npmrc.js';
 import type { E2BAssetBinding } from './paths.js';
 import { type E2BStateSource, E2BStateStore, selectedStateFiles } from './state.js';
 
@@ -320,7 +321,7 @@ async function selectedPaths(
                 return false;
             }
             if (excludedByNestedAsset(path, syncExcludedPaths)) return false;
-            if (!protectedWorkspacePath(path)) return true;
+            if (!protectedWorkspacePath(path) || projectNpmrcPath(path)) return true;
             excludedPaths.push(path);
             return false;
         });
@@ -329,6 +330,29 @@ async function selectedPaths(
         const path = join(binding.hostPath, name);
         const details = await lstat(path).catch(() => undefined);
         if (!details) continue;
+        if (projectNpmrcPath(name)) {
+            const tracked = Bun.spawn(
+                ['git', 'ls-files', '--error-unmatch', '--', name],
+                {
+                    cwd: binding.hostPath,
+                    stdout: 'ignore',
+                    stderr: 'ignore',
+                }
+            );
+            if ((await tracked.exited) !== 0) {
+                excludedPaths.push(name);
+                continue;
+            }
+            if (
+                !details.isFile() ||
+                details.size > 64 * 1024 ||
+                !safeProjectNpmrc(await readFile(path))
+            ) {
+                throw new Error(
+                    `Cannot safely transfer tracked project config ${name} to E2B. Only non-secret npm boolean settings are supported; remove credentials or unsupported settings before retrying.`
+                );
+            }
+        }
         if (details.isDirectory()) {
             // Ordinary files are listed individually. A directory here is a
             // Gitlink or another nested repository boundary, whose own ignore
@@ -448,10 +472,44 @@ async function writeArchive(
     entries: Map<string, E2BSnapshotEntry>,
     sourceIsDirectory: boolean
 ): Promise<void> {
+    // Validate and retain the exact config bytes before opening the archive.
+    const configs = new Map<string, Buffer>();
+    for (const entry of entries.values()) {
+        if (!sourceIsDirectory || !projectNpmrcPath(entry.path)) continue;
+        const content = await readFile(join(source, entry.path));
+        const digest = `sha256:${createHash('sha256').update(content).digest('hex')}`;
+        if (
+            entry.type !== 'file' ||
+            content.byteLength !== entry.size ||
+            digest !== entry.digest ||
+            !safeProjectNpmrc(content)
+        ) {
+            throw new Error(
+                `Project config changed or is unsafe for E2B transfer: ${entry.path}`
+            );
+        }
+        configs.set(entry.path, content);
+    }
     const pack = tar.pack();
     const writing = pipeline(pack, createGzip(), writeStream(archive, { mode: 0o600 }));
     for (const entry of entries.values()) {
         const absolutePath = sourceIsDirectory ? join(source, entry.path) : source;
+        const content = configs.get(entry.path);
+        if (content) {
+            await new Promise<void>((resolveEntry, reject) => {
+                pack.entry(
+                    {
+                        name: entry.path,
+                        type: 'file',
+                        size: content.byteLength,
+                        mode: entry.mode,
+                    },
+                    content,
+                    (error) => (error ? reject(error) : resolveEntry())
+                );
+            });
+            continue;
+        }
         if (entry.type === 'symlink') {
             await new Promise<void>((resolveEntry, reject) => {
                 pack.entry(
@@ -524,6 +582,13 @@ function validateSymlink(
             `Escaping symlink is not allowed in E2B transfer: ${displayPath}`
         );
     }
+}
+
+function projectNpmrcPath(path: string): boolean {
+    return (
+        basename(path) === '.npmrc' &&
+        !protectedWorkspacePath(`${dirname(path)}/config`)
+    );
 }
 
 function protectedWorkspacePath(path: string): boolean {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,46 +16,59 @@ afterEach(async () => {
 });
 
 describe('interactive session storage', () => {
-    test('serializes operations that can advance one stable session', async () => {
-        const home = await temporaryHome();
-        const store = new SessionStore(home);
-        const session = await store.create({
-            id: 'wb_sessionlease1234567890123',
-            workbench: 'creator',
-            workbench_version: '0.1.0',
-            runner: 'opencode',
-            model: 'openai/gpt-5.6-terra',
-            runtime: 'local',
-            reference: 'creator',
-            workbench_path: '/repo/.workbenches/creator',
-            workspace: '/repo',
-            workspaces: [],
-            latest_run_id: 'wb_sessionlease1234567890123',
-        });
-        const entered = deferred<void>();
-        const release = deferred<void>();
-        const order: string[] = [];
-        const first = store.exclusive(session.id, async () => {
-            order.push('first');
-            entered.resolve();
-            await release.promise;
-        });
-        await entered.promise;
-        const second = store.exclusive(session.id, async () => {
-            order.push('second');
-        });
+    for (const inaccessible of [false, true]) {
+        test(`serializes session operations when owner is ${inaccessible ? 'inaccessible' : 'accessible'}`, async () => {
+            const home = await temporaryHome();
+            const store = new SessionStore(home);
+            const session = await store.create({
+                id: 'wb_sessionlease1234567890123',
+                workbench: 'creator',
+                workbench_version: '0.1.0',
+                runner: 'opencode',
+                model: 'openai/gpt-5.6-terra',
+                runtime: 'local',
+                reference: 'creator',
+                workbench_path: '/repo/.workbenches/creator',
+                workspace: '/repo',
+                workspaces: [],
+                latest_run_id: 'wb_sessionlease1234567890123',
+            });
+            const entered = deferred<void>();
+            const release = deferred<void>();
+            const order: string[] = [];
+            const first = store.exclusive(session.id, async () => {
+                order.push('first');
+                entered.resolve();
+                await release.promise;
+            });
+            await entered.promise;
+            const probe = inaccessible
+                ? spyOn(process, 'kill').mockImplementation(() => {
+                      throw Object.assign(new Error('inspection denied'), {
+                          code: 'EPERM',
+                      });
+                  })
+                : undefined;
+            const second = store.exclusive(session.id, async () => {
+                order.push('second');
+            });
 
-        await Bun.sleep(50);
-        expect(order).toEqual(['first']);
-        release.resolve();
-        await Promise.all([first, second]);
-        expect(order).toEqual(['first', 'second']);
-        expect(
-            await stat(join(home, 'sessions', session.id, '.lease')).catch(
-                () => undefined
-            )
-        ).toBeUndefined();
-    });
+            try {
+                await Bun.sleep(50);
+                expect(order).toEqual(['first']);
+            } finally {
+                probe?.mockRestore();
+                release.resolve();
+                await Promise.all([first, second]);
+            }
+            expect(order).toEqual(['first', 'second']);
+            expect(
+                await stat(join(home, 'sessions', session.id, '.lease')).catch(
+                    () => undefined
+                )
+            ).toBeUndefined();
+        });
+    }
 
     test('stores resumable metadata separately from native runner state', async () => {
         const home = await temporaryHome();
