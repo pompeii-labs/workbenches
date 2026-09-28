@@ -2173,6 +2173,93 @@ describe.serial('Workbench TUI', () => {
         expect(secondFrame).not.toBe(firstFrame);
     });
 
+    test('dismisses externally answered permissions without answering them again', async () => {
+        const unrelated = deferred<void>();
+        const answered = deferred<void>();
+        let replies = 0;
+        let cancellations = 0;
+        const handle = fakeHandle(() => {});
+        handle.respondToPermission = async () => {
+            replies += 1;
+            throw new Error('Permission request is no longer active');
+        };
+        handle.cancelTurn = async () => {
+            cancellations += 1;
+            return receipt('cancel_turn', 'cancelled');
+        };
+        handle.observe = () =>
+            (async function* () {
+                yield event(0, 'run.ready', {});
+                yield event(1, 'turn.started', { index: 1 });
+                yield event(2, 'input.requested', {
+                    id: 'permission_current',
+                    kind: 'permission',
+                    action: 'bash',
+                    message: 'Allow the verification command?',
+                    resources: ['pwd'],
+                    options: ['allow_once', 'reject'],
+                });
+                await unrelated.promise;
+                yield event(3, 'input.accepted', {
+                    id: 'permission_other',
+                    kind: 'permission',
+                });
+                yield event(4, 'input.accepted', {
+                    id: 'permission_current',
+                    kind: 'send',
+                });
+                await answered.promise;
+                yield event(5, 'input.accepted', {
+                    id: 'permission_current',
+                    kind: 'permission',
+                });
+            })();
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => handle}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32, exitOnCtrlC: false }
+        );
+        renderers.push(setup.renderer);
+        await waitForFrame(
+            setup,
+            (frame) => frame.includes('Allow the verification command?'),
+            'permission prompt'
+        );
+        unrelated.resolve();
+        await Bun.sleep(20);
+        await setup.flush();
+        expect(setup.captureCharFrame()).toContain('Allow the verification command?');
+        answered.resolve();
+        await waitForFrame(
+            setup,
+            (frame) => !frame.includes('Allow the verification command?'),
+            'externally answered permission to dismiss'
+        );
+        expect(setup.captureCharFrame()).not.toContain('Needs permission');
+        setup.mockInput.pressCtrlC();
+        await Bun.sleep(20);
+        await setup.flush();
+        expect(replies).toBe(0);
+        expect(cancellations).toBe(1);
+        expect(setup.captureCharFrame()).not.toContain(
+            'Permission request is no longer active'
+        );
+    });
+
     test('detaches the terminal client without closing the durable session', async () => {
         const handle = fakeHandle(() => {});
         let detaches = 0;
