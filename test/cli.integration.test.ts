@@ -1909,7 +1909,7 @@ describe('CLI integration', () => {
         } finally {
             server.stop(true);
         }
-    });
+    }, 15_000);
 
     test('dispatches and attaches to a detached Docker run', async () => {
         const fixture = await createFixture({

@@ -13,7 +13,7 @@ import { join } from 'node:path';
 
 import { OutcomeApplier, OutcomeStore } from '../src/outcomes/index.js';
 import type { E2BAssetBinding } from '../src/runtimes/e2b/paths.js';
-import { E2BAssetSnapshot } from '../src/runtimes/e2b/snapshot.js';
+import { E2BAssetSnapshot, extractArchive } from '../src/runtimes/e2b/snapshot.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -102,6 +102,96 @@ describe('E2B workspace snapshots', () => {
             expect(snapshot.entries.has('.workbench/runtime.secrets.json')).toBeFalse();
             expect(snapshot.entries.has('runtime.secrets.json')).toBeFalse();
             expect(snapshot.excludedPaths).toContain('.env');
+        } finally {
+            await snapshot.cleanup();
+        }
+    });
+
+    test('preserves tracked non-secret npm config without phantom Git deletions', async () => {
+        const directory = await temporaryDirectory();
+        await mkdir(join(directory, 'apps', 'web'), { recursive: true });
+        const config = 'apps/web/.npmrc';
+        await writeFile(join(directory, config), 'engine-strict=true\n');
+        await run(['git', 'init', '-q'], directory);
+        await run(['git', 'add', config], directory);
+        await run(
+            [
+                'git',
+                '-c',
+                'user.name=Test',
+                '-c',
+                'user.email=test@example.com',
+                'commit',
+                '-qm',
+                'baseline',
+            ],
+            directory
+        );
+        // Untracked config must remain private, even when its contents look safe.
+        await writeFile(join(directory, '.npmrc'), 'engine-strict=true\n');
+        const remote = await temporaryDirectory();
+        const snapshot = await E2BAssetSnapshot.create(binding(directory), 1024 * 1024);
+        try {
+            expect([...snapshot.entries.keys()]).toEqual([config]);
+            expect(snapshot.excludedPaths).toEqual(['.npmrc']);
+            await extractArchive(snapshot.archive, remote);
+            expect(await readFile(join(remote, config), 'utf8')).toBe(
+                'engine-strict=true\n'
+            );
+            // Use the original repository index against the materialized worktree.
+            const status = await output(
+                [
+                    'git',
+                    `--git-dir=${join(directory, '.git')}`,
+                    `--work-tree=${remote}`,
+                    'status',
+                    '--porcelain',
+                ],
+                directory
+            );
+            expect(status.trim()).toBe('');
+        } finally {
+            await snapshot.cleanup();
+        }
+    });
+
+    for (const content of [
+        '//registry.npmjs.org/:_authToken=private-token\n',
+        'engine-strict=true\n_auth=private-token\n',
+        'registry=https://user:secret@example.com\n',
+        'registry=https://example.com\n',
+        `engine-strict=\${TOKEN}\n`,
+        '# private-token\nengine-strict=true\n',
+        'engine-strict=true\0\n',
+        'engine-strict=true\n'.repeat(4096),
+    ]) {
+        test(`rejects unsupported tracked npm config (${content.length} bytes, ${content.split('=')[0]})`, async () => {
+            const directory = await temporaryDirectory();
+            await writeFile(join(directory, '.npmrc'), content);
+            await run(['git', 'init', '-q'], directory);
+            await run(['git', 'add', '.npmrc'], directory);
+            await expect(
+                E2BAssetSnapshot.create(binding(directory), 1024 * 1024)
+            ).rejects.toThrow('Cannot safely transfer tracked project config .npmrc');
+        });
+    }
+
+    test('does not transfer tracked npm config symlinks or config in protected directories', async () => {
+        const directory = await temporaryDirectory();
+        await writeFile(join(directory, 'config'), 'engine-strict=true\n');
+        await symlink('config', join(directory, '.npmrc'));
+        await run(['git', 'init', '-q'], directory);
+        await run(['git', 'add', '.npmrc'], directory);
+        await expect(E2BAssetSnapshot.create(binding(directory), 1024)).rejects.toThrow(
+            'Cannot safely transfer tracked project config .npmrc'
+        );
+        await run(['git', 'rm', '-f', '.npmrc'], directory);
+        await mkdir(join(directory, '.aws'));
+        await writeFile(join(directory, '.aws', '.npmrc'), 'engine-strict=true\n');
+        await run(['git', 'add', '.aws/.npmrc'], directory);
+        const snapshot = await E2BAssetSnapshot.create(binding(directory), 1024);
+        try {
+            expect(snapshot.entries.has('.aws/.npmrc')).toBeFalse();
         } finally {
             await snapshot.cleanup();
         }
