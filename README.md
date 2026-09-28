@@ -263,6 +263,7 @@ Run `wb <command> --help` for command-specific options.
 - [Execution protocol](docs/EXECUTION.md)
 - [Outcome contract](docs/OUTCOMES.md)
 - [Source and workspace behavior](docs/SOURCES.md)
+- [Benchmarks](https://github.com/pompeii-labs/workbenchmarks): the same requests with and without a Workbench, graded by running the result, and how to reproduce them
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 
