@@ -15,3 +15,13 @@ export async function withTimeout<T>(
         if (timeout) clearTimeout(timeout);
     }
 }
+
+export function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((accepted, rejected) => {
+        resolve = accepted;
+        reject = rejected;
+    });
+    return { promise, resolve, reject };
+}

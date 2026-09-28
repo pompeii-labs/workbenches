@@ -36,6 +36,300 @@ runnerAdapterContract({
 });
 
 describe('OpenCode interactive server adapter', () => {
+    test('releases an unanswered request on cancellation so the next turn can ask', async () => {
+        const server = new FakeOpenCodeServer();
+        let asked!: () => void;
+        const requested = new Promise<void>((resolve) => {
+            asked = resolve;
+        });
+        let count = 0;
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async () => {},
+                requestPermission: async () => {
+                    count++;
+                    if (count === 1) {
+                        asked();
+                        return new Promise(() => {});
+                    }
+                    return 'allow_once';
+                },
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+        try {
+            server.onPrompt = () =>
+                server.emit('permission.asked', {
+                    id: `permission_${count}`,
+                    permission: 'read',
+                    patterns: ['/outside'],
+                });
+            const first = session.prompt('first');
+            await requested;
+            await session.cancelTurn();
+            expect(await first).toEqual({ reason: 'cancelled' });
+            server.onPermissionReply = () => server.completeTurn('second');
+            await session.prompt('second');
+            expect(count).toBe(2);
+            expect(server.permissionReplies).toEqual([{ reply: 'once' }]);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('keeps streaming child usage while a sibling permission is unanswered', async () => {
+        const server = new FakeOpenCodeServer();
+        let answer!: (decision: 'allow_once') => void;
+        const decision = new Promise<'allow_once'>((resolve) => {
+            answer = resolve;
+        });
+        let observed!: () => void;
+        const usage = new Promise<void>((resolve) => {
+            observed = resolve;
+        });
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async (event) => {
+                    if (event.type === 'usage.updated') observed();
+                },
+                requestPermission: async () => decision,
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+        try {
+            server.onPrompt = () => {
+                server.emit('session.created', {
+                    info: { id: 'ses_child', parentID: 'ses_native_1' },
+                });
+                server.emit('permission.asked', {
+                    id: 'pending',
+                    permission: 'read',
+                    patterns: ['/outside'],
+                });
+                server.emit('message.part.updated', {
+                    sessionID: 'ses_child',
+                    part: {
+                        id: 'step_1',
+                        type: 'step-finish',
+                        cost: 0.5,
+                        tokens: { total: 100 },
+                    },
+                });
+            };
+            server.onPermissionReply = () => server.completeTurn('done');
+            const result = session.prompt('parallel branches');
+            await usage;
+            expect(server.permissionReplies).toEqual([]);
+            answer('allow_once');
+            await result;
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('streams descendant spend and tools once without completing or replacing the parent reply', async () => {
+        const server = new FakeOpenCodeServer();
+        const emitted: WorkbenchEventDraft[] = [];
+        let observed!: () => void;
+        const childUsage = new Promise<void>((resolve) => {
+            observed = resolve;
+        });
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async (event) => {
+                    emitted.push(event);
+                    if (event.type === 'usage.updated') observed();
+                },
+                requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+        try {
+            server.onPrompt = () => {
+                server.emit('session.created', {
+                    info: { id: 'ses_child', parentID: 'ses_native_1' },
+                });
+                server.emit('session.created', {
+                    info: { id: 'ses_grandchild', parentID: 'ses_child' },
+                });
+                server.emit('message.part.updated', {
+                    sessionID: 'ses_grandchild',
+                    part: { type: 'text', text: 'Not the parent answer' },
+                });
+                server.emit('message.part.updated', {
+                    sessionID: 'ses_grandchild',
+                    part: toolPart('completed'),
+                });
+                const step = {
+                    sessionID: 'ses_grandchild',
+                    part: {
+                        id: 'step_child',
+                        type: 'step-finish',
+                        reason: 'stop',
+                        cost: 0.5,
+                        tokens: { total: 100 },
+                    },
+                };
+                server.emit('message.part.updated', step);
+                server.emit('message.part.updated', step);
+                server.emit('session.status', {
+                    sessionID: 'ses_grandchild',
+                    status: { type: 'idle' },
+                });
+                server.emit('message.part.updated', {
+                    sessionID: 'ses_unrelated',
+                    part: { ...step.part, cost: 100 },
+                });
+            };
+            let completed = false;
+            const result = session.prompt('delegate').then((value) => {
+                completed = true;
+                return value;
+            });
+            await childUsage;
+            await Bun.sleep(10);
+            expect(completed).toBe(false);
+            expect(emitted.filter((event) => event.type === 'usage.updated')).toEqual([
+                {
+                    type: 'usage.updated',
+                    data: {
+                        kind: 'delta',
+                        total_tokens: 100,
+                        cost_usd: 0.5,
+                        native_session_id: 'ses_grandchild',
+                    },
+                },
+            ]);
+            expect(
+                emitted.find((event) => event.type === 'tool.completed')?.data.id
+            ).toBe('ses_grandchild:call_1');
+            expect(emitted.some((event) => event.type === 'output.text')).toBe(false);
+            server.completeTurn('Parent answer');
+            expect(await result).toMatchObject({ reason: 'stop' });
+            expect(
+                emitted
+                    .filter((event) => event.type === 'output.text')
+                    .map((event) => event.data.text)
+                    .join('')
+            ).toBe('Parent answer');
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('resolves resumed child ancestry and surfaces its permissions and questions', async () => {
+        const server = new FakeOpenCodeServer();
+        server.sessions.set('ses_child', { id: 'ses_child', parentID: 'ses_native_1' });
+        const requests: string[] = [];
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async () => {},
+                requestPermission: async (request) => {
+                    requests.push(request.id);
+                    return 'allow_once';
+                },
+                requestQuestion: async (request) => {
+                    requests.push(request.id);
+                    return { outcome: 'rejected' };
+                },
+            },
+        });
+        try {
+            server.onPrompt = () => {
+                server.emit('permission.asked', {
+                    sessionID: 'ses_child',
+                    id: 'child_permission',
+                    permission: 'external_directory',
+                    patterns: ['/outside/*'],
+                    always: [],
+                });
+                server.emit('question.asked', {
+                    sessionID: 'ses_child',
+                    id: 'child_question',
+                    questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }],
+                });
+            };
+            server.onQuestionResponse = () => server.completeTurn('done');
+            await session.prompt('delegate');
+            expect(requests).toEqual(['child_permission', 'child_question']);
+            expect(server.permissionReplies).toEqual([{ reply: 'once' }]);
+            expect(server.questionResponses).toEqual([
+                { path: '/question/child_question/reject' },
+            ]);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('rejects unrelated and cyclic session ancestry without admitting their spend', async () => {
+        const server = new FakeOpenCodeServer();
+        server.sessions.set('ses_other', { id: 'ses_other' });
+        server.sessions.set('ses_cycle', { id: 'ses_cycle', parentID: 'ses_cycle' });
+        const emitted: WorkbenchEventDraft[] = [];
+        const session = await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: {
+                emit: async (event) => {
+                    emitted.push(event);
+                },
+                requestPermission: async () => {
+                    throw new Error('unrelated permission');
+                },
+                requestQuestion: async () => {
+                    throw new Error('unrelated question');
+                },
+            },
+        });
+        try {
+            server.onPrompt = () => {
+                for (const sessionID of ['ses_other', 'ses_cycle']) {
+                    server.emit('permission.asked', {
+                        sessionID,
+                        id: 'permission_other',
+                        permission: 'read',
+                        patterns: ['/outside'],
+                    });
+                    server.emit('message.part.updated', {
+                        sessionID,
+                        part: {
+                            id: 'step_other',
+                            type: 'step-finish',
+                            cost: 100,
+                            tokens: { total: 100 },
+                        },
+                    });
+                }
+                server.completeTurn('done');
+            };
+            await session.prompt('work');
+            expect(emitted.filter((event) => event.type === 'usage.updated')).toEqual(
+                []
+            );
+            expect(server.permissionReplies).toEqual([]);
+        } finally {
+            await session.close();
+        }
+    });
+
     for (const [action, resources, allowed] of [
         ['external_directory', ['/outbox/*'], true],
         ['external_directory', ['/outbox/reports/*'], true],
@@ -1024,6 +1318,7 @@ describe('OpenCode interactive server adapter', () => {
 });
 
 class FakeOpenCodeServer {
+    readonly sessions = new Map<string, Record<string, unknown>>();
     readonly promptBodies: Record<string, unknown>[] = [];
     readonly permissionReplies: Record<string, unknown>[] = [];
     readonly questionResponses: Array<{
@@ -1384,6 +1679,12 @@ class FakeOpenCodeServer {
         if (url.pathname === '/session/ses_native_1' && init.method === 'GET') {
             this.resumedSessions += 1;
             return Response.json({ id: 'ses_native_1' });
+        }
+        if (url.pathname.startsWith('/session/') && init.method === 'GET') {
+            const info = this.sessions.get(
+                decodeURIComponent(url.pathname.slice('/session/'.length))
+            );
+            return info ? Response.json(info) : new Response(null, { status: 404 });
         }
         if (url.pathname === '/event') {
             const stream = new ReadableStream<Uint8Array>({

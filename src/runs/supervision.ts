@@ -31,6 +31,7 @@ export interface RunSnapshot {
     sequence: number;
     final: string;
     usage: Record<string, unknown>;
+    usage_total: Record<string, unknown>;
     outcome_id?: string;
     error?: string;
     pending_requests: PendingRunRequest[];
@@ -72,7 +73,7 @@ export class RunSupervision {
             throw new Error('--after must be a non-negative integer');
         if (timeout !== undefined && (!Number.isFinite(timeout) || timeout < 0))
             throw new Error('--timeout must be a non-negative number of seconds');
-        const view = new RunObservation(run);
+        const view = new RunObservation(run, after);
         let sequence = 0;
         const controller = new AbortController();
         const stop = () => controller.abort();
@@ -148,13 +149,18 @@ class RunObservation {
     private answer = '';
     private answerId = '';
     private usage: Record<string, unknown> = {};
+    private readonly usageTotal: Record<string, number> = {};
+    private readonly usageAfter: Record<string, number> = {};
     private outcomeId: string | undefined;
     private error: string | undefined;
     private readonly pending = new Map<string, PendingRunRequest>();
     private readonly queued = new Set<string>();
     private readonly completedTurns: RunSnapshot[] = [];
 
-    constructor(private readonly initial: StoredRun) {}
+    constructor(
+        private readonly initial: StoredRun,
+        private readonly afterSequence?: number
+    ) {}
 
     apply(event: WorkbenchEvent): void {
         this.sequence = event.sequence;
@@ -178,7 +184,6 @@ class RunObservation {
                 this.completedTurns.push({
                     ...this.snapshot(this.initial, false),
                     state: 'turn_completed',
-                    usage: { ...this.usage },
                 });
             }
         }
@@ -191,6 +196,18 @@ class RunObservation {
         }
         if (event.type === 'usage.updated') {
             for (const [key, value] of Object.entries(data)) {
+                if (typeof value === 'number' && Number.isFinite(value)) {
+                    const delta =
+                        data.kind === 'delta'
+                            ? value
+                            : value - Number(this.usage[key] ?? 0);
+                    this.usageTotal[key] = (this.usageTotal[key] ?? 0) + delta;
+                    if (
+                        this.afterSequence !== undefined &&
+                        event.sequence > this.afterSequence
+                    )
+                        this.usageAfter[key] = (this.usageAfter[key] ?? 0) + delta;
+                }
                 this.usage[key] =
                     data.kind === 'delta' && typeof value === 'number'
                         ? Number(this.usage[key] ?? 0) + value
@@ -252,7 +269,19 @@ class RunObservation {
             state,
             sequence: this.sequence,
             final: this.answer.trimEnd(),
-            usage: this.usage,
+            usage:
+                this.afterSequence === undefined
+                    ? { ...this.usage, kind: 'total' }
+                    : {
+                          kind: 'delta',
+                          ...Object.fromEntries(
+                              Object.keys(this.usageTotal).map((key) => [
+                                  key,
+                                  this.usageAfter[key] ?? 0,
+                              ])
+                          ),
+                      },
+            usage_total: { ...this.usageTotal, kind: 'total' },
             ...(outcomeId ? { outcome_id: outcomeId } : {}),
             ...(this.error ? { error: this.error } : {}),
             pending_requests: pending,

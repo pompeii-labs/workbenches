@@ -13,7 +13,7 @@ Models are generalists. Projects are not. Every time a general-purpose agent ent
 
 Workbench packages that knowledge once, together with the skills, tools, runtime, harness, and model configuration needed to use it. Every compatible run starts prepared instead of paying the same knowledge ramp-up cost again.
 
-A Workbench can run in your current directory, inside Docker, in an E2B sandbox, or against an isolated GitHub checkout. The package belongs to its author, the user brings their own model and runtime credentials, and core execution has no hosted Workbench dependency.
+A Workbench can run in your current directory, inside Docker, in an E2B sandbox, or against an isolated GitHub checkout. The package belongs to its author, and the user brings their own model and runtime credentials. Runs execute through the selected harness, not a hosted Workbench agent service. The CLI downloads and caches model-routing metadata; first use requires an internet connection, and subsequent commands can use cached metadata if that service is unavailable.
 
 > Workbench is currently a public alpha implementing the draft-0 specification. Package and execution contracts may still change before 1.0.
 
@@ -34,13 +34,35 @@ wb --version
 wb update --check
 ```
 
-### Connect a model provider
+### Save and inspect your first Workbench
+
+Browse the [registry](https://workbenches.dev/workbenches) for published Workbenches. Start with the official creator, which helps you decide what expertise to package for your project:
 
 ```sh
-wb connect
+wb add pompeii/creator --as creator
+wb view creator
 ```
 
-Choose a runtime, harness, provider, and authentication method. This saves your preference without starting Docker, creating a cloud sandbox, or spending model tokens. If your harness needs an interactive login, the first foreground run will guide you through it.
+The creator runs locally through OpenCode. Install [OpenCode](https://opencode.ai/docs/) before continuing. Inspecting the package shows its model, runtime, instructions, skills, and requirements; adding or inspecting it does not start an agent.
+
+### Connect and run
+
+```sh
+wb connect creator
+wb smoke creator
+```
+
+Choose an authentication method for the creator's model provider. Workbench uses the package's harness, model, and runtime rather than asking you to configure a different environment. `smoke` checks that the runtime, harness, authentication, and declared tools are ready without spending model tokens.
+
+From the project directory you want the agent to inspect, run:
+
+```sh
+wb run creator --task "Inspect this repository and recommend one focused Workbench to create. Do not change files." --final
+```
+
+This starts a real model run and prints its final recommendation. It uses your provider credentials and billing. To have a multi-turn conversation instead, run `wb run creator` without a task; that opens the terminal interface. Bare `wb` displays command help.
+
+When you are ready to author the package, use `wb create core`; see [Create a Workbench](#create-a-workbench) below.
 
 Runtime credentials are configured separately. For example, save an E2B API key once with:
 
@@ -50,15 +72,9 @@ wb connect --runtime e2b
 
 An inherited `E2B_API_KEY` still overrides the saved value for a single process.
 
-### Inspect commands and launch a Workbench
+### Other package sources
 
-```sh
-wb
-```
-
-Search the registry, choose Add or Add and run, then choose where it should work: your current directory, another local directory, or an isolated GitHub checkout. Saved Workbenches offer Run.
-
-You can also save and run a Workbench directly from the shell:
+Save a registry publication, a package from GitHub, or a local package before running its alias. The following are example references; replace them with your own:
 
 ```sh
 wb add publisher/core --as project-core
@@ -74,14 +90,7 @@ wb run project-core --task "Review this migration" --final
 wb run project-core --task "Review this migration" --json
 ```
 
-Remote additions are frozen until `wb upgrade`. Local additions are live: each
-new run reads the registered absolute package directory. Every session captures
-its own package bytes, so resumed sessions keep their original package even
-after edits, upgrades, or removal. `run` accepts saved aliases only; `--dir` and
-`--repo` select the work target, never the package source. `wb publish <alias>`
-submits package bytes under `publisher/<manifest-name>` for registry review and
-reports the returned status. `--as` only names a local alias when adding a
-Workbench; it does not rename a registry publication.
+Remote additions are frozen until `wb upgrade`. Local additions are live: each new run reads the registered absolute package directory. Every session captures its own package bytes, so resumed sessions keep their original package even after edits, upgrades, or removal. `run` accepts saved aliases only; `--dir` and `--repo` select the work target, never the package source. `wb publish <alias>` submits package bytes under `publisher/<manifest-name>` for registry review and reports the returned status. `--as` only names a local alias when adding a Workbench; it does not rename a registry publication.
 
 ## What is in a Workbench?
 
