@@ -60,7 +60,7 @@
         "@clack/prompts": "^1.5.1",
         "@opentui/solid": "^0.5.4",
         "citty": "^0.2.2",
-        "e2b": "2.49.1",
+        "e2b": "2.51.0",
         "marked": "^18.0.7",
         "picocolors": "^1.1.1",
         "solid-js": "1.9.12",
