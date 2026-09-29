@@ -563,10 +563,60 @@ describe('interactive run worker', () => {
             eventIndex(events, 'input.delivered', 'steer')
         );
 
-        await handle.cancelTurn();
+        await handle.cancelTurn({ promoteQueuedSteers: true });
+        expect(adapter.prompts).toEqual(['first turn']);
         await handle.close();
         await execution;
         await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
+    });
+
+    test('ordinary interruption still rejects an undelivered steer', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const adapter = new ControlledAdapter({ deferSteeringDelivery: true });
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+        await handle.send('first turn');
+        await adapter.waitForPrompts(1);
+        await handle.steer('discard on ordinary interruption');
+        await handle.cancelTurn();
+        expect(adapter.prompts).toEqual(['first turn']);
+        const events = await new RunStore(home).readEvents(stored.id);
+        expect(eventIndex(events, 'input.rejected', 'steer')).toBeGreaterThan(-1);
+        await handle.close();
+        await execution;
+    });
+
+    test('promotes undelivered steering to the next turn when interrupting', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const adapter = new ControlledAdapter({ deferSteeringDelivery: true });
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+
+        await handle.send('first turn');
+        await adapter.waitForPrompts(1);
+        await handle.steer('queued correction');
+        await expect(
+            handle.cancelTurn({ promoteQueuedSteers: true })
+        ).resolves.toMatchObject({ disposition: 'cancelled' });
+        await adapter.waitForPrompts(2);
+        expect(adapter.prompts).toEqual(['first turn', 'queued correction']);
+        const events = await new RunStore(home).readEvents(stored.id);
+        expect(eventIndex(events, 'input.rejected', 'steer')).toBe(-1);
+        expect(eventIndex(events, 'input.delivered', 'steer')).toBeGreaterThan(
+            eventIndex(events, 'input.queued', 'steer')
+        );
+
+        await handle.cancelTurn();
+        await handle.close();
+        await execution;
     });
 
     test('treats repeated turn cancellation as idempotent once idle', async () => {
@@ -855,6 +905,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
 
     private readonly steeringDelivery: Promise<void>;
     private readonly resolveSteeringDelivery: () => void;
+    private readonly rejectSteeringDelivery: (reason?: unknown) => void;
 
     constructor(
         private readonly options: {
@@ -876,10 +927,13 @@ class ControlledAdapter implements RunnerSessionAdapter {
         });
         this.markQuestionRequested = markQuestionRequested;
         let resolveSteeringDelivery!: () => void;
-        this.steeringDelivery = new Promise((resolve) => {
+        let rejectSteeringDelivery!: (reason?: unknown) => void;
+        this.steeringDelivery = new Promise((resolve, reject) => {
             resolveSteeringDelivery = resolve;
+            rejectSteeringDelivery = reject;
         });
         this.resolveSteeringDelivery = resolveSteeringDelivery;
+        this.rejectSteeringDelivery = rejectSteeringDelivery;
     }
 
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
@@ -960,6 +1014,9 @@ class ControlledAdapter implements RunnerSessionAdapter {
 
     private async cancelTurn(): Promise<void> {
         this.cancellations += 1;
+        if (this.options.deferSteeringDelivery) {
+            this.rejectSteeringDelivery(new Error('Steering interrupted'));
+        }
         this.releaseFirst?.();
     }
 }

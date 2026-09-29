@@ -36,6 +36,7 @@ export interface RunControlRequest {
     };
     reason?: string;
     client_id?: string;
+    promote_queued_steers?: boolean;
 }
 
 export type RunControlDisposition =
@@ -64,7 +65,8 @@ export interface RunControlReceipt {
 export type RunControlSubmission =
     | { kind: 'attach_client' | 'detach_client'; clientId: string }
     | { kind: 'send' | 'steer' | 'follow_up'; input: RunnerInput }
-    | { kind: 'cancel_turn' | 'close' }
+    | { kind: 'cancel_turn'; promoteQueuedSteers?: boolean }
+    | { kind: 'close' }
     | { kind: 'cancel'; reason?: string }
     | {
           kind: 'permission';
@@ -164,6 +166,9 @@ export class RunControl {
                 ? { permission: submission.permission }
                 : {}),
             ...('question' in submission ? { question: submission.question } : {}),
+            ...('promoteQueuedSteers' in submission && submission.promoteQueuedSteers
+                ? { promote_queued_steers: true }
+                : {}),
             ...('reason' in submission && submission.reason?.trim()
                 ? { reason: submission.reason.trim() }
                 : {}),

@@ -248,16 +248,18 @@ export function ChatScreen(props: ChatScreenProps) {
     };
     const showOutcome = () =>
         showTranscriptOutcome(props.home, state(), dialog, setError);
-    const cancelTurn = (): Promise<void> => {
+    const cancelTurn = (promoteQueuedSteers = false): Promise<void> => {
         if (cancellation.pending) return Promise.resolve();
         const active = session;
         if (!active) return Promise.resolve();
         setError('');
         setCancellationPending(true);
         events.discardText();
-        setState((current) => interruptTranscript(current));
+        setState((current) =>
+            interruptTranscript(current, undefined, promoteQueuedSteers)
+        );
         return cancellation
-            .request(active)
+            .request(active, { promoteQueuedSteers })
             .then(() => undefined)
             .catch((cause) => {
                 setError(cause instanceof Error ? cause.message : String(cause));
@@ -514,10 +516,13 @@ export function ChatScreen(props: ChatScreenProps) {
             showRepository();
         } else if (key.name === 'escape' && (state().busy || cancellationPending())) {
             key.preventDefault();
-            void cancelTurn();
+            void cancelTurn(state().queued.length > 0);
         } else if (key.ctrl && key.name === 'c') {
             key.preventDefault();
-            if (state().busy || cancellationPending()) void cancelTurn();
+            if (composer?.hasDraft() || attachments().length > 0) {
+                composer?.clear();
+                setAttachments([]);
+            } else if (state().busy || cancellationPending()) void cancelTurn();
             else void close(false);
         } else if (key.name === 'escape' && props.homeAvailable && !state().busy) {
             key.preventDefault();

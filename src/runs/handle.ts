@@ -31,7 +31,7 @@ export interface RunHandle {
     send(input: RunnerInput): Promise<RunControlReceipt>;
     steer(input: RunnerInput): Promise<RunControlReceipt>;
     followUp(input: RunnerInput): Promise<RunControlReceipt>;
-    cancelTurn(): Promise<RunControlReceipt>;
+    cancelTurn(options?: { promoteQueuedSteers?: boolean }): Promise<RunControlReceipt>;
     respondToPermission(
         id: string,
         decision: RunnerPermissionDecision
@@ -99,8 +99,10 @@ export class StoredRunHandle implements RunHandle {
         return this.submit({ kind: 'follow_up', input });
     }
 
-    cancelTurn(): Promise<RunControlReceipt> {
-        return this.submit({ kind: 'cancel_turn' });
+    cancelTurn(
+        options: { promoteQueuedSteers?: boolean } = {}
+    ): Promise<RunControlReceipt> {
+        return this.submit({ kind: 'cancel_turn', ...options });
     }
 
     respondToPermission(

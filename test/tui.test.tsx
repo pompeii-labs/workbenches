@@ -2260,6 +2260,125 @@ describe.serial('Workbench TUI', () => {
         );
     });
 
+    test('Escape interrupts and preserves queued steering for the next turn', async () => {
+        const steered = deferred<void>();
+        const cancelled = deferred<void>();
+        const delivered = deferred<void>();
+        let promoted = false;
+        const handle = fakeHandle(() => {});
+        handle.observe = () =>
+            (async function* () {
+                yield event(0, 'run.ready', {});
+                yield event(1, 'turn.started', { index: 1 });
+                await steered.promise;
+                yield event(2, 'input.queued', {
+                    id: 'ctl_queued',
+                    kind: 'steer',
+                });
+                await cancelled.promise;
+                yield event(3, 'turn.completed', { reason: 'cancelled' });
+                await delivered.promise;
+                yield event(4, 'input.delivered', {
+                    id: 'ctl_queued',
+                    kind: 'steer',
+                });
+            })();
+        handle.steer = async () => {
+            steered.resolve();
+            return receipt('steer', 'queued');
+        };
+        handle.cancelTurn = async (options) => {
+            promoted = options?.promoteQueuedSteers === true;
+            cancelled.resolve();
+            return receipt('cancel_turn', 'cancelled');
+        };
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => handle}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32, exitOnCtrlC: false }
+        );
+        renderers.push(setup.renderer);
+        await waitForFrame(
+            setup,
+            (frame) => frame.includes('Steer the current turn'),
+            'active turn'
+        );
+        const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('Keep this correction');
+        prompt.submit();
+        await waitForFrame(
+            setup,
+            (frame) =>
+                frame.includes('QUEUED 1') && frame.includes('Keep this correction'),
+            'queued steering'
+        );
+        setup.mockInput.pressEscape();
+        await Bun.sleep(20);
+        await setup.flush();
+        expect(promoted).toBe(true);
+        expect(setup.captureCharFrame()).toContain('QUEUED 1');
+        delivered.resolve();
+        await waitForFrame(
+            setup,
+            (frame) =>
+                frame.includes('Keep this correction') && !frame.includes('QUEUED 1'),
+            'promoted next turn'
+        );
+    });
+
+    test('clears a composer draft on the first Ctrl+C and quits on the second', async () => {
+        const handle = fakeHandle(() => {});
+        let detaches = 0;
+        handle.detach = async () => {
+            detaches += 1;
+            return receipt('detach_client', 'detached');
+        };
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <WorkbenchApp
+                        home="/tmp/workbench-tui-tests"
+                        entries={[]}
+                        initial={{
+                            alias: 'creator',
+                            resolved: resolvedWorkbench('creator', 'opencode'),
+                        }}
+                        resolve={async () => {
+                            throw new Error('not opened in this test');
+                        }}
+                        start={async () => handle}
+                    />
+                </ThemeProvider>
+            ),
+            { width: 100, height: 32, exitOnCtrlC: false }
+        );
+        renderers.push(setup.renderer);
+        await Bun.sleep(20);
+        const prompt = findPrompt(setup.renderer.root);
+        prompt.setText('unsent draft');
+        setup.mockInput.pressCtrlC();
+        await setup.flush();
+        expect(prompt.plainText).toBe('');
+        expect(detaches).toBe(0);
+        setup.mockInput.pressCtrlC();
+        await Bun.sleep(20);
+        expect(detaches).toBe(1);
+    });
+
     test('detaches the terminal client without closing the durable session', async () => {
         const handle = fakeHandle(() => {});
         let detaches = 0;
@@ -2602,6 +2721,67 @@ describe.serial('Workbench TUI', () => {
         expect(frame).toContain('1 changeset · 2 artifacts · 1 link');
         expect(frame).toContain('/outcome');
         expect(frame).toContain('wbo_1234567890abcdefghij');
+    });
+
+    test('keeps large artifact outcomes shorter than the transcript viewport', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'workbench-tui-artifacts-'));
+        temporaryDirectories.push(home);
+        const store = new OutcomeStore(home);
+        const content = await store.putBytes('proof', 'text/plain');
+        const outcome = await store.commit(
+            {
+                version: 1,
+                id: OutcomeStore.createId(),
+                run_id: 'wb_1234567890abcdefghij',
+                created_at: new Date().toISOString(),
+                completeness: 'complete',
+                changesets: [],
+                artifacts: Array.from({ length: 29 }, (_, index) => ({
+                    id: `artifact_${index}`,
+                    name: `proof-${index}.txt`,
+                    content,
+                })),
+                links: [],
+                warnings: [],
+            },
+            'present'
+        );
+        await store.close();
+        const setup = await testRender(
+            () => (
+                <ThemeProvider controller={themes}>
+                    <box width="100%" height="100%">
+                        <Transcript
+                            assistantLabel="fixture"
+                            streaming={false}
+                            home={home}
+                            item={{
+                                id: 'large-outcome',
+                                kind: 'outcome',
+                                outcomeId: outcome.id,
+                                applicationState: 'present',
+                                completeness: 'complete',
+                                changesets: 0,
+                                artifacts: 29,
+                                links: 0,
+                                warnings: 0,
+                            }}
+                        />
+                    </box>
+                </ThemeProvider>
+            ),
+            { width: 90, height: 18 }
+        );
+        renderers.push(setup.renderer);
+        const frame = await waitForFrame(
+            setup,
+            (current) => current.includes('26 more artifacts'),
+            'compact artifact preview'
+        );
+        expect(frame).toContain('proof-0.txt');
+        expect(frame).toContain('proof-2.txt');
+        expect(frame).not.toContain('proof-3.txt');
+        expect(frame).toContain('/outcome to browse all');
     });
 
     test('does not call an empty durable outcome ready', async () => {

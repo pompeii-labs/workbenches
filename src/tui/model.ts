@@ -69,6 +69,7 @@ export interface TranscriptState {
     busy: boolean;
     status: string;
     interruptionPending: boolean;
+    preserveQueuedOnInterrupt?: boolean;
     totalTokens?: number;
     costUsd?: number;
 }
@@ -204,7 +205,8 @@ export function queueUserMessage(
 
 export function interruptTranscript(
     state: TranscriptState,
-    id: string = crypto.randomUUID()
+    id: string = crypto.randomUUID(),
+    preserveQueued = false
 ): TranscriptState {
     if (!state.busy || state.interruptionPending) return state;
     return {
@@ -212,6 +214,7 @@ export function interruptTranscript(
         busy: false,
         status: 'Interrupted',
         interruptionPending: true,
+        preserveQueuedOnInterrupt: preserveQueued,
         items: [
             ...state.items,
             {
@@ -535,7 +538,12 @@ export function reduceTranscript(
     if (event.type === 'turn.completed') {
         const interrupted = field(event.data, 'reason') === 'cancelled';
         if (state.interruptionPending) {
-            return { ...state, queued: [], interruptionPending: false };
+            return {
+                ...state,
+                queued: state.preserveQueuedOnInterrupt ? state.queued : [],
+                interruptionPending: false,
+                preserveQueuedOnInterrupt: false,
+            };
         }
         return {
             ...state,
