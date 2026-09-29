@@ -7,9 +7,12 @@ export class TurnCancellation {
         return this.pendingRequest !== undefined;
     }
 
-    request(session: Pick<RunHandle, 'cancelTurn'>): Promise<RunControlReceipt> {
+    request(
+        session: Pick<RunHandle, 'cancelTurn'>,
+        options: { promoteQueuedSteers?: boolean } = {}
+    ): Promise<RunControlReceipt> {
         if (this.pendingRequest) return this.pendingRequest;
-        const pending = session.cancelTurn().finally(() => {
+        const pending = session.cancelTurn(options).finally(() => {
             if (this.pendingRequest === pending) this.pendingRequest = undefined;
         });
         this.pendingRequest = pending;

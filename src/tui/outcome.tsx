@@ -78,7 +78,7 @@ export function OutcomeCard(props: { item: OutcomeTranscriptItem; home?: string 
                     {results()?.error}
                 </text>
             </Show>
-            <For each={results()?.data?.artifacts}>
+            <For each={results()?.data?.artifacts.slice(0, 3)}>
                 {(artifact) => (
                     <text fg={theme.accent} wrapMode="word">
                         <a href={artifact.uri}>{artifact.name}</a> ·{' '}
@@ -86,13 +86,25 @@ export function OutcomeCard(props: { item: OutcomeTranscriptItem; home?: string 
                     </text>
                 )}
             </For>
-            <For each={results()?.data?.outcome.links}>
+            <Show when={(results()?.data?.artifacts.length ?? 0) > 3}>
+                <text fg={theme.textMuted}>
+                    {(results()?.data?.artifacts.length ?? 0) - 3} more artifacts ·
+                    /outcome to browse all
+                </text>
+            </Show>
+            <For each={results()?.data?.outcome.links.slice(0, 3)}>
                 {(link) => (
                     <text fg={theme.accent} wrapMode="word">
                         <a href={link.uri}>{link.label}</a>
                     </text>
                 )}
             </For>
+            <Show when={(results()?.data?.outcome.links.length ?? 0) > 3}>
+                <text fg={theme.textMuted}>
+                    {(results()?.data?.outcome.links.length ?? 0) - 3} more links ·
+                    /outcome to browse all
+                </text>
+            </Show>
             <Show
                 when={
                     results()?.data &&

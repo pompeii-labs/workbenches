@@ -36,6 +36,11 @@ export class InteractiveRunWorker {
     private readonly audience = new RunAudience();
     private readonly nativeRequests = new NativeRequests();
     private readonly queued: RunControlRequest[] = [];
+    private readonly queuedSteers = new Map<
+        string,
+        { request: RunControlRequest; delivered: Promise<boolean> }
+    >();
+    private readonly promotingSteers = new Set<string>();
     private session: InteractiveRunSession | undefined;
     private sessionId: string | undefined;
     private namingStarted = false;
@@ -306,21 +311,31 @@ export class InteractiveRunWorker {
             outcome: 'accepted',
             disposition: 'queued',
         });
-        void delivery.delivered
+        const delivered = delivery.delivered
             .then(
-                () =>
-                    session.recordInput(
+                async () => {
+                    await session.recordInput(
                         'input.delivered',
                         this.eventData(request, true)
-                    ),
-                (error) =>
-                    session.recordInput('input.rejected', {
+                    );
+                    return true;
+                },
+                async (error) => {
+                    if (this.promotingSteers.has(request.id)) return false;
+                    await session.recordInput('input.rejected', {
                         ...this.eventData(request),
                         code: 'steering_not_delivered',
                         message: errorMessage(error),
-                    })
+                    });
+                    return false;
+                }
             )
-            .catch((error) => this.fail(error));
+            .catch(async (error) => {
+                await this.fail(error);
+                return false;
+            });
+        this.queuedSteers.set(request.id, { request, delivered });
+        void delivered.finally(() => this.queuedSteers.delete(request.id));
     }
 
     private async cancelTurn(request: RunControlRequest): Promise<void> {
@@ -343,15 +358,29 @@ export class InteractiveRunWorker {
         }
         await this.accept(request);
         this.drainPaused = true;
+        const promoting = request.promote_queued_steers
+            ? [...this.queuedSteers.values()]
+            : [];
+        for (const steer of promoting) this.promotingSteers.add(steer.request.id);
         try {
             this.nativeRequests.rejectQuestions();
             await session.cancelTurn();
+            const delivered = await Promise.all(
+                promoting.map((steer) => steer.delivered)
+            );
+            this.queued.unshift(
+                ...promoting
+                    .filter((_, index) => !delivered[index])
+                    .map((steer) => steer.request)
+            );
             await session.recordInput('input.delivered', this.eventData(request));
             await this.control.resolve(request, {
                 outcome: 'accepted',
                 disposition: 'cancelled',
             });
         } finally {
+            for (const steer of promoting)
+                this.promotingSteers.delete(steer.request.id);
             this.drainPaused = false;
             if (!this.activeTurn) await this.deliverNext();
         }

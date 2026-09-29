@@ -16,6 +16,7 @@ import type { PromptHistory } from './history.js';
 export interface ComposerRef {
     clear(): void;
     focus(): void;
+    hasDraft(): boolean;
 }
 
 export interface ComposerProps {
@@ -153,7 +154,11 @@ export function Composer(props: ComposerProps) {
         return true;
     };
 
-    props.ref?.({ clear, focus: () => input?.focus() });
+    props.ref?.({
+        clear,
+        focus: () => input?.focus(),
+        hasDraft: () => Boolean(input?.plainText.length),
+    });
 
     return (
         <box flexDirection="column" flexShrink={0}>
