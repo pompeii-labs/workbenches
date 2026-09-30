@@ -1,15 +1,21 @@
 import type { RunnerConnectionSelection } from '../connections/store.js';
-import type { ResolvedWorkbench } from '../types.js';
+import type { WorkbenchManifest } from '../types.js';
+import { modelLabel } from './label.js';
 import {
     ModelCatalog,
     type ModelCatalogModel,
     type ModelCatalogProvider,
     type ModelCatalogSnapshot,
-} from './catalog.js';
-import { modelLabel } from './label.js';
+} from './snapshot.js';
 
 export type ModelCatalogData = ModelCatalogSnapshot;
 export type { ModelCatalogModel, ModelCatalogProvider };
+
+/** The parts of a resolved Workbench that routing reads. */
+export interface RoutedWorkbench {
+    manifest: Pick<WorkbenchManifest, 'name' | 'runner' | 'model' | 'env'>;
+    runnerConfigPath?: string;
+}
 
 export interface ModelRoute {
     provider: string;
@@ -37,7 +43,7 @@ export interface ResolvedRunnerConfiguration {
 }
 
 export interface ResolveModelRouteOptions {
-    workbench: ResolvedWorkbench;
+    workbench: RoutedWorkbench;
     authenticatedProviders?: Iterable<string>;
     authenticatedRoutes?: Iterable<AuthenticatedModelRoute>;
     preferredConnection?: RunnerConnectionSelection;
@@ -45,9 +51,14 @@ export interface ResolveModelRouteOptions {
 }
 
 export class ModelRouter {
+    /**
+     * Routes against `catalog`. Without one the router reads the snapshot that
+     * `ModelCatalog.activate` made active, so a host that passes a snapshot
+     * needs no process-global state.
+     */
     constructor(readonly catalog: ModelCatalogSnapshot = ModelCatalog.current()) {}
 
-    routes(workbench: ResolvedWorkbench): ModelRoute[] {
+    routes(workbench: RoutedWorkbench): ModelRoute[] {
         const declared = workbench.manifest.model;
         const knownModel = Boolean(this.catalog.models[declared.id]);
         if (!knownModel) {
@@ -131,7 +142,7 @@ export class ModelRouter {
         };
     }
 
-    providerEnvironmentNames(workbench: ResolvedWorkbench): string[] {
+    providerEnvironmentNames(workbench: RoutedWorkbench): string[] {
         return [
             ...new Set(
                 this.routes(workbench).flatMap(
@@ -142,7 +153,7 @@ export class ModelRouter {
     }
 
     environmentForRoute(
-        workbench: ResolvedWorkbench,
+        workbench: RoutedWorkbench,
         configuration: ResolvedRunnerConfiguration,
         environment: Record<string, string | undefined>
     ): Record<string, string | undefined> {

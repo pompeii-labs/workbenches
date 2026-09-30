@@ -7,7 +7,7 @@ import {
     PI_PROVIDER_CAPABILITIES,
 } from '../runners/pi/providers.js';
 
-export const connectionRuntimes = ['local', 'docker', 'e2b'] as const;
+export const connectionRuntimes = ['local', 'docker', 'e2b', 'daytona'] as const;
 export type ConnectionRuntime = (typeof connectionRuntimes)[number];
 
 export const connectionHarnesses = ['opencode', 'pi'] as const;

@@ -23,24 +23,29 @@ export {
     type StoredRunnerConnection,
 } from './connections/index.js';
 export {
+    ModelCatalog,
+    type ModelCatalogFetch,
+    type ModelCatalogResult,
+} from './models/catalog.js';
+export {
     type AuthenticatedModelRoute,
     connectCommand,
-    ModelCatalog,
     type ModelCatalogAuthenticationMethod,
     type ModelCatalogData,
-    type ModelCatalogFetch,
     type ModelCatalogHarness,
     type ModelCatalogHarnessProviderRoute,
     type ModelCatalogHarnessVersion,
     type ModelCatalogModel,
     type ModelCatalogProvider,
-    type ModelCatalogResult,
     type ModelCatalogSnapshot,
     type ModelRoute,
     ModelRouter,
     modelLabel,
     type ResolvedRunnerConfiguration,
     type ResolveModelRouteOptions,
+    type RouteConfigurationOptions,
+    type RoutedWorkbench,
+    routeConfiguration,
 } from './models/index.js';
 export {
     type CollectedOutput,

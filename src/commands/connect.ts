@@ -299,6 +299,7 @@ async function selectConnectionTarget(input: {
             local: 'this machine',
             docker: 'local container',
             e2b: 'cloud sandbox',
+            daytona: 'cloud sandbox',
         },
         flag: '--runtime',
     });
