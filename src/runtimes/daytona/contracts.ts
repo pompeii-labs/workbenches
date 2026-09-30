@@ -1,5 +1,7 @@
+import type { ResolvedWorkbench } from '../../types.js';
 import type { RuntimeCommandResult } from '../contracts.js';
 import type { AssetSource } from '../staging/source.js';
+import type { RemoteTransfer } from '../staging/transfer.js';
 
 /** Sandbox resources. Daytona allocates whole CPUs and whole GiB. */
 export interface DaytonaResources {
@@ -51,6 +53,12 @@ export interface DaytonaSandboxInfo {
 
 export interface DaytonaSandbox {
     readonly id: string;
+    /**
+     * The sandbox's state when it was looked up, for example `started` or
+     * `stopped`. A client that does not report state leaves it out, and the
+     * sandbox is assumed to be running.
+     */
+    readonly state?: string | undefined;
     /** Runs a shell command to completion. Standard error is folded into `stdout`. */
     run(command: string, options?: DaytonaRunOptions): Promise<RuntimeCommandResult>;
     /** Starts a shell command and streams its output. */
@@ -81,9 +89,36 @@ export interface DaytonaClient {
 }
 
 export interface DaytonaRuntimeDependencies {
+    /** Talks to Daytona. Without one, the provider builds a `DaytonaApiClient` from `apiKey`. */
     client?: DaytonaClient;
-    /** Where staged workspace and package files are read from. Defaults to disk. */
+    /**
+     * The API key for the default client: the key itself, or a function of the
+     * request environment for a host that resolves it per run. A
+     * `DAYTONA_API_KEY` in the request environment takes precedence. The
+     * provider reads no store of its own.
+     */
+    apiKey?:
+        | string
+        | ((environment: Record<string, string | undefined>) => string | undefined);
+    /** The API endpoint for the default client. `DAYTONA_API_URL` in the request environment takes precedence. */
+    apiUrl?: string;
+    /**
+     * Where staged workspace and package files are read from. Required, since
+     * the provider has no storage of its own. The CLI passes the local disk;
+     * `MemoryAssetSource` serves a host that holds files in memory.
+     */
     assets?: AssetSource;
+    /**
+     * How files are packed into the sandbox and collected from it. Defaults to
+     * `memoryTransfer`, which needs no storage. The CLI passes `diskTransfer`.
+     */
+    transfer?: RemoteTransfer;
+    /**
+     * Names of the model provider environment variables a Workbench's routes
+     * use, which the runtime forwards into the sandbox alongside the manifest's
+     * own. Without it only the manifest's variables are forwarded.
+     */
+    providerEnvironment?: (workbench: ResolvedWorkbench) => readonly string[];
     maxTransferBytes?: number;
     leaseMilliseconds?: number;
     now?: () => Date;

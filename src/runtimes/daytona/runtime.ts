@@ -11,7 +11,7 @@ import type {
 import { type PreflightResult, WorkbenchPreflight } from '../../workbench/preflight.js';
 import { RequirementsPreflight } from '../../workbench/requirements.js';
 import { requirementsOf } from '../../workbench/runtimes.js';
-import { WorkbenchWorkspaces } from '../../workbench/workspaces.js';
+import { workspaceEnvironment } from '../../workbench/workspace-environment.js';
 import type {
     PreparedRuntime,
     RuntimeCommandOptions,
@@ -22,28 +22,55 @@ import type {
     RuntimeServiceBinding,
     RuntimeSessionOptions,
 } from '../contracts.js';
-import { E2BOutcomeCollector } from '../e2b/collector.js';
-import { captureE2BNativeState } from '../e2b/native.js';
 import type { E2BPathPlan } from '../e2b/paths.js';
 import { definedEnvironment, quote, shellCommand } from '../e2b/shell.js';
-import { E2BAssetSnapshot } from '../e2b/snapshot.js';
 import { stageSnapshots } from '../e2b/staging.js';
+import { workspaceTracking } from '../e2b/tracking.js';
 import { RuntimeError } from '../error.js';
 import { runLabels } from '../labels.js';
-import { type ActiveRemoteProcess, launchRemoteProcess } from '../remote-process.js';
+import {
+    type ActiveRemoteProcess,
+    launchRemoteProcess,
+    type RemoteCommand,
+} from '../remote-process.js';
 import { installRepositoryTools, needsRepositoryTools } from '../repository-tools.js';
 import type { AssetSource } from '../staging/source.js';
+import type { RemoteTransfer, StagedAsset } from '../staging/transfer.js';
 import type { DaytonaClient, DaytonaResources, DaytonaSandbox } from './contracts.js';
 import { type SandboxShell, sandboxShell } from './shell.js';
 
 const label = 'Daytona';
 const servicePort = 4096;
 
+/**
+ * True when something accepts connections on the port inside the sandbox. It
+ * needs `bash` for its `/dev/tcp` redirection or `curl`, and reports a closed
+ * port otherwise.
+ */
+const portListening = (port: number) =>
+    [
+        'if command -v bash >/dev/null 2>&1; then',
+        `  bash -c '(exec 3<>/dev/tcp/127.0.0.1/${port}) 2>/dev/null'`,
+        'elif command -v curl >/dev/null 2>&1; then',
+        `  curl -s -o /dev/null --max-time 2 http://127.0.0.1:${port}/; code=$?`,
+        '  [ "$code" != 7 ] && [ "$code" != 28 ] && [ "$code" != 6 ]',
+        'else',
+        '  exit 1',
+        'fi',
+    ].join('\n');
+
 export interface DaytonaRuntimeOptions {
     request: RuntimePrepareRequest;
     client: DaytonaClient;
     paths: E2BPathPlan;
     assets: AssetSource;
+    transfer: RemoteTransfer;
+    /**
+     * Bind to a sandbox an earlier run created instead of creating one. Nothing
+     * is uploaded. The assets the request names are read again to record what
+     * was staged, so they must be unchanged since then.
+     */
+    existing?: { sandboxId: string };
     image: string;
     run: { id: string; scope: string };
     maximumTransferBytes: number;
@@ -68,7 +95,8 @@ export function daytonaResources(
 
 /**
  * A Daytona sandbox created from the manifest image. The runner runs inside it
- * and the engine drives it from outside. Each execution gets a fresh sandbox.
+ * and the engine drives it from outside. Each execution gets a fresh sandbox,
+ * unless the runtime was bound to an existing one with `existing`.
  */
 export class DaytonaRuntime implements PreparedRuntime {
     readonly name = 'daytona';
@@ -79,10 +107,9 @@ export class DaytonaRuntime implements PreparedRuntime {
     readonly workspaces: WorkbenchWorkspaceBinding[];
     readonly preparation: RuntimePreparation;
     private readonly active = new Set<ActiveRemoteProcess>();
-    private readonly workspaceBindings = new WorkbenchWorkspaces();
     private sandbox: DaytonaSandbox | undefined;
     private shell: SandboxShell | undefined;
-    private snapshots: E2BAssetSnapshot[] = [];
+    private snapshots: StagedAsset[] = [];
     private readonly snapshotBaselines = new Map<number, string>();
     private readonly persistedState = new Set<number>();
     private statePersistence: Promise<void> | undefined;
@@ -115,9 +142,14 @@ export class DaytonaRuntime implements PreparedRuntime {
         );
         this.environment = {
             ...options.paths.environment(),
-            ...this.workspaceBindings.environment(this.workspaces),
+            ...workspaceEnvironment(this.workspaces),
         };
         this.workbench = options.paths.remap(options.request.workbench);
+    }
+
+    /** The Daytona sandbox id, once the sandbox exists. */
+    get sandboxId(): string | undefined {
+        return this.sandbox?.id;
     }
 
     pathFor(hostPath: string): string {
@@ -239,9 +271,10 @@ export class DaytonaRuntime implements PreparedRuntime {
     launchService(
         buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
     ): RuntimeService {
-        const process = this.launch(
-            buildInvocation({ hostname: '0.0.0.0', port: servicePort })
-        );
+        const invocation = buildInvocation({ hostname: '0.0.0.0', port: servicePort });
+        const process = this.options.existing
+            ? this.attachOrLaunch(invocation)
+            : this.launch(invocation);
         return {
             process,
             resolveUrl: async (reportedUrl) => {
@@ -260,6 +293,50 @@ export class DaytonaRuntime implements PreparedRuntime {
                 return url.toString();
             },
         };
+    }
+
+    /**
+     * For a reconnected sandbox: when the runner's server is already listening,
+     * report its address as a fresh server would and leave it running. Otherwise
+     * start the server as usual. The server's password is the caller's to keep,
+     * since this process never sees the one it was started with.
+     */
+    private attachOrLaunch(invocation: RunnerInvocation): SpawnedRunner {
+        const sandbox = this.requireReady();
+        const active = launchRemoteProcess({
+            stdin: false,
+            start: async (callbacks): Promise<RemoteCommand> => {
+                const probe = await sandbox.run(portListening(servicePort));
+                if (probe.code !== 0) {
+                    return sandbox.start(shellCommand(invocation.command), {
+                        cwd: invocation.cwd,
+                        env: definedEnvironment(invocation.env),
+                        stdin: false,
+                        ...callbacks,
+                    });
+                }
+                callbacks.onStdout(
+                    `Attached to the running server at http://0.0.0.0:${servicePort}\n`
+                );
+                let detach: (() => void) | undefined;
+                const detached = new Promise<void>((resolve) => {
+                    detach = resolve;
+                });
+                return {
+                    wait: async () => {
+                        await detached;
+                        return { code: 0, stdout: '', stderr: '' };
+                    },
+                    sendStdin: async () => {},
+                    closeStdin: async () => {},
+                    // Detaching leaves the server running in the sandbox.
+                    kill: async () => detach?.(),
+                };
+            },
+            onExit: (entry) => this.active.delete(entry),
+        });
+        this.active.add(active);
+        return active.process;
     }
 
     cancel(process: SpawnedRunner): void {
@@ -323,11 +400,11 @@ export class DaytonaRuntime implements PreparedRuntime {
         if (failures[0]) throw failures[0];
     }
 
-    private collector(): E2BOutcomeCollector {
+    private collector() {
         this.requireReady();
         if (!this.shell)
             throw new Error('Runtime preflight must succeed before launch');
-        return new E2BOutcomeCollector({
+        return this.options.transfer.collector({
             sandbox: this.shell,
             snapshots: this.snapshots,
             baselines: this.snapshotBaselines,
@@ -343,36 +420,38 @@ export class DaytonaRuntime implements PreparedRuntime {
     private persistNativeState(): Promise<void> {
         if (!this.shell) return Promise.resolve();
         if (!this.statePersistence) {
-            this.statePersistence = captureE2BNativeState(
-                this.shell,
-                this.snapshots,
-                this.options.maximumTransferBytes,
-                this.persistedState,
-                undefined,
-                label
-            ).catch((error) => {
-                this.statePersistence = undefined;
-                throw error;
-            });
+            this.statePersistence = this.options.transfer
+                .captureNativeState(
+                    this.shell,
+                    this.snapshots,
+                    this.options.maximumTransferBytes,
+                    this.persistedState,
+                    label
+                )
+                .catch((error) => {
+                    this.statePersistence = undefined;
+                    throw error;
+                });
         }
         return this.statePersistence;
     }
 
     private async ensureSandbox(): Promise<DaytonaSandbox> {
         if (this.sandbox) return this.sandbox;
-        const snapshots: E2BAssetSnapshot[] = [];
+        const snapshots: StagedAsset[] = [];
+        const existing = this.options.existing;
         let transferred = 0;
         try {
             for (const binding of this.options.paths.bindings) {
-                const snapshot = await E2BAssetSnapshot.create(
+                const snapshot = await this.options.transfer.pack(
                     binding,
                     this.options.maximumTransferBytes - transferred,
-                    undefined,
-                    { source: this.options.assets, label }
+                    { source: this.options.assets, label, upload: !existing }
                 );
                 transferred += snapshot.bytes;
                 snapshots.push(snapshot);
             }
+            if (existing) return await this.attach(existing.sandboxId, snapshots);
             const sandbox = await this.options.client.createSandbox({
                 image: this.options.image,
                 labels: runLabels(this.options.run, label),
@@ -404,17 +483,13 @@ export class DaytonaRuntime implements PreparedRuntime {
                 label,
                 uploader: {
                     upload: async (remotePath, snapshot) =>
-                        sandbox.upload(
-                            remotePath,
-                            new Uint8Array(
-                                await Bun.file(snapshot.archive).arrayBuffer()
-                            )
-                        ),
+                        sandbox.upload(remotePath, await snapshot.archiveBytes()),
                 },
             });
             return sandbox;
         } catch (error) {
-            if (this.sandbox) {
+            // A sandbox this runtime did not create is not its to delete.
+            if (this.sandbox && !existing) {
                 await this.options.client
                     .deleteSandbox(this.sandbox.id)
                     .catch(() => {});
@@ -427,6 +502,51 @@ export class DaytonaRuntime implements PreparedRuntime {
             this.snapshotBaselines.clear();
             throw error;
         }
+    }
+
+    /**
+     * Binds to a sandbox that is already running. It checks the sandbox exists
+     * and is started, then recovers each workspace's Git baseline from the
+     * sandbox itself: staging committed it first, so the root commit is it.
+     */
+    private async attach(
+        sandboxId: string,
+        snapshots: StagedAsset[]
+    ): Promise<DaytonaSandbox> {
+        const sandbox = await this.options.client.getSandbox(sandboxId);
+        if (!sandbox) {
+            throw new Error(`${label} sandbox does not exist: ${sandboxId}`);
+        }
+        if (sandbox.state !== undefined && sandbox.state !== 'started') {
+            throw new Error(
+                `${label} sandbox ${sandboxId} is ${sandbox.state}, not running`
+            );
+        }
+        this.sandbox = sandbox;
+        this.shell = sandboxShell(sandbox);
+        this.snapshots = snapshots;
+        const created = (await sandbox.info().catch(() => undefined))?.createdAt;
+        this.sandboxStartedAt = (created ?? this.options.now()).getTime();
+        for (const [index, snapshot] of snapshots.entries()) {
+            const tracked =
+                snapshot.binding.access === 'read-write' &&
+                snapshot.sourceIsDirectory &&
+                snapshot.binding.kind !== 'outcome' &&
+                snapshot.binding.kind !== 'git';
+            if (!tracked) continue;
+            const tracking = workspaceTracking(snapshots, index);
+            const result = await sandbox.run(
+                `${tracking.git} rev-list --max-parents=0 HEAD`
+            );
+            const baseline = result.stdout.trim().split(/\s+/).at(-1) ?? '';
+            if (result.code !== 0 || !/^[a-f0-9]{40,64}$/.test(baseline)) {
+                throw new Error(
+                    `Cannot find the workspace baseline in the ${label} sandbox: ${snapshot.binding.hostPath}`
+                );
+            }
+            this.snapshotBaselines.set(index, baseline);
+        }
+        return sandbox;
     }
 
     private async preflightAssets(sandbox: DaytonaSandbox): Promise<void> {

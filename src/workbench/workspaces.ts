@@ -3,6 +3,7 @@ import { access, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
+import { workspaceEnvironment } from './workspace-environment.js';
 
 export class WorkbenchWorkspaces {
     parse(rawArgs: string[]): Map<string, string> {
@@ -87,14 +88,7 @@ export class WorkbenchWorkspaces {
         bindings: WorkbenchWorkspaceBinding[],
         pathFor: (path: string) => string = (path) => path
     ): Record<string, string> {
-        return Object.fromEntries(
-            bindings.map((binding) => [
-                `WORKBENCH_WORKSPACE_${binding.name
-                    .toUpperCase()
-                    .replaceAll('-', '_')}`,
-                pathFor(binding.path),
-            ])
-        );
+        return workspaceEnvironment(bindings, pathFor);
     }
 
     async validate(

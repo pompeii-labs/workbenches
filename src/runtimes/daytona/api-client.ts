@@ -133,7 +133,8 @@ export class DaytonaApiClient implements DaytonaClient {
         return new ToolboxSandbox(
             this.transport,
             dto.id,
-            await this.transport.toolboxUrl(dto)
+            await this.transport.toolboxUrl(dto),
+            dto.state
         );
     }
 
@@ -287,7 +288,8 @@ class ToolboxSandbox implements DaytonaSandbox {
     constructor(
         private readonly transport: Transport,
         readonly id: string,
-        private readonly toolbox: string
+        private readonly toolbox: string,
+        readonly state?: string
     ) {}
 
     async run(

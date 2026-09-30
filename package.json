@@ -46,6 +46,7 @@
         "./runtimes": "./src/runtimes/index.ts",
         "./runtimes/contracts": "./src/runtimes/contracts.ts",
         "./runtimes/daytona": "./src/runtimes/daytona/index.ts",
+        "./runtimes/daytona/disk": "./src/runtimes/daytona/disk.ts",
         "./runtimes/e2b": "./src/runtimes/e2b/index.ts",
         "./runtimes/e2b/contracts": "./src/runtimes/e2b/contracts.ts",
         "./runtimes/assets": "./src/runtimes/staging/source.ts",

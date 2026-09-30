@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { ModelRouter } from '../../models/index.js';
 import { WorkbenchPreflight } from '../../workbench/preflight.js';
 import { RequirementsPreflight } from '../../workbench/requirements.js';
 import type {
@@ -7,7 +8,6 @@ import type {
     RuntimeProvider,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
-import { RuntimeSecretStore } from '../secrets.js';
 import { diskAssetSource } from '../staging/disk-source.js';
 import type { E2BRuntimeDependencies } from './contracts.js';
 import { E2BPathPlan } from './paths.js';
@@ -30,7 +30,12 @@ export class E2BRuntimeProvider implements RuntimeProvider {
             throw RuntimeError.from(this.name, 'prepare', error);
         }
         const assets = this.dependencies.assets ?? diskAssetSource;
-        const paths = new E2BPathPlan(request);
+        const paths = new E2BPathPlan(request, {
+            providerEnvironment: (
+                this.dependencies.providerEnvironment ??
+                ((workbench) => new ModelRouter().providerEnvironmentNames(workbench))
+            )(request.workbench),
+        });
         await paths.verify(assets);
         new WorkbenchPreflight({
             environment: paths.environment(),
@@ -38,7 +43,13 @@ export class E2BRuntimeProvider implements RuntimeProvider {
         const client =
             this.dependencies.client ??
             (() => {
-                const key = RuntimeSecretStore.e2bKey(request.environment);
+                const configured = this.dependencies.apiKey;
+                const key =
+                    request.environment.E2B_API_KEY?.trim() ||
+                    (typeof configured === 'function'
+                        ? configured(request.environment)
+                        : configured
+                    )?.trim();
                 return key ? new E2BSdkClient(key) : null;
             })();
         if (!client) {

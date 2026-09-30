@@ -1,15 +1,19 @@
 import { posix, relative, resolve, sep } from 'node:path';
 
-import { ModelRouter } from '../../models/index.js';
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RuntimePrepareRequest } from '../contracts.js';
-import { diskAssetSource } from '../staging/disk-source.js';
 import { contains } from '../staging/rules.js';
 import type { AssetSource } from '../staging/source.js';
 
 export interface PathPlanOptions {
     /** Provider name used in messages. Defaults to `E2B`. */
     label?: string;
+    /**
+     * Names of the model provider variables the Workbench's routes use, which
+     * are forwarded into the sandbox alongside the manifest's own. The plan
+     * reads no model catalog, so the caller supplies them.
+     */
+    providerEnvironment?: readonly string[];
 }
 
 export interface E2BAssetBinding {
@@ -31,12 +35,14 @@ export interface E2BAssetBinding {
 export class E2BPathPlan {
     readonly bindings: E2BAssetBinding[];
     private readonly label: string;
+    private readonly providerEnvironment: readonly string[];
 
     constructor(
         private readonly request: RuntimePrepareRequest,
         options: PathPlanOptions = {}
     ) {
         this.label = options.label ?? 'E2B';
+        this.providerEnvironment = options.providerEnvironment ?? [];
         const workspace = resolve(request.workspaceDirectory);
         const packageDirectory = resolve(request.workbench.packageDirectory);
         const unique = new Map<string, E2BAssetBinding>();
@@ -157,8 +163,8 @@ export class E2BPathPlan {
         }));
     }
 
-    /** Checks every staged path exists in `source`, which defaults to the local disk. */
-    async verify(source: AssetSource = diskAssetSource): Promise<void> {
+    /** Checks every staged path exists in `source`. */
+    async verify(source: AssetSource): Promise<void> {
         for (const binding of this.bindings) {
             const entry = await source.stat(binding.hostPath);
             if (!entry) {
@@ -230,10 +236,10 @@ export class E2BPathPlan {
                 : {}),
             ...(this.request.outcome ? { WORKBENCH_OUTPUT_DIR: '/outbox' } : {}),
             ...Object.fromEntries(
-                E2BPathPlan.environmentNames(this.request.workbench).map((name) => [
-                    name,
-                    this.request.environment[name],
-                ])
+                E2BPathPlan.environmentNames(
+                    this.request.workbench,
+                    this.providerEnvironment
+                ).map((name) => [name, this.request.environment[name]])
             ),
             ...(this.request.repository?.delivery === 'pr'
                 ? Object.fromEntries(
@@ -255,11 +261,14 @@ export class E2BPathPlan {
         };
     }
 
-    static environmentNames(workbench: ResolvedWorkbench): string[] {
+    static environmentNames(
+        workbench: ResolvedWorkbench,
+        providerEnvironment: readonly string[] = []
+    ): string[] {
         return [
             ...new Set([
                 ...Object.keys(workbench.manifest.env),
-                ...new ModelRouter().providerEnvironmentNames(workbench),
+                ...providerEnvironment,
             ]),
         ].filter((name) => name !== 'E2B_API_KEY' && name !== 'DAYTONA_API_KEY');
     }

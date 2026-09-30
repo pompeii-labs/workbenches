@@ -22,6 +22,7 @@ import type {
     RuntimeServiceBinding,
     RuntimeSessionOptions,
 } from './contracts.js';
+import { diskDaytonaDependencies } from './daytona/disk.js';
 import {
     type DaytonaRuntimeDependencies,
     DaytonaRuntimeProvider,
@@ -33,6 +34,7 @@ import {
 import { type E2BRuntimeDependencies, E2BRuntimeProvider } from './e2b/index.js';
 import { RuntimeError } from './error.js';
 import { type LocalRuntimeDependencies, LocalRuntimeProvider } from './local.js';
+import { RuntimeSecretStore } from './secrets.js';
 
 export interface RuntimeDependencies extends LocalRuntimeDependencies {
     docker?: DockerRuntimeDependencies;
@@ -58,8 +60,14 @@ export class RuntimeRegistry {
         return new RuntimeRegistry([
             new LocalRuntimeProvider(dependencies),
             new DockerRuntimeProvider(dependencies.docker),
-            new E2BRuntimeProvider(dependencies.e2b),
-            new DaytonaRuntimeProvider(dependencies.daytona),
+            new E2BRuntimeProvider({
+                apiKey: (environment) => RuntimeSecretStore.e2bKey(environment),
+                ...dependencies.e2b,
+            }),
+            new DaytonaRuntimeProvider({
+                ...diskDaytonaDependencies,
+                ...dependencies.daytona,
+            }),
         ]);
     }
 
@@ -131,6 +139,10 @@ class GuardedRuntime implements PreparedRuntime {
         } catch (error) {
             throw RuntimeError.from(this.name, 'prepare', error);
         }
+    }
+
+    get sandboxId(): string | undefined {
+        return this.runtime.sandboxId;
     }
 
     async preflight(): Promise<PreflightResult> {

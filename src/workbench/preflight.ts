@@ -26,11 +26,20 @@ export interface WorkbenchPreflightDependencies {
 
 export class WorkbenchPreflight {
     private readonly environment: Record<string, string | undefined>;
-    private readonly findExecutable: (name: string) => string | null;
+    private readonly locate: ((name: string) => string | null) | undefined;
 
+    /**
+     * `findExecutable` and `process.env` are read only by the local check, so a
+     * host that supplies `environment` and calls `checkConfiguration` needs
+     * neither `Bun` nor `process`.
+     */
     constructor(dependencies: WorkbenchPreflightDependencies = {}) {
         this.environment = dependencies.environment ?? process.env;
-        this.findExecutable = dependencies.findExecutable ?? Bun.which;
+        this.locate = dependencies.findExecutable;
+    }
+
+    private findExecutable(name: string): string | null {
+        return (this.locate ?? Bun.which)(name);
     }
 
     check(workbench: ResolvedWorkbench): PreflightResult {

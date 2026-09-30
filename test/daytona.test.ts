@@ -10,9 +10,11 @@ import type {
     DaytonaProcess,
     DaytonaProcessOptions,
     DaytonaRunOptions,
+    DaytonaRuntimeDependencies,
     DaytonaSandbox,
     DaytonaSandboxInfo,
 } from '../src/runtimes/daytona/contracts.js';
+import { diskDaytonaDependencies } from '../src/runtimes/daytona/disk.js';
 import { DaytonaRuntimeProvider } from '../src/runtimes/daytona/provider.js';
 import { e2bIdentityCommand } from '../src/runtimes/e2b/directories.js';
 import { E2BAssetSnapshot } from '../src/runtimes/e2b/snapshot.js';
@@ -29,6 +31,11 @@ import { MemoryAssetSource, readArchive } from './runtimes/memory-assets.js';
 
 const temporaryDirectories: string[] = [];
 
+/** The provider as the CLI wires it: disk files, disk transfer, and the saved key. */
+function daytonaProvider(dependencies: DaytonaRuntimeDependencies = {}) {
+    return new DaytonaRuntimeProvider({ ...diskDaytonaDependencies, ...dependencies });
+}
+
 afterEach(async () => {
     await Promise.all(
         temporaryDirectories
@@ -39,7 +46,7 @@ afterEach(async () => {
 
 describe('Daytona runtime provider', () => {
     runtimeProviderContract({
-        createProvider: () => new DaytonaRuntimeProvider({ client: new FakeClient() }),
+        createProvider: () => daytonaProvider({ client: new FakeClient() }),
         request: async () => request(await fixture()),
         manifest: (base) => {
             const { runtime: _runtime, image: _image, ...rest } = base;
@@ -58,7 +65,7 @@ describe('Daytona runtime provider', () => {
         const home = await mkdtemp(join(tmpdir(), 'workbench-daytona-empty-home-'));
         temporaryDirectories.push(home);
         await expect(
-            new DaytonaRuntimeProvider().prepare({
+            daytonaProvider().prepare({
                 ...request(resolved),
                 environment: { WORKBENCH_HOME: home },
             })
@@ -68,7 +75,7 @@ describe('Daytona runtime provider', () => {
     test('creates the sandbox from the manifest image and labels it for the run', async () => {
         const client = new FakeClient();
         const run = { id: `wb_${'a'.repeat(20)}`, scope: 'b'.repeat(24) };
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare({
+        const runtime = await daytonaProvider({ client }).prepare({
             ...request(await fixture()),
             run,
         });
@@ -96,7 +103,7 @@ describe('Daytona runtime provider', () => {
 
     test('maps requirements to whole-unit sandbox resources', async () => {
         const client = new FakeClient();
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare(
+        const runtime = await daytonaProvider({ client }).prepare(
             request(
                 await fixture({
                     requirements: { cpu: 4, memory_gb: 7.5, disk_gb: 20, gpu: false },
@@ -117,7 +124,7 @@ describe('Daytona runtime provider', () => {
 
     test('falls back to the docker image when the daytona entry has none', async () => {
         const client = new FakeClient();
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare(
+        const runtime = await daytonaProvider({ client }).prepare(
             request(
                 await fixture({
                     runtimes: {
@@ -139,7 +146,7 @@ describe('Daytona runtime provider', () => {
 
     test('prefers the daytona image over the docker image', async () => {
         const client = new FakeClient();
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare(
+        const runtime = await daytonaProvider({ client }).prepare(
             request(
                 await fixture({
                     runtimes: {
@@ -158,7 +165,7 @@ describe('Daytona runtime provider', () => {
     });
 
     test('fails clearly without any image to create the sandbox from', async () => {
-        const provider = new DaytonaRuntimeProvider({ client: new FakeClient() });
+        const provider = daytonaProvider({ client: new FakeClient() });
         await expect(
             provider.prepare(
                 request(await fixture({ runtimes: { daytona: { class: 'linux' } } }))
@@ -167,7 +174,7 @@ describe('Daytona runtime provider', () => {
     });
 
     test('refuses an image that would need a local Dockerfile build', async () => {
-        const provider = new DaytonaRuntimeProvider({ client: new FakeClient() });
+        const provider = daytonaProvider({ client: new FakeClient() });
         await expect(
             provider.prepare(
                 request(
@@ -188,7 +195,7 @@ describe('Daytona runtime provider', () => {
         test(`refuses the ${daytonaClass} class for now`, async () => {
             const client = new FakeClient();
             await expect(
-                new DaytonaRuntimeProvider({ client }).prepare(
+                daytonaProvider({ client }).prepare(
                     request(
                         await fixture({
                             runtimes: {
@@ -208,7 +215,7 @@ describe('Daytona runtime provider', () => {
     test('refuses a GPU requirement', async () => {
         const client = new FakeClient();
         await expect(
-            new DaytonaRuntimeProvider({ client }).prepare(
+            daytonaProvider({ client }).prepare(
                 request(await fixture({ requirements: { gpu: true } }))
             )
         ).rejects.toThrow('GPU requirements are not supported on the daytona runtime');
@@ -220,9 +227,7 @@ describe('Daytona runtime provider', () => {
         resolved.manifest.tools = ['fixture-tool'];
         const client = new FakeClient();
         client.sandbox.missingCommands.add('fixture-tool');
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare(
-            request(resolved)
-        );
+        const runtime = await daytonaProvider({ client }).prepare(request(resolved));
         try {
             await expect(runtime.preflight()).rejects.toThrow(
                 'Required CLI tool is unavailable in Daytona image ghcr.io/example/workbench:1.0.0: fixture-tool'
@@ -236,7 +241,7 @@ describe('Daytona runtime provider', () => {
     });
 
     test('reports the runner path after a successful preflight', async () => {
-        const runtime = await new DaytonaRuntimeProvider({
+        const runtime = await daytonaProvider({
             client: new FakeClient(),
         }).prepare(request(await fixture()));
         try {
@@ -253,9 +258,7 @@ describe('Daytona runtime provider', () => {
     test('stages the package and workspace at the shared runtime paths', async () => {
         const resolved = await fixture();
         const client = new FakeClient();
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare(
-            request(resolved)
-        );
+        const runtime = await daytonaProvider({ client }).prepare(request(resolved));
         try {
             expect(runtime.workspaceDirectory).toBe('/workspace');
             expect(runtime.workbench.packageDirectory).toBe('/workbench');
@@ -284,7 +287,7 @@ describe('Daytona runtime provider', () => {
             .file('/virtual/pkg/workbench.yml', 'fixture');
         const resolved = await fixture();
         const client = new FakeClient();
-        const runtime = await new DaytonaRuntimeProvider({
+        const runtime = await daytonaProvider({
             client,
             assets: source,
         }).prepare({
@@ -318,7 +321,7 @@ describe('Daytona runtime provider', () => {
 
     test('runs a command to completion with its directory and environment', async () => {
         const client = new FakeClient();
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare(
+        const runtime = await daytonaProvider({ client }).prepare(
             request(await fixture())
         );
         try {
@@ -342,7 +345,7 @@ describe('Daytona runtime provider', () => {
     });
 
     test('rejects launch until preflight has succeeded', async () => {
-        const runtime = await new DaytonaRuntimeProvider({
+        const runtime = await daytonaProvider({
             client: new FakeClient(),
         }).prepare(request(await fixture()));
         try {
@@ -356,9 +359,7 @@ describe('Daytona runtime provider', () => {
 
     test('streams output, forwards input, and resolves the service URL', async () => {
         const client = new FakeClient();
-        const runtime = await new RuntimeRegistry([
-            new DaytonaRuntimeProvider({ client }),
-        ])
+        const runtime = await new RuntimeRegistry([daytonaProvider({ client })])
             .resolve('daytona')
             .prepare(request(await fixture()));
         try {
@@ -403,7 +404,7 @@ describe('Daytona runtime provider', () => {
     test('cancels a running process and forgets it', async () => {
         const client = new FakeClient();
         client.sandbox.holdProcesses = true;
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare(
+        const runtime = await daytonaProvider({ client }).prepare(
             request(await fixture())
         );
         try {
@@ -424,7 +425,7 @@ describe('Daytona runtime provider', () => {
 
     test('deletes the sandbox on cleanup and is safe to repeat', async () => {
         const client = new FakeClient();
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare(
+        const runtime = await daytonaProvider({ client }).prepare(
             request(await fixture())
         );
         await runtime.preflight();
@@ -439,7 +440,7 @@ describe('Daytona runtime provider', () => {
     test('deletes the sandbox when staging fails', async () => {
         const client = new FakeClient();
         client.sandbox.uploadFailure = new Error('upload network unavailable');
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare(
+        const runtime = await daytonaProvider({ client }).prepare(
             request(await fixture())
         );
         await expect(runtime.preflight()).rejects.toThrow('upload network unavailable');
@@ -450,7 +451,7 @@ describe('Daytona runtime provider', () => {
     test('surfaces a failed deletion at cleanup', async () => {
         const client = new FakeClient();
         client.deleteFailure = new Error('delete network unavailable');
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare(
+        const runtime = await daytonaProvider({ client }).prepare(
             request(await fixture())
         );
         await runtime.preflight();
@@ -459,7 +460,7 @@ describe('Daytona runtime provider', () => {
 
     test('installs engine-managed Git tools as root for repository runs', async () => {
         const client = new FakeClient();
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare({
+        const runtime = await daytonaProvider({ client }).prepare({
             ...request(await fixture()),
             repository: { name: 'example/project', revision: 'main', delivery: 'pr' },
         });
@@ -476,7 +477,7 @@ describe('Daytona runtime provider', () => {
 
     test('does not install repository tools for ordinary runs', async () => {
         const client = new FakeClient();
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare(
+        const runtime = await daytonaProvider({ client }).prepare(
             request(await fixture())
         );
         try {
@@ -495,7 +496,7 @@ describe('Daytona runtime provider', () => {
         const client = new FakeClient();
         client.sandbox.sandboxInfo = { cpuCount: 2, memoryMB: 4_096, diskGb: 10 };
         let clock = new Date('2026-09-30T12:00:00.000Z');
-        const runtime = await new DaytonaRuntimeProvider({
+        const runtime = await daytonaProvider({
             client,
             now: () => clock,
         }).prepare(request(await fixture()));
@@ -518,7 +519,7 @@ describe('Daytona runtime provider', () => {
         const resolved = await fixture();
         resolved.manifest.env.DAYTONA_API_KEY = { required: false };
         const client = new FakeClient();
-        const runtime = await new DaytonaRuntimeProvider({ client }).prepare({
+        const runtime = await daytonaProvider({ client }).prepare({
             ...request(resolved),
             environment: {
                 DAYTONA_API_KEY: 'daytona-secret',
@@ -538,7 +539,7 @@ describe('Daytona runtime provider', () => {
     });
 
     test('does not support interactive terminals yet', async () => {
-        const runtime = await new DaytonaRuntimeProvider({
+        const runtime = await daytonaProvider({
             client: new FakeClient(),
         }).prepare(request(await fixture()));
         try {
@@ -555,7 +556,7 @@ describe('Daytona runtime provider', () => {
         const credentials = await mkdtemp(join(tmpdir(), 'workbench-daytona-creds-'));
         temporaryDirectories.push(credentials);
         await expect(
-            new DaytonaRuntimeProvider({ client: new FakeClient() }).prepare({
+            daytonaProvider({ client: new FakeClient() }).prepare({
                 ...request(await fixture()),
                 credentials: {
                     runtime: 'e2b',

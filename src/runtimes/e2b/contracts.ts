@@ -1,3 +1,4 @@
+import type { ResolvedWorkbench } from '../../types.js';
 import type { RuntimeCommandResult } from '../contracts.js';
 import type { AssetSource } from '../staging/source.js';
 
@@ -94,6 +95,19 @@ export interface E2BClient {
 
 export interface E2BRuntimeDependencies {
     client?: E2BClient;
+    /**
+     * The API key for the default client: the key itself, or a function of the
+     * request environment. An `E2B_API_KEY` in the request environment takes
+     * precedence. The provider reads no store of its own.
+     */
+    apiKey?:
+        | string
+        | ((environment: Record<string, string | undefined>) => string | undefined);
+    /**
+     * Names of the model provider environment variables to forward into the
+     * sandbox. Defaults to those of the Workbench's model routes.
+     */
+    providerEnvironment?: (workbench: ResolvedWorkbench) => readonly string[];
     /** Where staged workspace and package files are read from. Defaults to disk. */
     assets?: AssetSource;
     maxTransferBytes?: number;
