@@ -14,6 +14,7 @@ export {
     type RegistryReference,
     type RegistryRequestOptions,
     type RegistrySearchResult,
+    type RegistryVisibility,
 } from './client.js';
 export {
     type OciClientRunner,

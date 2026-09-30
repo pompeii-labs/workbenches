@@ -1241,6 +1241,7 @@ function registryPackage(digest: string): RegistryPackage {
     return {
         reference: { publisher: 'pompeii', workbench: 'creator' },
         registryUrl: 'https://api.workbenches.dev',
+        visibility: 'public',
         versionId: 'version-id',
         version: '0.1.4',
         digest,

@@ -32,15 +32,18 @@ export class SavedWorkbenchUpgrade {
         }
         const client = new RegistryClient({
             apiUrl: savedRegistry.url,
+            home: this.home,
             ...(this.#fetch ? { fetch: this.#fetch } : {}),
         });
-        const registry = await client.resolve({
+        const reference = {
             publisher: savedRegistry.publisher,
             workbench: savedRegistry.workbench,
-        });
+        };
+        const registry = await client.resolve(reference);
         if (!registry) {
+            const hint = await client.signInHint(reference.publisher);
             throw new Error(
-                `Workbench is no longer available from ${savedRegistry.publisher}/${savedRegistry.workbench}`
+                `Workbench is no longer available from ${reference.publisher}/${reference.workbench}${hint}`
             );
         }
         const workbench = registry.artifactUrl
@@ -60,6 +63,7 @@ export class SavedWorkbenchUpgrade {
                 publisher: registry.reference.publisher,
                 workbench: registry.reference.workbench,
                 version_id: registry.versionId,
+                visibility: registry.visibility,
             },
         });
     }

@@ -1,6 +1,22 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { RegistryClient } from '../src/registry/index.js';
+import {
+    RegistryAccountStore,
+    RegistryClient,
+    type RegistryPackage,
+} from '../src/registry/index.js';
+
+const API = 'https://registry.example';
+const homes: string[] = [];
+
+afterEach(async () => {
+    await Promise.all(
+        homes.splice(0).map((home) => rm(home, { recursive: true, force: true }))
+    );
+});
 
 describe('Workbench registry provider', () => {
     test('permits an HTTP registry only on loopback', () => {
@@ -52,6 +68,7 @@ describe('Workbench registry provider', () => {
         expect(resolved).toEqual({
             reference: { publisher: 'pompeii-labs', workbench: 'lux-core' },
             registryUrl: 'https://registry.example',
+            visibility: 'public',
             versionId: '018f1e48-7fb2-7a12-a4dd-0123456789ab',
             version: '0.1.0',
             digest: `sha256:${'b'.repeat(64)}`,
@@ -91,6 +108,7 @@ describe('Workbench registry provider', () => {
                 verifiedPublisher: true,
                 saves: 12,
                 runs: 34,
+                visibility: 'public',
             },
         ]);
     });
@@ -236,6 +254,122 @@ describe('Workbench registry provider', () => {
         );
     });
 });
+
+describe('Workbench registry keys', () => {
+    test('uses the key of the organization matching the publisher', async () => {
+        const { client, authorizations } = await keyed(['alpha', 'beta']);
+        await client.resolve({ publisher: 'beta', workbench: 'tool' });
+        await client.resolve({ publisher: 'alpha', workbench: 'tool' });
+        expect(authorizations).toEqual(['Bearer wb_beta', 'Bearer wb_alpha']);
+    });
+
+    test('falls back to the default key for other publishers and for search', async () => {
+        const { client, authorizations } = await keyed(['alpha', 'beta']);
+        await client.resolve({ publisher: 'public-org', workbench: 'tool' });
+        await client.search('anything');
+        expect(authorizations).toEqual(['Bearer wb_alpha', 'Bearer wb_alpha']);
+    });
+
+    test('stays anonymous when no key is held or the held key is expired', async () => {
+        const none = await keyed([]);
+        await none.client.resolve({ publisher: 'alpha', workbench: 'tool' });
+        await none.client.search('');
+        expect(none.authorizations).toEqual([null, null]);
+
+        const expired = await keyed(['alpha'], '2001-01-01T00:00:00Z');
+        await expired.client.resolve({ publisher: 'alpha', workbench: 'tool' });
+        expect(expired.authorizations).toEqual([null]);
+    });
+
+    test('sends the key on registry artifact fetches and never to another origin', async () => {
+        const { client, authorizations, requests } = await keyed(['alpha']);
+        const registry = (artifactUrl: string): RegistryPackage => ({
+            reference: { publisher: 'alpha', workbench: 'tool' },
+            registryUrl: API,
+            visibility: 'private',
+            versionId: 'v',
+            version: '0.1.0',
+            digest: `sha256:${'b'.repeat(64)}`,
+            source: 'alpha/tool',
+            selector: 'tool',
+            revision: 'a'.repeat(40),
+            artifactUrl,
+        });
+        await client.fetchWorkbench(registry(`${API}/v1/artifacts/v`)).catch(() => {});
+        await client
+            .fetchWorkbench(registry('https://elsewhere.example/artifact'))
+            .catch(() => {});
+        expect(requests).toEqual([
+            `${API}/v1/artifacts/v`,
+            'https://elsewhere.example/artifact',
+        ]);
+        expect(authorizations).toEqual(['Bearer wb_alpha', null]);
+    });
+
+    test('reads visibility and defaults to public when the registry omits it', async () => {
+        const client = new RegistryClient({
+            apiUrl: API,
+            fetch: async () =>
+                Response.json({ ...registryResponse(), visibility: 'private' }),
+        });
+        expect(
+            (await client.resolve({ publisher: 'lux', workbench: 'core' }))?.visibility
+        ).toBe('private');
+        const bad = new RegistryClient({
+            apiUrl: API,
+            fetch: async () =>
+                Response.json({ ...registryResponse(), visibility: 'secret' }),
+        });
+        await expect(
+            bad.resolve({ publisher: 'lux', workbench: 'core' })
+        ).rejects.toThrow('malformed package record');
+    });
+
+    test('explains a miss for a publisher with no held key', async () => {
+        const none = await keyed([]);
+        expect(
+            (await none.client.missing({ publisher: 'acme', workbench: 'x' })).message
+        ).toBe(
+            'Registry Workbench does not exist: acme/x. Private workbenches need a key for their organization: wb login --org acme'
+        );
+        const held = await keyed(['acme']);
+        expect(
+            (await held.client.missing({ publisher: 'acme', workbench: 'x' })).message
+        ).toBe('Registry Workbench does not exist: acme/x');
+    });
+});
+
+async function keyed(slugs: string[], expiresAt = '2099-01-01T00:00:00Z') {
+    const home = await mkdtemp(join(tmpdir(), 'registry-keys-'));
+    homes.push(home);
+    const authorizations: Array<string | null> = [];
+    const requests: string[] = [];
+    const client = new RegistryClient({
+        apiUrl: API,
+        home,
+        fetch: async (input, init) => {
+            requests.push(String(input));
+            authorizations.push(new Headers(init?.headers).get('authorization'));
+            return String(input).endsWith('/v1/searches')
+                ? Response.json({ workbenches: [] })
+                : Response.json(registryResponse());
+        },
+    });
+    const accounts = new RegistryAccountStore({ home, client });
+    for (const slug of slugs) {
+        await accounts.save({
+            organizationId: `${slug}-id`,
+            slug,
+            name: slug,
+            personal: false,
+            token: `wb_${slug}`,
+            keyId: `${slug}-key`,
+            scopes: ['catalog:read'],
+            expiresAt,
+        });
+    }
+    return { client, authorizations, requests };
+}
 
 function artifactFile(path: string, source: string) {
     return {

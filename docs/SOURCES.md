@@ -17,6 +17,11 @@ selects a package; `--ref` selects a branch, tag, or commit. Multi-package sourc
 offer an interactive picker or a non-interactive error listing the available
 `--name` choices. Source fragments (`#name`) are not acquisition syntax.
 
+Registry references can require a held organization key: a private workbench
+resolves only with the key of its owning organization (`wb login --org
+<publisher>`), and looks missing without it. Keys are sent to the registry only,
+never to GitHub.
+
 Aliases default to manifest names. `--as` selects another alias. Identical adds
 are idempotent, collisions never overwrite, and changed remote packages at an
 existing alias require `wb upgrade <alias>`.
@@ -55,7 +60,9 @@ an explicit `wb add ... --as ...` instruction.
 directory. It uses the default connected organization; `--org <slug>` selects
 another one. `--as` is only for local aliases when adding a Workbench. Publish
 reports the submission status, dashboard URL, and latest approved version when
-available. A pending submission is not a published release.
+available. A pending submission is not a published release. With `--private`
+the workbench is published to the organization immediately, without review, and
+stays invisible to everyone else.
 
 ## Inspection and safety
 

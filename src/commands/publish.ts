@@ -31,6 +31,12 @@ export const publishCommand = defineCommand({
             required: true,
         },
         org: orgArgument,
+        private: {
+            type: 'boolean',
+            description:
+                'Publish privately to your organization, live immediately without review',
+            default: false,
+        },
     },
     async run({ args }) {
         rejectPublisherFlag(args);
@@ -73,6 +79,7 @@ export const publishCommand = defineCommand({
                 body: {
                     organization_id: publisher.id,
                     slug,
+                    ...(args.private ? { visibility: 'private' } : {}),
                     package: {
                         format: 1,
                         files: files.map((file) => ({
@@ -114,5 +121,10 @@ export const publishCommand = defineCommand({
                 published.dashboard_url,
             ],
         });
+        if (args.private)
+            output.message(
+                `Published ${publishedReference} privately without review.`,
+                'success'
+            );
     },
 });

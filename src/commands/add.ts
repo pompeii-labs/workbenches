@@ -54,12 +54,9 @@ export const addCommand = defineCommand({
                 throw new Error(
                     '--name and --ref apply to source packages, not registry references.'
                 );
-            const registryClient = new RegistryClient();
+            const registryClient = new RegistryClient({ home });
             const registry = await registryClient.resolve(registryReference);
-            if (!registry)
-                throw new Error(
-                    `Registry Workbench does not exist: ${registryReference.publisher}/${registryReference.workbench}`
-                );
+            if (!registry) throw await registryClient.missing(registryReference);
             const github = new GitHubWorkbenchSource();
             const workbench = registry.artifactUrl
                 ? await registryClient.fetchWorkbench(registry)
@@ -71,6 +68,7 @@ export const addCommand = defineCommand({
                 publisher: registry.reference.publisher,
                 workbench: registry.reference.workbench,
                 version_id: registry.versionId,
+                visibility: registry.visibility,
             };
             const alias = args.as ?? workbench.manifest.name;
             const saved = await saveCandidate({

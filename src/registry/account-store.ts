@@ -1,21 +1,13 @@
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-
 import { workbenchHome } from '../storage.js';
 import { RegistryClient } from './client.js';
+import {
+    type CredentialState,
+    RegistryCredentialFile,
+    type RegistryEntry,
+    type RegistryOrganizationKey,
+} from './credentials.js';
 
-/** A key for one organization, as stored per API URL. */
-export interface RegistryOrganizationKey {
-    organizationId: string;
-    slug: string;
-    name: string;
-    personal: boolean;
-    token: string;
-    keyId: string;
-    scopes: string[];
-    expiresAt: string;
-    email?: string;
-}
+export type { RegistryOrganizationKey } from './credentials.js';
 
 /** A held organization key together with the API URL it belongs to. */
 export interface RegistryAccount extends RegistryOrganizationKey {
@@ -45,29 +37,15 @@ export interface RegistrySignOut {
     cleared: boolean;
 }
 
-interface RegistryEntry {
-    url: string;
-    defaultSlug: string;
-    organizations: RegistryOrganizationKey[];
-}
-
-interface CredentialFile {
-    version: 2;
-    registries: RegistryEntry[];
-}
-
-interface CredentialState {
-    registries: RegistryEntry[];
-    legacy: boolean;
-}
-
 export class RegistryAccountStore {
     readonly home: string;
     readonly client: RegistryClient;
+    readonly #file: RegistryCredentialFile;
 
     constructor(options: RegistryAccountStoreOptions = {}) {
         this.home = options.home ?? workbenchHome();
-        this.client = options.client ?? new RegistryClient();
+        this.client = options.client ?? new RegistryClient({ home: this.home });
+        this.#file = new RegistryCredentialFile(this.home);
     }
 
     /** The requested held organization, or the default one for this API URL. */
@@ -231,89 +209,11 @@ export class RegistryAccountStore {
         ];
     }
 
-    private async read(): Promise<CredentialState> {
-        const source = await readFile(
-            join(this.home, 'credentials.json'),
-            'utf8'
-        ).catch(() => null);
-        if (!source) return { registries: [], legacy: false };
-        const parsed: unknown = JSON.parse(source);
-        if (!RegistryAccountStore.isRecord(parsed)) {
-            throw new Error('The Workbench credential file is invalid');
-        }
-        // Version 1 tokens are invalid server side, so they are discarded.
-        if (parsed.version === 1) return { registries: [], legacy: true };
-        if (parsed.version !== 2 || !Array.isArray(parsed.registries)) {
-            throw new Error('The Workbench credential file is invalid');
-        }
-        return {
-            registries: parsed.registries.map(RegistryAccountStore.parseRegistry),
-            legacy: false,
-        };
+    private read(): Promise<CredentialState> {
+        return this.#file.read();
     }
 
-    private async write(registries: RegistryEntry[]): Promise<void> {
-        const path = join(this.home, 'credentials.json');
-        if (registries.length === 0) {
-            await rm(path, { force: true });
-            return;
-        }
-        await mkdir(this.home, { recursive: true });
-        const temporary = join(this.home, `credentials.${crypto.randomUUID()}.tmp`);
-        const contents: CredentialFile = { version: 2, registries };
-        await writeFile(temporary, `${JSON.stringify(contents, null, 2)}\n`, {
-            mode: 0o600,
-        });
-        await rename(temporary, path);
-        await chmod(path, 0o600);
-    }
-
-    private static parseRegistry(value: unknown): RegistryEntry {
-        if (
-            !RegistryAccountStore.isRecord(value) ||
-            typeof value.url !== 'string' ||
-            typeof value.defaultSlug !== 'string' ||
-            !Array.isArray(value.organizations)
-        ) {
-            throw new Error('The Workbench credential file is invalid');
-        }
-        return {
-            url: value.url,
-            defaultSlug: value.defaultSlug,
-            organizations: value.organizations.map(RegistryAccountStore.parseKey),
-        };
-    }
-
-    private static parseKey(value: unknown): RegistryOrganizationKey {
-        if (
-            !RegistryAccountStore.isRecord(value) ||
-            typeof value.organizationId !== 'string' ||
-            typeof value.slug !== 'string' ||
-            typeof value.name !== 'string' ||
-            typeof value.personal !== 'boolean' ||
-            typeof value.token !== 'string' ||
-            typeof value.keyId !== 'string' ||
-            !Array.isArray(value.scopes) ||
-            !value.scopes.every((scope) => typeof scope === 'string') ||
-            typeof value.expiresAt !== 'string' ||
-            (value.email !== undefined && typeof value.email !== 'string')
-        ) {
-            throw new Error('The Workbench credential file is invalid');
-        }
-        return {
-            organizationId: value.organizationId,
-            slug: value.slug,
-            name: value.name,
-            personal: value.personal,
-            token: value.token,
-            keyId: value.keyId,
-            scopes: value.scopes as string[],
-            expiresAt: value.expiresAt,
-            ...(value.email !== undefined ? { email: value.email } : {}),
-        };
-    }
-
-    private static isRecord(value: unknown): value is Record<string, unknown> {
-        return typeof value === 'object' && value !== null && !Array.isArray(value);
+    private write(registries: RegistryEntry[]): Promise<void> {
+        return this.#file.write(registries);
     }
 }

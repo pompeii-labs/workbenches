@@ -16,6 +16,7 @@ describe('Registry Workbench saving', () => {
                     return registryPackage();
                 },
                 fetchWorkbench: async () => remoteWorkbench(),
+                missing: async () => new Error('missing'),
             },
             telemetry: {
                 report: async () => {
@@ -41,6 +42,7 @@ describe('Registry Workbench saving', () => {
             client: {
                 resolve: async () => registryPackage(),
                 fetchWorkbench: async () => remoteWorkbench(),
+                missing: async () => new Error('missing'),
             },
             github: {
                 fetch: async () => {
@@ -81,6 +83,7 @@ describe('Registry Workbench saving', () => {
                     return registryPackage();
                 },
                 fetchWorkbench: async () => remoteWorkbench(),
+                missing: async () => new Error('missing'),
             },
             telemetry: { report: async () => true },
         });
@@ -105,6 +108,7 @@ describe('Registry Workbench saving', () => {
                 fetchWorkbench: async () => {
                     throw new Error('Registry artifact should not be fetched');
                 },
+                missing: async () => new Error('missing'),
             },
             github: {
                 fetch: async (...request) => {
@@ -132,6 +136,7 @@ describe('Registry Workbench saving', () => {
             client: {
                 resolve: async () => registryPackage(),
                 fetchWorkbench: async () => remoteWorkbench(),
+                missing: async () => new Error('missing'),
             },
             telemetry: { report: async () => true },
         });
@@ -179,6 +184,7 @@ function registryPackage(): RegistryPackage {
     return {
         reference: { publisher: 'lux', workbench: 'auth' },
         registryUrl: 'https://api.workbenches.dev',
+        visibility: 'public',
         versionId: 'version-id',
         version: '0.1.0',
         digest: `sha256:${'b'.repeat(64)}`,

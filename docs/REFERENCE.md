@@ -946,6 +946,24 @@ signs out of the default; removing the last key deletes the credential file.
 `--publisher` was removed and now fails with a pointer to `--org`. A credential
 file from an older CLI is ignored: run `wb login` once.
 
+### Private workbenches
+
+`wb publish <alias> --private` submits with `visibility: private`. The registry
+publishes it immediately, without review, and only keys for the owning
+organization can resolve, download, or search it. Anyone else receives a plain
+404. A workbench keeps the visibility it was first published with: submitting
+the other one is rejected by the registry with a conflict, and the CLI prints
+its message unchanged.
+
+Registry reads attach a held key automatically. For `publisher/name`, the key of
+the organization whose slug matches `publisher` is used; otherwise the default
+organization's key; otherwise the request is anonymous. Search uses the default
+key. Expired keys are never sent, and keys go only to the registry, never to
+GitHub. A 404 for a publisher you hold no key for suggests
+`wb login --org <publisher>`. Saved snapshots record their visibility, shown as
+`private` by `wb list --saved` (a trailing column in machine output) and
+`wb view` (`origin.visibility` in JSON), and `wb upgrade` reuses the same key rule.
+
 ## Source and authorization boundaries
 
 Remote `list`, `validate`, and `smoke` operations are read-only. Public GitHub

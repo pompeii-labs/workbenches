@@ -11,6 +11,8 @@ export interface CatalogRegistryReference {
     publisher: string;
     workbench: string;
     version_id: string;
+    /** Absent on snapshots saved before private workbenches; treated as public. */
+    visibility?: 'public' | 'private';
 }
 
 export interface CatalogEntry {

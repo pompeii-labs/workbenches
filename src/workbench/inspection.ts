@@ -37,6 +37,7 @@ export type WorkbenchOrigin =
           added_at: string;
           package: string;
           mode?: 'live' | 'snapshot';
+          visibility?: 'public' | 'private';
       }
     | {
           kind: 'local';
@@ -178,6 +179,8 @@ export class WorkbenchInspection {
         this.field(lines, 'Selector', view.origin.selector);
         if (view.origin.revision) this.field(lines, 'Revision', view.origin.revision);
         if (view.origin.kind === 'saved') {
+            if (view.origin.visibility === 'private')
+                this.field(lines, 'Visibility', 'private');
             if (view.origin.mode) this.field(lines, 'Mode', view.origin.mode);
             this.field(lines, 'Digest', view.origin.digest);
             this.field(lines, 'Added', view.origin.added_at);
@@ -336,6 +339,9 @@ export class WorkbenchInspector {
                       )
                     : saved.digest,
                 mode: saved.localPath ? 'live' : 'snapshot',
+                ...(saved.registry?.visibility
+                    ? { visibility: saved.registry.visibility }
+                    : {}),
                 added_at: saved.addedAt,
                 package: saved.packagePath,
             });

@@ -2952,6 +2952,7 @@ function registryWorkbench(publisher: string, workbench: string): RegistrySearch
         verifiedPublisher: true,
         saves: 42,
         runs: 108,
+        visibility: 'public',
     };
 }
 
