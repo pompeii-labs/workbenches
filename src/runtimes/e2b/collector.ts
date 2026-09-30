@@ -8,6 +8,13 @@ import {
     type OutcomeSink,
     type RuntimeOutcomeCollection,
 } from '../../outcomes/index.js';
+import {
+    exclusionWarnings,
+    outputCollectionCommand,
+    requireSuccess,
+    workspaceCollectionCommand,
+    workspaceCollectionPaths,
+} from '../staging/collect.js';
 import type { E2BSandbox } from './contracts.js';
 import { formatBytes } from './infrastructure.js';
 import { quote } from './shell.js';
@@ -63,16 +70,17 @@ export class E2BOutcomeCollector {
                     );
                 }
                 const root = snapshot.binding.runtimePath;
-                const remoteArchive = `/tmp/workbench-output-${index}.tar.gz`;
-                const remoteChanged = `/tmp/workbench-changed-${index}`;
-                const remoteDeleted = `/tmp/workbench-deleted-${index}`;
+                const paths = workspaceCollectionPaths(index);
+                const remoteArchive = paths.archive;
+                const remoteChanged = paths.changed;
+                const remoteDeleted = paths.deleted;
                 const tracking = workspaceTracking(this.options.snapshots, index);
-                const command = [
-                    `${tracking.git} add -A`,
-                    `${tracking.git} diff --cached --name-only --diff-filter=ACMRTUXB -z ${quote(baseline)} > ${quote(remoteChanged)}`,
-                    `${tracking.git} diff --cached --name-only --diff-filter=D -z ${quote(baseline)} > ${quote(remoteDeleted)}`,
-                    `tar -C ${quote(root)} --null --files-from=${quote(remoteChanged)} -czf ${quote(remoteArchive)}`,
-                ].join(' && ');
+                const command = workspaceCollectionCommand({
+                    git: tracking.git,
+                    root,
+                    baseline,
+                    paths,
+                });
                 requireSuccess(
                     await sandbox.run(command),
                     `Failed to collect ${this.label} workspace changes: ${snapshot.binding.hostPath}`
@@ -179,10 +187,11 @@ export class E2BOutcomeCollector {
         try {
             requireSuccess(
                 await sandbox.run(
-                    [
-                        `(cd ${quote(root)} && find . -mindepth 1 -print0) > ${quote(remoteFiles)}`,
-                        `tar -C ${quote(root)} --no-recursion --null --files-from=${quote(remoteFiles)} -czf ${quote(remoteArchive)}`,
-                    ].join(' && ')
+                    outputCollectionCommand({
+                        root,
+                        files: remoteFiles,
+                        archive: remoteArchive,
+                    })
                 ),
                 `Failed to collect ${this.label} outcome artifacts`
             );
@@ -218,28 +227,4 @@ export class E2BOutcomeCollector {
             await rm(directory, { recursive: true, force: true });
         }
     }
-}
-
-function exclusionWarnings(paths: string[], label: string) {
-    if (paths.length === 0) return [];
-    const visible = paths
-        .slice(0, 3)
-        .map((path) => JSON.stringify(path))
-        .join(', ');
-    const remaining = paths.length - 3;
-    return [
-        {
-            code: 'workspace_paths_excluded',
-            message: `${paths.length} protected or nested workspace path${paths.length === 1 ? ' was' : 's were'} not sent to ${label}: ${visible}${remaining > 0 ? `, and ${remaining} more` : ''}. ${paths.length === 1 ? 'This path' : 'These paths'} cannot appear in returned changes.`,
-        },
-    ];
-}
-
-function requireSuccess(
-    result: { code: number; stdout: string; stderr: string },
-    message: string
-): void {
-    if (result.code === 0) return;
-    const detail = result.stderr.trim() || result.stdout.trim();
-    throw new Error(`${message}${detail ? `: ${detail}` : ''}`);
 }

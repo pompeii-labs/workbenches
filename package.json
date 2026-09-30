@@ -50,6 +50,8 @@
         "./runtimes/e2b/contracts": "./src/runtimes/e2b/contracts.ts",
         "./runtimes/assets": "./src/runtimes/staging/source.ts",
         "./runtimes/assets/disk": "./src/runtimes/staging/disk-source.ts",
+        "./runtimes/staging": "./src/runtimes/staging/index.ts",
+        "./runtimes/staging/disk": "./src/runtimes/staging/disk.ts",
         "./package.json": "./package.json"
     },
     "scripts": {

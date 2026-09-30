@@ -1,14 +1,14 @@
 import { dirname } from 'node:path';
 
+import type { StagedAsset } from '../staging/transfer.js';
 import type { E2BSandbox } from './contracts.js';
 import { prepareE2BDirectories } from './directories.js';
 import { gitExcludePattern, quote } from './shell.js';
-import type { E2BAssetSnapshot } from './snapshot.js';
 import { remoteExclusions, workspaceTracking } from './tracking.js';
 
-export interface SnapshotUpload {
+export interface SnapshotUpload<S extends StagedAsset = StagedAsset> {
     /** Writes `snapshot`'s archive to `remotePath` inside the sandbox. */
-    upload(remotePath: string, snapshot: E2BAssetSnapshot): Promise<void>;
+    upload(remotePath: string, snapshot: S): Promise<void>;
 }
 
 /**
@@ -17,10 +17,10 @@ export interface SnapshotUpload {
  * `baselines` by snapshot index, so changes can be collected later. Read-only
  * assets lose their write bits. Remote providers share this.
  */
-export async function stageSnapshots(options: {
+export async function stageSnapshots<S extends StagedAsset>(options: {
     sandbox: Pick<E2BSandbox, 'run'>;
-    uploader: SnapshotUpload;
-    snapshots: E2BAssetSnapshot[];
+    uploader: SnapshotUpload<S>;
+    snapshots: S[];
     home: string;
     baselines: Map<number, string>;
     /** Provider name used in messages. Defaults to `E2B`. */

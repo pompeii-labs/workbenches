@@ -1,5 +1,4 @@
 import { dirname, join, resolve } from 'node:path';
-import type { Pack } from 'tar-stream';
 
 import {
     excludedByNestedAsset,
@@ -11,6 +10,7 @@ import {
     validateSymlink,
 } from './rules.js';
 import type { AssetSource } from './source.js';
+import { packTarGzip, type TarEntry } from './tar.js';
 
 /** What a provider needs to copy a host path into a sandbox archive. */
 export interface StagingContext {
@@ -196,17 +196,18 @@ export async function digestEntries(
 }
 
 /**
- * Writes the selected entries into `pack` and finalizes it. Symlinks are written
- * as links. Project npm settings are re-validated against the digest taken during
- * selection, so a file that changes in between is refused rather than copied.
+ * Yields the selected entries as archive records, reading each file as it goes.
+ * Symlinks become links. Project npm settings are re-validated against the
+ * digest taken during selection, so a file that changes in between is refused
+ * rather than copied. The caller writes the records into a tar: a stream on
+ * disk (`pack.ts`), or bytes in memory.
  */
-export async function fillArchive(
+export async function* archiveRecords(
     context: StagingContext,
-    pack: Pack,
     source: string,
     entries: Map<string, SnapshotEntry>,
     sourceIsDirectory: boolean
-): Promise<void> {
+): AsyncGenerator<TarEntry> {
     // Validate and retain the exact config bytes before writing the archive.
     const configs = new Map<string, Uint8Array>();
     for (const entry of entries.values()) {
@@ -227,12 +228,13 @@ export async function fillArchive(
     for (const entry of entries.values()) {
         const absolutePath = sourceIsDirectory ? join(source, entry.path) : source;
         if (entry.type === 'symlink') {
-            await write(pack, {
+            yield {
                 name: entry.path,
                 type: 'symlink',
-                linkname: entry.link,
                 mode: entry.mode,
-            });
+                content: new Uint8Array(),
+                link: entry.link ?? '',
+            };
             continue;
         }
         const content =
@@ -242,30 +244,27 @@ export async function fillArchive(
                 `${context.label} transfer source changed while reading: ${entry.path}`
             );
         }
-        await write(
-            pack,
-            {
-                name: entry.path,
-                type: 'file',
-                size: content.byteLength,
-                mode: entry.mode,
-            },
-            content
-        );
+        yield { name: entry.path, type: 'file', mode: entry.mode, content };
     }
-    pack.finalize();
 }
 
-function write(
-    pack: Pack,
-    header: Parameters<Pack['entry']>[0],
-    content?: Uint8Array
-): Promise<void> {
-    return new Promise<void>((resolveEntry, reject) => {
-        const done = (error?: Error | null) => (error ? reject(error) : resolveEntry());
-        if (content) pack.entry(header, Buffer.from(content), done);
-        else pack.entry(header, done);
-    });
+/** Builds the whole archive in memory. */
+export async function archiveBytes(
+    context: StagingContext,
+    source: string,
+    entries: Map<string, SnapshotEntry>,
+    sourceIsDirectory: boolean
+): Promise<Uint8Array> {
+    const records: TarEntry[] = [];
+    for await (const record of archiveRecords(
+        context,
+        source,
+        entries,
+        sourceIsDirectory
+    )) {
+        records.push(record);
+    }
+    return packTarGzip(records);
 }
 
 export async function digestBytes(bytes: Uint8Array): Promise<string> {

@@ -1,5 +1,5 @@
 import { createWriteStream as writeStream } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -12,11 +12,11 @@ import type { OutcomeSink } from '../../outcomes/collection.js';
 import type { OutcomeChangeset, OutcomeWorkspace } from '../../outcomes/contracts.js';
 import { WorkspaceSnapshot } from '../../outcomes/workspace.js';
 import { diskAssetSource } from '../staging/disk-source.js';
+import { fillArchive } from '../staging/pack.js';
 import {
     describeEntries,
     describeEntry,
     digestEntries,
-    fillArchive,
     type SnapshotEntry,
     selectPaths,
     walk,
@@ -29,6 +29,7 @@ import {
     validateRelativePath,
 } from '../staging/rules.js';
 import type { AssetSource } from '../staging/source.js';
+import type { StagedAsset } from '../staging/transfer.js';
 import { extractArchive } from './archive.js';
 import type { E2BAssetBinding } from './paths.js';
 import { type E2BStateSource, E2BStateStore, selectedStateFiles } from './state.js';
@@ -65,7 +66,7 @@ export interface E2BSnapshotOptions {
  * it reads files through an `AssetSource` and records what it sent so outcomes
  * can be diffed against it.
  */
-export class E2BAssetSnapshot {
+export class E2BAssetSnapshot implements StagedAsset {
     private constructor(
         readonly binding: E2BAssetBinding,
         readonly archive: string,
@@ -322,6 +323,10 @@ export class E2BAssetSnapshot {
             await rm(materialized, { recursive: true, force: true });
             throw error;
         }
+    }
+
+    async archiveBytes(): Promise<Uint8Array> {
+        return new Uint8Array(await readFile(this.archive));
     }
 
     cleanup(): Promise<void> {
