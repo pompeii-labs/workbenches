@@ -53,7 +53,9 @@ A Workbench can declare:
 - Remote MCP integrations
 - Environment-variable requirements without embedded secret values
 - Explicit named workspace requirements for multi-repository work
-- A local or isolated runtime and, where supported, an image
+- Environment requirements (OS, architecture, CPU, memory, disk, GPU)
+- The runtimes it supports (local, Docker, E2B) and, where a runtime needs one,
+  an image
 
 The manifest is intentionally small:
 
@@ -160,7 +162,17 @@ Candidates that declare environment values, named workspaces, or host Docker
 access can be verified with the same `--env-file`, repeatable `--env`, repeatable
 `--workspace`, and `--allow-host-docker` options accepted by `smoke` and `run`.
 Their values are used only for the final smoke and are never written to the
-authoring record or improvement evidence.
+authoring record or improvement evidence. `--runtime <name>` chooses which
+declared runtime of the candidate the final smoke checks, and
+`--allow-unchecked-gpu` accepts a GPU requirement the runtime cannot verify.
+
+Scaffold a package with `wb init`. `--runtimes` takes a comma-separated list and
+writes the `runtimes` map in that order. It defaults to `local`. The `docker` and
+`e2b` runtimes need `--image`, and `daytona` is written with `class: linux`:
+
+```sh
+wb init migrations --runtimes local,docker --image ghcr.io/example/migrations:0.1.0
+```
 
 Edit a local source package through the same authoring environment:
 
@@ -486,6 +498,62 @@ returns the complete translation:
 ```sh
 wb run project-core --task "Review this migration" --dry-run
 ```
+
+### Requirements and runtimes
+
+A `spec: 1` Workbench declares what its environment must satisfy with
+`requirements` (optional) and the providers it supports with `runtimes`
+(required). Spec 0 is frozen and keeps its single `runtime` with top-level
+`image` and `docker`, which the examples in the sections below still show; spec
+1 rejects those three fields, and spec 0 rejects `requirements` and `runtimes`.
+The engine reads both specs and treats a spec 0 `runtime` as a one-entry
+`runtimes` map internally. `wb init` writes spec 1.
+
+```yaml
+spec: 1
+requirements:
+  os: [linux]
+  arch: [x64, arm64]
+  cpu: 4
+  memory_gb: 8
+  gpu: false
+
+runtimes:
+  local: {}
+  docker:
+    image: ghcr.io/example/project-workbench:0.4.0
+  e2b:
+    image: ghcr.io/example/project-workbench:0.4.0
+```
+
+The providers are `local`, `docker`, `e2b`, and `daytona`. `daytona`
+takes a `class` of `linux`, `windows`, `gpu`, or `macos`. The reference engine
+validates and displays it but cannot run it yet.
+
+`run`, `smoke`, `build`, and `create` accept `--runtime <name>`. Without it the
+first declared runtime is used. Naming a runtime the Workbench does not declare
+fails and lists the declared ones. A resumed session keeps the runtime it
+started on.
+
+```sh
+wb view project-core
+wb smoke project-core --runtime docker
+wb run project-core --runtime e2b --task "Review this migration"
+```
+
+`wb view` lists every declared runtime and the requirements. Requirements are
+checked against the selected runtime before anything is prepared or launched:
+
+- Local compares OS, architecture, CPU count, and total memory with the host. A
+  GPU requirement cannot be verified locally and is refused unless you pass
+  `--allow-unchecked-gpu` to `run`, `smoke`, or `create`.
+- Docker and E2B need `linux` in `os` or no `os` constraint, and refuse a GPU
+  requirement. Docker also needs the host architecture in `arch` and applies
+  `cpu` and `memory_gb` as container limits. E2B does not enforce `arch`, `cpu`,
+  `memory_gb`, or `disk_gb` in this engine, and `smoke` reports them as
+  unchecked.
+- Daytona needs its class to match `os`: `linux` needs `linux`, `macos` needs
+  `macos`, `windows` needs `windows`, and `gpu` needs `linux` with `gpu: true`.
 
 ### Run in Docker
 

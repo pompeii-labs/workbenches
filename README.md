@@ -147,6 +147,21 @@ runtime: local
 
 The Workbench engine reads this manifest; the underlying harness does not. The engine validates the package, prepares the runtime, checks its requirements, and translates the portable configuration into the harness's native interface.
 
+A `spec: 1` Workbench states what its environment must satisfy and lists every runtime it supports, in place of spec 0's single `runtime`. The first runtime is the default, and `wb run --runtime docker` picks another:
+
+```yaml
+spec: 1
+requirements:
+  os: [linux, macos]
+  cpu: 4
+  memory_gb: 8
+
+runtimes:
+  local: {}
+  docker:
+    image: ghcr.io/example/core:0.1.0
+```
+
 The format can package:
 
 - maintainer-authored instructions
