@@ -1,4 +1,5 @@
 import type { ResolvedWorkbench } from '../types.js';
+import { diskRunnerFiles } from './files-disk.js';
 import { OpenCodeRunner } from './opencode/runner.js';
 import { PiRunner } from './pi/runner.js';
 import type { PreparedRunner, Runner } from './runner.js';
@@ -29,7 +30,10 @@ export class RunnerRegistry {
     }
 
     static standard(): RunnerRegistry {
-        return new RunnerRegistry([new OpenCodeRunner(), new PiRunner()]);
+        return new RunnerRegistry([
+            new OpenCodeRunner({ files: diskRunnerFiles }),
+            new PiRunner(),
+        ]);
     }
 
     resolve(name: string): Runner {

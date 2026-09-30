@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRouter } from '../src/models/index.js';
+import { diskRunnerFiles } from '../src/runners/files-disk.js';
 import { OpenCodeSessionAdapter } from '../src/runners/opencode/adapter.js';
 import type {
     RunnerPermissionRequest,
@@ -1354,6 +1355,7 @@ class FakeOpenCodeServer {
 
     adapter() {
         return new OpenCodeSessionAdapter({
+            files: diskRunnerFiles,
             password: () => 'test-password',
             spawn: (_command, options) => {
                 this.spawnEnvironment = options.env;

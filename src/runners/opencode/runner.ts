@@ -10,27 +10,60 @@ import {
     type RunnerEventNormalizer,
 } from '../runner.js';
 import { type RunnerContextFiles, remapRunnerContext } from '../runtime-context.js';
-import { OpenCodeSessionAdapter } from './adapter.js';
-import { stageOpenCodeSkills } from './assets.js';
+import { OpenCodeSessionAdapter, type OpenCodeSessionDependencies } from './adapter.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeInvocation, publicInvocation } from './invocation.js';
+import { type StagedOpenCodeSkills, stageOpenCodeSkillsWith } from './staging.js';
+
+/** Stages a Workbench's skills, native config, and context through `files`. */
+export type OpenCodeSkillStaging = (
+    workbench: ResolvedWorkbench,
+    files: RunnerFiles
+) => Promise<StagedOpenCodeSkills>;
+
+export interface OpenCodeRunnerDependencies {
+    /**
+     * Where skills, native config, and context are staged. Required: the runner
+     * has no storage of its own. The CLI passes the local disk; a host passes any
+     * store that can answer the same calls.
+     */
+    files: RunnerFiles;
+    /** Replaces how skills are staged. Defaults to `stageOpenCodeSkillsWith`. */
+    stageSkills?: OpenCodeSkillStaging;
+    /** The session driver's own dependencies: `fetch`, the server password, timeouts. */
+    session?: Omit<OpenCodeSessionDependencies, 'files'>;
+}
 
 export class OpenCodeRunner extends Runner {
     readonly name = 'opencode';
     readonly session: OpenCodeSessionAdapter;
+    private readonly files: RunnerFiles;
+    private readonly stageSkills: OpenCodeSkillStaging;
 
-    /** `files` stages skills and native config. It defaults to the local disk. */
-    constructor(private readonly files?: RunnerFiles) {
+    constructor(dependencies: OpenCodeRunnerDependencies) {
         super();
-        this.session = new OpenCodeSessionAdapter(files ? { files } : {});
+        this.files = dependencies.files;
+        this.stageSkills =
+            dependencies.stageSkills ??
+            ((workbench, files) => stageOpenCodeSkillsWith(files, workbench));
+        this.session = new OpenCodeSessionAdapter({
+            ...dependencies.session,
+            files: dependencies.files,
+        });
     }
 
     async prepare(workbench: ResolvedWorkbench): Promise<PreparedRunner> {
-        return PreparedOpenCodeRunner.create(workbench, this.session, this.files);
+        return PreparedOpenCodeRunner.create(
+            workbench,
+            this.session,
+            this.files,
+            this.stageSkills
+        );
     }
 }
 
-class PreparedOpenCodeRunner implements PreparedRunner {
+/** An OpenCode runner with its skills staged, ready to build invocations and start sessions. */
+export class PreparedOpenCodeRunner implements PreparedRunner {
     readonly name = 'opencode';
     readonly failureLabel = 'OpenCode';
     readonly assets: RuntimeAsset[];
@@ -65,10 +98,12 @@ class PreparedOpenCodeRunner implements PreparedRunner {
 
     static async create(
         workbench: ResolvedWorkbench,
-        session = new OpenCodeSessionAdapter(),
-        files?: RunnerFiles
+        session: OpenCodeSessionAdapter,
+        files: RunnerFiles,
+        stageSkills: OpenCodeSkillStaging = (source, storage) =>
+            stageOpenCodeSkillsWith(storage, source)
     ): Promise<PreparedOpenCodeRunner> {
-        const staged = await stageOpenCodeSkills(workbench, files);
+        const staged = await stageSkills(workbench, files);
         const nativeConfigFile = staged.nativeConfigFile;
         return new PreparedOpenCodeRunner({
             workbench,

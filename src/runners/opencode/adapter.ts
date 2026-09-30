@@ -17,7 +17,11 @@ import { OpenCodeServerSession } from './session.js';
 import { stageOpenCodeSkillsWith } from './staging.js';
 
 export interface OpenCodeSessionDependencies {
-    /** Where skills and native config are staged. Defaults to the local disk. */
+    /**
+     * Where skills and native config are staged for a session the adapter starts
+     * itself with `start`. `startPrepared`, which a runner calls after staging,
+     * needs none. The adapter has no storage of its own.
+     */
     files?: RunnerFiles;
     spawn?: (
         command: string[],
@@ -62,9 +66,12 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
     }
 
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
-        // The disk default loads lazily so a host that injects `files` never
-        // pulls in a local filesystem module.
-        const files = this.files ?? (await import('../files-disk.js')).diskRunnerFiles;
+        const files = this.files;
+        if (!files) {
+            throw new Error(
+                'Starting an OpenCode session stages skills through RunnerFiles. Pass `files` in the adapter dependencies, or use startPrepared with staging done elsewhere.'
+            );
+        }
         const staged = await stageOpenCodeSkillsWith(files, options.workbench);
         const nativeConfigFile = staged.nativeConfigFile;
         return this.startConfigured(
