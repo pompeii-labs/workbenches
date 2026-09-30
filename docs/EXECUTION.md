@@ -67,8 +67,7 @@ declares its supported runtimes in `runtimes`. A spec 0 manifest declares one
 otherwise the first declared runtime is used, and naming an undeclared runtime
 fails before any preparation. The selected name is recorded with the run and its
 session, so a detached worker and a resumed session prepare the same runtime.
-`daytona` is a reserved provider name: its provider is registered and fails
-`prepare` with "The daytona runtime is not available in this engine yet".
+`daytona` is implemented by the reference Daytona provider described below.
 
 The `ResolvedWorkbench` a provider receives carries the selection. Providers read
 the selected runtime's configuration (`image`, `docker`, `class`) and the
@@ -81,7 +80,9 @@ Docker requires `linux` and the host architecture, and applies `cpu` and
 `linux` and reports `arch`, `cpu`, `memory_gb`, and `disk_gb` as unchecked. A
 `gpu: true` requirement is refused on local unless the caller passes
 `--allow-unchecked-gpu`, and always refused on Docker and E2B. Daytona checks its
-class against `os`. What a provider applies or could not check is returned in
+class against `os`, applies `cpu`, `memory_gb`, and `disk_gb` as sandbox
+resources, reports `arch` as unchecked, and refuses `gpu: true` until its `gpu`
+class is supported. What a provider applies or could not check is returned in
 `PreflightResult.requirements` as `checked`, `applied`, and `unchecked` lists.
 Every provider implements the same lifecycle:
 
@@ -145,6 +146,17 @@ and each named workspace has its manifest-declared access. Generated runner
 state can be a separate writable ephemeral asset. Local execution uses host
 paths unchanged. Isolated providers mount or copy only the declared
 assets and return remapped paths.
+
+Providers that mount host paths, local and Docker, never read file contents and
+need nothing beyond the host filesystem. Providers that copy bytes into a remote
+sandbox, E2B and Daytona, read the package, workspace, and named workspace files
+through an asset source: a small interface that stats, lists, and reads files and
+may report Git state. The provider's dependencies take it as `assets`. The
+reference CLI passes the local disk, and an embedding host can pass any store
+that answers the same calls. The asset source changes where bytes come from, not
+which bytes are sent: selection, exclusions, size limits, and symlink rules are
+applied identically. The runner adapter's staging of skills and native config
+follows the same idea through its own `files` interface.
 
 Preparation must be safe to repeat with the same inputs, including after an
 interrupted attempt. `cleanup` must be safe to call more than once. A provider
@@ -359,6 +371,76 @@ provider filesystem to survive. It is not a guarantee against provider data
 loss or expiration, and outcome recovery is separate from native session resume.
 Inspecting, applying, and exporting already-collected results requires no live
 sandbox or runtime key.
+
+### Reference Daytona provider
+
+The reference Daytona provider creates a fresh Daytona sandbox from the
+Workbench's published image for each execution. The runner runs inside the
+sandbox and the engine drives it from outside through Daytona's REST API. No
+engine code runs in the sandbox beyond the repository tools install that E2B also
+performs.
+
+The image is `runtimes.daytona.image`. When the daytona entry has none, the
+provider uses `runtimes.docker.image`, and it fails `prepare` with a message
+naming both fields when neither is declared. An image that is a Workbench-local
+Dockerfile build is refused, because Daytona creates sandboxes from published
+images. Only the `linux` class is available. `windows`, `macos`, and `gpu` fail
+with "class X is not available yet", and a `gpu: true` requirement is refused.
+`cpu`, `memory_gb`, and `disk_gb` become the sandbox's CPU, memory, and disk,
+rounded up to whole CPUs and GiB. `arch` is reported as unchecked.
+
+`DAYTONA_API_KEY` is required by the host and is excluded from the runtime
+environment. `DAYTONA_API_URL` optionally selects another Daytona API endpoint;
+the default is the public API. `wb connect --runtime daytona` saves the key
+locally without creating a sandbox, and an inherited `DAYTONA_API_KEY` overrides
+it. The sandbox receives manifest-declared environment values for allowed model
+routes. Daytona has no native credential store in this engine, so model access
+comes from those environment values. Every request to Daytona has a timeout, and
+no error message contains the key.
+
+The staging layout and exclusion rules are the E2B ones. The primary workspace is
+copied to `/workspace`, named workspaces to `/workspaces/<name>`, the Workbench
+package to `/workbench`, other assets beneath `/runtime-assets`, and the outbox
+to `/outbox`. Workspace selection uses tracked and unignored Git files when the
+asset source reports Git state, with a filesystem walk otherwise. Repository
+metadata, dependency trees, common credential directories, and common
+secret-bearing files are excluded, symlinks that escape the copied root are
+rejected, and read-only assets lose their write bits. Input and output each have
+a 512 MiB limit. Read-write workspaces receive the same synthetic Git baseline,
+and collected changes return as pending outcomes that are applied only by an
+explicit `wb outcome <id> --apply`. Transfer archives are written to the host
+temporary directory, because outcome collection diffs against the archive that
+was sent.
+
+The selected image must include the runner, declared tools, Git, and GNU tar with
+`--null` support. For repository runs the provider installs `git` and `gh` in
+the sandbox after creating it, which needs root or passwordless `sudo`. The
+OpenCode service binds `0.0.0.0:4096` in the sandbox and is reached through a
+signed Daytona preview URL whose token is part of the host name, so the sandbox
+is not made public. One-shot commands return standard error merged into standard
+output. Background commands are followed by polling the session logs, so output
+arrives with a delay of a fraction of a second.
+
+Every sandbox carries the labels `dev.workbenches.managed`,
+`dev.workbenches.run`, and `dev.workbenches.scope`, matching E2B's metadata, and
+a 60 minute lifetime that Daytona enforces even if the engine process dies. Idle
+auto-stop is disabled for the run. Cleanup terminates active commands, captures
+native session state, and deletes the sandbox.
+
+Current limits:
+
+- No interactive terminal, so interactive native authentication is not available.
+  `wb run` works with environment-backed model credentials.
+- No pause or recovery. A sandbox is deleted at cleanup even when outcome
+  collection failed, and `wb outcome <run-id> --recover` has nothing to recover
+  from. A linked session resumed later gets a fresh sandbox.
+- A piped standard input can be written to but not closed, so runners that need
+  end-of-input to finish should not be launched with piped input.
+- No cost estimate. Terminal run events report duration and resources with cost
+  marked unavailable.
+- The provider does not retry sandbox creation, command starts, or transfers,
+  because those boundaries can have an ambiguous remote outcome. A failure is
+  terminal for the run and cleanup is still attempted.
 
 ## Repository execution and GitHub authentication
 

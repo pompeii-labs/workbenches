@@ -54,8 +54,8 @@ A Workbench can declare:
 - Environment-variable requirements without embedded secret values
 - Explicit named workspace requirements for multi-repository work
 - Environment requirements (OS, architecture, CPU, memory, disk, GPU)
-- The runtimes it supports (local, Docker, E2B) and, where a runtime needs one,
-  an image
+- The runtimes it supports (local, Docker, E2B, Daytona) and, where a runtime
+  needs one, an image
 
 The manifest is intentionally small:
 
@@ -108,8 +108,9 @@ This repository contains `workbench`, also available as `wb`: the TypeScript
 reference engine and command-line client for the standard.
 
 The project is in public pre-alpha development. The draft-0 format, OpenCode and
-Pi adapters, and local, Docker, and E2B runtimes for one-shot, detached, and
-interactive execution are implemented. The format is not yet stable. Other
+Pi adapters, and local, Docker, E2B, and Daytona runtimes for one-shot, detached,
+and interactive execution are implemented. Daytona has no interactive terminal
+yet. The format is not yet stable. Other
 runners and remote runtime providers are not yet supported by the reference
 engine.
 
@@ -385,7 +386,7 @@ boundary:
 ```sh
 wb connect
 # Model provider → runtime → harness → provider → authentication method
-# Or E2B runtime → masked API-key prompt
+# Or E2B or Daytona runtime → masked API-key prompt
 wb run project-core --task "Review this migration"
 ```
 
@@ -413,6 +414,20 @@ that could enter shell history. Remove the saved key with
 `wb connect --runtime e2b --remove`. The key is stored in
 `~/.workbench/runtime.secrets.json` with mode `0600`, separately from model
 credentials. An inherited `E2B_API_KEY` overrides the saved key for one process.
+
+Daytona works the same way and keeps its own key in the same file:
+
+```sh
+wb connect --runtime daytona
+wb connect --runtime daytona --status
+wb connect --runtime daytona --stdin
+wb connect --runtime daytona --remove
+```
+
+An inherited `DAYTONA_API_KEY` overrides the saved Daytona key for one process.
+Set `DAYTONA_API_URL` to use a Daytona API endpoint other than the public one.
+The key is never printed, is never passed to the sandbox, and is not accepted as
+a command-line value. Saving it creates no sandbox and incurs no Daytona usage.
 
 Passing a Workbench reference narrows the provider choices to routes allowed by
 that package; it still performs no runtime work.
@@ -527,8 +542,9 @@ runtimes:
 ```
 
 The providers are `local`, `docker`, `e2b`, and `daytona`. `daytona`
-takes a `class` of `linux`, `windows`, `gpu`, or `macos`. The reference engine
-validates and displays it but cannot run it yet.
+takes a `class` of `linux`, `windows`, `gpu`, or `macos`, and an optional
+`image`. The reference engine runs the `linux` class, and creates the sandbox
+from the daytona entry's image, falling back to the docker entry's image.
 
 `run`, `smoke`, `build`, and `create` accept `--runtime <name>`. Without it the
 first declared runtime is used. Naming a runtime the Workbench does not declare
@@ -554,6 +570,9 @@ checked against the selected runtime before anything is prepared or launched:
   unchecked.
 - Daytona needs its class to match `os`: `linux` needs `linux`, `macos` needs
   `macos`, `windows` needs `windows`, and `gpu` needs `linux` with `gpu: true`.
+  The engine runs only the `linux` class and refuses `gpu: true`. It applies
+  `cpu`, `memory_gb`, and `disk_gb` as the sandbox's resources, and `smoke`
+  reports `arch` as unchecked.
 
 ### Run in Docker
 
@@ -758,6 +777,45 @@ copied in. Outcome recovery is separate from conversation resume and requires
 the original checkpoint and provider filesystem to survive. Already-collected
 outcomes can be inspected, exported, and explicitly applied without a live
 sandbox or E2B key.
+
+### Run in Daytona
+
+A Daytona Workbench declares the `linux` class and a published image. When the
+daytona entry has no image, the image of the docker entry is used:
+
+```yaml
+runtimes:
+  daytona:
+    class: linux
+    image: ghcr.io/example/project-workbench:0.4.0
+```
+
+```sh
+wb connect --runtime daytona
+wb smoke project-core --runtime daytona
+wb run project-core --runtime daytona --task "Review this migration"
+```
+
+The engine creates a fresh Daytona sandbox from the image for each execution and
+deletes it at cleanup. Daytona builds or pulls the image, so a Workbench-local
+Dockerfile build is refused; publish the image instead. The image must include
+the selected runner, every declared tool, `git`, and GNU `tar` with `--null`
+support. For repository runs the engine installs `git` and `gh` in the sandbox,
+which needs a root user or passwordless `sudo`.
+
+Staging, exclusions, pending outcomes, and the 512 MiB transfer limits match
+E2B: `/workspace`, `/workspaces/<name>`, and `/workbench` hold isolated copies,
+and remote changes return as pending outcomes that only `wb outcome <id> --apply`
+applies. `cpu`, `memory_gb`, and `disk_gb` requirements become the sandbox's
+resources. The sandbox has a 60 minute lifetime that Daytona enforces even if the
+CLI process dies, and it carries the labels `dev.workbenches.managed`,
+`dev.workbenches.run`, and `dev.workbenches.scope`.
+
+Daytona currently has no interactive terminal, no pause or recovery, and no cost
+estimate. Model credentials come from the environment or `--env-file`, because
+there is no native credential store for interactive login. See the
+[Daytona provider contract](EXECUTION.md#reference-daytona-provider) for the
+full list of limits.
 
 ### Returned results
 
@@ -1125,6 +1183,12 @@ cross-sandbox credential persistence, and sandbox destruction.
 verifies native session resume. It requires a supported model-provider key and
 makes model-provider requests.
 
+`test:daytona` requires `DAYTONA_API_KEY`. It creates a sandbox from
+`debian:bookworm-slim`, runs a command, transfers a file in both directions,
+follows a background command, requests a preview URL, deletes the sandbox, and
+confirms by listing the run's label that nothing is left. It uses Daytona usage
+and is skipped unless both `DAYTONA_E2E=1` and the key are set.
+
 `test:outcomes:harnesses` exercises OpenCode and Pi through the public CLI on
 Local, Docker, and E2B. It requires `OPENROUTER_API_KEY`, a running Docker daemon,
 and `E2B_API_KEY`. It makes real model-provider requests and verifies tool-created
@@ -1146,6 +1210,32 @@ notice.
 
 Both `workbench` and `wb` are package binary names. Commits use Conventional
 Commits and are checked by the repository's `commit-msg` hook and CI.
+
+### Embedding engine modules
+
+The reference engine is also a set of modules a host can import. The package
+`exports` map names them by subpath, and the root export is unchanged:
+
+| Subpath | Contents |
+| --- | --- |
+| `./manifest`, `./requirements`, `./runtime-selection`, `./types` | Manifest parsing, requirement checks, runtime selection, and shared types |
+| `./events` | The normalized run event protocol |
+| `./runners/opencode/*` | The OpenCode adapter, session driver, server client, event translation, invocation builder, and staging |
+| `./runners/files`, `./runners/files/disk` | The `RunnerFiles` interface and its disk implementation |
+| `./runtimes`, `./runtimes/contracts` | The runtime registry and the provider contract |
+| `./runtimes/daytona`, `./runtimes/e2b`, `./runtimes/e2b/contracts` | The Daytona and E2B providers with their client interfaces |
+| `./runtimes/assets`, `./runtimes/assets/disk` | The `AssetSource` interface and its disk implementation |
+
+Two interfaces keep file access out of the modules that drive a runner. The
+OpenCode session driver and event translation import no `node:fs` or `node:os`,
+directly or transitively, so they run on any JavaScript runtime with `fetch`; a
+test walks their import graph to keep it that way. Skills and native config are
+staged through `RunnerFiles`, which the OpenCode adapter takes as `files`. Remote
+sandbox providers read package and workspace files through `AssetSource`, which
+the provider dependencies take as `assets`. The CLI passes the disk for both. A
+host passes any store that can answer the same calls. The Daytona client is a
+`DaytonaClient` interface with a `fetch`-based `DaytonaApiClient`, so a host can
+also supply its own transport.
 
 ## Project policies
 
