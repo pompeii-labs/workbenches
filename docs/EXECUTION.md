@@ -392,10 +392,10 @@ rounded up to whole CPUs and GiB. `arch` is reported as unchecked.
 For `--repo` runs the provider first checks for `git` and `gh` as the sandbox
 user and installs them as root or sudo only when one is missing, so an image that
 ships both works with a non-root user; a missing tool with no root access fails
-naming the tool. Staging directories follow the same rule: when the image
-pre-creates them owned by the sandbox user, no root access is needed; otherwise
-the engine creates them as root or sudo and fails naming the first directory when
-neither is available.
+naming the tool. Staging directories follow the same rule: the engine first tries
+to create them as the sandbox user, which needs no root access for writable
+parents or directories the image pre-created; otherwise it creates them as root
+or sudo and fails naming the first directory when neither is available.
 
 `DAYTONA_API_KEY` is required by the host and is excluded from the runtime
 environment. `DAYTONA_API_URL` optionally selects another Daytona API endpoint;

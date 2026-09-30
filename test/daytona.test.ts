@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 
 import { OutcomeStore } from '../src/outcomes/index.js';
 import type {
@@ -296,7 +296,30 @@ describe('Daytona runtime provider', () => {
             ).toBeFalse();
             expect(
                 client.sandbox.runs.some((call) =>
-                    call.command.startsWith("chmod 700 '/")
+                    call.command.includes("chmod 700 '/workspace'")
+                )
+            ).toBeTrue();
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('creates a writable-parent staging directory as the user without root', async () => {
+        const client = new FakeClient();
+        client.sandbox.rootUnavailable = true;
+        client.sandbox.ownedDirectories.add('/workspace');
+        client.sandbox.ownedDirectories.add('/workbench');
+        const runtime = await daytonaProvider({ client }).prepare(
+            request(await fixture())
+        );
+        try {
+            await runtime.preflight();
+            expect(
+                client.sandbox.runs.some((call) => call.options.user === 'root')
+            ).toBeFalse();
+            expect(
+                client.sandbox.runs.some((call) =>
+                    call.command.includes("mkdir -p '/tmp/workbench-home'")
                 )
             ).toBeTrue();
         } finally {
@@ -823,6 +846,17 @@ class FakeSandbox implements DaytonaSandbox {
             return this.rootUnavailable
                 ? result(1, '', 'root access is required')
                 : result(0);
+        }
+        if (command.includes('mkdir -p') && command.includes('chmod 700')) {
+            const targets = [...command.matchAll(/mkdir -p '([^']+)'/g)].map(
+                (match) => match[1] as string
+            );
+            // Nested targets have a writable parent; targets under / need pre-owning.
+            return targets.every(
+                (path) => posix.dirname(path) !== '/' || this.ownedDirectories.has(path)
+            )
+                ? result(0)
+                : result(1, '', 'Permission denied');
         }
         const ownership = [...command.matchAll(/test -O '([^']+)'/g)].map(
             (match) => match[1] as string

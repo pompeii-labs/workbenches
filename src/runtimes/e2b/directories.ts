@@ -33,24 +33,19 @@ export async function prepareE2BDirectories(
         }
     }
     const symlinkGuards = [...ancestors].map((path) => `test ! -L ${quote(path)}`);
-    // Images that run as a non-root user without sudo pre-create the directories.
-    // When every target already exists and belongs to the sandbox user, no root
-    // access is needed.
-    const owned = await sandbox.run(
+    // Try as the sandbox user first. Targets under writable parents such as /tmp,
+    // or directories the image pre-created, need no root access.
+    const asUser = await sandbox.run(
         [
             ...symlinkGuards,
+            ...targets.map((path) => `mkdir -p ${quote(path)}`),
             ...targets.map(
                 (path) => `test -d ${quote(path)} && test -O ${quote(path)}`
             ),
+            ...targets.map((path) => `chmod 700 ${quote(path)}`),
         ].join(' && ')
     );
-    if (owned.code === 0) {
-        const restricted = await sandbox.run(
-            targets.map((path) => `chmod 700 ${quote(path)}`).join(' && ')
-        );
-        requireSuccess(restricted, `Failed to secure ${label} staging directories`);
-        return;
-    }
+    if (asUser.code === 0) return;
     // Only directory provisioning uses root. Extraction and harness processes
     // retain the template's default user and cannot select this setup option.
     const provisioned = await sandbox.run(
