@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { HostOutcomeCapture } from '../../outcomes/index.js';
+import { currentHost } from '../../workbench/host.js';
 import {
     assertDaemonCapacity,
     RequirementsPreflight,
@@ -47,7 +48,9 @@ export class DockerRuntimeProvider implements RuntimeProvider {
             );
         }
         try {
-            new RequirementsPreflight(this.dependencies.host).check(request.workbench);
+            new RequirementsPreflight(this.dependencies.host ?? currentHost).check(
+                request.workbench
+            );
         } catch (error) {
             throw RuntimeError.from(this.name, 'prepare', error);
         }

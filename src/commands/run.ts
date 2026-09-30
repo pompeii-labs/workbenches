@@ -8,6 +8,7 @@ import { workbenchHome } from '../storage.js';
 import { assertWorkbenchTuiSupported, launchWorkbenchTui } from '../tui.js';
 import {
     assertRequirements,
+    currentHost,
     selectedRuntime,
     WorkbenchEnvironment,
     WorkbenchPreflight,
@@ -417,9 +418,13 @@ function selectRuntime(
     args: { runtime?: string | undefined; 'allow-unchecked-gpu': boolean }
 ): void {
     resolved.workbench = withRuntime(resolved.workbench, args.runtime);
-    assertRequirements(resolved.workbench, {
-        ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
-    });
+    assertRequirements(
+        resolved.workbench,
+        {
+            ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
+        },
+        currentHost
+    );
 }
 
 function validateHostDockerAuthorization(declared: boolean, authorized: boolean): void {

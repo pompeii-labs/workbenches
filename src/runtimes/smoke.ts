@@ -7,6 +7,7 @@ import { ConnectionStore } from '../connections/store.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import { RunStore } from '../runs/store.js';
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
+import { currentHost } from '../workbench/host.js';
 import type { PreflightResult } from '../workbench/preflight.js';
 import { assertRequirements } from '../workbench/requirements.js';
 import { selectedRuntime, withRuntime } from '../workbench/runtimes.js';
@@ -47,9 +48,13 @@ export class RuntimeSmoke {
             this.options.workspaceDirectory ?? workbench.repositoryDirectory;
         const workspaces = this.options.workspaces ?? [];
         await this.workspaceBindings.validate(workbench, workspaces);
-        assertRequirements(workbench, {
-            ...(this.options.allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
-        });
+        assertRequirements(
+            workbench,
+            {
+                ...(this.options.allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
+            },
+            currentHost
+        );
         if (this.options.allowHostDocker && !selected.docker?.engine) {
             throw new Error(
                 'Host Docker authorization was supplied to a Workbench that does not declare docker.engine'

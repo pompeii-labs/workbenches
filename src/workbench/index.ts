@@ -3,6 +3,7 @@ export {
     type EnvironmentOverrides,
     WorkbenchEnvironment,
 } from './environment.js';
+export { currentHost } from './host.js';
 export {
     WorkbenchInspection,
     WorkbenchInspector,

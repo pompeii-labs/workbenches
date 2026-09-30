@@ -230,6 +230,7 @@ export type {
 } from './types.js';
 export {
     assertRequirements,
+    currentHost,
     declaredRuntimeNames,
     declaredRuntimes,
     type PreflightResult,

@@ -1,5 +1,3 @@
-import { arch, cpus, platform, totalmem } from 'node:os';
-
 import type {
     ResolvedWorkbench,
     SelectedRuntime,
@@ -56,24 +54,29 @@ const daytonaClassOs: Record<WorkbenchDaytonaClass, WorkbenchOs> = {
  * selected, before anything is prepared or launched.
  */
 export class RequirementsPreflight {
-    private readonly host: RequirementsHost;
+    private readonly describeHost: (() => RequirementsHost) | undefined;
 
-    constructor(host: RequirementsHost = RequirementsPreflight.currentHost()) {
-        this.host = host;
+    /**
+     * `host` describes the machine a local or Docker runtime runs on, either as a
+     * value or as a function that is called only when a check needs it. A
+     * runtime that provides its own machine, such as a remote sandbox, never
+     * reads it, so a host on another JavaScript runtime passes nothing.
+     * `currentHost()` in `workbench/host.ts` describes the local machine.
+     */
+    constructor(host?: RequirementsHost | (() => RequirementsHost)) {
+        this.describeHost = typeof host === 'function' ? host : host && (() => host);
     }
 
-    static currentHost(): RequirementsHost {
-        const systems: Record<string, string> = {
-            darwin: 'macos',
-            linux: 'linux',
-            win32: 'windows',
-        };
-        return {
-            os: systems[platform()] ?? platform(),
-            arch: arch(),
-            cpus: cpus().length,
-            memoryBytes: totalmem(),
-        };
+    private described: RequirementsHost | undefined;
+
+    private get host(): RequirementsHost {
+        if (!this.describeHost) {
+            throw new Error(
+                'Checking requirements on this runtime needs a host description'
+            );
+        }
+        this.described ??= this.describeHost();
+        return this.described;
     }
 
     check(
@@ -286,7 +289,7 @@ function nearestGibibytes(bytes: number): number {
 export function assertRequirements(
     workbench: ResolvedWorkbench,
     options: RequirementsCheckOptions = {},
-    host?: RequirementsHost
+    host?: RequirementsHost | (() => RequirementsHost)
 ): RequirementsReport {
     return new RequirementsPreflight(host).check(workbench, options);
 }

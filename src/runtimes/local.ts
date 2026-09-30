@@ -4,6 +4,7 @@ import {
     type RuntimeOutcomeCollection,
 } from '../outcomes/index.js';
 import type { RunnerInvocation, SpawnedRunner } from '../types.js';
+import { currentHost } from '../workbench/host.js';
 import { type PreflightResult, WorkbenchPreflight } from '../workbench/preflight.js';
 import {
     type RequirementsHost,
@@ -89,9 +90,10 @@ export class LocalRuntimeProvider implements RuntimeProvider {
      */
     private checkRequirements(request: RuntimePrepareRequest): void {
         try {
-            new RequirementsPreflight(this.dependencies.host).check(request.workbench, {
-                allowUncheckedGpu: request.allowUncheckedGpu ?? false,
-            });
+            new RequirementsPreflight(this.dependencies.host ?? currentHost).check(
+                request.workbench,
+                { allowUncheckedGpu: request.allowUncheckedGpu ?? false }
+            );
         } catch (error) {
             throw RuntimeError.from(this.name, 'prepare', error);
         }
@@ -163,7 +165,7 @@ export class LocalRuntime implements PreparedRuntime {
                 findExecutable: this.dependencies.findExecutable,
             }).check(this.workbench);
             const requirements = new RequirementsPreflight(
-                this.dependencies.host
+                this.dependencies.host ?? currentHost
             ).check(this.workbench, { allowUncheckedGpu: this.allowUncheckedGpu });
             this.ready = true;
             return { ...result, workspaces: this.workspaces, requirements };
