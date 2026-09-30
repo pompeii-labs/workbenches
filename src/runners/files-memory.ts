@@ -1,3 +1,4 @@
+import type { AssetSource, AssetStat } from '../runtimes/staging/source.js';
 import type { RunnerFileStat, RunnerFiles } from './files.js';
 
 type Entry =
@@ -13,8 +14,12 @@ function fail(code: string, message: string): never {
  * filesystem. Paths are absolute and virtual. Like a disk, it refuses to write
  * into a missing directory and to create one that exists, so staging code that
  * works here works against real storage. It has no symbolic links.
+ *
+ * It is also an `AssetSource`, so one store can hold a Workbench package, a
+ * workspace, and the skills a runner stages, and serve a remote runtime and a
+ * runner at once.
  */
-export class MemoryRunnerFiles implements RunnerFiles {
+export class MemoryRunnerFiles implements RunnerFiles, AssetSource {
     private readonly entries = new Map<string, Entry>([
         ['/', { kind: 'directory', mode: 0o755 }],
     ]);
@@ -117,13 +122,28 @@ export class MemoryRunnerFiles implements RunnerFiles {
             .map((key) => key.slice(prefix.length));
     }
 
-    async stat(path: string): Promise<RunnerFileStat | undefined> {
+    async stat(path: string): Promise<(RunnerFileStat & AssetStat) | undefined> {
         const entry = this.entries.get(normalize(path));
         if (!entry) return undefined;
         return {
             kind: entry.kind,
             size: entry.kind === 'file' ? entry.content.byteLength : 0,
+            mode: entry.mode,
         };
+    }
+
+    /** As `stat`. There are no symbolic links, so nothing is followed either way. */
+    lstat(path: string): Promise<(RunnerFileStat & AssetStat) | undefined> {
+        return this.stat(path);
+    }
+
+    /** As `readFile`, under the name `AssetSource` uses. */
+    read(path: string): Promise<Uint8Array> {
+        return this.readFile(path);
+    }
+
+    async readLink(path: string): Promise<string> {
+        fail('EINVAL', `not a symbolic link: ${path}`);
     }
 
     async tempDirectory(prefix: string): Promise<string> {

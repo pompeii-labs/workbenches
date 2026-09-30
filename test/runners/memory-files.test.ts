@@ -63,7 +63,7 @@ for (const [name, create] of backends) {
             await files.writeFile(join(root, 'dir', 'f.txt'), 'four');
             await files.writeFile(join(root, 'top.txt'), 'x');
             expect((await files.list(root)).toSorted()).toEqual(['dir', 'top.txt']);
-            expect(await files.stat(join(root, 'dir', 'f.txt'))).toEqual({
+            expect(await files.stat(join(root, 'dir', 'f.txt'))).toMatchObject({
                 kind: 'file',
                 size: 4,
             });
