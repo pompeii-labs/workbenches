@@ -8,8 +8,8 @@ import { createGzip } from 'node:zlib';
 import tar from 'tar-stream';
 
 import { nativeCredentialPaths } from '../../connections/index.js';
+import type { OutcomeSink } from '../../outcomes/collection.js';
 import type { OutcomeChangeset, OutcomeWorkspace } from '../../outcomes/contracts.js';
-import type { OutcomeStore } from '../../outcomes/store.js';
 import { WorkspaceSnapshot } from '../../outcomes/workspace.js';
 import { diskAssetSource } from '../staging/disk-source.js';
 import {
@@ -39,7 +39,7 @@ export type E2BSnapshotEntry = SnapshotEntry;
 
 export interface E2BSnapshotOutcome {
     readonly bytes: number;
-    collect(store: OutcomeStore): Promise<OutcomeChangeset | undefined>;
+    collect(store: OutcomeSink): Promise<OutcomeChangeset | undefined>;
     cleanup(): Promise<void>;
 }
 

@@ -2,10 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
-    HostOutcomeCapture,
-    OutcomeStore,
+    OutcomeSink,
     RuntimeOutcomeCollection,
-} from '../../outcomes/index.js';
+} from '../../outcomes/collection.js';
+import type { HostOutcomeCapture } from '../../outcomes/runtime.js';
 import type {
     ResolvedWorkbench,
     RunnerInvocation,
@@ -337,16 +337,16 @@ export class DockerRuntime implements PreparedRuntime {
     }
 
     async collectOutcome(
-        store: OutcomeStore
+        store: OutcomeSink
     ): Promise<RuntimeOutcomeCollection | undefined> {
         return this.options.outcome?.collect(store);
     }
 
-    collectOutput(store: OutcomeStore) {
+    collectOutput(store: OutcomeSink) {
         return this.options.outcome?.collectOutput(store) ?? Promise.resolve(undefined);
     }
 
-    async snapshotRepository(store: OutcomeStore) {
+    async snapshotRepository(store: OutcomeSink) {
         return this.options.outcome?.snapshot(store);
     }
 

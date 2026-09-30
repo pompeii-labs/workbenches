@@ -1,7 +1,10 @@
 export * from './apply.js';
+export * from './collection.js';
 export * from './contracts.js';
+export { assembleOutput, parseDeclarationSource } from './declared.js';
 export * from './export.js';
 export * from './lifecycle.js';
+export { MemoryOutcomeStore, type MemoryOutcomeStoreOptions } from './memory.js';
 export * from './output.js';
 export * from './runtime.js';
 export * from './store.js';

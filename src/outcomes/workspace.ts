@@ -12,7 +12,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-
+import type { OutcomeSink } from './collection.js';
 import type {
     OutcomeChangeEntry,
     OutcomeChangeset,
@@ -21,8 +21,8 @@ import type {
     OutcomeWarning,
     OutcomeWorkspace,
 } from './contracts.js';
+import { putFileTo } from './file-sink.js';
 import { GitBaseline } from './git.js';
-import type { OutcomeStore } from './store.js';
 import { validateFilesystemSymlink } from './symlinks.js';
 
 const defaultMaximumSnapshotBytes = 512 * 1_024 * 1_024;
@@ -156,7 +156,7 @@ export class WorkspaceSnapshot {
         }
     }
 
-    async collect(store: OutcomeStore): Promise<OutcomeChangeset | undefined> {
+    async collect(store: OutcomeSink): Promise<OutcomeChangeset | undefined> {
         const currentPaths = await selectedPaths(this.root, this.excludedPaths);
         const current = await describeEntries(
             this.root,
@@ -260,7 +260,7 @@ export class WorkspaceSnapshot {
         this.indexedFiles.delete(entry.path);
     }
 
-    private async outcomeState(store: OutcomeStore, entry: SnapshotEntry) {
+    private async outcomeState(store: OutcomeSink, entry: SnapshotEntry) {
         if (entry.type === 'symlink') {
             return {
                 kind: 'symlink' as const,
@@ -271,7 +271,7 @@ export class WorkspaceSnapshot {
         return {
             kind: 'file' as const,
             mode: entry.mode,
-            content: await store.putFile(join(this.root, entry.path)),
+            content: await putFileTo(store, join(this.root, entry.path)),
         };
     }
 

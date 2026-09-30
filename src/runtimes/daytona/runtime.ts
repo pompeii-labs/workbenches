@@ -1,4 +1,7 @@
-import type { OutcomeStore, RuntimeOutcomeCollection } from '../../outcomes/index.js';
+import type {
+    OutcomeSink,
+    RuntimeOutcomeCollection,
+} from '../../outcomes/collection.js';
 import type {
     ResolvedWorkbench,
     RunnerInvocation,
@@ -272,7 +275,7 @@ export class DaytonaRuntime implements PreparedRuntime {
         return this.measureInfrastructure();
     }
 
-    async collectOutcome(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+    async collectOutcome(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
         if (!this.outcomeCollection) {
             this.outcomeCollection = this.persistNativeState()
                 .then(() => this.collectSnapshots(store))
@@ -284,11 +287,11 @@ export class DaytonaRuntime implements PreparedRuntime {
         return this.outcomeCollection;
     }
 
-    snapshotRepository(store: OutcomeStore) {
+    snapshotRepository(store: OutcomeSink) {
         return this.collectSnapshots(store);
     }
 
-    collectOutput(store: OutcomeStore) {
+    collectOutput(store: OutcomeSink) {
         return this.collector().collectOutput(store);
     }
 
@@ -333,7 +336,7 @@ export class DaytonaRuntime implements PreparedRuntime {
         });
     }
 
-    private collectSnapshots(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+    private collectSnapshots(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
         return this.collector().collect(store);
     }
 

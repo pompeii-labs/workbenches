@@ -1,4 +1,7 @@
-import type { OutcomeStore, RuntimeOutcomeCollection } from '../../outcomes/index.js';
+import type {
+    OutcomeSink,
+    RuntimeOutcomeCollection,
+} from '../../outcomes/collection.js';
 import type {
     ResolvedWorkbench,
     RunnerInvocation,
@@ -280,7 +283,7 @@ export class E2BRuntime implements PreparedRuntime {
         return this.measureInfrastructure();
     }
 
-    async collectOutcome(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+    async collectOutcome(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
         if (!this.outcomeCollection) {
             this.outcomeCollection = this.persistNativeState()
                 .then(() => this.collectSnapshots(store))
@@ -303,11 +306,11 @@ export class E2BRuntime implements PreparedRuntime {
         await this.recovery?.discard();
     }
 
-    snapshotRepository(store: OutcomeStore) {
+    snapshotRepository(store: OutcomeSink) {
         return this.collectSnapshots(store);
     }
 
-    collectOutput(store: OutcomeStore) {
+    collectOutput(store: OutcomeSink) {
         return new E2BOutcomeCollector({
             sandbox: this.requireReady(),
             snapshots: this.snapshots,
@@ -438,7 +441,7 @@ export class E2BRuntime implements PreparedRuntime {
         });
     }
 
-    private collectSnapshots(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+    private collectSnapshots(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
         return new E2BOutcomeCollector({
             sandbox: this.requireReady(),
             snapshots: this.snapshots,

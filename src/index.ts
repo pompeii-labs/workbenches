@@ -50,6 +50,8 @@ export {
 export {
     type CollectedOutput,
     type DeclaredOutcome,
+    MemoryOutcomeStore,
+    type MemoryOutcomeStoreOptions,
     type OutcomeApplicationReceipt,
     type OutcomeApplicationState,
     OutcomeApplier,
@@ -63,6 +65,7 @@ export {
     type OutcomeLink,
     type OutcomePathFingerprint,
     type OutcomePathState,
+    type OutcomeSink,
     OutcomeStore,
     type OutcomeWarning,
     type OutcomeWorkspace,

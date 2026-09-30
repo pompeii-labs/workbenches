@@ -1,5 +1,8 @@
-import type { OutcomeStore, RuntimeOutcomeCollection } from '../outcomes/index.js';
-import type { CollectedOutput } from '../outcomes/output.js';
+import type {
+    CollectedOutput,
+    OutcomeSink,
+    RuntimeOutcomeCollection,
+} from '../outcomes/collection.js';
 import type {
     ResolvedWorkbench,
     RunnerInvocation,
@@ -128,13 +131,13 @@ export interface PreparedRuntime {
     ): RuntimeService;
     cancel(process: SpawnedRunner): void;
     infrastructure?(): Promise<RuntimeInfrastructureMetadata | undefined>;
-    collectOutcome?(store: OutcomeStore): Promise<RuntimeOutcomeCollection | undefined>;
+    collectOutcome?(store: OutcomeSink): Promise<RuntimeOutcomeCollection | undefined>;
     /** Capture repository changes during execution without finalizing or caching them. */
     snapshotRepository?(
-        store: OutcomeStore
+        store: OutcomeSink
     ): Promise<RuntimeOutcomeCollection | undefined>;
     /** Collect returned files and links without finalizing native state or workspace diffs. */
-    collectOutput?(store: OutcomeStore): Promise<CollectedOutput | undefined>;
+    collectOutput?(store: OutcomeSink): Promise<CollectedOutput | undefined>;
     finalizeOutcome?(): Promise<void>;
     cleanup(): Promise<void>;
 }

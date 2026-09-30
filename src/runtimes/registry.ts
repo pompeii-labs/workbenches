@@ -1,5 +1,8 @@
-import type { OutcomeStore, RuntimeOutcomeCollection } from '../outcomes/index.js';
-import type { CollectedOutput } from '../outcomes/output.js';
+import type {
+    CollectedOutput,
+    OutcomeSink,
+    RuntimeOutcomeCollection,
+} from '../outcomes/collection.js';
 import type {
     ResolvedWorkbench,
     RunnerInvocation,
@@ -203,7 +206,7 @@ class GuardedRuntime implements PreparedRuntime {
     }
 
     async collectOutcome(
-        store: OutcomeStore
+        store: OutcomeSink
     ): Promise<RuntimeOutcomeCollection | undefined> {
         try {
             return await this.runtime.collectOutcome?.(store);
@@ -212,7 +215,7 @@ class GuardedRuntime implements PreparedRuntime {
         }
     }
 
-    async collectOutput(store: OutcomeStore): Promise<CollectedOutput | undefined> {
+    async collectOutput(store: OutcomeSink): Promise<CollectedOutput | undefined> {
         try {
             return await this.runtime.collectOutput?.(store);
         } catch (error) {
@@ -221,7 +224,7 @@ class GuardedRuntime implements PreparedRuntime {
     }
 
     async snapshotRepository(
-        store: OutcomeStore
+        store: OutcomeSink
     ): Promise<RuntimeOutcomeCollection | undefined> {
         try {
             return await this.runtime.snapshotRepository?.(store);
