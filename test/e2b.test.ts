@@ -118,6 +118,22 @@ describe('E2B runtime provider', () => {
         }
     });
 
+    test('skips root when the staging paths are pre-created and owned', async () => {
+        const client = new FakeClient();
+        client.sandbox.directoriesOwned = true;
+        const runtime = await new E2BRuntimeProvider({ client }).prepare(
+            request(await fixture())
+        );
+        try {
+            await runtime.preflight();
+            expect(
+                client.sandbox.runs.some((run) => run.options.user === 'root')
+            ).toBeFalse();
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('provisions staging paths for non-root users without elevating the harness', async () => {
         const client = new FakeClient();
         const runtime = await new E2BRuntimeProvider({ client }).prepare(
@@ -774,6 +790,7 @@ class FakeSandbox implements E2BSandbox {
     uploadFailure: Error | undefined;
     startFailure: Error | undefined;
     readonly missingCommands = new Set<string>();
+    directoriesOwned = false;
 
     async run(
         command: string,
@@ -781,6 +798,9 @@ class FakeSandbox implements E2BSandbox {
     ): Promise<{ code: number; stdout: string; stderr: string }> {
         this.runs.push({ command, options });
         if (command === e2bIdentityCommand) return result(0, this.runtimeIdentity);
+        if (command.includes('test -O')) {
+            return this.directoriesOwned ? result(0) : result(1);
+        }
         if (command === 'tar --help 2>&1') {
             return result(0, 'Usage: tar [OPTION...]\n      --null');
         }

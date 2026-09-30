@@ -282,6 +282,62 @@ describe('Daytona runtime provider', () => {
         }
     });
 
+    test('skips root when the staging directories are pre-created and owned', async () => {
+        const resolved = await fixture();
+        const client = new FakeClient();
+        for (const path of ['/workspace', '/workbench', '/tmp/workbench-home'])
+            client.sandbox.ownedDirectories.add(path);
+        client.sandbox.rootUnavailable = true;
+        const runtime = await daytonaProvider({ client }).prepare(request(resolved));
+        try {
+            await runtime.preflight();
+            expect(
+                client.sandbox.runs.some((call) => call.options.user === 'root')
+            ).toBeFalse();
+            expect(
+                client.sandbox.runs.some((call) =>
+                    call.command.startsWith("chmod 700 '/")
+                )
+            ).toBeTrue();
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('uses root when a staging directory is missing', async () => {
+        const client = new FakeClient();
+        const runtime = await daytonaProvider({ client }).prepare(
+            request(await fixture())
+        );
+        try {
+            await runtime.preflight();
+            expect(
+                client.sandbox.runs.some(
+                    (call) =>
+                        call.options.user === 'root' &&
+                        call.command.includes('mkdir -p')
+                )
+            ).toBeTrue();
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('names the missing directory when root access is unavailable', async () => {
+        const client = new FakeClient();
+        client.sandbox.rootUnavailable = true;
+        const runtime = await daytonaProvider({ client }).prepare(
+            request(await fixture())
+        );
+        try {
+            await expect(runtime.preflight()).rejects.toThrow(
+                /staging directory \/\S+: the sandbox image must run as root, allow sudo, or pre-create that directory owned by the sandbox user/
+            );
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('reads staged files through an injected asset source', async () => {
         const source = new MemoryAssetSource()
             .file('/virtual/ws/readme.md', 'hello')
@@ -733,6 +789,8 @@ class FakeSandbox implements DaytonaSandbox {
     readonly previews: Array<{ port: number; ttlSeconds: number }> = [];
     readonly uploads = new Map<string, Uint8Array>();
     readonly missingCommands = new Set<string>();
+    readonly ownedDirectories = new Set<string>();
+    rootUnavailable = false;
     artifactDownload: Uint8Array | undefined;
     installResult: { code: number; stdout: string; stderr: string } | undefined;
     nextRun: { code: number; stdout: string; stderr: string } | undefined;
@@ -761,6 +819,19 @@ class FakeSandbox implements DaytonaSandbox {
             this.missingCommands.delete('gh');
         }
         if (command === e2bIdentityCommand) return result(0, '1000:1000');
+        if (options.user === 'root' && command.includes('mkdir -p')) {
+            return this.rootUnavailable
+                ? result(1, '', 'root access is required')
+                : result(0);
+        }
+        const ownership = [...command.matchAll(/test -O '([^']+)'/g)].map(
+            (match) => match[1] as string
+        );
+        if (ownership.length > 0) {
+            return ownership.every((path) => this.ownedDirectories.has(path))
+                ? result(0)
+                : result(1);
+        }
         if (command === 'tar --help 2>&1') return result(0, '--null');
         if (command.startsWith('command -v')) {
             const name = command.match(/'([^']+)'/)?.[1] ?? 'tool';
