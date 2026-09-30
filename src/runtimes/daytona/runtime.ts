@@ -33,7 +33,11 @@ import {
     launchRemoteProcess,
     type RemoteCommand,
 } from '../remote-process.js';
-import { installRepositoryTools, needsRepositoryTools } from '../repository-tools.js';
+import {
+    installRepositoryTools,
+    needsRepositoryTools,
+    probeRepositoryTools,
+} from '../repository-tools.js';
 import type { AssetSource } from '../staging/source.js';
 import type { RemoteTransfer, StagedAsset } from '../staging/transfer.js';
 import type { DaytonaClient, DaytonaResources, DaytonaSandbox } from './contracts.js';
@@ -466,13 +470,20 @@ export class DaytonaRuntime implements PreparedRuntime {
             this.sandboxStartedAt = this.options.now().getTime();
             this.snapshots = snapshots;
             if (needsRepositoryTools(this.options.request)) {
-                const install = await sandbox.run(installRepositoryTools, {
-                    user: 'root',
-                });
-                if (install.code !== 0) {
-                    throw new Error(
-                        `Failed to provision Git tools in the ${label} sandbox: ${install.stdout.trim() || install.stderr.trim()}`
-                    );
+                const probe = await sandbox.run(probeRepositoryTools);
+                if (probe.code !== 0) {
+                    const missing = probe.stdout.trim() || 'git, gh';
+                    const install = await sandbox.run(installRepositoryTools, {
+                        user: 'root',
+                    });
+                    if (install.code !== 0) {
+                        const detail = install.stdout.trim() || install.stderr.trim();
+                        throw new Error(
+                            detail.includes('root access is required')
+                                ? `The ${label} sandbox image is missing ${missing} and cannot install it without root: the image must ship git and gh or allow root`
+                                : `Failed to provision Git tools in the ${label} sandbox: ${detail}`
+                        );
+                    }
                 }
             }
             await stageSnapshots({

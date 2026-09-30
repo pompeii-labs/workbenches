@@ -28,3 +28,11 @@ export const installRepositoryTools = [
 export const repositoryToolsCacheKey = createHash('sha256')
     .update(installRepositoryTools)
     .digest('hex');
+
+/** Run as the sandbox user: prints the names of the repository tools it lacks. */
+export const probeRepositoryTools = [
+    'missing=',
+    'command -v git >/dev/null 2>&1 || missing="$missing git"',
+    'command -v gh >/dev/null 2>&1 || missing="$missing gh"',
+    'if [ -n "$missing" ]; then echo "$missing" | sed "s/^ //"; exit 1; fi',
+].join('\n');

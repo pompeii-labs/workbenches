@@ -389,6 +389,11 @@ with "class X is not available yet", and a `gpu: true` requirement is refused.
 `cpu`, `memory_gb`, and `disk_gb` become the sandbox's CPU, memory, and disk,
 rounded up to whole CPUs and GiB. `arch` is reported as unchecked.
 
+For `--repo` runs the provider first checks for `git` and `gh` as the sandbox
+user and installs them as root or sudo only when one is missing, so an image that
+ships both works with a non-root user; a missing tool with no root access fails
+naming the tool.
+
 `DAYTONA_API_KEY` is required by the host and is excluded from the runtime
 environment. `DAYTONA_API_URL` optionally selects another Daytona API endpoint;
 the default is the public API. `wb connect --runtime daytona` saves the key

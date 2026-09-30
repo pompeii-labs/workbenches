@@ -19,7 +19,10 @@ import { DaytonaRuntimeProvider } from '../src/runtimes/daytona/provider.js';
 import { e2bIdentityCommand } from '../src/runtimes/e2b/directories.js';
 import { E2BAssetSnapshot } from '../src/runtimes/e2b/snapshot.js';
 import { RuntimeRegistry } from '../src/runtimes/index.js';
-import { installRepositoryTools } from '../src/runtimes/repository-tools.js';
+import {
+    installRepositoryTools,
+    probeRepositoryTools,
+} from '../src/runtimes/repository-tools.js';
 import { RuntimeSmoke } from '../src/runtimes/smoke.js';
 import type {
     ResolvedWorkbench,
@@ -458,8 +461,48 @@ describe('Daytona runtime provider', () => {
         await expect(runtime.cleanup()).rejects.toThrow('delete network unavailable');
     });
 
+    test('skips the install when git and gh are already present', async () => {
+        const client = new FakeClient();
+        const runtime = await daytonaProvider({ client }).prepare({
+            ...request(await fixture()),
+            repository: { name: 'example/project', revision: 'main', delivery: 'pr' },
+        });
+        try {
+            await runtime.preflight();
+            const probe = client.sandbox.runs.find(
+                (call) => call.command === probeRepositoryTools
+            );
+            expect(probe?.options.user).toBeUndefined();
+            expect(
+                client.sandbox.runs.some(
+                    (call) => call.command === installRepositoryTools
+                )
+            ).toBeFalse();
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('names the missing tool when root access is unavailable', async () => {
+        const client = new FakeClient();
+        client.sandbox.missingCommands.add('gh');
+        client.sandbox.installResult = result(1, 'root access is required\n');
+        const runtime = await daytonaProvider({ client }).prepare({
+            ...request(await fixture()),
+            repository: { name: 'example/project', revision: 'main', delivery: 'pr' },
+        });
+        try {
+            await expect(runtime.preflight()).rejects.toThrow(
+                /missing gh.*must ship git and gh or allow root/
+            );
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('installs engine-managed Git tools as root for repository runs', async () => {
         const client = new FakeClient();
+        client.sandbox.missingCommands.add('git');
         const runtime = await daytonaProvider({ client }).prepare({
             ...request(await fixture()),
             repository: { name: 'example/project', revision: 'main', delivery: 'pr' },
@@ -691,6 +734,7 @@ class FakeSandbox implements DaytonaSandbox {
     readonly uploads = new Map<string, Uint8Array>();
     readonly missingCommands = new Set<string>();
     artifactDownload: Uint8Array | undefined;
+    installResult: { code: number; stdout: string; stderr: string } | undefined;
     nextRun: { code: number; stdout: string; stderr: string } | undefined;
     sandboxInfo: DaytonaSandboxInfo = { cpuCount: 1, memoryMB: 1_024, diskGb: 3 };
     uploadFailure: Error | undefined;
@@ -704,6 +748,17 @@ class FakeSandbox implements DaytonaSandbox {
             const result = this.nextRun;
             this.nextRun = undefined;
             return result;
+        }
+        if (command === probeRepositoryTools) {
+            const missing = ['git', 'gh'].filter((name) =>
+                this.missingCommands.has(name)
+            );
+            return missing.length > 0 ? result(1, `${missing.join(' ')}\n`) : result(0);
+        }
+        if (command === installRepositoryTools) {
+            if (this.installResult) return this.installResult;
+            this.missingCommands.delete('git');
+            this.missingCommands.delete('gh');
         }
         if (command === e2bIdentityCommand) return result(0, '1000:1000');
         if (command === 'tar --help 2>&1') return result(0, '--null');
