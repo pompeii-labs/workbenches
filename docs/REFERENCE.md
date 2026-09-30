@@ -510,13 +510,15 @@ wb smoke project-core
 wb run project-core --task "Review this migration"
 ```
 
-Publish a locally built image to the Workbench OCI registry after signing in:
+Publish a locally built image to the Workbench OCI registry after signing in.
+Images are published under the connected organization, the default one unless
+`--org <slug>` is given:
 
 ```sh
-wb login
+wb login --org example
 docker build -t project-core-local .
 wb image push project-core-local \
-  --publisher example \
+  --org example \
   --as project-core \
   --tag 0.4.0
 ```
@@ -920,6 +922,29 @@ Docker credentials remain in the runner's private named volume. E2B runner
 credentials persist in private runtime storage independently of native session
 state. A Workbench that declares host Docker access must be explicitly
 reauthorized with `--allow-host-docker` for each resumed run.
+
+### Registry organizations
+
+`wb login` runs a browser approval that connects exactly one organization and
+stores a key for it in `~/.workbench/credentials.json` (mode 0600). Every account
+has a personal organization by default. The CLI holds keys for several
+organizations per registry URL, with one default:
+
+```sh
+wb login                 # first login becomes the default
+wb login --org example   # connect example and make it the default
+wb org list              # held organizations, default and expiry
+wb org use example       # change the default
+wb whoami                # default organization, user, scopes, key expiry
+wb logout --org example  # revoke that key and forget it
+```
+
+`--org` on `login` must match the organization approved in the browser, or
+nothing is stored. `wb publish` and `wb image push` use the default
+organization, or the one named with `--org <slug>`. `wb logout` without a flag
+signs out of the default; removing the last key deletes the credential file.
+`--publisher` was removed and now fails with a pointer to `--org`. A credential
+file from an older CLI is ignored: run `wb login` once.
 
 ## Source and authorization boundaries
 

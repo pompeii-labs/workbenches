@@ -2,7 +2,10 @@ export {
     type RegistryAccount,
     RegistryAccountStore,
     type RegistryAccountStoreOptions,
+    type RegistryOrganizationKey,
+    type RegistryOrganizationList,
     type RegistryProfile,
+    type RegistrySignOut,
 } from './account-store.js';
 export {
     RegistryClient,
@@ -20,6 +23,11 @@ export {
     type RegistryImagePushOptions,
     registryImageReference,
 } from './images/index.js';
+export {
+    RegistryLogin,
+    type RegistryLoginOptions,
+    type RegistryLoginResult,
+} from './login.js';
 export {
     RegistryWorkbenchSaver,
     type RegistryWorkbenchSaverOptions,

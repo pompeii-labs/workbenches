@@ -328,13 +328,6 @@ describe('saved-source contract', () => {
             async fetch(request) {
                 const pathname = new URL(request.url).pathname;
                 requests.push(pathname);
-                if (pathname === '/v1/profile')
-                    return Response.json({
-                        user: { id: 'user', email: 'fixture@example.test' },
-                        publishers: [
-                            { id: 'publisher-id', slug: 'example', name: 'Example' },
-                        ],
-                    });
                 if (pathname === '/v1/submissions') {
                     submitted = await request.json();
                     return Response.json({
@@ -360,13 +353,7 @@ describe('saved-source contract', () => {
             await new RegistryAccountStore({
                 home,
                 client: new RegistryClient({ apiUrl: server.url.origin }),
-            }).save({
-                url: server.url.origin,
-                token: 'fixture-token',
-                tokenId: 'token-id',
-                email: 'fixture@example.test',
-                expiresAt: '2099-01-01T00:00:00Z',
-            });
+            }).save(orgKey('example'));
             const result = await cli(
                 home,
                 ['publish', 'local-expert', '--api-url', server.url.origin],
@@ -379,9 +366,9 @@ describe('saved-source contract', () => {
                 'https://registry.example/submissions/submission-id'
             );
             expect(result.stdout).not.toContain('published\t');
-            expect(requests).toEqual(['/v1/profile', '/v1/submissions']);
+            expect(requests).toEqual(['/v1/submissions']);
             expect(submitted).toMatchObject({
-                organization_id: 'publisher-id',
+                organization_id: 'example-id',
                 slug: 'repo-engineer',
                 package: {
                     format: 1,
@@ -416,96 +403,175 @@ describe('saved-source contract', () => {
         expect(result.stderr).toContain('Sign in first with wb login');
     });
 
-    test('publish requires an explicit publisher when more than one is available', async () => {
+    test('publish uses the default organization, --org, and rejects --publisher', async () => {
         const { root, home, path } = await fixture('repo-engineer');
         await new SavedWorkbenchCatalog(home).addLocal({
             alias: 'local-expert',
             workbench: await Workbench.load(path),
         });
-        const requests: string[] = [];
-        let submitted: unknown;
+        const digest = WorkbenchPackage.digest(
+            await new WorkbenchPackage(await Workbench.load(path)).files()
+        ).slice('sha256:'.length);
+        const submitted: Array<{ organization_id: string; authorization: string }> = [];
         const server = Bun.serve({
             port: 0,
             hostname: '127.0.0.1',
             async fetch(request) {
                 const pathname = new URL(request.url).pathname;
-                requests.push(pathname);
-                if (pathname === '/v1/profile')
-                    return Response.json({
-                        user: { id: 'user', email: 'fixture@example.test' },
-                        publishers: [
-                            { id: 'first-id', slug: 'first', name: 'First' },
-                            { id: 'second-id', slug: 'second', name: 'Second' },
-                        ],
-                    });
-                if (pathname === '/v1/submissions') {
-                    submitted = await request.json();
-                    return Response.json({
-                        submissions: [
-                            {
-                                id: 'submission-id',
-                                status: 'pending',
-                                publisher_slug: 'second',
-                                slug: 'repo-engineer',
-                                version: '0.1.0',
-                                digest: WorkbenchPackage.digest(
-                                    await new WorkbenchPackage(
-                                        await Workbench.load(path)
-                                    ).files()
-                                ).slice('sha256:'.length),
-                                dashboard_url:
-                                    'https://registry.example/submissions/submission-id',
-                                latest_approved_version: null,
-                            },
-                        ],
-                    });
+                if (pathname !== '/v1/submissions') {
+                    return new Response('unexpected', { status: 500 });
                 }
-                return new Response('unexpected', { status: 500 });
+                const body = (await request.json()) as { organization_id: string };
+                submitted.push({
+                    organization_id: body.organization_id,
+                    authorization: request.headers.get('authorization') ?? '',
+                });
+                return Response.json({
+                    submissions: [
+                        {
+                            id: 'submission-id',
+                            status: 'pending',
+                            publisher_slug: body.organization_id.replace('-id', ''),
+                            slug: 'repo-engineer',
+                            version: '0.1.0',
+                            digest,
+                            dashboard_url:
+                                'https://registry.example/submissions/submission-id',
+                            latest_approved_version: null,
+                        },
+                    ],
+                });
             },
         });
         try {
-            await new RegistryAccountStore({
+            const accounts = new RegistryAccountStore({
                 home,
                 client: new RegistryClient({ apiUrl: server.url.origin }),
-            }).save({
-                url: server.url.origin,
-                token: 'fixture-token',
-                tokenId: 'token-id',
-                email: 'fixture@example.test',
-                expiresAt: '2099-01-01T00:00:00Z',
             });
-            const ambiguous = await cli(
-                home,
-                ['publish', 'local-expert', '--api-url', server.url.origin],
-                root
-            );
-            expect(ambiguous.code).toBe(1);
-            expect(ambiguous.stderr).toContain('Choose a publisher with --publisher');
-            expect(requests).toEqual(['/v1/profile']);
+            await accounts.save(orgKey('first'));
+            await accounts.save(orgKey('second'));
+            const api = ['--api-url', server.url.origin];
+
+            const fallback = await cli(home, ['publish', 'local-expert', ...api], root);
+            expect(fallback.code).toBe(0);
+            expect(fallback.stdout).toContain('submitted\tfirst/repo-engineer');
 
             const selected = await cli(
                 home,
-                [
-                    'publish',
-                    'local-expert',
-                    '--publisher',
-                    'second',
-                    '--api-url',
-                    server.url.origin,
-                ],
+                ['publish', 'local-expert', '--org', 'second', ...api],
                 root
             );
             expect(selected.code).toBe(0);
-            expect(selected.stdout).toContain('submitted\tsecond/repo-engineer\t0.1.0');
-            expect(submitted).toMatchObject({
-                organization_id: 'second-id',
-                slug: 'repo-engineer',
+            expect(selected.stdout).toContain('submitted\tsecond/repo-engineer');
+            expect(submitted).toEqual([
+                { organization_id: 'first-id', authorization: 'Bearer wb_first' },
+                { organization_id: 'second-id', authorization: 'Bearer wb_second' },
+            ]);
+
+            const removed = await cli(
+                home,
+                ['publish', 'local-expert', '--publisher', 'second', ...api],
+                root
+            );
+            expect(removed.code).toBe(1);
+            expect(removed.stderr).toContain('Use --org <slug>');
+            const unheld = await cli(
+                home,
+                ['publish', 'local-expert', '--org', 'third', ...api],
+                root
+            );
+            expect(unheld.code).toBe(1);
+            expect(unheld.stderr).toContain('Not signed in to organization third');
+            expect(submitted).toHaveLength(2);
+        } finally {
+            server.stop(true);
+        }
+    });
+
+    test('org list, use, whoami, and logout manage held organizations', async () => {
+        const { root, home } = await fixture();
+        const deleted: string[] = [];
+        const server = Bun.serve({
+            port: 0,
+            hostname: '127.0.0.1',
+            fetch(request) {
+                const url = new URL(request.url);
+                if (request.method === 'DELETE') {
+                    deleted.push(url.pathname);
+                    return Response.json({ ok: true });
+                }
+                const slug = request.headers
+                    .get('authorization')
+                    ?.slice('Bearer wb_'.length);
+                return Response.json({
+                    organization: {
+                        id: `${slug}-id`,
+                        slug,
+                        name: slug,
+                        personal: false,
+                    },
+                    user: { id: 'user-1', email: 'person@example.test' },
+                    scopes: ['catalog:read', 'packages:write'],
+                    key: {
+                        id: `${slug}-key`,
+                        label: null,
+                        expires_at: '2099-01-01T00:00:00Z',
+                    },
+                });
+            },
+        });
+        try {
+            const accounts = new RegistryAccountStore({
+                home,
+                client: new RegistryClient({ apiUrl: server.url.origin }),
             });
+            await accounts.save(orgKey('first'));
+            await accounts.save(orgKey('second'));
+            const api = ['--api-url', server.url.origin];
+
+            const listed = await cli(home, ['org', 'list', ...api], root);
+            expect(listed.stdout).toContain('org\tfirst\tdefault');
+            expect(listed.stdout).toContain('org\tsecond\t\t');
+            expect((await cli(home, ['org', 'use', 'second', ...api], root)).code).toBe(
+                0
+            );
+            expect((await cli(home, ['org', 'use', 'nope', ...api], root)).code).toBe(
+                1
+            );
+
+            const who = await cli(home, ['whoami', ...api], root);
+            expect(who.code).toBe(0);
+            const text = `${who.stdout}${who.stderr}`;
+            expect(text).toContain('second');
+            expect(text).toContain('person@example.test');
+            expect(text).toContain('catalog:read, packages:write');
+            expect(text).toContain('first');
+
+            const out = await cli(home, ['logout', ...api], root);
+            expect(out.code).toBe(0);
+            expect(deleted).toEqual(['/v1/keys/second-key']);
+            expect((await accounts.list()).defaultSlug).toBe('first');
+            await cli(home, ['logout', '--org', 'first', ...api], root);
+            expect(deleted).toEqual(['/v1/keys/second-key', '/v1/keys/first-key']);
+            expect((await accounts.list()).organizations).toEqual([]);
         } finally {
             server.stop(true);
         }
     });
 });
+
+function orgKey(slug: string) {
+    return {
+        organizationId: `${slug}-id`,
+        slug,
+        name: slug,
+        personal: false,
+        token: `wb_${slug}`,
+        keyId: `${slug}-key`,
+        scopes: ['catalog:read', 'packages:write'],
+        expiresAt: '2099-01-01T00:00:00Z',
+    };
+}
 
 async function fixture(name = 'expert') {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'acquisition-')));

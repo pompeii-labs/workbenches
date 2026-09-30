@@ -65,7 +65,6 @@ describe('Workbench image commands', () => {
             await runDefinedCommand(loginCommand, { client: fixture.client });
             await runDefinedCommand(pushCommand, {
                 image: 'local-image:latest',
-                publisher: 'pompeii-labs',
                 as: 'creator',
                 tag: '0.2.0',
                 client: fixture.client,
@@ -99,36 +98,35 @@ describe('Workbench image commands', () => {
         }
     });
 
-    test('rejects unavailable, absent, and ambiguous publishers', async () => {
+    test('rejects the removed --publisher flag and unheld organizations', async () => {
         const fixture = await imageFixture();
-        const account = testAccount(fixture.apiUrl, fixture.token);
-        const image = {
-            image: 'local-image:latest',
-            name: 'creator',
-            tag: '0.2.0',
-            client: fixture.client,
-        };
         try {
-            await expect(
-                new RegistryImagePublisher({
-                    account,
-                    profile: testRegistryProfile(['pompeii-labs']),
-                }).push({ ...image, publisher: 'unavailable' })
-            ).rejects.toThrow('Publisher is unavailable to this account: unavailable');
-            await expect(
-                new RegistryImagePublisher({
-                    account,
-                    profile: testRegistryProfile([]),
-                }).push(image)
-            ).rejects.toThrow('Create or join a publisher before pushing');
-            await expect(
-                new RegistryImagePublisher({
-                    account,
-                    profile: testRegistryProfile(['pompeii-labs', 'lux-db']),
-                }).push(image)
-            ).rejects.toThrow(
-                'Choose a publisher with --publisher: pompeii-labs, lux-db'
+            const base = [
+                '--api-url',
+                fixture.apiUrl,
+                'image',
+                'push',
+                'local-image:latest',
+                '--as',
+                'creator',
+                '--client',
+                fixture.client,
+            ];
+            const removed = await executeCli(
+                [...base, '--publisher', 'pompeii-labs'],
+                fixture.environment
             );
+            expect(removed.code).toBe(1);
+            expect(removed.stderr).toContain('Use --org <slug>');
+            const unheld = await executeCli(
+                [...base, '--org', 'other'],
+                fixture.environment
+            );
+            expect(unheld.code).toBe(1);
+            expect(unheld.stderr).toContain(
+                'Not signed in to organization other. Held: pompeii-labs'
+            );
+            expect(fixture.manifests).toHaveLength(0);
         } finally {
             fixture.server.stop(true);
         }
@@ -190,8 +188,6 @@ describe('Workbench image commands', () => {
                     'image',
                     'push',
                     'local-image:latest',
-                    '--publisher',
-                    'pompeii-labs',
                     '--as',
                     'creator',
                     '--tag',
@@ -236,8 +232,6 @@ describe('Workbench image commands', () => {
                     'image',
                     'push',
                     'local-image:latest',
-                    '--publisher',
-                    'pompeii-labs',
                     '--as',
                     'creator',
                     '--tag',
@@ -267,8 +261,6 @@ describe('Workbench image commands', () => {
                     'image',
                     'push',
                     'local-image:latest',
-                    '--publisher',
-                    'pompeii-labs',
                     '--as',
                     'creator',
                     '--tag',
@@ -329,24 +321,6 @@ async function imageFixture(options: { losePatchResponseOnce?: boolean } = {}) {
         port: 0,
         async fetch(request) {
             const url = new URL(request.url);
-            if (url.pathname === '/v1/profile') {
-                if (request.headers.get('authorization') !== `Bearer ${token}`) {
-                    return Response.json(
-                        { error: { message: 'Unauthorized' } },
-                        { status: 401 }
-                    );
-                }
-                return Response.json({
-                    user: { id: 'user-1', email: 'maintainer@example.com' },
-                    publishers: [
-                        {
-                            id: 'publisher-1',
-                            slug: 'pompeii-labs',
-                            name: 'Pompeii Labs',
-                        },
-                    ],
-                });
-            }
             if (url.pathname === '/v2/auth') {
                 if (request.headers.get('authorization') !== `Bearer ${token}`) {
                     return Response.json({ errors: [] }, { status: 401 });
@@ -430,14 +404,12 @@ async function imageFixture(options: { losePatchResponseOnce?: boolean } = {}) {
     await writeFile(
         join(home, 'credentials.json'),
         `${JSON.stringify({
-            version: 1,
-            accounts: [
+            version: 2,
+            registries: [
                 {
                     url: apiUrl,
-                    token,
-                    tokenId: 'token-1',
-                    email: 'maintainer@example.com',
-                    expiresAt: '2099-01-01T00:00:00.000Z',
+                    defaultSlug: 'pompeii-labs',
+                    organizations: [testKey(token)],
                 },
             ],
         })}\n`,
@@ -539,25 +511,22 @@ function digestPath(digest: string): string {
     return `blobs/sha256/${digest.slice('sha256:'.length)}`;
 }
 
-function testAccount(url: string, token: string) {
+function testKey(token: string) {
     return {
-        url,
+        organizationId: 'org-1',
+        slug: 'pompeii-labs',
+        name: 'Pompeii Labs',
+        personal: false,
         token,
-        tokenId: 'token-1',
-        email: 'maintainer@example.com',
+        keyId: 'key-1',
+        scopes: ['catalog:read', 'packages:write'],
         expiresAt: '2099-01-01T00:00:00.000Z',
+        email: 'maintainer@example.com',
     };
 }
 
-function testRegistryProfile(slugs: string[]) {
-    return {
-        user: { id: 'user-1', email: 'maintainer@example.com' },
-        publishers: slugs.map((slug) => ({
-            id: `publisher-${slug}`,
-            slug,
-            name: slug,
-        })),
-    };
+function testAccount(url: string, token: string) {
+    return { url, ...testKey(token) };
 }
 
 async function runDefinedCommand(

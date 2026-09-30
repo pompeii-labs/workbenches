@@ -3,6 +3,7 @@ import { defineCommand } from 'citty';
 import { WorkbenchPackage } from '../catalog/index.js';
 import { RegistryAccountStore } from '../registry/index.js';
 import { WorkbenchResolver } from '../workbench/index.js';
+import { orgArgument, rejectPublisherFlag } from './org-option.js';
 import { CliPresenter } from './presenter.js';
 
 interface PublicationResponse {
@@ -29,39 +30,17 @@ export const publishCommand = defineCommand({
             description: 'Saved Workbench alias',
             required: true,
         },
-        publisher: {
-            type: 'string',
-            description: 'Publisher slug',
-        },
+        org: orgArgument,
     },
     async run({ args }) {
+        rejectPublisherFlag(args);
         const output = new CliPresenter();
         const { workbench } = await new WorkbenchResolver().resolve(args.source, {
             savedOnly: true,
         });
         const accounts = new RegistryAccountStore();
-        const account = await accounts.require();
-        const profile = await accounts.profile(account);
-        const publisher = args.publisher
-            ? profile.publishers.find((candidate) => candidate.slug === args.publisher)
-            : profile.publishers.length === 1
-              ? profile.publishers[0]
-              : undefined;
-        if (!publisher) {
-            if (args.publisher) {
-                throw new Error(
-                    `Publisher is unavailable to this account: ${args.publisher}`
-                );
-            }
-            if (profile.publishers.length === 0) {
-                throw new Error('Create or join a publisher before publishing');
-            }
-            throw new Error(
-                `Choose a publisher with --publisher: ${profile.publishers
-                    .map((candidate) => candidate.slug)
-                    .join(', ')}`
-            );
-        }
+        const account = await accounts.require(args.org);
+        const publisher = { id: account.organizationId, slug: account.slug };
 
         const slug = workbench.manifest.name;
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {

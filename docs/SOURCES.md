@@ -51,8 +51,9 @@ turn a verified creation into failure: the result includes the package path and
 an explicit `wb add ... --as ...` instruction.
 
 `wb publish <saved-alias>` submits package bytes to the registry for review as
-`publisher/<workbench.yml name>`, independent of the local alias and package
-directory. `--as` is only for local aliases when adding a Workbench. Publish
+`organization/<workbench.yml name>`, independent of the local alias and package
+directory. It uses the default connected organization; `--org <slug>` selects
+another one. `--as` is only for local aliases when adding a Workbench. Publish
 reports the submission status, dashboard URL, and latest approved version when
 available. A pending submission is not a published release.
 

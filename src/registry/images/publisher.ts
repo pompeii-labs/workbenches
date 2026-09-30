@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { RegistryAccount, RegistryProfile } from '../account-store.js';
+import type { RegistryAccount } from '../account-store.js';
 import { RegistryClient } from '../client.js';
 import { OciArchive } from './archive.js';
 import { OciRegistryClient } from './client.js';
@@ -30,7 +30,6 @@ export type OciClientRunner = (
 
 export interface RegistryImagePublisherOptions {
     account: RegistryAccount;
-    profile?: RegistryProfile;
     registry?: RegistryClient;
     run?: OciClientRunner;
     fetch?: typeof fetch;
@@ -62,7 +61,7 @@ export class RegistryImagePublisher {
     }
 
     async push(options: RegistryImagePushOptions): Promise<string> {
-        const publisher = this.publisher(options.publisher);
+        const publisher = this.options.account.slug;
         const target = registryImageReference(
             publisher,
             options.name,
@@ -85,28 +84,6 @@ export class RegistryImagePublisher {
         } finally {
             await rm(directory, { recursive: true, force: true });
         }
-    }
-
-    private publisher(requested: string | undefined): string {
-        const profile = this.options.profile;
-        if (!profile) throw new Error('Registry profile is required to push an image');
-        const publisher = requested
-            ? profile.publishers.find((candidate) => candidate.slug === requested)
-            : profile.publishers.length === 1
-              ? profile.publishers[0]
-              : undefined;
-        if (publisher) return publisher.slug;
-        if (requested) {
-            throw new Error(`Publisher is unavailable to this account: ${requested}`);
-        }
-        if (profile.publishers.length === 0) {
-            throw new Error('Create or join a publisher before pushing');
-        }
-        throw new Error(
-            `Choose a publisher with --publisher: ${profile.publishers
-                .map((candidate) => candidate.slug)
-                .join(', ')}`
-        );
     }
 
     private async publish(
@@ -206,7 +183,6 @@ export class RegistryImagePublisher {
 
 export interface RegistryImagePushOptions {
     image: string;
-    publisher?: string;
     name: string;
     tag: string;
     client: string;

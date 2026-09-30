@@ -101,7 +101,7 @@ wb run project-core --task "Review this migration" --final
 wb run project-core --task "Review this migration" --json
 ```
 
-Remote additions are frozen until `wb upgrade`. Local additions are live: each new run reads the registered absolute package directory. Every session captures its own package bytes, so resumed sessions keep their original package even after edits, upgrades, or removal. `run` accepts saved aliases only; `--dir` and `--repo` select the work target, never the package source. `wb publish <alias>` submits package bytes under `publisher/<manifest-name>` for registry review and reports the returned status. `--as` only names a local alias when adding a Workbench; it does not rename a registry publication.
+Remote additions are frozen until `wb upgrade`. Local additions are live: each new run reads the registered absolute package directory. Every session captures its own package bytes, so resumed sessions keep their original package even after edits, upgrades, or removal. `run` accepts saved aliases only; `--dir` and `--repo` select the work target, never the package source. `wb publish <alias>` submits package bytes under `organization/<manifest-name>` for registry review and reports the returned status. It publishes as your default organization; pass `--org <slug>` to use another connected one. `wb login` connects one organization per approval, so run `wb login --org <slug>` for each you publish from, then manage them with `wb org list`, `wb org use <slug>`, `wb whoami`, and `wb logout [--org <slug>]`. `--as` only names a local alias when adding a Workbench; it does not rename a registry publication.
 
 ## What is in a Workbench?
 
