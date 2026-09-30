@@ -17,15 +17,4 @@ export function estimateE2BCost(
     return Number(amount.toFixed(8));
 }
 
-export function formatBytes(bytes: number): string {
-    if (bytes < 1_024) return `${bytes} B`;
-    const units = ['KiB', 'MiB', 'GiB'];
-    let value = bytes;
-    let unit = 'B';
-    for (const next of units) {
-        value /= 1_024;
-        unit = next;
-        if (value < 1_024) break;
-    }
-    return `${value.toFixed(value < 10 ? 1 : 0)} ${unit}`;
-}
+export { formatBytes } from '../staging/rules.js';

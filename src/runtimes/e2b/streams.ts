@@ -6,11 +6,12 @@ import type { E2BSandbox } from './contracts.js';
 import { formatBytes } from './infrastructure.js';
 
 export async function downloadE2BFile(
-    sandbox: E2BSandbox,
+    sandbox: Pick<E2BSandbox, 'download'>,
     remote: string,
     local: string,
     maximumBytes: number,
-    reportedMaximumBytes: number
+    reportedMaximumBytes: number,
+    label = 'E2B'
 ): Promise<number> {
     const stream = await sandbox.download(remote);
     let bytes = 0;
@@ -20,7 +21,7 @@ export async function downloadE2BFile(
             if (bytes > maximumBytes) {
                 callback(
                     new Error(
-                        `E2B output exceeds the ${formatBytes(reportedMaximumBytes)} transfer safety limit`
+                        `${label} output exceeds the ${formatBytes(reportedMaximumBytes)} transfer safety limit`
                     )
                 );
                 return;

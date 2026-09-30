@@ -5,8 +5,9 @@ import { quote } from './shell.js';
 export const e2bIdentityCommand = 'printf "%s:%s" "$(id -u)" "$(id -g)"';
 
 export async function prepareE2BDirectories(
-    sandbox: E2BSandbox,
-    directories: string[]
+    sandbox: Pick<E2BSandbox, 'run'>,
+    directories: string[],
+    label = 'E2B'
 ): Promise<void> {
     const targets = [...new Set(directories)];
     for (const target of targets) {
@@ -16,14 +17,14 @@ export async function prepareE2BDirectories(
             posix.normalize(target) !== target ||
             target.includes('\0')
         ) {
-            throw new Error('Invalid E2B staging directory');
+            throw new Error(`Invalid ${label} staging directory`);
         }
     }
     const identity = await sandbox.run(e2bIdentityCommand);
-    requireSuccess(identity, 'Failed to determine the E2B runtime user');
+    requireSuccess(identity, `Failed to determine the ${label} runtime user`);
     const owner = identity.stdout.trim();
     if (!/^\d{1,10}:\d{1,10}$/.test(owner)) {
-        throw new Error('Invalid E2B runtime user identity');
+        throw new Error(`Invalid ${label} runtime user identity`);
     }
     const ancestors = new Set<string>();
     for (const target of targets) {
@@ -44,7 +45,7 @@ export async function prepareE2BDirectories(
         ].join(' && '),
         { user: 'root' }
     );
-    requireSuccess(provisioned, 'Failed to provision E2B staging directories');
+    requireSuccess(provisioned, `Failed to provision ${label} staging directories`);
 }
 
 function requireSuccess(

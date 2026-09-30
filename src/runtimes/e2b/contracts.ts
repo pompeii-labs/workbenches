@@ -1,4 +1,5 @@
 import type { RuntimeCommandResult } from '../contracts.js';
+import type { AssetSource } from '../staging/source.js';
 
 export interface E2BTemplateSource {
     image?: string;
@@ -93,6 +94,8 @@ export interface E2BClient {
 
 export interface E2BRuntimeDependencies {
     client?: E2BClient;
+    /** Where staged workspace and package files are read from. Defaults to disk. */
+    assets?: AssetSource;
     maxTransferBytes?: number;
     leaseMilliseconds?: number;
     now?: () => Date;

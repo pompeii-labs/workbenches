@@ -15,15 +15,24 @@ import { type E2BAssetSnapshot, extractArchive } from './snapshot.js';
 import { downloadE2BFile } from './streams.js';
 import { workspaceTracking } from './tracking.js';
 
+/** The sandbox operations outcome collection needs. */
+export type CollectionSandbox = Pick<E2BSandbox, 'run' | 'fileSize' | 'download'>;
+
 export class E2BOutcomeCollector {
+    private readonly label: string;
+
     constructor(
         private readonly options: {
-            sandbox: E2BSandbox;
+            sandbox: CollectionSandbox;
+            /** Provider name used in messages. Defaults to `E2B`. */
+            label?: string;
             snapshots: E2BAssetSnapshot[];
             baselines: Map<number, string>;
             maximumTransferBytes: number;
         }
-    ) {}
+    ) {
+        this.label = options.label ?? 'E2B';
+    }
 
     async collect(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
         const sandbox = this.options.sandbox;
@@ -50,7 +59,7 @@ export class E2BOutcomeCollector {
                 const baseline = this.options.baselines.get(index);
                 if (!baseline) {
                     throw new Error(
-                        `E2B workspace baseline is unavailable: ${snapshot.binding.hostPath}`
+                        `${this.label} workspace baseline is unavailable: ${snapshot.binding.hostPath}`
                     );
                 }
                 const root = snapshot.binding.runtimePath;
@@ -66,7 +75,7 @@ export class E2BOutcomeCollector {
                 ].join(' && ');
                 requireSuccess(
                     await sandbox.run(command),
-                    `Failed to collect E2B workspace changes: ${snapshot.binding.hostPath}`
+                    `Failed to collect ${this.label} workspace changes: ${snapshot.binding.hostPath}`
                 );
                 const reportedSizes = await Promise.all([
                     sandbox.fileSize(remoteArchive),
@@ -77,7 +86,7 @@ export class E2BOutcomeCollector {
                     this.options.maximumTransferBytes
                 ) {
                     throw new Error(
-                        `E2B output exceeds the ${formatBytes(this.options.maximumTransferBytes)} transfer safety limit`
+                        `${this.label} output exceeds the ${formatBytes(this.options.maximumTransferBytes)} transfer safety limit`
                     );
                 }
                 const localArchive = join(directory, `output-${index}.tar.gz`);
@@ -87,20 +96,22 @@ export class E2BOutcomeCollector {
                     remoteArchive,
                     localArchive,
                     this.options.maximumTransferBytes - transferred,
-                    this.options.maximumTransferBytes
+                    this.options.maximumTransferBytes,
+                    this.label
                 );
                 const deletionBytes = await downloadE2BFile(
                     sandbox,
                     remoteDeleted,
                     localDeleted,
                     this.options.maximumTransferBytes - transferred,
-                    this.options.maximumTransferBytes
+                    this.options.maximumTransferBytes,
+                    this.label
                 );
                 transferred += deletionBytes;
                 materialized += deletionBytes;
                 if (materialized > this.options.maximumTransferBytes) {
                     throw new Error(
-                        `E2B output exceeds the ${formatBytes(this.options.maximumTransferBytes)} transfer safety limit`
+                        `${this.label} output exceeds the ${formatBytes(this.options.maximumTransferBytes)} transfer safety limit`
                     );
                 }
                 const deletions = (await readFile(localDeleted))
@@ -146,7 +157,7 @@ export class E2BOutcomeCollector {
                 changesets,
                 artifacts: output.artifacts,
                 links: output.links,
-                warnings: exclusionWarnings([...excluded]),
+                warnings: exclusionWarnings([...excluded], this.label),
             };
         } finally {
             await Promise.allSettled(captures.map((capture) => capture.cleanup()));
@@ -173,12 +184,12 @@ export class E2BOutcomeCollector {
                         `tar -C ${quote(root)} --no-recursion --null --files-from=${quote(remoteFiles)} -czf ${quote(remoteArchive)}`,
                     ].join(' && ')
                 ),
-                'Failed to collect E2B outcome artifacts'
+                `Failed to collect ${this.label} outcome artifacts`
             );
             const maximum = this.options.maximumTransferBytes;
             if (transferred + (await sandbox.fileSize(remoteArchive)) > maximum) {
                 throw new Error(
-                    `E2B output exceeds the ${formatBytes(maximum)} transfer safety limit`
+                    `${this.label} output exceeds the ${formatBytes(maximum)} transfer safety limit`
                 );
             }
             const archive = join(directory, 'artifacts.tar.gz');
@@ -187,11 +198,18 @@ export class E2BOutcomeCollector {
                 remoteArchive,
                 archive,
                 maximum - transferred,
-                maximum
+                maximum,
+                this.label
             );
             const artifacts = join(directory, 'artifacts');
             await mkdir(artifacts, { mode: 0o700 });
-            await extractArchive(archive, artifacts, maximum - materialized, maximum);
+            await extractArchive(
+                archive,
+                artifacts,
+                maximum - materialized,
+                maximum,
+                this.label
+            );
             return await OutcomeOutput.open(artifacts).collect(store);
         } finally {
             await sandbox
@@ -202,7 +220,7 @@ export class E2BOutcomeCollector {
     }
 }
 
-function exclusionWarnings(paths: string[]) {
+function exclusionWarnings(paths: string[], label: string) {
     if (paths.length === 0) return [];
     const visible = paths
         .slice(0, 3)
@@ -212,7 +230,7 @@ function exclusionWarnings(paths: string[]) {
     return [
         {
             code: 'workspace_paths_excluded',
-            message: `${paths.length} protected or nested workspace path${paths.length === 1 ? ' was' : 's were'} not sent to E2B: ${visible}${remaining > 0 ? `, and ${remaining} more` : ''}. ${paths.length === 1 ? 'This path' : 'These paths'} cannot appear in returned changes.`,
+            message: `${paths.length} protected or nested workspace path${paths.length === 1 ? ' was' : 's were'} not sent to ${label}: ${visible}${remaining > 0 ? `, and ${remaining} more` : ''}. ${paths.length === 1 ? 'This path' : 'These paths'} cannot appear in returned changes.`,
         },
     ];
 }

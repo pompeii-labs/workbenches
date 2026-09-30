@@ -20,6 +20,7 @@ import type {
     RuntimeSessionOptions,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
+import type { AssetSource } from '../staging/source.js';
 import { E2BOutcomeCollector } from './collector.js';
 import type { E2BClient, E2BCommand, E2BSandbox } from './contracts.js';
 import { prepareE2BDirectories } from './directories.js';
@@ -37,6 +38,7 @@ interface E2BRuntimeOptions {
     request: RuntimePrepareRequest;
     client: E2BClient;
     paths: E2BPathPlan;
+    assets: AssetSource;
     preparation: RuntimePreparation & {
         kind: 'image';
         reference: string;
@@ -475,7 +477,8 @@ export class E2BRuntime implements PreparedRuntime {
                 const snapshot = await E2BAssetSnapshot.create(
                     binding,
                     this.options.maximumTransferBytes - transferred,
-                    binding.kind === 'workspace' ? this.recovery?.directory : undefined
+                    binding.kind === 'workspace' ? this.recovery?.directory : undefined,
+                    { source: this.options.assets }
                 );
                 transferred += snapshot.bytes;
                 snapshots.push(snapshot);

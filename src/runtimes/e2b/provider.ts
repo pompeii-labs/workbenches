@@ -8,6 +8,7 @@ import type {
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
 import { RuntimeSecretStore } from '../secrets.js';
+import { diskAssetSource } from '../staging/disk-source.js';
 import type { E2BRuntimeDependencies } from './contracts.js';
 import { E2BPathPlan } from './paths.js';
 import { E2BRuntime } from './runtime.js';
@@ -28,8 +29,9 @@ export class E2BRuntimeProvider implements RuntimeProvider {
         } catch (error) {
             throw RuntimeError.from(this.name, 'prepare', error);
         }
+        const assets = this.dependencies.assets ?? diskAssetSource;
         const paths = new E2BPathPlan(request);
-        await paths.verify();
+        await paths.verify(assets);
         new WorkbenchPreflight({
             environment: paths.environment(),
         }).checkConfiguration(paths.remap(request.workbench));
@@ -58,6 +60,7 @@ export class E2BRuntimeProvider implements RuntimeProvider {
             request,
             client,
             paths,
+            assets,
             preparation: template.preparation,
             run,
             maximumTransferBytes:

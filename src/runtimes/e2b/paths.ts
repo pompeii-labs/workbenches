@@ -1,9 +1,16 @@
-import { stat } from 'node:fs/promises';
-import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
+import { posix, relative, resolve, sep } from 'node:path';
 
 import { ModelRouter } from '../../models/index.js';
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RuntimePrepareRequest } from '../contracts.js';
+import { diskAssetSource } from '../staging/disk-source.js';
+import { contains } from '../staging/rules.js';
+import type { AssetSource } from '../staging/source.js';
+
+export interface PathPlanOptions {
+    /** Provider name used in messages. Defaults to `E2B`. */
+    label?: string;
+}
 
 export interface E2BAssetBinding {
     hostPath: string;
@@ -23,8 +30,13 @@ export interface E2BAssetBinding {
 
 export class E2BPathPlan {
     readonly bindings: E2BAssetBinding[];
+    private readonly label: string;
 
-    constructor(private readonly request: RuntimePrepareRequest) {
+    constructor(
+        private readonly request: RuntimePrepareRequest,
+        options: PathPlanOptions = {}
+    ) {
+        this.label = options.label ?? 'E2B';
         const workspace = resolve(request.workspaceDirectory);
         const packageDirectory = resolve(request.workbench.packageDirectory);
         const unique = new Map<string, E2BAssetBinding>();
@@ -92,9 +104,9 @@ export class E2BPathPlan {
             );
         }
         if (request.credentials) {
-            if (request.credentials.runtime !== 'e2b') {
+            if (request.credentials.runtime !== this.label.toLowerCase()) {
                 throw new Error(
-                    `E2B received credential storage for the ${request.credentials.runtime} runtime`
+                    `${this.label} received credential storage for the ${request.credentials.runtime} runtime`
                 );
             }
             if (request.credentials.runner !== request.workbench.manifest.runner) {
@@ -145,18 +157,19 @@ export class E2BPathPlan {
         }));
     }
 
-    async verify(): Promise<void> {
+    /** Checks every staged path exists in `source`, which defaults to the local disk. */
+    async verify(source: AssetSource = diskAssetSource): Promise<void> {
         for (const binding of this.bindings) {
-            const entry = await stat(binding.hostPath).catch(() => null);
+            const entry = await source.stat(binding.hostPath);
             if (!entry) {
                 throw new Error(`Runtime asset does not exist: ${binding.hostPath}`);
             }
-            if (!entry.isDirectory() && !entry.isFile()) {
+            if (entry.kind !== 'directory' && entry.kind !== 'file') {
                 throw new Error(`Unsupported runtime asset: ${binding.hostPath}`);
             }
-            if (entry.isFile() && binding.access === 'read-write') {
+            if (entry.kind === 'file' && binding.access === 'read-write') {
                 throw new Error(
-                    `E2B read-write runtime assets must be directories: ${binding.hostPath}`
+                    `${this.label} read-write runtime assets must be directories: ${binding.hostPath}`
                 );
             }
             if (binding.hostPath.includes('\n') || binding.hostPath.includes('\r')) {
@@ -248,7 +261,7 @@ export class E2BPathPlan {
                 ...Object.keys(workbench.manifest.env),
                 ...new ModelRouter().providerEnvironmentNames(workbench),
             ]),
-        ].filter((name) => name !== 'E2B_API_KEY');
+        ].filter((name) => name !== 'E2B_API_KEY' && name !== 'DAYTONA_API_KEY');
     }
 
     private repositoryPathFor(workbench: ResolvedWorkbench): string {
@@ -258,12 +271,4 @@ export class E2BPathPlan {
         }
         return this.pathFor(workbench.packageDirectory);
     }
-}
-
-function contains(parent: string, child: string): boolean {
-    const suffix = relative(parent, child);
-    return (
-        suffix === '' ||
-        (!suffix.startsWith(`..${sep}`) && suffix !== '..' && !isAbsolute(suffix))
-    );
 }
