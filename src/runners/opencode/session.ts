@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { type RunnerContextFiles, runtimeContext } from '../context.js';
+import { type RunnerContextFiles, runtimeContext } from '../runtime-context.js';
 import type {
     RunnerInput,
     RunnerInputDelivery,

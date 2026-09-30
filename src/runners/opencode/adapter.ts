@@ -1,11 +1,10 @@
-import type { RunnerContextFiles } from '../context.js';
-
+import type { RunnerFiles } from '../files.js';
+import type { RunnerContextFiles } from '../runtime-context.js';
 import type {
     RunnerSession,
     RunnerSessionAdapter,
     RunnerSessionStartOptions,
 } from '../session.js';
-import { stageOpenCodeSkills } from './assets.js';
 import { OPENCODE_SESSION_DECLARATION } from './capabilities.js';
 import {
     launchLocalOpenCodeServer,
@@ -15,8 +14,11 @@ import {
     spawnOpenCodeServer,
 } from './server.js';
 import { OpenCodeServerSession } from './session.js';
+import { stageOpenCodeSkillsWith } from './staging.js';
 
 export interface OpenCodeSessionDependencies {
+    /** Where skills and native config are staged. Defaults to the local disk. */
+    files?: RunnerFiles;
     spawn?: (
         command: string[],
         options: {
@@ -44,9 +46,11 @@ export interface PreparedOpenCodeSession {
 export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
     readonly runner = 'opencode';
     readonly declaration = OPENCODE_SESSION_DECLARATION;
-    private readonly dependencies: Required<OpenCodeSessionDependencies>;
+    private readonly dependencies: Required<Omit<OpenCodeSessionDependencies, 'files'>>;
+    private readonly files: RunnerFiles | undefined;
 
     constructor(dependencies: OpenCodeSessionDependencies = {}) {
+        this.files = dependencies.files;
         this.dependencies = {
             spawn: dependencies.spawn ?? spawnOpenCodeServer,
             fetch: dependencies.fetch ?? globalThis.fetch,
@@ -58,7 +62,10 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
     }
 
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
-        const staged = await stageOpenCodeSkills(options.workbench);
+        // The disk default loads lazily so a host that injects `files` never
+        // pulls in a local filesystem module.
+        const files = this.files ?? (await import('../files-disk.js')).diskRunnerFiles;
+        const staged = await stageOpenCodeSkillsWith(files, options.workbench);
         const nativeConfigFile = staged.nativeConfigFile;
         return this.startConfigured(
             options,

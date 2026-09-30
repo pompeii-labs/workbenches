@@ -10,13 +10,13 @@ export {
     type ModelCatalogResult,
     type ModelCatalogSnapshot,
 } from './catalog.js';
+export { modelLabel } from './label.js';
 export {
     type AuthenticatedModelRoute,
     connectCommand,
     type ModelCatalogData,
     type ModelRoute,
     ModelRouter,
-    modelLabel,
     type ResolvedRunnerConfiguration,
     type ResolveModelRouteOptions,
 } from './routing.js';

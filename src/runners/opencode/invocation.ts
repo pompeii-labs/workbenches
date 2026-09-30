@@ -1,8 +1,8 @@
 import { relative } from 'node:path';
 
-import { modelLabel } from '../../models/index.js';
+import { modelLabel } from '../../models/label.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
-import { type RunnerContextFiles, withRunnerContext } from '../context.js';
+import { type RunnerContextFiles, withRunnerContext } from '../runtime-context.js';
 
 export function buildOpenCodeInvocation(
     workbench: ResolvedWorkbench,

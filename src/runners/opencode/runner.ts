@@ -1,7 +1,7 @@
 import { ModelRouter, type ResolvedRunnerConfiguration } from '../../models/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
-import { type RunnerContextFiles, remapRunnerContext } from '../context.js';
+import type { RunnerFiles } from '../files.js';
 import {
     assertRunnerConfiguration,
     type PreparedRunner,
@@ -9,6 +9,7 @@ import {
     Runner,
     type RunnerEventNormalizer,
 } from '../runner.js';
+import { type RunnerContextFiles, remapRunnerContext } from '../runtime-context.js';
 import { OpenCodeSessionAdapter } from './adapter.js';
 import { stageOpenCodeSkills } from './assets.js';
 import { OpenCodeEventAdapter } from './events.js';
@@ -16,10 +17,16 @@ import { buildOpenCodeInvocation, publicInvocation } from './invocation.js';
 
 export class OpenCodeRunner extends Runner {
     readonly name = 'opencode';
-    readonly session = new OpenCodeSessionAdapter();
+    readonly session: OpenCodeSessionAdapter;
+
+    /** `files` stages skills and native config. It defaults to the local disk. */
+    constructor(private readonly files?: RunnerFiles) {
+        super();
+        this.session = new OpenCodeSessionAdapter(files ? { files } : {});
+    }
 
     async prepare(workbench: ResolvedWorkbench): Promise<PreparedRunner> {
-        return PreparedOpenCodeRunner.create(workbench, this.session);
+        return PreparedOpenCodeRunner.create(workbench, this.session, this.files);
     }
 }
 
@@ -58,9 +65,10 @@ class PreparedOpenCodeRunner implements PreparedRunner {
 
     static async create(
         workbench: ResolvedWorkbench,
-        session = new OpenCodeSessionAdapter()
+        session = new OpenCodeSessionAdapter(),
+        files?: RunnerFiles
     ): Promise<PreparedOpenCodeRunner> {
-        const staged = await stageOpenCodeSkills(workbench);
+        const staged = await stageOpenCodeSkills(workbench, files);
         const nativeConfigFile = staged.nativeConfigFile;
         return new PreparedOpenCodeRunner({
             workbench,
