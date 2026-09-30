@@ -13,6 +13,7 @@ export type {
     RuntimeServiceBinding,
     RuntimeSessionOptions,
 } from './contracts.js';
+export { diskDaytonaDependencies } from './daytona/disk.js';
 export {
     DaytonaApiClient,
     DaytonaApiError,
@@ -68,3 +69,14 @@ export {
     type RuntimeSmokeOptions,
     type WorkbenchSmokeResult,
 } from './smoke.js';
+export { diskAssetSource, diskTransfer } from './staging/disk.js';
+export {
+    type AssetGit,
+    type AssetSource,
+    type AssetStat,
+    MemoryAssetSource,
+    memoryTransfer,
+    type OutcomeCollector,
+    type RemoteTransfer,
+    type StagedAsset,
+} from './staging/index.js';

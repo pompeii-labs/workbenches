@@ -1,9 +1,17 @@
+export type { RunnerFileStat, RunnerFiles } from './files.js';
+export { diskRunnerFiles } from './files-disk.js';
+export { MemoryRunnerFiles } from './files-memory.js';
 export {
     OpenCodeSessionAdapter,
     type OpenCodeSessionDependencies,
 } from './opencode/adapter.js';
 export { OPENCODE_SESSION_DECLARATION } from './opencode/capabilities.js';
-export { OpenCodeRunner } from './opencode/runner.js';
+export {
+    OpenCodeRunner,
+    type OpenCodeRunnerDependencies,
+    type OpenCodeSkillStaging,
+    PreparedOpenCodeRunner,
+} from './opencode/runner.js';
 export { PiRunner } from './pi/runner.js';
 export {
     PI_SESSION_DECLARATION,

@@ -5,11 +5,23 @@ import { join } from 'node:path';
 import type { WorkbenchEvent } from '@pompeii-labs/workbench/events';
 import { WORKBENCH_EVENT_TYPES } from '@pompeii-labs/workbench/events';
 import { WorkbenchManifestParser } from '@pompeii-labs/workbench/manifest';
+import {
+    ModelCatalog,
+    ModelRouter,
+    routeConfiguration,
+} from '@pompeii-labs/workbench/models';
+import { MemoryOutcomeStore, type OutcomeSink } from '@pompeii-labs/workbench/outcomes';
+import { OutcomeStore } from '@pompeii-labs/workbench/outcomes/disk';
 import { RequirementsPreflight } from '@pompeii-labs/workbench/requirements';
 import type { RunnerFiles } from '@pompeii-labs/workbench/runners/files';
 import { diskRunnerFiles } from '@pompeii-labs/workbench/runners/files/disk';
+import { MemoryRunnerFiles } from '@pompeii-labs/workbench/runners/files/memory';
 import { OpenCodeSessionAdapter } from '@pompeii-labs/workbench/runners/opencode/adapter';
 import { OpenCodeEventAdapter } from '@pompeii-labs/workbench/runners/opencode/events';
+import {
+    OpenCodeRunner,
+    PreparedOpenCodeRunner,
+} from '@pompeii-labs/workbench/runners/opencode/runner';
 import { OpenCodeServer } from '@pompeii-labs/workbench/runners/opencode/server';
 import { OpenCodeServerSession } from '@pompeii-labs/workbench/runners/opencode/session';
 import { stageOpenCodeSkillsWith } from '@pompeii-labs/workbench/runners/opencode/staging';
@@ -22,8 +34,15 @@ import {
     type DaytonaClient,
     DaytonaRuntimeProvider,
 } from '@pompeii-labs/workbench/runtimes/daytona';
+import { diskDaytonaDependencies } from '@pompeii-labs/workbench/runtimes/daytona/disk';
 import { E2BRuntimeProvider, E2BSdkClient } from '@pompeii-labs/workbench/runtimes/e2b';
 import type { E2BClient } from '@pompeii-labs/workbench/runtimes/e2b/contracts';
+import {
+    MemoryAssetSource,
+    memoryTransfer,
+    type RemoteTransfer,
+} from '@pompeii-labs/workbench/runtimes/staging';
+import { diskTransfer } from '@pompeii-labs/workbench/runtimes/staging/disk';
 import type { ResolvedWorkbench } from '@pompeii-labs/workbench/types';
 
 const root = join(import.meta.dir, '..');
@@ -45,6 +64,29 @@ describe('package exports', () => {
         expect(typeof E2BSdkClient).toBe('function');
         expect(typeof diskRunnerFiles.readFile).toBe('function');
         expect(typeof diskAssetSource.read).toBe('function');
+    });
+
+    test('loads the storage-free modules and their disk counterparts', () => {
+        expect(typeof ModelCatalog.activate).toBe('function');
+        expect(typeof ModelRouter).toBe('function');
+        expect(typeof routeConfiguration).toBe('function');
+        expect(typeof MemoryOutcomeStore).toBe('function');
+        expect(typeof OutcomeStore).toBe('function');
+        expect(typeof OpenCodeRunner).toBe('function');
+        expect(typeof PreparedOpenCodeRunner.create).toBe('function');
+        expect(typeof MemoryRunnerFiles).toBe('function');
+        expect(typeof MemoryAssetSource).toBe('function');
+        expect(typeof memoryTransfer.pack).toBe('function');
+        expect(typeof diskTransfer.pack).toBe('function');
+        expect(typeof diskDaytonaDependencies.assets?.read).toBe('function');
+        expect(typeof new DaytonaRuntimeProvider().adopt).toBe('function');
+    });
+
+    test('types the new injected interfaces from their subpaths', () => {
+        const sink: OutcomeSink = new MemoryOutcomeStore();
+        const transfer: RemoteTransfer = memoryTransfer;
+        const values = [sink, transfer];
+        expect(values).toHaveLength(2);
     });
 
     test('types the injected interfaces from their subpaths', () => {
