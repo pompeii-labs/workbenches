@@ -9,7 +9,7 @@ import type {
     SpawnedRunner,
     WorkbenchWorkspaceBinding,
 } from '../types.js';
-import type { PreflightResult } from '../workbench/index.js';
+import type { PreflightResult } from '../workbench/preflight.js';
 import type {
     PreparedRuntime,
     RuntimeCommandOptions,

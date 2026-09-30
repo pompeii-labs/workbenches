@@ -1,6 +1,6 @@
 import type { RunnerConnectionSelection } from '../connections/store.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
-import type { WorkbenchEventDraft } from '../runs/index.js';
+import type { WorkbenchEventDraft } from '../runs/events.js';
 import type { ResolvedWorkbench } from '../types.js';
 
 export const RUNNER_CAPABILITIES = [

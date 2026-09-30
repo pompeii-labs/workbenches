@@ -12,7 +12,7 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import type { CatalogRegistryReference } from '../catalog/index.js';
+import type { CatalogRegistryReference } from '../catalog/types.js';
 import { OutcomeStore } from '../outcomes/store.js';
 import type { RepositoryBinding } from '../repositories/contracts.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';

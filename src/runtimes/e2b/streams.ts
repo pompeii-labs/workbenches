@@ -1,6 +1,7 @@
 import { createWriteStream } from 'node:fs';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
 import type { E2BSandbox } from './contracts.js';
 import { formatBytes } from './infrastructure.js';
@@ -30,7 +31,7 @@ export async function downloadE2BFile(
         },
     });
     await pipeline(
-        Readable.fromWeb(stream as globalThis.ReadableStream<Uint8Array>),
+        Readable.fromWeb(stream as unknown as NodeReadableStream<Uint8Array>),
         limit,
         createWriteStream(local, { mode: 0o600 })
     );
@@ -42,5 +43,14 @@ export async function pipeWebOutput(
     output: NodeJS.WriteStream
 ): Promise<void> {
     if (!stream) return;
-    for await (const chunk of stream) output.write(chunk);
+    const reader = stream.getReader();
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) return;
+            output.write(value);
+        }
+    } finally {
+        reader.releaseLock();
+    }
 }

@@ -25,10 +25,20 @@ import {
 import { OpenCodeServer } from '@pompeii-labs/workbench/runners/opencode/server';
 import { OpenCodeServerSession } from '@pompeii-labs/workbench/runners/opencode/session';
 import { stageOpenCodeSkillsWith } from '@pompeii-labs/workbench/runners/opencode/staging';
+import type {
+    RunnerPermissionRequest,
+    RunnerQuestionRequest,
+    RunnerSessionHost,
+} from '@pompeii-labs/workbench/runners/session';
 import { RuntimeRegistry } from '@pompeii-labs/workbench/runtimes';
 import type { AssetSource } from '@pompeii-labs/workbench/runtimes/assets';
 import { diskAssetSource } from '@pompeii-labs/workbench/runtimes/assets/disk';
-import type { PreparedRuntime } from '@pompeii-labs/workbench/runtimes/contracts';
+import {
+    managedMetadata,
+    type PreparedRuntime,
+    runMetadata,
+    scopeMetadata,
+} from '@pompeii-labs/workbench/runtimes/contracts';
 import {
     DaytonaApiClient,
     type DaytonaClient,
@@ -101,6 +111,16 @@ describe('package exports', () => {
         const event: WorkbenchEvent | undefined = undefined;
         const values = [files, assets, daytona, e2b, runtime, workbench, event];
         expect(values).toHaveLength(7);
+    });
+
+    test('exports the session host types and runtime labels', () => {
+        const host: RunnerSessionHost | undefined = undefined;
+        const permission: RunnerPermissionRequest | undefined = undefined;
+        const question: RunnerQuestionRequest | undefined = undefined;
+        expect([host, permission, question]).toHaveLength(3);
+        expect(managedMetadata).toBe('dev.workbenches.managed');
+        expect(runMetadata).toBe('dev.workbenches.run');
+        expect(scopeMetadata).toBe('dev.workbenches.scope');
     });
 
     test('points every subpath at a file that exists', async () => {

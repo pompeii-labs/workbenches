@@ -10,7 +10,7 @@ import {
 } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
-import type { CatalogRegistryReference } from '../catalog/index.js';
+import type { CatalogRegistryReference } from '../catalog/types.js';
 import type { RepositoryBinding } from '../repositories/contracts.js';
 import { RunStore } from '../runs/store.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';

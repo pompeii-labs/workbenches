@@ -9,7 +9,9 @@ import type {
     SpawnedRunner,
     WorkbenchWorkspaceBinding,
 } from '../types.js';
-import type { PreflightResult } from '../workbench/index.js';
+import type { PreflightResult } from '../workbench/preflight.js';
+
+export { managedMetadata, runLabels, runMetadata, scopeMetadata } from './labels.js';
 
 export type RuntimePhase =
     | 'resolve'

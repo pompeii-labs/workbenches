@@ -1,4 +1,4 @@
-import type { WorkbenchEventDraft } from '../../runs/index.js';
+import type { WorkbenchEventDraft } from '../../runs/events.js';
 import { OpenCodeEventAdapter } from './events.js';
 import type { OpenCodeServer } from './server.js';
 
