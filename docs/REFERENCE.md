@@ -1220,22 +1220,162 @@ The reference engine is also a set of modules a host can import. The package
 | --- | --- |
 | `./manifest`, `./requirements`, `./runtime-selection`, `./types` | Manifest parsing, requirement checks, runtime selection, and shared types |
 | `./events` | The normalized run event protocol |
+| `./models` | Model routing over a catalog snapshot, with `routeConfiguration` for a chosen provider route |
+| `./outcomes` | Outcome contracts and validation, the `OutcomeSink` interface, and `MemoryOutcomeStore` |
+| `./outcomes/disk` | The disk outcome store, with quotas and leases, and applying changes to a workspace |
+| `./runners/opencode/runner` | `OpenCodeRunner` and `PreparedOpenCodeRunner` |
 | `./runners/opencode/*` | The OpenCode adapter, session driver, server client, event translation, invocation builder, and staging |
-| `./runners/files`, `./runners/files/disk` | The `RunnerFiles` interface and its disk implementation |
+| `./runners/files`, `./runners/files/disk`, `./runners/files/memory` | The `RunnerFiles` interface and its disk and in-memory implementations |
 | `./runtimes`, `./runtimes/contracts` | The runtime registry and the provider contract |
-| `./runtimes/daytona`, `./runtimes/e2b`, `./runtimes/e2b/contracts` | The Daytona and E2B providers with their client interfaces |
+| `./runtimes/daytona` | The Daytona provider and its `fetch`-based API client |
+| `./runtimes/daytona/disk` | The dependencies the CLI gives the Daytona provider |
+| `./runtimes/e2b`, `./runtimes/e2b/contracts` | The E2B provider and its client interfaces |
+| `./runtimes/staging` | The `AssetSource` and `RemoteTransfer` interfaces, `MemoryAssetSource`, `memoryTransfer`, and byte-array tar, gzip, and diff helpers |
+| `./runtimes/staging/disk` | `diskAssetSource` and `diskTransfer` |
 | `./runtimes/assets`, `./runtimes/assets/disk` | The `AssetSource` interface and its disk implementation |
 
-Two interfaces keep file access out of the modules that drive a runner. The
-OpenCode session driver and event translation import no `node:fs` or `node:os`,
-directly or transitively, so they run on any JavaScript runtime with `fetch`; a
-test walks their import graph to keep it that way. Skills and native config are
-staged through `RunnerFiles`, which the OpenCode adapter takes as `files`. Remote
-sandbox providers read package and workspace files through `AssetSource`, which
-the provider dependencies take as `assets`. The CLI passes the disk for both. A
-host passes any store that can answer the same calls. The Daytona client is a
-`DaytonaClient` interface with a `fetch`-based `DaytonaApiClient`, so a host can
-also supply its own transport.
+Storage and credentials are injected, and the portable modules import none.
+Skills and native config are staged through `RunnerFiles`, which the OpenCode
+runner takes as `files`. Remote providers read package and workspace files
+through `AssetSource` (`assets`), pack them and collect changes through
+`RemoteTransfer` (`transfer`), and put collected content in an `OutcomeSink` the
+caller passes to `collectOutcome`. The Daytona provider takes its key as `apiKey`,
+a string or a function of the request environment, and the names of model
+provider variables to forward as `providerEnvironment`. The CLI passes the disk
+for all of these. A host passes stores of its own, or the in-memory ones.
+
+A test bundles these subpaths for the browser with `Bun.build` and fails if the
+output reaches `node:fs`, `node:os`, `node:zlib`, `node:stream`, or
+`node:child_process`: `./runtimes/daytona`, `./runners/opencode/adapter`,
+`./runners/opencode/runner`, `./models`, `./outcomes`, `./manifest`,
+`./requirements`, `./runtimes/contracts`, and `./runtimes/staging`. A host on a
+runtime with only `fetch` and the Compression Streams API can run all of them.
+The disk implementations live in separate subpaths that the CLI wires in, and a
+portable module never imports one, statically or dynamically.
+
+#### Running a remote runtime from memory
+
+```ts
+import { ModelRouter, routeConfiguration } from '@pompeii-labs/workbench/models';
+import { MemoryOutcomeStore } from '@pompeii-labs/workbench/outcomes';
+import { MemoryRunnerFiles } from '@pompeii-labs/workbench/runners/files/memory';
+import { OpenCodeRunner } from '@pompeii-labs/workbench/runners/opencode/runner';
+import { DaytonaRuntimeProvider } from '@pompeii-labs/workbench/runtimes/daytona';
+
+// One in-memory store holds the package, the workspace, and the staged skills.
+// It is both the runner's RunnerFiles and the runtime's AssetSource.
+const files = new MemoryRunnerFiles()
+    .file('/pkg/instructions.md', instructions)
+    .file('/pkg/skills/review/SKILL.md', skill)
+    .file('/ws/src/index.ts', source);
+
+// `workbench` is a ResolvedWorkbench over those virtual paths. Parse the
+// manifest with WorkbenchManifestParser and point `packageDirectory`,
+// `instructionsPath`, and each skill at the /pkg paths.
+const provider = new DaytonaRuntimeProvider({
+    apiKey: daytonaKey,
+    assets: files,
+    providerEnvironment: (wb) => new ModelRouter(catalog).providerEnvironmentNames(wb),
+});
+const runner = new OpenCodeRunner({
+    files,
+    catalog, // a ModelCatalogSnapshot, so no global activation is needed
+    session: { password: () => serverPassword },
+});
+
+const prepared = await runner.prepare(workbench);
+const runtime = await provider.prepare({
+    workbench,
+    workspaceDirectory: '/ws',
+    environment: { OPENAI_API_KEY: openaiKey },
+    assets: [
+        { path: '/ws', access: 'read-write' },
+        { path: '/pkg', access: 'read-only' },
+        ...prepared.assets,
+    ],
+});
+await runtime.preflight();
+const sandboxId = runtime.sandboxId; // keep this, the native session id, and the password
+
+const session = await prepared.startSession(runtime, {
+    configuration: routeConfiguration({
+        catalog,
+        model: workbench.manifest.model,
+        environmentNames: ['OPENAI_API_KEY'],
+    }),
+    host, // receives events, permission requests, and questions
+});
+await session.prompt('Fix the failing test.');
+
+const sink = new MemoryOutcomeStore();
+const outcome = await runtime.collectOutcome?.(sink);
+await runtime.cleanup();
+await prepared.cleanup();
+```
+
+`memoryTransfer` is the default `transfer`, so the example passes none. It packs
+each asset into a gzip tar in memory and reads the changes a run made as tar
+entries, so nothing touches a disk. The changeset matches the disk transfer's
+entries, statistics, and base digest for the same tree. Its review diff is
+rendered in TypeScript without `git`: it reads like `git diff`, omits `index`
+lines, and reports a binary change as "Binary files differ" rather than a
+patch. Symbolic link modes are not compared, since they carry no meaning.
+Runner-owned native state, such as a session database, is the host's to keep, so
+`memoryTransfer` does not copy it out, and it does not stage native credential
+storage.
+
+#### Reconnecting after a restart
+
+A remote sandbox outlives the process that created it. Keep the sandbox id, the
+native session id (`session.id`), and the server password. After a restart,
+`adopt` binds a new runtime to the running sandbox without uploading anything:
+
+```ts
+const runtime = await provider.adopt(request, sandboxId);
+await runtime.preflight();
+```
+
+`request` must describe the same assets as the original, and the files they name
+must be unchanged, because the runtime reads them again to record what was
+staged and recovers each workspace's Git baseline from the sandbox. `preflight`
+fails when the sandbox does not exist or is not running, and never deletes a
+sandbox it did not create. `launchService` then attaches to the runner server
+still listening in the sandbox and leaves it running, or starts one if nothing is
+listening. Start the session with the same password and
+`session: { id, directory, nativeSessionId }` so it resumes the native session.
+`cleanup` deletes the sandbox, as for a prepared runtime.
+
+Only Daytona has `adopt`. E2B keeps its own outcome-recovery state and template
+lifecycle, so reconnecting there is not offered yet. The CLI does not call
+`adopt`: `wb attach` observes stored events and does not reconnect to a live
+sandbox.
+
+A session that lost its event stream, or restarted, calls `resumeTurn`:
+
+```ts
+await session.resumeTurn(); // the OpenCode session driver
+```
+
+It subscribes to events again and reads the session's transcript, so text, tool
+activity, and usage produced while disconnected are emitted once and in order,
+then it follows the turn until it completes. A prompt that is still waiting
+settles normally. The event protocol is unchanged. Dedupe state lives in the
+session: `session.progress()` returns the characters emitted per native text
+part and the tool calls and usage steps reported, as plain JSON. Save it as the
+turn runs, and call `restoreProgress(saved)` on the session started after a
+restart, before `resumeTurn()`, so only what the host has not seen is emitted.
+Without it a new session replays the whole turn.
+
+#### Model routing without globals
+
+`ModelRouter` routes against the snapshot it is constructed with. A host that
+constructs it without one reads `ModelCatalog.activate(snapshot)`, which is
+process-global state, so activate a snapshot before routing or always pass one.
+`routeConfiguration` builds the runner configuration for a chosen provider route,
+the same one `--connection <provider>` resolves, from a snapshot, the manifest's
+`model` block, and the names of the environment variables the host can supply. It
+reads nothing else. The catalog cache on disk and `ConnectionInspector` stay in
+the CLI.
 
 ## Project policies
 
