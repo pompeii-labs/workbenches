@@ -288,10 +288,9 @@ export class RegistryClient {
             throw new Error('The registry package does not include an artifact');
         }
         // Keys only ever go to the registry itself, never another origin.
-        const token =
-            new URL(registry.artifactUrl).origin === new URL(this.apiUrl).origin
-                ? await this.keyring.select(registry.reference.publisher)
-                : undefined;
+        const token = this.sameOrigin(new URL(registry.artifactUrl))
+            ? await this.keyring.select(registry.reference.publisher)
+            : undefined;
         let response: Response;
         try {
             response = await this.fetcher(registry.artifactUrl, {
@@ -328,6 +327,18 @@ export class RegistryClient {
         };
         this.packageValidator.validate(summary, files);
         return { ...summary, files };
+    }
+
+    private sameOrigin(url: URL): boolean {
+        const api = new URL(this.apiUrl);
+        if (url.origin === api.origin) return true;
+        const loopback = new Set(['localhost', '127.0.0.1', '[::1]']);
+        return (
+            url.protocol === api.protocol &&
+            url.port === api.port &&
+            loopback.has(url.hostname) &&
+            loopback.has(api.hostname)
+        );
     }
 
     private parsePackage(value: unknown): {
@@ -376,13 +387,22 @@ export class RegistryClient {
                 if (source.protocol !== 'https:' || source.hostname !== 'github.com')
                     return null;
             }
-            if (typeof version.artifact_url === 'string') {
-                const artifact = new URL(version.artifact_url);
-                if (artifact.origin !== new URL(this.apiUrl).origin) return null;
-                if (artifact.username || artifact.password) return null;
-            }
         } catch {
             return null;
+        }
+        if (typeof version.artifact_url === 'string') {
+            let artifact: URL;
+            try {
+                artifact = new URL(version.artifact_url);
+            } catch {
+                return null;
+            }
+            if (!this.sameOrigin(artifact)) {
+                throw new Error(
+                    `The registry returned an artifact URL on ${artifact.origin}, which does not match the API URL ${this.apiUrl}. Keys are only sent to the API origin.`
+                );
+            }
+            if (artifact.username || artifact.password) return null;
         }
         return {
             workbench_id: value.workbench_id as string | undefined,

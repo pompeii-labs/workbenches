@@ -72,6 +72,30 @@ describe('Registry Workbench saving', () => {
         expect(reports).toHaveLength(1);
     });
 
+    test('reports a save for a public package but not for an internal one', async () => {
+        const run = async (visibility: 'public' | 'private') => {
+            const reports: unknown[] = [];
+            const saver = new RegistryWorkbenchSaver('/tmp/workbench-registry-save', {
+                catalog: new Catalog([]),
+                client: {
+                    resolve: async () => ({ ...registryPackage(), visibility }),
+                    fetchWorkbench: async () => remoteWorkbench(),
+                    missing: async () => new Error('missing'),
+                },
+                telemetry: {
+                    report: async (event) => {
+                        reports.push(event);
+                        return true;
+                    },
+                },
+            });
+            await saver.save({ publisher: 'lux', workbench: 'auth' });
+            return reports;
+        };
+        expect(await run('private')).toHaveLength(0);
+        expect(await run('public')).toHaveLength(1);
+    });
+
     test('checks current registry bytes instead of silently returning an old package', async () => {
         const existing = catalogEntry('auth', 'lux', 'auth');
         let resolved = 0;

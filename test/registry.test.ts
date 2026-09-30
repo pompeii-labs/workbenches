@@ -253,6 +253,60 @@ describe('Workbench registry provider', () => {
             'http://localhost:57401/v1/artifacts/018f1e48-7fb2-7a12-a4dd-0123456789ab'
         );
     });
+
+    test('treats loopback aliases on the same port as one origin', async () => {
+        const resolveWith = (apiUrl: string, artifactUrl: string) =>
+            new RegistryClient({
+                apiUrl,
+                fetch: async () =>
+                    Response.json({
+                        ...registryResponse(),
+                        source_path: 'workbench.yml',
+                        repository: null,
+                        latest_version: {
+                            ...registryResponse().latest_version,
+                            source_commit: 'c'.repeat(64),
+                            artifact_url: artifactUrl,
+                        },
+                    }),
+            }).resolve({ publisher: 'pompeii-labs', workbench: 'creator' });
+
+        for (const host of ['127.0.0.1', '[::1]', 'localhost']) {
+            const resolved = await resolveWith(
+                'http://localhost:57401',
+                `http://${host}:57401/v1/artifacts/a`
+            );
+            expect(resolved?.artifactUrl).toBe(`http://${host}:57401/v1/artifacts/a`);
+        }
+        await expect(
+            resolveWith(
+                'http://localhost:57401',
+                'http://127.0.0.1:57402/v1/artifacts/a'
+            )
+        ).rejects.toThrow('does not match the API URL');
+    });
+
+    test('names the origin mismatch when an artifact URL is on another host', async () => {
+        const client = new RegistryClient({
+            apiUrl: 'https://registry.example',
+            fetch: async () =>
+                Response.json({
+                    ...registryResponse(),
+                    source_path: 'workbench.yml',
+                    repository: null,
+                    latest_version: {
+                        ...registryResponse().latest_version,
+                        source_commit: 'c'.repeat(64),
+                        artifact_url: 'https://elsewhere.example/v1/artifacts/a',
+                    },
+                }),
+        });
+        await expect(
+            client.resolve({ publisher: 'pompeii-labs', workbench: 'creator' })
+        ).rejects.toThrow(
+            'The registry returned an artifact URL on https://elsewhere.example, which does not match the API URL https://registry.example. Keys are only sent to the API origin.'
+        );
+    });
 });
 
 describe('Workbench registry keys', () => {
