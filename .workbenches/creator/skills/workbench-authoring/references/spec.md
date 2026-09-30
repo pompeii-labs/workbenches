@@ -412,19 +412,21 @@ may be written `local: {}` or with no value (`local:`).
 | `local`   | none, written `{}`                      | implemented by the reference engine               |
 | `docker`  | `image` (required), `docker` (optional) | implemented by the reference engine               |
 | `e2b`     | `image` (required)                      | implemented by the reference engine               |
-| `daytona` | `class` (required), `image` (optional)  | reserved, not implemented by the reference engine |
+| `daytona` | `class` (required), `image` (optional)  | implemented by the reference engine               |
 
 The Daytona `class` is one of `linux`, `windows`, `gpu`, or `macos`. The
-reference engine accepts and displays a `daytona` entry, and fails to prepare it
-with a message that the runtime is not available in this engine yet. An unknown
-provider name is an error and must not silently fall back to the host.
+reference engine creates a Daytona sandbox from the entry's `image` and, when the
+entry has none, from the `docker` entry's image. It fails to prepare a `daytona`
+entry when neither declares an image, and supports the `linux` class only; the
+other classes fail with "class X is not available yet". An unknown provider name
+is an error and must not silently fall back to the host.
 
 `image` is a string naming a published image, or a build object with a
 package-relative `build` Dockerfile and a package-relative `context` that
 defaults to `.`. Both must remain within the containing repository. Providers
 decide how to cache prepared images, but the observable result must be
 equivalent to preparing the declared input again. Runtime image behavior, the
-E2B staging layout, and the host Docker engine binding
+E2B staging layout (shared by Daytona), and the host Docker engine binding
 (`docker: { engine: { mode: host } }` under the docker entry, authorized per run
 with `--allow-host-docker`) follow the spec 0 text above, applied to the
 selected runtime's entry.
