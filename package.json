@@ -19,6 +19,14 @@
         "open-standard",
         "workbench"
     ],
+    "files": [
+        "src",
+        "schemas",
+        "package.json",
+        "README.md",
+        "LICENSE",
+        "NOTICE"
+    ],
     "packageManager": "bun@1.3.11",
     "type": "module",
     "bin": {
