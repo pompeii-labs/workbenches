@@ -151,7 +151,9 @@ class PreparedOpenCodeRunner implements PreparedRunner {
             {
                 // Cloud proxy setup and cold native session loading share this
                 // bounded readiness budget, not the ten-second local deadline.
-                ...(runtime.name === 'e2b' ? { startupTimeoutMs: 60_000 } : {}),
+                ...(runtime.name === 'e2b' || runtime.name === 'daytona'
+                    ? { startupTimeoutMs: 60_000 }
+                    : {}),
                 context: remapRunnerContext(this.#context, (path) =>
                     runtime.pathFor(path)
                 ),

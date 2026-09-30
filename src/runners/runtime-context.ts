@@ -31,7 +31,7 @@ export function runtimeContext(
     const runtime = selectedRuntime(workbench).name;
     const repository = environment.WORKBENCH_REPOSITORY;
     const behavior =
-        runtime === 'e2b'
+        runtime === 'e2b' || runtime === 'daytona'
             ? 'The primary workspace and named bindings are selected sandbox copies, not host directories. Collected workspace changes are pending until the caller explicitly applies them. There is no automatic host filesystem synchronization. A sandbox-local server is not automatically a durable published preview.'
             : runtime === 'docker'
               ? 'The primary workspace and named bindings are mounted host directories. Edits to writable bindings change the host immediately; they do not wait for an apply action. Other container paths are disposable and are not automatically returned.'

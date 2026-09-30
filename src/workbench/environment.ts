@@ -38,8 +38,11 @@ export class WorkbenchEnvironment {
         const catalog = ModelCatalog.active();
         const allowed = new Set([
             ...declared,
-            // Provisioning credentials are host-only; E2BPathPlan excludes this key.
+            // Provisioning credentials are host-only; E2BPathPlan excludes these keys.
             ...(selectedRuntime(workbench).name === 'e2b' ? ['E2B_API_KEY'] : []),
+            ...(selectedRuntime(workbench).name === 'daytona'
+                ? ['DAYTONA_API_KEY', 'DAYTONA_API_URL']
+                : []),
             ...(catalog
                 ? new ModelRouter(catalog).providerEnvironmentNames(workbench)
                 : []),

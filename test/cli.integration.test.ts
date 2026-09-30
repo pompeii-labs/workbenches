@@ -2333,9 +2333,7 @@ describe('CLI integration', () => {
             environment
         );
         expect(defaulted.code).toBe(1);
-        expect(defaulted.stderr).toContain(
-            'The daytona runtime is not available in this engine yet'
-        );
+        expect(defaulted.stderr).toContain('The daytona runtime needs an image');
 
         const selected = await executeCli(
             ['run', 'multi', '--task', 'work', '--final', '--runtime', 'local'],

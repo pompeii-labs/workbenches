@@ -101,6 +101,83 @@ describe('E2B runtime connection', () => {
     });
 });
 
+describe('Daytona runtime connection', () => {
+    test('saves a private host-only key through wb connect without printing it', async () => {
+        const home = await temporaryHome();
+        const key = 'fixture-daytona-key';
+        const saved = await command(
+            home,
+            ['connect', '--runtime', 'daytona', '--stdin'],
+            key
+        );
+        expect(saved.code).toBe(0);
+        expect(saved.stdout).toContain('Daytona runtime key saved');
+        expect(`${saved.stdout}${saved.stderr}`).not.toContain(key);
+        expect((await stat(join(home, 'runtime.secrets.json'))).mode & 0o777).toBe(
+            0o600
+        );
+        expect(new RuntimeSecretStore(home).daytonaKey()).toBe(key);
+        expect(new RuntimeSecretStore(home).e2bKey()).toBeUndefined();
+
+        const status = await command(home, [
+            'connect',
+            '--runtime',
+            'daytona',
+            '--status',
+        ]);
+        expect(status.code).toBe(0);
+        expect(status.stdout).toContain('Daytona runtime key is saved');
+        expect(status.stdout).not.toContain(key);
+
+        const removed = await command(home, [
+            'connect',
+            '--runtime',
+            'daytona',
+            '--remove',
+        ]);
+        expect(removed.code).toBe(0);
+        expect(new RuntimeSecretStore(home).daytonaKey()).toBeUndefined();
+    });
+
+    test('keeps the E2B and Daytona keys independent', async () => {
+        const home = await temporaryHome();
+        const store = new RuntimeSecretStore(home);
+        store.saveE2B('e2b-key');
+        store.saveDaytona('daytona-key');
+        expect(store.e2bKey()).toBe('e2b-key');
+        expect(store.daytonaKey()).toBe('daytona-key');
+        store.removeDaytona();
+        expect(store.e2bKey()).toBe('e2b-key');
+        expect(store.daytonaKey()).toBeUndefined();
+        store.saveDaytona('daytona-key');
+        store.removeE2B();
+        expect(store.e2bKey()).toBeUndefined();
+        expect(store.daytonaKey()).toBe('daytona-key');
+    });
+
+    test('lets an environment key override the saved runtime key', async () => {
+        const home = await temporaryHome();
+        new RuntimeSecretStore(home).saveDaytona('saved-key');
+        expect(RuntimeSecretStore.daytonaKey({ WORKBENCH_HOME: home })).toBe(
+            'saved-key'
+        );
+        expect(
+            RuntimeSecretStore.daytonaKey({
+                WORKBENCH_HOME: home,
+                DAYTONA_API_KEY: 'override-key',
+            })
+        ).toBe('override-key');
+    });
+
+    test('does not accept key material as a command-line argument', async () => {
+        const home = await temporaryHome();
+        const result = await command(home, ['connect', '--runtime', 'daytona']);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain('or pass --stdin');
+        expect(new RuntimeSecretStore(home).daytonaKey()).toBeUndefined();
+    });
+});
+
 async function temporaryHome(): Promise<string> {
     const home = await mkdtemp(join(tmpdir(), 'workbench-runtime-key-'));
     homes.push(home);
@@ -114,7 +191,12 @@ async function command(
 ): Promise<{ code: number; stdout: string; stderr: string }> {
     const child = Bun.spawn([process.execPath, cli, ...args], {
         cwd: resolve(import.meta.dir, '..'),
-        env: { ...process.env, WORKBENCH_HOME: home, E2B_API_KEY: '' },
+        env: {
+            ...process.env,
+            WORKBENCH_HOME: home,
+            E2B_API_KEY: '',
+            DAYTONA_API_KEY: '',
+        },
         stdin: 'pipe',
         stdout: 'pipe',
         stderr: 'pipe',

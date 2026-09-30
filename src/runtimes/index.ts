@@ -13,7 +13,24 @@ export type {
     RuntimeServiceBinding,
     RuntimeSessionOptions,
 } from './contracts.js';
-export { DaytonaRuntimeProvider } from './daytona.js';
+export {
+    DaytonaApiClient,
+    DaytonaApiError,
+    type DaytonaApiOptions,
+    type DaytonaClient,
+    type DaytonaCreateOptions,
+    type DaytonaProcess,
+    type DaytonaProcessOptions,
+    type DaytonaResources,
+    type DaytonaRunOptions,
+    type DaytonaRuntimeDependencies,
+    DaytonaRuntimeProvider,
+    type DaytonaSandbox,
+    type DaytonaSandboxInfo,
+    type DaytonaSandboxSummary,
+    daytonaResources,
+    defaultDaytonaApiUrl,
+} from './daytona/index.js';
 export {
     type DockerCommandResult,
     DockerManagedContainers,

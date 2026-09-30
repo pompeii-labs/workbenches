@@ -14,9 +14,12 @@ import {
 import { join } from 'node:path';
 import { workbenchHome } from '../storage.js';
 
+type RuntimeSecretProvider = 'e2b' | 'daytona';
+
 interface RuntimeSecretFile {
     version: 1;
     e2b?: { api_key: string };
+    daytona?: { api_key: string };
 }
 
 const filename = 'runtime.secrets.json';
@@ -39,18 +42,48 @@ export class RuntimeSecretStore {
         return this.read().e2b?.api_key;
     }
 
+    static daytonaKey(
+        environment: Record<string, string | undefined> = process.env
+    ): string | undefined {
+        return (
+            environment.DAYTONA_API_KEY?.trim() ||
+            new RuntimeSecretStore(workbenchHome(environment)).daytonaKey()
+        );
+    }
+
+    daytonaKey(): string | undefined {
+        return this.read().daytona?.api_key;
+    }
+
     saveE2B(key: string): void {
-        const value = key.trim();
-        if (!value || /[\r\n\0]/.test(value)) {
-            throw new Error('E2B API key must be a non-empty single line');
-        }
-        this.write({ ...this.read(), e2b: { api_key: value } });
+        this.save('e2b', key, 'E2B');
+    }
+
+    saveDaytona(key: string): void {
+        this.save('daytona', key, 'Daytona');
     }
 
     removeE2B(): void {
+        this.remove('e2b');
+    }
+
+    removeDaytona(): void {
+        this.remove('daytona');
+    }
+
+    private save(provider: RuntimeSecretProvider, key: string, label: string): void {
+        const value = key.trim();
+        if (!value || /[\r\n\0]/.test(value)) {
+            throw new Error(`${label} API key must be a non-empty single line`);
+        }
+        this.write({ ...this.read(), [provider]: { api_key: value } });
+    }
+
+    private remove(provider: RuntimeSecretProvider): void {
         const current = this.read();
-        if (!current.e2b) return;
-        this.write({ version: 1 });
+        if (!current[provider]) return;
+        const { [provider]: _removed, ...remaining } = current;
+        this.write(remaining);
     }
 
     private read(): RuntimeSecretFile {
@@ -81,16 +114,18 @@ export class RuntimeSecretStore {
             if (
                 !isRecord(parsed) ||
                 parsed.version !== 1 ||
-                (parsed.e2b !== undefined &&
-                    (!isRecord(parsed.e2b) ||
-                        typeof parsed.e2b.api_key !== 'string' ||
-                        !parsed.e2b.api_key))
+                !validKey(parsed.e2b) ||
+                !validKey(parsed.daytona)
             ) {
                 throw new Error('The Workbench runtime secret store is invalid');
             }
-            return parsed.e2b === undefined
-                ? { version: 1 }
-                : { version: 1, e2b: { api_key: parsed.e2b.api_key as string } };
+            return {
+                version: 1,
+                ...(parsed.e2b ? { e2b: { api_key: keyOf(parsed.e2b) } } : {}),
+                ...(parsed.daytona
+                    ? { daytona: { api_key: keyOf(parsed.daytona) } }
+                    : {}),
+            };
         } finally {
             closeSync(descriptor);
         }
@@ -111,6 +146,18 @@ export class RuntimeSecretStore {
             rmSync(temporary, { force: true });
         }
     }
+}
+
+/** An absent entry is valid. A present one must hold a non-empty key. */
+function validKey(entry: unknown): boolean {
+    return (
+        entry === undefined ||
+        (isRecord(entry) && typeof entry.api_key === 'string' && entry.api_key !== '')
+    );
+}
+
+function keyOf(entry: unknown): string {
+    return (entry as { api_key: string }).api_key;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -55,7 +55,9 @@ export class RepositoryInspection {
             ...(native ? { native_pull: native.pull } : {}),
             checkout,
             workspace:
-                run.runtime === 'docker' || run.runtime === 'e2b'
+                run.runtime === 'docker' ||
+                run.runtime === 'e2b' ||
+                run.runtime === 'daytona'
                     ? '/workspace'
                     : checkout,
         };

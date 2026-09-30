@@ -19,7 +19,10 @@ import type {
     RuntimeServiceBinding,
     RuntimeSessionOptions,
 } from './contracts.js';
-import { DaytonaRuntimeProvider } from './daytona.js';
+import {
+    type DaytonaRuntimeDependencies,
+    DaytonaRuntimeProvider,
+} from './daytona/index.js';
 import {
     type DockerRuntimeDependencies,
     DockerRuntimeProvider,
@@ -31,6 +34,7 @@ import { type LocalRuntimeDependencies, LocalRuntimeProvider } from './local.js'
 export interface RuntimeDependencies extends LocalRuntimeDependencies {
     docker?: DockerRuntimeDependencies;
     e2b?: E2BRuntimeDependencies;
+    daytona?: DaytonaRuntimeDependencies;
 }
 
 export class RuntimeRegistry {
@@ -52,7 +56,7 @@ export class RuntimeRegistry {
             new LocalRuntimeProvider(dependencies),
             new DockerRuntimeProvider(dependencies.docker),
             new E2BRuntimeProvider(dependencies.e2b),
-            new DaytonaRuntimeProvider(),
+            new DaytonaRuntimeProvider(dependencies.daytona),
         ]);
     }
 

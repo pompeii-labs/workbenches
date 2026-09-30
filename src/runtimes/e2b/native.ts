@@ -8,11 +8,12 @@ import type { E2BAssetSnapshot } from './snapshot.js';
 import { downloadE2BFile } from './streams.js';
 
 export async function captureE2BNativeState(
-    sandbox: E2BSandbox,
+    sandbox: Pick<E2BSandbox, 'run' | 'download'>,
     snapshots: E2BAssetSnapshot[],
     maximumBytes: number,
     completed = new Set<number>(),
-    checkpoint?: (completed: Set<number>) => Promise<void>
+    checkpoint?: (completed: Set<number>) => Promise<void>,
+    label = 'E2B'
 ): Promise<void> {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-e2b-state-'));
     let transferred = 0;
@@ -35,7 +36,7 @@ export async function captureE2BNativeState(
             const result = await sandbox.run(selection);
             if (result.code !== 0)
                 throw new Error(
-                    `Failed to collect E2B native state: ${result.stderr.trim()}`
+                    `Failed to collect ${label} native state: ${result.stderr.trim() || result.stdout.trim()}`
                 );
             const archive = join(directory, `${index}.tar.gz`);
             transferred += await downloadE2BFile(
@@ -43,7 +44,8 @@ export async function captureE2BNativeState(
                 remoteArchive,
                 archive,
                 maximumBytes - transferred,
-                maximumBytes
+                maximumBytes,
+                label
             );
             materialized += await snapshot.persistState(
                 archive,

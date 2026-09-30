@@ -121,7 +121,21 @@ export class RequirementsPreflight {
             );
         }
         report.checked.push(`class ${daytonaClass} provides ${provided}`);
-        this.pending(check, ['arch', 'cpu', 'memory']);
+        // The sandbox is created with these as its resources.
+        if (requirements.cpu !== undefined) {
+            report.applied.push(`cpu allocation ${requirements.cpu}`);
+        }
+        if (requirements.memory_gb !== undefined) {
+            report.applied.push(
+                `memory allocation ${Math.ceil(requirements.memory_gb)} GiB`
+            );
+        }
+        if (requirements.disk_gb !== undefined) {
+            report.applied.push(
+                `disk allocation ${Math.ceil(requirements.disk_gb)} GiB`
+            );
+        }
+        this.pending(check, ['arch']);
     }
 
     private checkLocal(check: RequirementsCheck): void {

@@ -5,6 +5,7 @@ import {
     E2B,
     type Sandbox as E2BSdkSandbox,
 } from 'e2b';
+import { managedMetadata, runLabels, runMetadata, scopeMetadata } from '../labels.js';
 import { installRepositoryTools } from '../repository-tools.js';
 import type {
     E2BClient,
@@ -20,9 +21,7 @@ import type {
     E2BTemplateSource,
 } from './contracts.js';
 
-export const managedMetadata = 'dev.workbenches.managed';
-export const runMetadata = 'dev.workbenches.run';
-export const scopeMetadata = 'dev.workbenches.scope';
+export { managedMetadata, runMetadata, scopeMetadata };
 
 export class E2BSdkClient implements E2BClient {
     readonly #client: E2B;
@@ -118,17 +117,7 @@ export function e2bMetadata(run: {
     id: string;
     scope: string;
 }): Record<string, string> {
-    if (!/^wb_[a-z0-9]{20,64}$/.test(run.id)) {
-        throw new Error(`Invalid Workbench run ID for E2B: ${run.id}`);
-    }
-    if (!/^[a-f0-9]{24}$/.test(run.scope)) {
-        throw new Error(`Invalid Workbench E2B scope: ${run.scope}`);
-    }
-    return {
-        [managedMetadata]: 'true',
-        [runMetadata]: run.id,
-        [scopeMetadata]: run.scope,
-    };
+    return runLabels(run, 'E2B');
 }
 
 class SdkSandbox implements E2BSandbox {
