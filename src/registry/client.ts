@@ -11,6 +11,11 @@ const defaultRegistryUrl = 'https://api.workbenches.dev';
 
 export type RegistryVisibility = 'public' | 'private';
 
+/** The registry says `private` on the wire; people see `internal`. */
+export function registryVisibilityLabel(visibility: RegistryVisibility): string {
+    return visibility === 'private' ? 'internal' : visibility;
+}
+
 export interface RegistryReference {
     publisher: string;
     workbench: string;
@@ -19,6 +24,8 @@ export interface RegistryReference {
 export interface RegistryPackage {
     reference: RegistryReference;
     registryUrl: string;
+    /** Present when the registry reports the workbench identity. */
+    workbenchId?: string;
     visibility: RegistryVisibility;
     versionId: string;
     version: string;
@@ -96,7 +103,7 @@ export class RegistryClient {
     async signInHint(publisher: string): Promise<string> {
         return (await this.keyring.holds(publisher))
             ? ''
-            : `. Private workbenches need a key for their organization: wb login --org ${publisher}`;
+            : `. Internal workbenches need a key for their organization: wb login --org ${publisher}`;
     }
 
     static configureApiUrl(value: string | undefined): void {
@@ -214,6 +221,7 @@ export class RegistryClient {
         return {
             reference,
             registryUrl: this.apiUrl,
+            ...(parsed.workbench_id ? { workbenchId: parsed.workbench_id } : {}),
             visibility: parsed.visibility,
             versionId: parsed.latest_version.id,
             version: parsed.latest_version.version,
@@ -323,6 +331,7 @@ export class RegistryClient {
     }
 
     private parsePackage(value: unknown): {
+        workbench_id: string | undefined;
         visibility: RegistryVisibility;
         source_path: string;
         repository: { url: string } | null;
@@ -345,6 +354,8 @@ export class RegistryClient {
         }
         if (
             typeof value.source_path !== 'string' ||
+            (value.workbench_id !== undefined &&
+                typeof value.workbench_id !== 'string') ||
             !RegistryClient.isVisibility(value.visibility) ||
             (repository !== null && typeof repository.url !== 'string') ||
             typeof version.id !== 'string' ||
@@ -374,6 +385,7 @@ export class RegistryClient {
             return null;
         }
         return {
+            workbench_id: value.workbench_id as string | undefined,
             visibility: value.visibility ?? 'public',
             source_path: value.source_path,
             repository: repository ? { url: repository.url as string } : null,

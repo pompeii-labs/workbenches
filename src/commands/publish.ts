@@ -1,130 +1,98 @@
 import { defineCommand } from 'citty';
 
-import { WorkbenchPackage } from '../catalog/index.js';
-import { RegistryAccountStore } from '../registry/index.js';
+import {
+    RegistryClient,
+    RegistryPublisher,
+    type RegistrySubmission,
+} from '../registry/index.js';
 import { WorkbenchResolver } from '../workbench/index.js';
 import { orgArgument, rejectPublisherFlag } from './org-option.js';
 import { CliPresenter } from './presenter.js';
-
-interface PublicationResponse {
-    submissions: Array<{
-        id: string;
-        status: string;
-        publisher_slug: string;
-        slug: string;
-        version: string;
-        digest: string;
-        dashboard_url: string;
-        latest_approved_version: string | null;
-    }>;
-}
+import { presentPushed } from './push.js';
 
 export const publishCommand = defineCommand({
     meta: {
         name: 'publish',
-        description: 'Submit a saved Workbench package for registry review.',
+        description: 'Submit a stored Workbench version for public registry review.',
     },
     args: {
         source: {
             type: 'positional',
-            description: 'Saved Workbench alias',
+            description: 'Registry org/name, local package, or saved alias',
             required: true,
         },
         org: orgArgument,
-        private: {
-            type: 'boolean',
-            description:
-                'Publish privately to your organization, live immediately without review',
-            default: false,
+        version: {
+            type: 'string',
+            description: 'Version to publish (only the latest stored version for now)',
         },
     },
     async run({ args }) {
         rejectPublisherFlag(args);
         const output = new CliPresenter();
-        const { workbench } = await new WorkbenchResolver().resolve(args.source, {
-            savedOnly: true,
-        });
-        const accounts = new RegistryAccountStore();
-        const account = await accounts.require(args.org);
-        const publisher = { id: account.organizationId, slug: account.slug };
+        const publisher = new RegistryPublisher();
+        const reference = RegistryClient.parseReference(args.source);
 
-        const slug = workbench.manifest.name;
-        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-            throw new Error(
-                `Workbench manifest name is not a valid registry slug: ${slug}`
-            );
-        }
-        output.progress(`Preparing ${publisher.slug}/${slug}`);
-        const files = await new WorkbenchPackage(workbench).files();
-        const total = files.reduce((bytes, file) => bytes + file.bytes.byteLength, 0);
-        if (files.length > 256) {
-            throw new Error('Workbench package exceeds 256 files');
-        }
-        if (total > 10 * 1024 * 1024) {
-            throw new Error('Workbench package exceeds 10485760 bytes');
-        }
-        const oversized = files.find((file) => file.bytes.byteLength > 2 * 1024 * 1024);
-        if (oversized) {
-            throw new Error(`Workbench package file is too large: ${oversized.path}`);
-        }
-
-        const digest = WorkbenchPackage.digest(files);
-        output.progress(`Submitting ${publisher.slug}/${slug}`);
-        const response = await accounts.client.request<PublicationResponse>(
-            '/v1/submissions',
-            {
-                method: 'POST',
-                token: account.token,
-                timeout: 60_000,
-                body: {
-                    organization_id: publisher.id,
-                    slug,
-                    ...(args.private ? { visibility: 'private' } : {}),
-                    package: {
-                        format: 1,
-                        files: files.map((file) => ({
-                            path: file.path,
-                            content: Buffer.from(file.bytes).toString('base64'),
-                            executable: file.executable,
-                        })),
-                    },
-                },
+        let submission: RegistrySubmission;
+        if (reference) {
+            const { account, registry } = await publisher.resolve(reference, args.org);
+            if (args.version && args.version !== registry.version) {
+                throw new Error(
+                    `Only the latest version can be published for now: ${reference.publisher}/${reference.workbench} is at ${registry.version}, not ${args.version}`
+                );
             }
-        );
-        const published = response.submissions[0];
-        if (!published) throw new Error('The registry returned no submission');
-        if (`sha256:${published.digest}` !== digest) {
-            throw new Error('The registry returned a different package digest');
+            output.progress(
+                `Submitting ${reference.publisher}/${reference.workbench}@${registry.version}`
+            );
+            submission = await publisher.submit(account, {
+                id: registry.versionId,
+                digest: registry.digest,
+            });
+        } else {
+            if (args.version) {
+                throw new Error(
+                    '--version applies to a registry org/name. A local package publishes the version in its manifest.'
+                );
+            }
+            const { workbench } = await new WorkbenchResolver().resolve(args.source);
+            const account = await publisher.account(args.org);
+            const pushed = await publisher.push(account, workbench, {
+                progress: (message) => output.progress(message),
+            });
+            presentPushed(output, pushed);
+            output.progress(
+                `Submitting ${pushed.reference.publisher}/${pushed.reference.workbench}@${pushed.version}`
+            );
+            submission = await publisher.submit(account, {
+                id: pushed.versionId,
+                digest: pushed.digest,
+            });
         }
-        const publishedReference = `${published.publisher_slug}/${published.slug}`;
+
+        const publishedReference = `${submission.reference.publisher}/${submission.reference.workbench}`;
         output.record({
             machine: [
                 'submitted',
                 publishedReference,
-                published.version,
-                digest,
-                published.status,
-                published.dashboard_url,
-                published.id,
-                published.latest_approved_version ?? '',
+                submission.version,
+                submission.digest,
+                submission.status,
+                submission.dashboardUrl,
+                submission.id,
+                submission.latestApprovedVersion ?? '',
             ],
-            title: `Submitted ${publishedReference}: ${published.status}`,
+            title: `Submitted ${publishedReference}: ${submission.status}`,
             details: [
-                published.version,
-                digest,
-                published.status === 'approved'
+                submission.version,
+                submission.digest,
+                submission.status === 'approved'
                     ? 'Approved by the registry.'
-                    : 'Not published. Review status is available in the dashboard.',
-                published.latest_approved_version
-                    ? `Latest approved version: ${published.latest_approved_version}`
+                    : 'Not public yet. Review status is available in the dashboard.',
+                submission.latestApprovedVersion
+                    ? `Latest approved version: ${submission.latestApprovedVersion}`
                     : 'No approved version yet.',
-                published.dashboard_url,
+                submission.dashboardUrl,
             ],
         });
-        if (args.private)
-            output.message(
-                `Published ${publishedReference} privately without review.`,
-                'success'
-            );
     },
 });

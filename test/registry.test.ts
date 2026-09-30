@@ -325,12 +325,31 @@ describe('Workbench registry keys', () => {
         ).rejects.toThrow('malformed package record');
     });
 
+    test('exposes the workbench id when the registry reports one', async () => {
+        const client = new RegistryClient({
+            apiUrl: API,
+            fetch: async () =>
+                Response.json({ ...registryResponse(), workbench_id: 'wb-id' }),
+        });
+        expect(
+            (await client.resolve({ publisher: 'lux', workbench: 'core' }))?.workbenchId
+        ).toBe('wb-id');
+        const bad = new RegistryClient({
+            apiUrl: API,
+            fetch: async () =>
+                Response.json({ ...registryResponse(), workbench_id: 7 }),
+        });
+        await expect(
+            bad.resolve({ publisher: 'lux', workbench: 'core' })
+        ).rejects.toThrow('malformed package record');
+    });
+
     test('explains a miss for a publisher with no held key', async () => {
         const none = await keyed([]);
         expect(
             (await none.client.missing({ publisher: 'acme', workbench: 'x' })).message
         ).toBe(
-            'Registry Workbench does not exist: acme/x. Private workbenches need a key for their organization: wb login --org acme'
+            'Registry Workbench does not exist: acme/x. Internal workbenches need a key for their organization: wb login --org acme'
         );
         const held = await keyed(['acme']);
         expect(

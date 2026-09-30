@@ -180,7 +180,7 @@ export class WorkbenchInspection {
         if (view.origin.revision) this.field(lines, 'Revision', view.origin.revision);
         if (view.origin.kind === 'saved') {
             if (view.origin.visibility === 'private')
-                this.field(lines, 'Visibility', 'private');
+                this.field(lines, 'Visibility', 'internal');
             if (view.origin.mode) this.field(lines, 'Mode', view.origin.mode);
             this.field(lines, 'Digest', view.origin.digest);
             this.field(lines, 'Added', view.origin.added_at);

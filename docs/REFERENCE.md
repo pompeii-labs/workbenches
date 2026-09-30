@@ -940,20 +940,45 @@ wb logout --org example  # revoke that key and forget it
 ```
 
 `--org` on `login` must match the organization approved in the browser, or
-nothing is stored. `wb publish` and `wb image push` use the default
-organization, or the one named with `--org <slug>`. `wb logout` without a flag
+nothing is stored. `wb push`, `wb publish`, `wb unpublish`, and `wb image push`
+use the default organization, or the one named with `--org <slug>`. `wb logout` without a flag
 signs out of the default; removing the last key deletes the credential file.
 `--publisher` was removed and now fails with a pointer to `--org`. A credential
 file from an older CLI is ignored: run `wb login` once.
 
-### Private workbenches
+### Internal workbenches, push, publish, unpublish
 
-`wb publish <alias> --private` submits with `visibility: private`. The registry
-publishes it immediately, without review, and only keys for the owning
-organization can resolve, download, or search it. Anyone else receives a plain
-404. A workbench keeps the visibility it was first published with: submitting
-the other one is rejected by the registry with a conflict, and the CLI prints
-its message unchanged.
+Every organization workbench is internal by default: members and organization
+keys see it, nobody else does. Anyone else receives a plain 404. Publishing is
+the single explicit act that makes a stored version public, and it always goes
+through review.
+
+```sh
+wb push [source] [--org <slug>] [--as <name>]
+wb publish <org/name | source> [--org <slug>] [--version <semver>]
+wb unpublish <org/name> [--org <slug>]
+```
+
+`wb push` uploads the package as a new immutable version. `source` is a local
+package reference (`.#name`, `/path#name`, default `.`) or a saved alias. The
+workbench is created as internal when missing. `--as` sets the registry name
+instead of the manifest name. Each push needs a manifest version greater than the
+latest stored one, and a public workbench takes new versions only through
+`wb publish`; the registry rejects both cases with a conflict and the CLI prints
+its message unchanged. Output is `Pushed acme/ios-expert@1.2.0 (internal)`; the
+machine record is `push`, `org/slug`, `version`, `digest`.
+
+`wb publish` submits a stored version for public review. With `org/name` it
+resolves the workbench with the organization's key and submits its latest stored
+version. `--version` is accepted only when it names that latest version, because
+the registry exposes no version lookup yet. With a local source it runs `wb push`
+first and submits the version it stored. It prints the submission id, status, and
+dashboard URL. A pending submission is not public.
+
+`wb unpublish` resolves `org/name` and flips a public workbench back to internal
+immediately. `--org`, when given, must match the organization in the reference.
+`--private` was removed: internal is the default, and publish never means
+internal.
 
 Registry reads attach a held key automatically. For `publisher/name`, the key of
 the organization whose slug matches `publisher` is used; otherwise the default
@@ -961,8 +986,9 @@ organization's key; otherwise the request is anonymous. Search uses the default
 key. Expired keys are never sent, and keys go only to the registry, never to
 GitHub. A 404 for a publisher you hold no key for suggests
 `wb login --org <publisher>`. Saved snapshots record their visibility, shown as
-`private` by `wb list --saved` (a trailing column in machine output) and
-`wb view` (`origin.visibility` in JSON), and `wb upgrade` reuses the same key rule.
+`internal` by `wb list --saved` (a trailing column in machine output) and
+`wb view`; `origin.visibility` in `wb view --json` keeps the wire value
+`private`. `wb upgrade` reuses the same key rule.
 
 ## Source and authorization boundaries
 

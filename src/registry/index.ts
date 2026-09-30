@@ -15,6 +15,7 @@ export {
     type RegistryRequestOptions,
     type RegistrySearchResult,
     type RegistryVisibility,
+    registryVisibilityLabel,
 } from './client.js';
 export {
     type OciClientRunner,
@@ -29,6 +30,11 @@ export {
     type RegistryLoginOptions,
     type RegistryLoginResult,
 } from './login.js';
+export {
+    RegistryPublisher,
+    type RegistryPushedVersion,
+    type RegistrySubmission,
+} from './publisher.js';
 export {
     RegistryWorkbenchSaver,
     type RegistryWorkbenchSaverOptions,

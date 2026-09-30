@@ -38,16 +38,12 @@ export const listCommand = defineCommand({
                 const source = entry.localPath
                     ? `${entry.localPath} (live${current ? '' : ', unavailable'})`
                     : `${entry.source} --name ${entry.selector}`;
-                const isPrivate = entry.registry?.visibility === 'private';
+                const internal =
+                    entry.registry?.visibility === 'private' ? 'internal' : undefined;
                 output.record({
-                    machine: [
-                        entry.alias,
-                        identity,
-                        source,
-                        isPrivate ? 'private' : undefined,
-                    ],
+                    machine: [entry.alias, identity, source, internal],
                     title: entry.alias,
-                    details: [identity, source, isPrivate ? 'private' : undefined],
+                    details: [identity, source, internal],
                     tone: 'info',
                 });
             }
