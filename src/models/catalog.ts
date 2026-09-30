@@ -54,7 +54,9 @@ export class ModelCatalog extends ActiveModelCatalog {
     }) {
         super();
         this.#home = options.home;
-        this.#fetch = options.fetch ?? fetch;
+        // Keep `this` undefined when calling, as some runtimes require.
+        const fetcher = options.fetch ?? fetch;
+        this.#fetch = (input, init) => fetcher(input, init);
         this.#maximumAge = options.maximumAge ?? defaultMaximumAge;
     }
 

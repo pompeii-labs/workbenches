@@ -182,7 +182,10 @@ class Transport {
     readonly transferTimeoutMs: number;
     readonly startTimeoutMs: number;
     readonly pollIntervalMs: number;
-    private readonly fetcher: typeof fetch;
+    private readonly fetcher: (
+        input: string | URL | Request,
+        init?: RequestInit
+    ) => Promise<Response>;
     private readonly apiKey: string;
 
     constructor(options: DaytonaApiOptions) {
@@ -191,7 +194,10 @@ class Transport {
             /\/+$/,
             ''
         );
-        this.fetcher = options.fetch ?? globalThis.fetch;
+        // Some runtimes require Web platform functions to run with an undefined
+        // `this`, so never call the injected function as a method of this client.
+        const fetcher = options.fetch ?? globalThis.fetch;
+        this.fetcher = (input, init) => fetcher(input, init);
         this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
         this.commandTimeoutMs = options.commandTimeoutMs ?? 60 * 60_000;
         this.transferTimeoutMs = options.transferTimeoutMs ?? 30 * 60_000;
