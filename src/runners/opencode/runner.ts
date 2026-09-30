@@ -1,4 +1,8 @@
-import { ModelRouter, type ResolvedRunnerConfiguration } from '../../models/index.js';
+import {
+    type ModelCatalogSnapshot,
+    ModelRouter,
+    type ResolvedRunnerConfiguration,
+} from '../../models/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import type { RunnerFiles } from '../files.js';
@@ -32,6 +36,12 @@ export interface OpenCodeRunnerDependencies {
     stageSkills?: OpenCodeSkillStaging;
     /** The session driver's own dependencies: `fetch`, the server password, timeouts. */
     session?: Omit<OpenCodeSessionDependencies, 'files'>;
+    /**
+     * The model catalog snapshot to route against. Without one the runner reads
+     * the snapshot `ModelCatalog.activate` made active, so a host that passes one
+     * needs no process-global state.
+     */
+    catalog?: ModelCatalogSnapshot;
 }
 
 export class OpenCodeRunner extends Runner {
@@ -39,10 +49,12 @@ export class OpenCodeRunner extends Runner {
     readonly session: OpenCodeSessionAdapter;
     private readonly files: RunnerFiles;
     private readonly stageSkills: OpenCodeSkillStaging;
+    private readonly catalog: ModelCatalogSnapshot | undefined;
 
     constructor(dependencies: OpenCodeRunnerDependencies) {
         super();
         this.files = dependencies.files;
+        this.catalog = dependencies.catalog;
         this.stageSkills =
             dependencies.stageSkills ??
             ((workbench, files) => stageOpenCodeSkillsWith(files, workbench));
@@ -57,7 +69,8 @@ export class OpenCodeRunner extends Runner {
             workbench,
             this.session,
             this.files,
-            this.stageSkills
+            this.stageSkills,
+            this.catalog
         );
     }
 }
@@ -74,6 +87,7 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
     readonly #workbench: ResolvedWorkbench;
     readonly #session: OpenCodeSessionAdapter;
     readonly #context: RunnerContextFiles;
+    readonly #catalog: ModelCatalogSnapshot | undefined;
 
     private constructor(options: {
         workbench: ResolvedWorkbench;
@@ -82,7 +96,9 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
         cleanup: () => Promise<void>;
         session: OpenCodeSessionAdapter;
         context: RunnerContextFiles;
+        catalog?: ModelCatalogSnapshot | undefined;
     }) {
+        this.#catalog = options.catalog;
         this.#workbench = options.workbench;
         this.#stagedDirectory = options.stagedDirectory;
         this.#nativeConfigFile = options.nativeConfigFile;
@@ -101,11 +117,13 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
         session: OpenCodeSessionAdapter,
         files: RunnerFiles,
         stageSkills: OpenCodeSkillStaging = (source, storage) =>
-            stageOpenCodeSkillsWith(storage, source)
+            stageOpenCodeSkillsWith(storage, source),
+        catalog?: ModelCatalogSnapshot
     ): Promise<PreparedOpenCodeRunner> {
         const staged = await stageSkills(workbench, files);
         const nativeConfigFile = staged.nativeConfigFile;
         return new PreparedOpenCodeRunner({
+            catalog,
             workbench,
             ...(staged?.directory ? { stagedDirectory: staged.directory } : {}),
             ...(nativeConfigFile ? { nativeConfigFile } : {}),
@@ -124,7 +142,7 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
         return buildOpenCodeInvocation(
             runtime.workbench,
             task,
-            new ModelRouter().environmentForRoute(
+            new ModelRouter(this.#catalog).environmentForRoute(
                 this.#workbench,
                 configuration,
                 runtime.environment
@@ -171,7 +189,7 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
             {
                 workbench: runtime.workbench,
                 workspaceDirectory: runtime.workspaceDirectory,
-                environment: new ModelRouter().environmentForRoute(
+                environment: new ModelRouter(this.#catalog).environmentForRoute(
                     this.#workbench,
                     options.configuration,
                     runtime.environment
