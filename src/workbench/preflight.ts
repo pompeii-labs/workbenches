@@ -1,4 +1,6 @@
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
+import type { RequirementsReport } from './requirements.js';
+import { selectedRuntime } from './runtimes.js';
 
 export interface PreflightResult {
     runner: { name: string; path: string };
@@ -8,6 +10,7 @@ export interface PreflightResult {
     optionalEnvironment: string[];
     workspaces: WorkbenchWorkspaceBinding[];
     dockerEngine?: 'host';
+    requirements?: RequirementsReport;
 }
 
 export interface WorkbenchConfigurationPreflight {
@@ -31,10 +34,11 @@ export class WorkbenchPreflight {
     }
 
     check(workbench: ResolvedWorkbench): PreflightResult {
-        if (workbench.manifest.runtime !== 'local') {
-            throw new Error(`Unsupported runtime: ${workbench.manifest.runtime}`);
+        const runtime = selectedRuntime(workbench);
+        if (runtime.name !== 'local') {
+            throw new Error(`Unsupported runtime: ${runtime.name}`);
         }
-        if (workbench.manifest.image) {
+        if (runtime.image) {
             throw new Error('image is not supported with the local runtime');
         }
 

@@ -11,7 +11,11 @@ import {
     type StoredSession,
 } from '../sessions/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
-import type { ResolvedWorkbenchReference } from '../workbench/index.js';
+import {
+    type ResolvedWorkbenchReference,
+    selectedRuntime,
+    withRuntime,
+} from '../workbench/index.js';
 import { Workbench } from '../workbench/workbench.js';
 import { type RunHandle, StoredRunHandle } from './handle.js';
 import { RunStore, type StoredRun } from './store.js';
@@ -45,10 +49,13 @@ export class RunDispatcher {
     }
 
     async prepare(options: PrepareRunOptions): Promise<StoredRun> {
-        const workbench =
+        const workbench = withRuntime(
             !options.session && options.resolved.source === 'local'
                 ? await Workbench.load(options.resolved.workbench.packageDirectory)
-                : options.resolved.workbench;
+                : options.resolved.workbench,
+            options.resolved.workbench.selectedRuntime
+        );
+        const runtime = selectedRuntime(workbench).name;
         const id = RunStore.createId();
         const execution = this.executionFor(workbench.manifest.runner);
         const reference =
@@ -99,7 +106,7 @@ export class RunDispatcher {
                 workbench_version: workbench.manifest.version,
                 runner: workbench.manifest.runner,
                 model: modelLabel(workbench.manifest.model),
-                runtime: workbench.manifest.runtime,
+                runtime,
                 reference,
                 workbench_path: packagePath,
                 ...(options.resolved.source === 'local'
@@ -129,7 +136,7 @@ export class RunDispatcher {
                     workbench_version: workbench.manifest.version,
                     runner: workbench.manifest.runner,
                     model: modelLabel(workbench.manifest.model),
-                    runtime: workbench.manifest.runtime,
+                    runtime,
                     workspace: options.resolved.workspaceDirectory,
                     ...(repository ? { repository } : {}),
                     mode: options.mode,
@@ -152,6 +159,7 @@ export class RunDispatcher {
                     task: options.task ?? '',
                     workspaces,
                     allow_host_docker: options.allowHostDocker ?? false,
+                    runtime,
                     reference,
                     session_id: session.id,
                     ...(session.native_session_id
@@ -188,7 +196,7 @@ export class RunDispatcher {
             session.workbench_version === workbench.manifest.version &&
             session.runner === workbench.manifest.runner &&
             session.model === modelLabel(workbench.manifest.model) &&
-            session.runtime === workbench.manifest.runtime &&
+            session.runtime === selectedRuntime(workbench).name &&
             session.workbench_path === workbench.packageDirectory &&
             (!session.workbench_digest || session.workbench_digest === digest) &&
             session.workspace === options.resolved.workspaceDirectory;

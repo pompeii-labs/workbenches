@@ -418,7 +418,11 @@ async function createFixture(options: FixtureOptions = {}) {
     };
     const calls: string[] = [];
     const runner = new TrackingRunner(workbench.manifest.runner, calls);
-    const provider = new TrackingRuntime(workbench.manifest.runtime, calls, options);
+    const provider = new TrackingRuntime(
+        workbench.manifest.runtime ?? 'local',
+        calls,
+        options
+    );
     const eventsSeen: Array<{ type: string }> = [];
     const events = new RunEvents({
         runId: RunStore.createId(),

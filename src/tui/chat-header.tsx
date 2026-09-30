@@ -3,18 +3,21 @@ import { createMemo, Show } from 'solid-js';
 
 import { modelLabel } from '../models/index.js';
 import type { WorkbenchManifest } from '../types.js';
+import { declaredRuntimeNames } from '../workbench/runtimes.js';
 import { useTheme } from './theme/index.js';
 
 export function ChatHeader(props: {
     alias: string;
     sessionName: string | undefined;
     manifest: WorkbenchManifest;
+    /** Selected runtime. Defaults to the first declared runtime. */
+    runtime?: string;
 }) {
     const dimensions = useTerminalDimensions();
     const { theme } = useTheme();
     const details = createMemo(
         () =>
-            `${props.manifest.runner} · ${modelLabel(props.manifest.model)} · ${props.manifest.runtime}`
+            `${props.manifest.runner} · ${modelLabel(props.manifest.model)} · ${props.runtime ?? declaredRuntimeNames(props.manifest)[0]}`
     );
     const showDetails = createMemo(() => dimensions().width >= 100);
     const title = createMemo(() => {

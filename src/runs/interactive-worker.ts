@@ -3,6 +3,7 @@ import type { NormalizedRunnerInput } from '../runners/session.js';
 import { normalizeRunnerInput } from '../runners/session.js';
 import { SessionStore } from '../sessions/index.js';
 import type { ResolvedWorkbench } from '../types.js';
+import { withRuntime } from '../workbench/runtimes.js';
 import { Workbench } from '../workbench/workbench.js';
 import { RunAudience } from './audience.js';
 import { RunControl, type RunControlRequest } from './control.js';
@@ -88,9 +89,12 @@ export class InteractiveRunWorker {
                 pid: process.pid,
             });
             controls = this.controlLoop().catch((error) => this.fail(error));
-            const workbench = this.dependencies.loadWorkbench
-                ? await this.dependencies.loadWorkbench(request.workbench_path)
-                : await Workbench.load(request.workbench_path);
+            const workbench = withRuntime(
+                this.dependencies.loadWorkbench
+                    ? await this.dependencies.loadWorkbench(request.workbench_path)
+                    : await Workbench.load(request.workbench_path),
+                request.runtime
+            );
             this.session = await InteractiveRun.start({
                 runId: this.runId,
                 resolved: {

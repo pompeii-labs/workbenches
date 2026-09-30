@@ -7,6 +7,7 @@ import type {
     WorkbenchWorkspaceBinding,
 } from '../../types.js';
 import { type PreflightResult, WorkbenchPreflight } from '../../workbench/preflight.js';
+import { RequirementsPreflight } from '../../workbench/requirements.js';
 import { WorkbenchWorkspaces } from '../../workbench/workspaces.js';
 import type {
     PreparedRuntime,
@@ -170,6 +171,9 @@ export class E2BRuntime implements PreparedRuntime {
             runner: { name: this.workbench.manifest.runner, path: runnerPath },
             tools,
             workspaces: this.workspaces,
+            requirements: new RequirementsPreflight().check(
+                this.options.request.workbench
+            ),
             ...configuration,
         };
     }

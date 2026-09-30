@@ -6,6 +6,7 @@ import { RunStore } from '../runs/store.js';
 import { workbenchHome } from '../storage.js';
 import { assertWorkbenchTuiSupported, launchWorkbenchTui } from '../tui.js';
 import {
+    selectedRuntime,
     WorkbenchEnvironment,
     WorkbenchPreflight,
     WorkbenchWorkspaces,
@@ -83,6 +84,18 @@ export const createCommand = defineCommand({
                 'Authorize a candidate host Docker engine binding during smoke',
             default: false,
         },
+        runtime: {
+            type: 'string',
+            valueHint: 'name',
+            description:
+                'Runtime to verify the candidate on (defaults to its first declared runtime)',
+        },
+        'allow-unchecked-gpu': {
+            type: 'boolean',
+            description:
+                'Verify a candidate with a GPU requirement on a runtime that cannot check it',
+            default: false,
+        },
     },
     async run({ args, rawArgs }) {
         const hasInput =
@@ -113,6 +126,8 @@ export const createCommand = defineCommand({
                 workspaceOverrides,
                 workspaceDirectory: process.cwd(),
                 ...(args['allow-host-docker'] ? { allowHostDocker: true } : {}),
+                ...(args.runtime ? { runtime: args.runtime } : {}),
+                ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
             },
         }).create({
             ...(args.target ? { target: args.target } : {}),
@@ -144,7 +159,7 @@ export const createCommand = defineCommand({
             }
             return;
         }
-        if (launch.resolved.workbench.manifest.runtime === 'local') {
+        if (selectedRuntime(launch.resolved.workbench).name === 'local') {
             new WorkbenchPreflight({ environment: launch.environment }).check(
                 launch.resolved.workbench
             );

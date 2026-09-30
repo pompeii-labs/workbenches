@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { ResolvedWorkbench } from '../types.js';
+import { selectedRuntime } from '../workbench/runtimes.js';
 
 export interface RunnerConnectionSelection {
     provider: string;
@@ -59,7 +60,7 @@ export class ConnectionStore {
     static context(workbench: ResolvedWorkbench): RunnerConnectionContext {
         return {
             runner: workbench.manifest.runner,
-            runtime: workbench.manifest.runtime,
+            runtime: selectedRuntime(workbench).name,
         };
     }
 

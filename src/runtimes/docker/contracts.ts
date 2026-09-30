@@ -1,4 +1,5 @@
 import type { SpawnedRunner } from '../../types.js';
+import type { RequirementsHost } from '../../workbench/requirements.js';
 import type { RuntimePreparation } from '../contracts.js';
 
 export interface DockerPreparation extends RuntimePreparation {
@@ -43,6 +44,8 @@ export interface DockerHostSocket {
 
 export interface DockerRuntimeDependencies {
     findExecutable?: (name: string) => string | null;
+    /** Host facts used to check requirements. Defaults to this machine. */
+    host?: RequirementsHost;
     command?: (
         command: string[],
         options?: DockerProcessOptions

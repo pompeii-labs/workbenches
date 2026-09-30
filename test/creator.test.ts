@@ -15,7 +15,8 @@ describe('published Workbench creator', () => {
         expect(workbench.manifest).toMatchObject({
             name: 'workbench-creator',
             runner: 'opencode',
-            runtime: 'local',
+            spec: 1,
+            runtimes: { local: {} },
         });
     });
 
@@ -23,7 +24,7 @@ describe('published Workbench creator', () => {
         const [rootSpec, packagedSpec, rootSchema, packagedSchema] = await Promise.all([
             readFile(join(root, 'SPEC.md'), 'utf8'),
             readFile(join(references, 'spec.md'), 'utf8'),
-            readFile(join(root, 'schemas', 'v0', 'workbench.schema.json'), 'utf8'),
+            readFile(join(root, 'schemas', 'v1', 'workbench.schema.json'), 'utf8'),
             readFile(join(references, 'workbench.schema.json'), 'utf8'),
         ]);
 

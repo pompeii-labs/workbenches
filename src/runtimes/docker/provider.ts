@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { HostOutcomeCapture } from '../../outcomes/index.js';
+import { RequirementsPreflight } from '../../workbench/requirements.js';
+import { selectedRuntime } from '../../workbench/runtimes.js';
 import type {
     PreparedRuntime,
     RuntimePrepareRequest,
@@ -33,16 +35,22 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                 'Docker CLI is unavailable on the host'
             );
         }
-        if (!request.workbench.manifest.image) {
+        const runtime = selectedRuntime(request.workbench);
+        if (!runtime.image) {
             throw new RuntimeError(
                 this.name,
                 'prepare',
                 'Docker runtime requires an image or local image build'
             );
         }
+        try {
+            new RequirementsPreflight(this.dependencies.host).check(request.workbench);
+        } catch (error) {
+            throw RuntimeError.from(this.name, 'prepare', error);
+        }
         const needsHostDocker =
             (request.purpose ?? 'run') === 'run' &&
-            request.workbench.manifest.docker?.engine !== undefined;
+            runtime.docker?.engine !== undefined;
         if (needsHostDocker && !request.authorizations?.hostDocker) {
             throw new RuntimeError(
                 this.name,
@@ -95,6 +103,7 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                 preparation: image.preparation,
                 stateDirectory: directory,
                 ...(outcome ? { outcome } : {}),
+                ...(this.dependencies.host ? { host: this.dependencies.host } : {}),
                 cleanupPreparation: async () => {
                     await Promise.all([
                         image.cleanup(),

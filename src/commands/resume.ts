@@ -6,7 +6,7 @@ import { RunContinuation } from '../runs/index.js';
 import { SessionResolver } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
 import { launchWorkbenchTui } from '../tui.js';
-import { WorkbenchEnvironment } from '../workbench/index.js';
+import { selectedRuntime, WorkbenchEnvironment } from '../workbench/index.js';
 import { CliRunClient } from './run-client.js';
 
 export const resumeCommand = defineCommand({
@@ -93,7 +93,7 @@ export const resumeCommand = defineCommand({
             overrides
         );
         if (
-            target.resolved.workbench.manifest.docker?.engine &&
+            selectedRuntime(target.resolved.workbench).docker?.engine &&
             !args['allow-host-docker']
         ) {
             throw new Error(

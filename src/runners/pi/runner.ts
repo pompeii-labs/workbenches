@@ -1,6 +1,7 @@
 import { ModelRouter, type ResolvedRunnerConfiguration } from '../../models/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
+import { selectedRuntime } from '../../workbench/runtimes.js';
 import { type RunnerContextFiles, remapRunnerContext } from '../context.js';
 import {
     assertRunnerConfiguration,
@@ -62,7 +63,7 @@ class PreparedPiRunner implements PreparedRunner {
         session = new PiSessionAdapter()
     ): Promise<PreparedPiRunner> {
         const staged = await stagePiConfig(workbench, environment, {
-            linkNativeCredentials: workbench.manifest.runtime === 'local',
+            linkNativeCredentials: selectedRuntime(workbench).name === 'local',
         });
         return new PreparedPiRunner({
             workbench,

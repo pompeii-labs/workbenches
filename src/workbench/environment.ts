@@ -5,6 +5,7 @@ import { parseEnv } from 'node:util';
 import { ModelCatalog } from '../models/catalog.js';
 import { ModelRouter } from '../models/routing.js';
 import type { ResolvedWorkbench } from '../types.js';
+import { selectedRuntime } from './runtimes.js';
 
 const maximumEnvironmentFileBytes = 1024 * 1024;
 
@@ -38,7 +39,7 @@ export class WorkbenchEnvironment {
         const allowed = new Set([
             ...declared,
             // Provisioning credentials are host-only; E2BPathPlan excludes this key.
-            ...(workbench.manifest.runtime === 'e2b' ? ['E2B_API_KEY'] : []),
+            ...(selectedRuntime(workbench).name === 'e2b' ? ['E2B_API_KEY'] : []),
             ...(catalog
                 ? new ModelRouter(catalog).providerEnvironmentNames(workbench)
                 : []),

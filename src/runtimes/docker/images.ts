@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { selectedRuntime } from '../../workbench/runtimes.js';
 import type { RuntimePrepareRequest } from '../contracts.js';
 import {
     installRepositoryTools,
@@ -23,7 +24,7 @@ export class DockerImageManager {
     constructor(private readonly client: DockerClient) {}
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedDockerImage> {
-        const image = request.workbench.manifest.image;
+        const image = selectedRuntime(request.workbench).image;
         const original =
             typeof image === 'string'
                 ? await this.pull(image)
@@ -156,7 +157,7 @@ export class DockerImageManager {
     }
 
     private async build(request: RuntimePrepareRequest): Promise<PreparedDockerImage> {
-        const image = request.workbench.manifest.image;
+        const image = selectedRuntime(request.workbench).image;
         if (!image || typeof image === 'string') {
             throw new Error('Local image build is missing');
         }

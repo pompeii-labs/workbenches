@@ -38,10 +38,10 @@ describe('spec 0 manifest parser', () => {
         });
 
         await expect(Workbench.load(missing.packageDirectory)).rejects.toThrow(
-            'Unsupported Workbench spec: undefined. Supported specs: 0'
+            'Manifest spec undefined is not supported by this engine; upgrade wb'
         );
         await expect(Workbench.load(future.packageDirectory)).rejects.toThrow(
-            'Unsupported Workbench spec: 2. Supported specs: 0'
+            'Manifest spec 2 is not supported by this engine; upgrade wb'
         );
     });
 

@@ -13,7 +13,12 @@ import type {
     SpawnedRunner,
     WorkbenchWorkspaceBinding,
 } from '../types.js';
-import { Workbench, WorkbenchWorkspaces } from '../workbench/index.js';
+import {
+    selectedRuntime,
+    Workbench,
+    WorkbenchWorkspaces,
+    withRuntime,
+} from '../workbench/index.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
 import { ExecutionPreparation } from './preparation.js';
 import { RunnerOutput } from './runner-output.js';
@@ -27,6 +32,8 @@ export interface WorkbenchRunOptions {
     workspaces?: WorkbenchWorkspaceBinding[];
     repository?: RepositoryBinding;
     allowHostDocker?: boolean;
+    /** Runtime to use. Defaults to the first declared runtime. */
+    runtime?: string;
     runId?: string;
     signal?: AbortSignal;
     onEvent?: (event: WorkbenchEvent) => Promise<void> | void;
@@ -85,7 +92,10 @@ export class WorkbenchRun {
     }
 
     async execute(): Promise<number> {
-        const workbench = await Workbench.load(this.options.workbenchPath);
+        const workbench = withRuntime(
+            await Workbench.load(this.options.workbenchPath),
+            this.options.runtime
+        );
         const workspaces = this.options.workspaces ?? [];
         await new WorkbenchWorkspaces().validate(workbench, workspaces);
         this.validateHostDockerAuthorization(workbench);
@@ -135,13 +145,14 @@ export class WorkbenchRun {
                         ? { catalog_version: configuration.catalogVersion }
                         : {}),
                 },
-                runtime: workbench.manifest.runtime,
+                runtime: selectedRuntime(workbench).name,
                 workspace:
                     this.options.workspaceDirectory ?? workbench.repositoryDirectory,
                 workspaces,
-                ...(workbench.manifest.docker?.engine
+                ...(selectedRuntime(workbench).docker?.engine
                     ? {
-                          docker_engine: workbench.manifest.docker.engine.mode,
+                          docker_engine:
+                              selectedRuntime(workbench).docker?.engine?.mode,
                           host_docker_authorized: this.options.allowHostDocker ?? false,
                       }
                     : {}),
@@ -275,8 +286,11 @@ export class WorkbenchRun {
                     },
                     skills: workbench.skills.map((skill) => skill.name),
                     workspaces: runtime.workspaces,
-                    ...(workbench.manifest.docker?.engine
-                        ? { docker_engine: workbench.manifest.docker.engine.mode }
+                    ...(selectedRuntime(workbench).docker?.engine
+                        ? {
+                              docker_engine:
+                                  selectedRuntime(workbench).docker?.engine?.mode,
+                          }
                         : {}),
                 },
                 null,
@@ -286,7 +300,7 @@ export class WorkbenchRun {
     }
 
     private validateHostDockerAuthorization(workbench: ResolvedWorkbench): void {
-        const declared = workbench.manifest.docker?.engine !== undefined;
+        const declared = selectedRuntime(workbench).docker?.engine !== undefined;
         if (this.options.allowHostDocker && !declared) {
             throw new Error(
                 'Host Docker authorization was supplied to a Workbench that does not declare docker.engine'

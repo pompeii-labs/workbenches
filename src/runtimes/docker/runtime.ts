@@ -13,6 +13,11 @@ import type {
     WorkbenchWorkspaceBinding,
 } from '../../types.js';
 import { type PreflightResult, WorkbenchPreflight } from '../../workbench/preflight.js';
+import {
+    type RequirementsHost,
+    RequirementsPreflight,
+} from '../../workbench/requirements.js';
+import { requirementsOf } from '../../workbench/runtimes.js';
 import { WorkbenchWorkspaces } from '../../workbench/workspaces.js';
 import type {
     PreparedRuntime,
@@ -43,6 +48,7 @@ export interface DockerRuntimeOptions {
     preparation: DockerPreparation;
     stateDirectory: string;
     outcome?: HostOutcomeCapture;
+    host?: RequirementsHost;
     cleanupPreparation(): Promise<void>;
 }
 
@@ -152,6 +158,9 @@ export class DockerRuntime implements PreparedRuntime {
             runner: { name: this.workbench.manifest.runner, path: runnerPath },
             tools,
             workspaces: this.workspaces,
+            requirements: new RequirementsPreflight(this.options.host).check(
+                this.options.request.workbench
+            ),
             ...(this.options.hostSocket ? { dockerEngine: 'host' as const } : {}),
             ...configuration,
         };
@@ -441,11 +450,25 @@ export class DockerRuntime implements PreparedRuntime {
 
     private containerArguments(): string[] {
         return [
+            ...this.limitArguments(),
             ...DockerRuntime.userArguments(this.options.client.user),
             ...DockerRuntime.groupArguments(this.options.hostSocket),
             ...DockerRuntime.temporaryFilesystemArguments(this.options.client.user),
             ...this.options.mounts.arguments(),
             ...(this.options.credentials?.mountArguments() ?? []),
+        ];
+    }
+
+    /** Applies declared cpu and memory requirements as container limits. */
+    private limitArguments(): string[] {
+        const requirements = requirementsOf(this.options.request.workbench.manifest);
+        return [
+            ...(requirements.cpu === undefined
+                ? []
+                : ['--cpus', String(requirements.cpu)]),
+            ...(requirements.memory_gb === undefined
+                ? []
+                : ['--memory', `${Math.ceil(requirements.memory_gb * 1024)}m`]),
         ];
     }
 

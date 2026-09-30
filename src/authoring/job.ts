@@ -36,6 +36,8 @@ interface VerificationRequest {
     workspaces?: AuthoringFinishOptions['workspaces'];
     workspace_directory?: string;
     allow_host_docker?: boolean;
+    runtime?: string;
+    allow_unchecked_gpu?: boolean;
 }
 
 /** Supervises creator verification outside the generic execution engine. */
@@ -98,6 +100,10 @@ export class AuthoringJob {
                     : {}),
                 ...(verification.allowHostDocker !== undefined
                     ? { allow_host_docker: verification.allowHostDocker }
+                    : {}),
+                ...(verification.runtime ? { runtime: verification.runtime } : {}),
+                ...(verification.allowUncheckedGpu
+                    ? { allow_unchecked_gpu: true }
                     : {}),
             };
             // Credential-bearing verification bindings are consumed and removed by
@@ -193,6 +199,8 @@ export class AuthoringJob {
                 ...(request.allow_host_docker !== undefined
                     ? { allowHostDocker: request.allow_host_docker }
                     : {}),
+                ...(request.runtime ? { runtime: request.runtime } : {}),
+                ...(request.allow_unchecked_gpu ? { allowUncheckedGpu: true } : {}),
             });
             const run = await new StoredRunHandle(this.home, record.run_id).result;
             if (run.status !== 'completed')

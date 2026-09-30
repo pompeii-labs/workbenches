@@ -2,6 +2,7 @@ import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { ResolvedWorkbench, RunnerInvocation } from '../types.js';
+import { selectedRuntime } from '../workbench/runtimes.js';
 
 export interface RunnerContextFiles {
     prefix: string;
@@ -60,7 +61,7 @@ export function runtimeContext(
     workspaceDirectory: string,
     environment: Record<string, string | undefined>
 ): string {
-    const runtime = workbench.manifest.runtime;
+    const runtime = selectedRuntime(workbench).name;
     const repository = environment.WORKBENCH_REPOSITORY;
     const behavior =
         runtime === 'e2b'

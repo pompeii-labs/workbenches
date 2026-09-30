@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { selectedRuntime } from '../../workbench/runtimes.js';
 import type { RuntimePreparation, RuntimePrepareRequest } from '../contracts.js';
 import { DockerBuildContext } from '../docker/build-context.js';
 import { needsRepositoryTools, repositoryToolsCacheKey } from '../repository-tools.js';
@@ -19,7 +20,7 @@ export class E2BTemplateManager {
     constructor(private readonly client: E2BClient) {}
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedE2BTemplate> {
-        const image = request.workbench.manifest.image;
+        const image = selectedRuntime(request.workbench).image;
         if (!image)
             throw new Error('E2B runtime requires an image or local image build');
         if (typeof image === 'string') {

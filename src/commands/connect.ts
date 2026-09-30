@@ -15,7 +15,7 @@ import { ModelCatalog } from '../models/catalog.js';
 import { ModelRouter } from '../models/routing.js';
 import { RuntimeSecretStore } from '../runtimes/secrets.js';
 import { workbenchHome } from '../storage.js';
-import { WorkbenchResolver } from '../workbench/index.js';
+import { selectedRuntime, WorkbenchResolver } from '../workbench/index.js';
 import { CliPresenter } from './presenter.js';
 
 export const connectCommand = defineCommand({
@@ -236,7 +236,7 @@ async function connectionTargetForWorkbench(
         ...(typeof args.dir === 'string' ? { workspaceDirectory: args.dir } : {}),
     });
     try {
-        const runtime = resolved.workbench.manifest.runtime;
+        const runtime = selectedRuntime(resolved.workbench).name;
         const harness = resolved.workbench.manifest.runner;
         if (!connectionRuntimes.includes(runtime as ConnectionTarget['runtime'])) {
             throw new Error(`Unsupported connection runtime: ${runtime}`);

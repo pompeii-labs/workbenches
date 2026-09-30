@@ -26,6 +26,7 @@ import type {
 import type { RuntimeRegistry } from '../runtimes/registry.js';
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
 import type { PreflightResult } from '../workbench/preflight.js';
+import { selectedRuntime } from '../workbench/runtimes.js';
 import type { RunEvents } from './events.js';
 import { publishRunOutcome } from './outcomes.js';
 import { RunStore } from './store.js';
@@ -136,6 +137,7 @@ export class ExecutionPreparation {
 
     private async prepareOnce(): Promise<PreparedExecution> {
         const { workbench, home, session } = this.options;
+        const runtimeName = selectedRuntime(workbench).name;
         let workspaceDirectory = this.options.workspaceDirectory;
         let environment = this.dependencies.environment;
         if (this.options.repository) {
@@ -161,7 +163,7 @@ export class ExecutionPreparation {
                 repository: `${this.options.repository.owner}/${this.options.repository.name}`,
                 revision: this.options.repository.revision,
             });
-            const identity = await this.repository.prepare(workbench.manifest.runtime);
+            const identity = await this.repository.prepare(runtimeName);
             await new RepositoryRetention(home, this.options.repository).restore(
                 this.options.events.runId,
                 this.repository.directory
@@ -210,79 +212,77 @@ export class ExecutionPreparation {
         this.runner = await (
             this.dependencies.runners ?? RunnerRegistry.standard()
         ).prepare(workbench, environment);
-        this.runtime = await this.dependencies.runtimes
-            .resolve(workbench.manifest.runtime)
-            .prepare({
-                workbench,
-                workspaceDirectory,
-                environment,
-                assets: [
-                    { path: workspaceDirectory, access: 'read-write' },
-                    ...(this.repository
-                        ? [
-                              {
-                                  path:
-                                      workbench.manifest.runtime === 'local'
-                                          ? join(workspaceDirectory, '.git')
-                                          : this.repository.agentGitDirectory,
-                                  access: 'read-write' as const,
-                                  git: true,
-                              },
-                          ]
-                        : []),
-                    { path: workbench.packageDirectory, access: 'read-only' },
-                    ...(this.options.workspaces ?? []).map((workspace) => ({
-                        path: workspace.path,
-                        access: workspace.access,
-                        workspace: workspace.name,
-                    })),
-                    ...this.runner.assets,
-                    ...(session
-                        ? [
-                              {
-                                  path: session.directory,
-                                  access: 'read-write' as const,
-                                  state: true,
-                              },
-                          ]
-                        : []),
-                ],
-                authorizations: { hostDocker: this.options.allowHostDocker ?? false },
-                purpose: 'run',
-                ...(this.options.repository
-                    ? {
-                          repository: {
-                              name: `${this.options.repository.owner}/${this.options.repository.name}`,
-                              revision: this.options.repository.revision,
-                              delivery: this.options.repository.delivery,
+        this.runtime = await this.dependencies.runtimes.resolve(runtimeName).prepare({
+            workbench,
+            workspaceDirectory,
+            environment,
+            assets: [
+                { path: workspaceDirectory, access: 'read-write' },
+                ...(this.repository
+                    ? [
+                          {
+                              path:
+                                  runtimeName === 'local'
+                                      ? join(workspaceDirectory, '.git')
+                                      : this.repository.agentGitDirectory,
+                              access: 'read-write' as const,
+                              git: true,
                           },
-                      }
-                    : {}),
-                ...(workbench.manifest.runtime === 'e2b' && home
-                    ? {
-                          credentials: await new RunnerCredentialStore(home).prepare(
-                              workbench.manifest.runtime,
-                              workbench.manifest.runner
-                          ),
-                      }
-                    : {}),
-                ...(home
-                    ? {
-                          run: {
-                              id: this.options.events.runId,
-                              scope: RunStore.scope(home),
+                      ]
+                    : []),
+                { path: workbench.packageDirectory, access: 'read-only' },
+                ...(this.options.workspaces ?? []).map((workspace) => ({
+                    path: workspace.path,
+                    access: workspace.access,
+                    workspace: workspace.name,
+                })),
+                ...this.runner.assets,
+                ...(session
+                    ? [
+                          {
+                              path: session.directory,
+                              access: 'read-write' as const,
+                              state: true,
                           },
-                      }
-                    : {}),
-                ...(this.outcomes
-                    ? {
-                          outcome: {
-                              directory: this.outcomes.output.directory,
-                              ...(home ? { home } : {}),
-                          },
-                      }
-                    : {}),
-            });
+                      ]
+                    : []),
+            ],
+            authorizations: { hostDocker: this.options.allowHostDocker ?? false },
+            purpose: 'run',
+            ...(this.options.repository
+                ? {
+                      repository: {
+                          name: `${this.options.repository.owner}/${this.options.repository.name}`,
+                          revision: this.options.repository.revision,
+                          delivery: this.options.repository.delivery,
+                      },
+                  }
+                : {}),
+            ...(runtimeName === 'e2b' && home
+                ? {
+                      credentials: await new RunnerCredentialStore(home).prepare(
+                          runtimeName,
+                          workbench.manifest.runner
+                      ),
+                  }
+                : {}),
+            ...(home
+                ? {
+                      run: {
+                          id: this.options.events.runId,
+                          scope: RunStore.scope(home),
+                      },
+                  }
+                : {}),
+            ...(this.outcomes
+                ? {
+                      outcome: {
+                          directory: this.outcomes.output.directory,
+                          ...(home ? { home } : {}),
+                      },
+                  }
+                : {}),
+        });
         const preflight = await this.runtime.preflight();
         const selection = await this.selectConnection(this.runner, this.runtime);
         return { runner: this.runner, runtime: this.runtime, preflight, ...selection };

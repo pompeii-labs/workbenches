@@ -8,6 +8,7 @@ import type {
 } from '../types.js';
 import { WorkbenchManifestParser } from './manifest.js';
 import { RunnerConfiguration } from './runner-configuration.js';
+import { declaredRuntimes } from './runtimes.js';
 
 export class Workbench implements ResolvedWorkbench {
     readonly runnerConfigPath?: string;
@@ -136,19 +137,25 @@ export class Workbench implements ResolvedWorkbench {
         packageDirectory: string,
         repositoryDirectory: string
     ): void {
-        if (!manifest.image || typeof manifest.image === 'string') return;
-        Workbench.packagePath(
-            packageDirectory,
-            repositoryDirectory,
-            manifest.image.build,
-            'image.build'
-        );
-        Workbench.packagePath(
-            packageDirectory,
-            repositoryDirectory,
-            manifest.image.context ?? '.',
-            'image.context'
-        );
+        const declared = declaredRuntimes(manifest);
+        const named = manifest.runtime === undefined;
+        for (const [name, runtime] of Object.entries(declared)) {
+            const image = runtime.image;
+            if (!image || typeof image === 'string') continue;
+            const prefix = named ? `runtimes.${name}.image` : 'image';
+            Workbench.packagePath(
+                packageDirectory,
+                repositoryDirectory,
+                image.build,
+                `${prefix}.build`
+            );
+            Workbench.packagePath(
+                packageDirectory,
+                repositoryDirectory,
+                image.context ?? '.',
+                `${prefix}.context`
+            );
+        }
     }
 
     private static repositoryRoot(packageDirectory: string): string {
