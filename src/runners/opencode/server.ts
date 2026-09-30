@@ -41,6 +41,7 @@ export class OpenCodeServer {
     private url: string | undefined;
     private password: string | undefined;
     private eventLoop: Promise<void> | undefined;
+    private subscription: AbortController | undefined;
     private stdoutLoop: Promise<void> | undefined;
     private stderrLoop: Promise<string> | undefined;
     private closed = false;
@@ -89,12 +90,22 @@ export class OpenCodeServer {
         }
     }
 
+    /**
+     * Opens the event stream. Subscribing again replaces the stream: the old one
+     * is closed first and its end is not reported as a failure, which is how a
+     * client reconnects after losing the stream.
+     */
     async subscribe(
         consume: (value: unknown) => Promise<void>,
         onFailure: (error: Error) => void
     ): Promise<void> {
+        this.subscription?.abort();
+        const subscription = new AbortController();
+        this.subscription = subscription;
+        const closeWithServer = () => subscription.abort();
+        this.abort.signal.addEventListener('abort', closeWithServer, { once: true });
         const response = await this.authFetch(this.endpoint('/event'), {
-            signal: this.abort.signal,
+            signal: subscription.signal,
         });
         if (!response.ok || !response.body) {
             throw new Error(
@@ -102,7 +113,11 @@ export class OpenCodeServer {
             );
         }
         this.eventLoop = consumeSse(response.body, consume).catch((error) => {
-            if (!this.closed && !isAbortError(error)) {
+            if (
+                !this.closed &&
+                !isAbortError(error) &&
+                this.subscription === subscription
+            ) {
                 onFailure(new Error('OpenCode event stream failed', { cause: error }));
             }
         });

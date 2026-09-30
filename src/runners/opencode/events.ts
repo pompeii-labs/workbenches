@@ -7,6 +7,12 @@ export interface OpenCodeAdapterResult {
     turnCompleted: boolean;
 }
 
+export interface OpenCodeAdapterProgress {
+    startedTools: string[];
+    completedTools: string[];
+    finishedSteps: string[];
+}
+
 export class OpenCodeEventAdapter {
     private readonly startedTools = new Set<string>();
     private readonly completedTools = new Set<string>();
@@ -16,6 +22,22 @@ export class OpenCodeEventAdapter {
     private sessionId: string | undefined;
     private completionReason: string | undefined;
     private failureMessage: string | undefined;
+
+    /** The tool calls and usage steps reported so far, by native id. */
+    progress(): OpenCodeAdapterProgress {
+        return {
+            startedTools: [...this.startedTools],
+            completedTools: [...this.completedTools],
+            finishedSteps: [...this.finishedSteps],
+        };
+    }
+
+    /** Marks ids from an earlier `progress()` as already reported. */
+    restore(state: OpenCodeAdapterProgress): void {
+        for (const id of state.startedTools) this.startedTools.add(id);
+        for (const id of state.completedTools) this.completedTools.add(id);
+        for (const id of state.finishedSteps) this.finishedSteps.add(id);
+    }
 
     consume(value: unknown): OpenCodeAdapterResult {
         const event = record(value);

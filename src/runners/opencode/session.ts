@@ -3,27 +3,34 @@ import { type RunnerContextFiles, runtimeContext } from '../runtime-context.js';
 import type {
     RunnerInput,
     RunnerInputDelivery,
-    RunnerPermissionDecision,
-    RunnerQuestionPrompt,
     RunnerSession,
     RunnerSessionStartOptions,
     RunnerTurnResult,
 } from '../session.js';
 import { normalizeRunnerInput } from '../session.js';
+import { authenticateOpenCode } from './authentication.js';
 import { OpenCodeChildren } from './children.js';
+import type { OpenCodeAdapterProgress } from './events.js';
 import { openCodeParts } from './input.js';
+import { OpenCodeInputRequests } from './input-requests.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
-import { isOutboxPermission } from './outbox.js';
-import { OpenCodeQuestion } from './question.js';
 import type { OpenCodeFetch, OpenCodeServerLauncher } from './server.js';
 import { OpenCodeServer } from './server.js';
 import { deferred, withTimeout } from './timing.js';
+import {
+    assistantMessagesOf,
+    latestUserMessageId,
+    outputIdFor,
+    turnEnd,
+    withoutCoveredDeltas,
+} from './transcript.js';
 import { type ActiveTurn, createActiveTurn, OpenCodeMessageIds } from './turn.js';
+import { asError, record, string } from './values.js';
 
-interface AlwaysPermission {
-    sessionId: string;
-    action: string;
-    resources: Set<string>;
+/** What a session has emitted, keyed by native ids. See `progress()`. */
+export interface OpenCodeProgress extends OpenCodeAdapterProgress {
+    /** Characters emitted so far, by native text part id. */
+    text: Record<string, number>;
 }
 
 export interface OpenCodeServerSessionOptions extends RunnerSessionStartOptions {
@@ -43,17 +50,31 @@ export class OpenCodeServerSession implements RunnerSession {
     private runtimeReminder: string | undefined;
     private readonly closing = deferred<void>();
     private readonly server: OpenCodeServer;
-    private readonly streamedTextParts = new Set<string>();
+    /** How many characters of each assistant text part have been emitted. */
+    private readonly textProgress = new Map<string, number>();
     private readonly assistantTextParts = new Set<string>();
-    private readonly alwaysPermissions: AlwaysPermission[] = [];
-    private readonly questions = new OpenCodeQuestion();
     private readonly messageIds = new OpenCodeMessageIds();
     private readonly children: OpenCodeChildren;
+    private readonly input: OpenCodeInputRequests;
     private requests: Promise<void> = Promise.resolve();
     private nativeSessionId: string | undefined;
     private active: ActiveTurn | undefined;
     private closed = false;
     private failure: Error | undefined;
+    /** Whether `failure` came from losing the event stream, which a catch-up can recover. */
+    private streamFailure = false;
+    /** The input message of the latest turn this session started. */
+    private lastInputMessageId: string | undefined;
+    /** The latest turn, kept so a catch-up continues its tool and usage bookkeeping. */
+    private lastTurn: ActiveTurn | undefined;
+    /** Events held while a catch-up reads the transcript. */
+    private held: unknown[] | undefined;
+    /** Tool and usage progress loaded by `restoreProgress`, for a turn not yet tracked. */
+    private restoredAdapter: OpenCodeAdapterProgress = {
+        startedTools: [],
+        completedTools: [],
+        finishedSteps: [],
+    };
 
     constructor(options: OpenCodeServerSessionOptions) {
         this.options = options;
@@ -74,6 +95,15 @@ export class OpenCodeServerSession implements RunnerSession {
             startupTimeoutMs: options.startupTimeoutMs,
         });
         this.children = new OpenCodeChildren(this.server, () => this.nativeSessionId);
+        this.input = new OpenCodeInputRequests({
+            server: this.server,
+            host: options.host,
+            children: this.children,
+            environment: options.environment,
+            closing: this.closing.promise,
+            active: () => this.active,
+            closed: () => this.closed,
+        });
     }
 
     get id(): string | undefined {
@@ -102,7 +132,11 @@ export class OpenCodeServerSession implements RunnerSession {
 
         if (this.options.authentication)
             await withTimeout(
-                this.authenticate(this.options.authentication),
+                authenticateOpenCode(
+                    this.server,
+                    this.options.host,
+                    this.options.authentication
+                ),
                 'OpenCode authentication did not complete in time',
                 this.options.authenticationTimeoutMs
             );
@@ -119,68 +153,6 @@ export class OpenCodeServerSession implements RunnerSession {
             : await this.create();
         this.nativeSessionId = sessionId;
         await this.subscribe();
-    }
-
-    private async authenticate(
-        authentication: NonNullable<OpenCodeServerSessionOptions['authentication']>
-    ): Promise<void> {
-        if (authentication.authenticationMethod !== 'oauth') {
-            throw new Error(
-                `OpenCode ${authentication.authenticationMethod ?? 'native'} authentication cannot be completed during a Workbench run yet`
-            );
-        }
-        const methods = record(await this.server.authenticationMethods());
-        const available = methods?.[authentication.nativeProvider];
-        if (!Array.isArray(available)) {
-            throw new Error(
-                `OpenCode did not expose authentication methods for ${authentication.nativeProvider}`
-            );
-        }
-        const method = available.findIndex((value) => {
-            const candidate = record(value);
-            return (
-                candidate?.type === 'oauth' &&
-                (!authentication.nativeMethod ||
-                    candidate.label === authentication.nativeMethod)
-            );
-        });
-        if (method < 0) {
-            throw new Error(
-                authentication.nativeMethod
-                    ? `OpenCode did not expose the configured authentication method: ${authentication.nativeMethod}`
-                    : `OpenCode did not expose a compatible OAuth method for ${authentication.nativeProvider}`
-            );
-        }
-        const authorization = record(
-            await this.server.authorizeProvider(authentication.nativeProvider, method)
-        );
-        const url = string(authorization?.url);
-        const instructions = string(authorization?.instructions);
-        if (!url || authorization?.method !== 'auto') {
-            throw new Error(
-                `OpenCode did not expose a supported headless authentication flow for ${authentication.nativeProvider}`
-            );
-        }
-        await this.options.host.emit({
-            type: 'authentication.requested',
-            data: {
-                provider: authentication.provider,
-                native_provider: authentication.nativeProvider,
-                url,
-                ...(instructions ? { instructions } : {}),
-            },
-        });
-        await this.server.completeProviderAuthorization(
-            authentication.nativeProvider,
-            method
-        );
-        await this.options.host.emit({
-            type: 'authentication.completed',
-            data: {
-                provider: authentication.provider,
-                native_provider: authentication.nativeProvider,
-            },
-        });
     }
 
     private async create(): Promise<string> {
@@ -216,6 +188,8 @@ export class OpenCodeServerSession implements RunnerSession {
         const messageId = this.messageIds.next();
         const turn = createActiveTurn(messageId);
         this.active = turn;
+        this.lastTurn = turn;
+        this.lastInputMessageId = messageId;
         const model = parseModel(this.options.configuration.model);
         const normalized = normalizeRunnerInput(input);
         try {
@@ -272,6 +246,117 @@ export class OpenCodeServerSession implements RunnerSession {
         }
     }
 
+    /**
+     * Picks a turn back up after this client lost its event stream, or after the
+     * engine restarted, without sending anything to the model. It subscribes to
+     * events again and reads the session's transcript, so output text, tool
+     * activity, and usage produced while disconnected are emitted once and in
+     * order, and then it follows the turn live until it completes. The returned
+     * promise settles like the original `prompt` would have.
+     *
+     * The turn is the one a `prompt` is still waiting on, which the catch-up then
+     * settles, or else the latest one this session started, or the one that began
+     * at `inputMessageId`, or, on a session that has started none, the latest user
+     * message in the transcript. Output text is emitted only past what this
+     * session already emitted. A fresh session has emitted nothing, so it replays
+     * the whole turn; events carry `message_id`, `part_id`, and `offset` so a
+     * consumer that kept what it saw can skip the overlap.
+     *
+     * Text that arrives at the moment of reconnection can be reported at most
+     * once, but a repeated delta that matches the transcript's tail can be
+     * mistaken for one the transcript already holds. A turn that is not running
+     * while the catch-up happens is replayed exactly.
+     */
+    async resumeTurn(
+        options: { inputMessageId?: string } = {}
+    ): Promise<RunnerTurnResult> {
+        if (this.closed) throw new Error('runner session is closed');
+        if (this.failure && !this.streamFailure) throw this.failure;
+        const sessionId = this.requireSessionId();
+        const held: unknown[] = [];
+        this.held = held;
+        this.failure = undefined;
+        this.streamFailure = false;
+        const waiting = this.active;
+        let turn: ActiveTurn;
+        try {
+            // Listen first and read second, so nothing between the two is missed.
+            await this.subscribe();
+            const transcript = await this.server.requestJson(
+                `/session/${encodeURIComponent(sessionId)}/message`,
+                { method: 'GET' }
+            );
+            const messages = (Array.isArray(transcript) ? transcript : [])
+                .map(record)
+                .filter((message) => message !== undefined);
+            const inputId =
+                options.inputMessageId ??
+                this.lastInputMessageId ??
+                latestUserMessageId(messages);
+            if (!inputId) throw new Error('OpenCode session has no turn to resume');
+            turn = waiting ?? this.beginResumedTurn(inputId);
+            await this.replayTranscript(turn, messages, inputId, sessionId);
+            let batch = withoutCoveredDeltas(held.splice(0), messages);
+            while (batch.length > 0) {
+                for (const value of batch) await this.handleEvent(value);
+                batch = held.splice(0);
+            }
+        } catch (error) {
+            // A turn this call began is abandoned. One a prompt is waiting on is not.
+            if (!waiting) this.active = undefined;
+            throw error;
+        } finally {
+            this.held = undefined;
+        }
+        const resumed = turn;
+        return resumed.promise.finally(() => {
+            if (this.active === resumed) this.active = undefined;
+        });
+    }
+
+    /** Starts tracking a turn that began before this call, sharing what was already reported. */
+    private beginResumedTurn(inputId: string): ActiveTurn {
+        const turn = createActiveTurn(inputId);
+        const previous = this.lastTurn;
+        if (previous?.inputMessageIds.has(inputId)) {
+            turn.adapter = previous.adapter;
+            for (const [native, output] of previous.assistantOutputIds) {
+                turn.assistantOutputIds.set(native, output);
+            }
+        } else {
+            turn.adapter.restore(this.restoredAdapter);
+        }
+        this.active = turn;
+        this.lastTurn = turn;
+        this.lastInputMessageId = inputId;
+        return turn;
+    }
+
+    /** Emits what the transcript holds of one turn and settles the turn if it is over. */
+    private async replayTranscript(
+        turn: ActiveTurn,
+        messages: Record<string, unknown>[],
+        inputId: string,
+        sessionId: string
+    ): Promise<void> {
+        const answers = assistantMessagesOf(messages, inputId);
+        for (const answer of answers) {
+            turn.assistantOutputIds.set(answer.id, outputIdFor(answer.id));
+            turn.seenActivity = true;
+            for (const part of answer.parts) {
+                await this.applyPart(turn, record(part), sessionId);
+            }
+        }
+        const last = answers.at(-1);
+        const end = last && turnEnd(last.info);
+        if (end?.kind === 'cancelled') this.finishActive('cancelled');
+        else if (end?.kind === 'failed') {
+            this.failActive(new Error('OpenCode session failed'));
+        } else if (end?.kind === 'completed') {
+            this.finishActive(turn.adapter.summary().completionReason ?? end.finish);
+        }
+    }
+
     async close(): Promise<void> {
         if (this.closed) return;
         this.closed = true;
@@ -284,11 +369,23 @@ export class OpenCodeServerSession implements RunnerSession {
     private async subscribe(): Promise<void> {
         await this.server.subscribe(
             async (value) => this.consumeEvent(value),
-            (error) => this.fail(error)
+            (error) => {
+                this.streamFailure = true;
+                this.fail(error);
+            }
         );
     }
 
+    /** Holds events while a catch-up reads the transcript, then replays them in order. */
     private async consumeEvent(value: unknown): Promise<void> {
+        if (this.held) {
+            this.held.push(value);
+            return;
+        }
+        await this.handleEvent(value);
+    }
+
+    private async handleEvent(value: unknown): Promise<void> {
         const event = record(value);
         const type = string(event?.type);
         const properties = record(event?.properties);
@@ -306,8 +403,8 @@ export class OpenCodeServerSession implements RunnerSession {
                 .then(async () => {
                     if (this.closed || !active || this.active !== active) return;
                     if (type === 'permission.asked')
-                        await this.answerPermission(properties);
-                    else await this.answerQuestion(properties);
+                        await this.input.permission(properties);
+                    else await this.input.question(properties);
                 })
                 .catch((error) => {
                     if (this.closed || this.active !== active) return;
@@ -342,7 +439,10 @@ export class OpenCodeServerSession implements RunnerSession {
                 this.active.inputMessageIds.has(parentId)
             ) {
                 if (!this.active.assistantOutputIds.has(messageId)) {
-                    this.active.assistantOutputIds.set(messageId, createOutputId());
+                    this.active.assistantOutputIds.set(
+                        messageId,
+                        outputIdFor(messageId)
+                    );
                 }
                 const delivery = this.active.steeringDeliveries.get(parentId);
                 if (delivery) {
@@ -391,11 +491,12 @@ export class OpenCodeServerSession implements RunnerSession {
             const delta = string(properties.delta);
             if (!delta) return;
             this.active.seenActivity = true;
-            this.streamedTextParts.add(partId);
-            await this.options.host.emit({
-                type: 'output.text',
-                data: { id: outputId, text: delta },
-            });
+            await this.emitText(
+                outputId,
+                partId,
+                delta,
+                this.textProgress.get(partId) ?? 0
+            );
             return;
         }
         if (type !== 'message.part.updated') {
@@ -405,26 +506,45 @@ export class OpenCodeServerSession implements RunnerSession {
             });
             return;
         }
-        const part = record(properties.part);
+        await this.applyPart(this.active, record(properties.part), sessionId);
+    }
+
+    /**
+     * Translates one native part of the active turn into events. A part arrives
+     * whole, from an update event or from the transcript, so text is emitted only
+     * past what was already emitted and every other part goes through the
+     * adapter, which reports each tool call and usage step once.
+     */
+    private async applyPart(
+        turn: ActiveTurn,
+        part: Record<string, unknown> | undefined,
+        sessionId: string
+    ): Promise<void> {
         const partType = string(part?.type);
         if (!part || !partType) return;
-        const outputId = this.assistantOutputId(part.messageID);
+        const outputId = turn.assistantOutputIds.get(string(part.messageID) ?? '');
         if (!outputId) return;
-        this.active.seenActivity = true;
+        turn.seenActivity = true;
         if (partType === 'text') {
             const partId = string(part.id);
             if (partId) this.assistantTextParts.add(partId);
             const text = string(part.text);
-            if (text && (!partId || !this.streamedTextParts.has(partId))) {
+            if (!text) return;
+            if (!partId) {
                 await this.options.host.emit({
                     type: 'output.text',
                     data: { id: outputId, text },
                 });
+                return;
+            }
+            const emitted = this.textProgress.get(partId) ?? 0;
+            if (text.length > emitted) {
+                await this.emitText(outputId, partId, text.slice(emitted), emitted);
             }
             return;
         }
         const nativeType = partType.replaceAll('-', '_');
-        const result = this.active.adapter.consume({
+        const result = turn.adapter.consume({
             type: nativeType === 'tool' ? 'tool_use' : nativeType,
             sessionID: sessionId,
             part,
@@ -436,132 +556,50 @@ export class OpenCodeServerSession implements RunnerSession {
         }
     }
 
-    private async answerPermission(properties: Record<string, unknown>) {
-        const active = this.active;
-        const id = string(properties.id);
-        const action = string(properties.permission);
-        const sessionId = string(properties.sessionID);
-        if (
-            !active ||
-            !id ||
-            !action ||
-            !sessionId ||
-            !(await this.children.owns(sessionId)) ||
-            this.active !== active ||
-            active.settled
-        )
-            return;
-        const resources = stringArray(properties.patterns);
-        if (
-            isOutboxPermission(
-                action,
-                resources,
-                this.options.environment.WORKBENCH_OUTPUT_DIR
-            )
-        ) {
-            await this.replyPermission(id, 'allow_once');
-            return;
-        }
-        if (this.isAlwaysAllowed(sessionId, action, resources)) return;
-        const always = stringArray(properties.always);
-        const decision = await Promise.race([
-            this.options.host.requestPermission({
-                id,
-                action,
-                resources,
-                message: permissionMessage(action, resources),
-                allowAlways: always.length > 0,
-            }),
-            this.closing.promise.then(() => undefined),
-            active.promise.then(
-                () => undefined,
-                () => undefined
-            ),
-        ]);
-        if (!decision || this.closed) return;
-        const replied = await this.replyPermission(id, decision);
-        if (replied && decision === 'allow_always') {
-            this.alwaysPermissions.push({
-                sessionId,
-                action,
-                resources: new Set(always.length > 0 ? always : resources),
-            });
-        }
-    }
-
-    private async answerQuestion(properties: Record<string, unknown>) {
-        const active = this.active;
-        const id = string(properties.id);
-        const sessionId = string(properties.sessionID);
-        if (
-            !active ||
-            !id ||
-            !sessionId ||
-            !(await this.children.owns(sessionId)) ||
-            this.active !== active ||
-            active.settled
-        )
-            return;
-        let questions: RunnerQuestionPrompt[];
-        try {
-            questions = this.questions.fromNative(properties.questions);
-        } catch (error) {
-            await this.server
-                .replyQuestion(`/question/${encodeURIComponent(id)}/reject`)
-                .catch(() => false);
-            throw error;
-        }
-        const response = await Promise.race([
-            this.options.host.requestQuestion({ id, questions }),
-            this.closing.promise.then(() => undefined),
-            active.promise.then(
-                () => undefined,
-                () => undefined
-            ),
-        ]);
-        if (!response || this.closed) return;
-        if (response.outcome === 'rejected') {
-            await this.server.replyQuestion(
-                `/question/${encodeURIComponent(id)}/reject`
-            );
-            return;
-        }
-        let answers: string[][];
-        try {
-            answers = this.questions.answers(questions, response);
-        } catch (error) {
-            await this.server
-                .replyQuestion(`/question/${encodeURIComponent(id)}/reject`)
-                .catch(() => false);
-            throw error;
-        }
-        await this.server.replyQuestion(`/question/${encodeURIComponent(id)}/reply`, {
-            answers,
+    /** Emits a piece of assistant text and records how far the part has been emitted. */
+    private async emitText(
+        outputId: string,
+        partId: string,
+        text: string,
+        offset: number
+    ): Promise<void> {
+        this.textProgress.set(partId, offset + text.length);
+        await this.options.host.emit({
+            type: 'output.text',
+            data: { id: outputId, text },
         });
     }
 
-    private async replyPermission(
-        id: string,
-        decision: RunnerPermissionDecision
-    ): Promise<boolean> {
-        return this.server.replyPermission(
-            `/permission/${encodeURIComponent(id)}/reply`,
-            { reply: permissionReply(decision) }
-        );
+    /**
+     * What this session has already emitted: characters of each assistant text
+     * part, and the tool calls and usage steps reported. A host saves it as it
+     * goes and hands it to `restoreProgress` on a session it starts after a
+     * restart, so `resumeTurn` emits only what the host has not seen. It holds
+     * native ids and counts, no content.
+     */
+    progress(): OpenCodeProgress {
+        const adapter = this.lastTurn?.adapter.progress() ?? this.restoredAdapter;
+        return {
+            text: Object.fromEntries(this.textProgress),
+            ...adapter,
+        };
     }
 
-    private isAlwaysAllowed(
-        sessionId: string,
-        action: string,
-        resources: string[]
-    ): boolean {
-        if (resources.length === 0) return false;
-        return this.alwaysPermissions.some(
-            (permission) =>
-                permission.sessionId === sessionId &&
-                permission.action === action &&
-                resources.every((resource) => permission.resources.has(resource))
-        );
+    /** Loads progress saved by `progress()`. Call it before `resumeTurn`. */
+    restoreProgress(state: OpenCodeProgress): void {
+        for (const [part, length] of Object.entries(state.text)) {
+            this.textProgress.set(
+                part,
+                Math.max(length, this.textProgress.get(part) ?? 0)
+            );
+            this.assistantTextParts.add(part);
+        }
+        this.restoredAdapter = {
+            startedTools: [...state.startedTools],
+            completedTools: [...state.completedTools],
+            finishedSteps: [...state.finishedSteps],
+        };
+        this.lastTurn?.adapter.restore(this.restoredAdapter);
     }
 
     private finishActive(reason = 'completed') {
@@ -647,23 +685,6 @@ export class OpenCodeServerSession implements RunnerSession {
     }
 }
 
-function createOutputId(): string {
-    return `output_${crypto.randomUUID()}`;
-}
-
-function permissionReply(decision: RunnerPermissionDecision) {
-    if (decision === 'allow_once') return 'once';
-    if (decision === 'allow_always') return 'always';
-    return 'reject';
-}
-
-function permissionMessage(action: string, resources: string[]) {
-    const label = action.replaceAll('_', ' ');
-    return resources.length
-        ? `Allow ${label} for ${resources.join(', ')}?`
-        : `Allow ${label}?`;
-}
-
 function parseModel(model: string) {
     const separator = model.indexOf('/');
     if (separator < 1 || separator === model.length - 1) {
@@ -673,24 +694,4 @@ function parseModel(model: string) {
         providerID: model.slice(0, separator),
         modelID: model.slice(separator + 1),
     };
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : undefined;
-}
-
-function string(value: unknown): string | undefined {
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function stringArray(value: unknown): string[] {
-    return Array.isArray(value)
-        ? value.filter((item): item is string => typeof item === 'string')
-        : [];
-}
-
-function asError(error: unknown): Error {
-    return error instanceof Error ? error : new Error(String(error));
 }

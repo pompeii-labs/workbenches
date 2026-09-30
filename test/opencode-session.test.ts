@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { ModelRouter } from '../src/models/index.js';
 import { diskRunnerFiles } from '../src/runners/files-disk.js';
 import { OpenCodeSessionAdapter } from '../src/runners/opencode/adapter.js';
+import type { OpenCodeServerSession } from '../src/runners/opencode/session.js';
 import type {
     RunnerPermissionRequest,
     RunnerQuestionRequest,
@@ -1318,6 +1319,382 @@ describe('OpenCode interactive server adapter', () => {
     });
 });
 
+describe('OpenCode turn catch-up', () => {
+    const host = (events: WorkbenchEventDraft[]) => ({
+        emit: async (event: WorkbenchEventDraft) => void events.push(event),
+        requestPermission: async () => 'reject' as const,
+        requestQuestion: async () => ({ outcome: 'rejected' as const }),
+    });
+
+    const start = async (server: FakeOpenCodeServer, events: WorkbenchEventDraft[]) =>
+        (await server.adapter().start({
+            workbench: workbench(),
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: configuration(),
+            host: host(events),
+            session: {
+                id: 'session_fixture',
+                directory: '/tmp/session-fixture',
+                nativeSessionId: 'ses_native_1',
+            },
+        })) as OpenCodeServerSession;
+
+    /** What the server holds once the turn has finished. */
+    function finishedTranscript(input: string, text = 'Hello, world') {
+        return [
+            { info: { id: input, role: 'user' }, parts: [] },
+            {
+                info: {
+                    id: 'message_1',
+                    role: 'assistant',
+                    parentID: input,
+                    finish: 'stop',
+                    time: { created: 1, completed: 2 },
+                },
+                parts: [
+                    { id: 'step_start_1', messageID: 'message_1', type: 'step-start' },
+                    {
+                        id: 'part_message_1',
+                        messageID: 'message_1',
+                        type: 'text',
+                        text,
+                    },
+                    { ...contractToolPart('completed'), id: 'tool_part_1' },
+                    {
+                        id: 'finish_1',
+                        messageID: 'message_1',
+                        type: 'step-finish',
+                        reason: 'stop',
+                        tokens: { total: 12, input: 5, output: 7 },
+                        cost: 0.001,
+                    },
+                ],
+            },
+        ];
+    }
+
+    const texts = (events: WorkbenchEventDraft[]) =>
+        events
+            .filter((event) => event.type === 'output.text')
+            .map((event) => event.data.text);
+
+    test('delivers output and usage produced while the stream was down, once and in order', async () => {
+        const server = new FakeOpenCodeServer();
+        const events: WorkbenchEventDraft[] = [];
+        const session = await start(server, events);
+        server.onPrompt = () => {
+            server.emit('session.status', { status: { type: 'busy' } });
+            server.emitAssistantText(
+                'message_1',
+                server.currentInputMessageId(),
+                'Hello'
+            );
+            server.emit('message.part.updated', {
+                part: contractToolPart('running'),
+            });
+            // The connection drops here. The rest of the turn happens unseen.
+            setTimeout(() => server.failEventStream(), 5);
+        };
+        await expect(session.prompt('work')).rejects.toThrow(
+            'OpenCode event stream failed'
+        );
+        expect(texts(events)).toEqual(['Hello']);
+        expect(events.filter((event) => event.type === 'tool.started')).toHaveLength(1);
+
+        server.transcript = finishedTranscript(server.currentInputMessageId());
+        await expect(session.resumeTurn()).resolves.toEqual({ reason: 'stop' });
+
+        expect(server.eventSubscriptions).toBe(2);
+        expect(texts(events)).toEqual(['Hello', ', world']);
+        // The tool call started before the drop is not reported again.
+        expect(events.filter((event) => event.type === 'tool.started')).toHaveLength(1);
+        expect(events.filter((event) => event.type === 'tool.completed')).toHaveLength(
+            1
+        );
+        expect(events.filter((event) => event.type === 'usage.updated')).toEqual([
+            {
+                type: 'usage.updated',
+                data: {
+                    kind: 'delta',
+                    total_tokens: 12,
+                    input_tokens: 5,
+                    output_tokens: 7,
+                    cost_usd: 0.001,
+                },
+            },
+        ]);
+        const output = events.filter((event) => event.type === 'output.text');
+        expect(output.map((event) => event.data.id)).toEqual([
+            'output_message_1',
+            'output_message_1',
+        ]);
+        expect(session.progress().text).toEqual({ part_message_1: 12 });
+        await session.close();
+    });
+
+    test('recovers from a stream that ended without an error', async () => {
+        const server = new FakeOpenCodeServer();
+        const events: WorkbenchEventDraft[] = [];
+        const session = await start(server, events);
+        server.onPrompt = () => {
+            server.emit('session.status', { status: { type: 'busy' } });
+            server.emitAssistantText(
+                'message_1',
+                server.currentInputMessageId(),
+                'Hello'
+            );
+            server.endEventStream();
+        };
+        const turn = session.prompt('work');
+        await server.prompted;
+        await Bun.sleep(5);
+        // Nothing failed, and nothing will ever arrive on this stream.
+        expect(await settled(turn)).toBe(false);
+        server.transcript = finishedTranscript(server.currentInputMessageId());
+        // The catch-up settles the prompt that was waiting.
+        await expect(session.resumeTurn()).resolves.toEqual({ reason: 'stop' });
+        await expect(turn).resolves.toEqual({ reason: 'stop' });
+        expect(texts(events)).toEqual(['Hello', ', world']);
+        expect(server.eventSubscriptions).toBe(2);
+        await session.close();
+    });
+
+    test('a fresh session replays the whole turn', async () => {
+        const server = new FakeOpenCodeServer();
+        server.transcript = finishedTranscript('msg_input_1');
+        const events: WorkbenchEventDraft[] = [];
+        const session = await start(server, events);
+
+        await expect(session.resumeTurn()).resolves.toEqual({ reason: 'stop' });
+
+        expect(texts(events)).toEqual(['Hello, world']);
+        expect(events.filter((event) => event.type === 'usage.updated')).toHaveLength(
+            1
+        );
+        await session.close();
+    });
+
+    test('progress survives a restart: a session given the saved progress emits only what is new', async () => {
+        const server = new FakeOpenCodeServer();
+        const firstEvents: WorkbenchEventDraft[] = [];
+        const first = await start(server, firstEvents);
+        server.onPrompt = () => {
+            server.emit('session.status', { status: { type: 'busy' } });
+            server.emitAssistantText(
+                'message_1',
+                server.currentInputMessageId(),
+                'Hello'
+            );
+            server.emit('message.part.updated', {
+                part: contractToolPart('running'),
+            });
+            setTimeout(() => server.failEventStream(), 5);
+        };
+        await expect(first.prompt('work')).rejects.toThrow('event stream failed');
+        // The host saves progress, through JSON as a store would hold it.
+        const saved = JSON.parse(JSON.stringify(first.progress()));
+        expect(saved).toMatchObject({
+            text: { part_message_1: 5 },
+            startedTools: ['call_contract'],
+            completedTools: [],
+            finishedSteps: [],
+        });
+
+        // The engine restarts. The turn finishes while it is down.
+        server.transcript = finishedTranscript(server.currentInputMessageId());
+        const secondEvents: WorkbenchEventDraft[] = [];
+        const second = await start(server, secondEvents);
+        second.restoreProgress(saved);
+        await expect(second.resumeTurn()).resolves.toEqual({ reason: 'stop' });
+
+        expect(texts(secondEvents)).toEqual([', world']);
+        expect(secondEvents.filter((event) => event.type === 'tool.started')).toEqual(
+            []
+        );
+        expect(
+            secondEvents.filter((event) => event.type === 'tool.completed')
+        ).toHaveLength(1);
+        expect(
+            secondEvents.filter((event) => event.type === 'usage.updated')
+        ).toHaveLength(1);
+        // Progress round trips, and a restored session that resumes again adds nothing.
+        expect(second.progress().text).toEqual({ part_message_1: 12 });
+        const count = secondEvents.length;
+        await second.resumeTurn();
+        expect(secondEvents.length).toBe(count);
+        // The first session's server is the one the fake replaced, so only the
+        // second needs closing.
+        await second.close();
+    });
+
+    test('resuming a finished turn again reports nothing new', async () => {
+        const server = new FakeOpenCodeServer();
+        server.transcript = finishedTranscript('msg_input_1');
+        const events: WorkbenchEventDraft[] = [];
+        const session = await start(server, events);
+        await session.resumeTurn();
+        const before = events.length;
+        await expect(session.resumeTurn()).resolves.toEqual({ reason: 'stop' });
+        expect(events.length).toBe(before);
+        await session.close();
+    });
+
+    test('follows a turn that is still running and adds only what is new', async () => {
+        const server = new FakeOpenCodeServer();
+        const events: WorkbenchEventDraft[] = [];
+        const session = await start(server, events);
+        server.transcript = [
+            { info: { id: 'msg_input_1', role: 'user' }, parts: [] },
+            {
+                info: {
+                    id: 'message_1',
+                    role: 'assistant',
+                    parentID: 'msg_input_1',
+                    time: { created: 1 },
+                },
+                parts: [
+                    {
+                        id: 'part_message_1',
+                        messageID: 'message_1',
+                        type: 'text',
+                        text: 'Hello',
+                    },
+                ],
+            },
+        ];
+        const resumed = session.resumeTurn();
+        await Bun.sleep(5);
+        expect(await settled(resumed)).toBe(false);
+        expect(texts(events)).toEqual(['Hello']);
+
+        server.emit('message.part.delta', {
+            messageID: 'message_1',
+            partID: 'part_message_1',
+            field: 'text',
+            delta: ', world',
+        });
+        server.emit('message.part.updated', {
+            part: {
+                id: 'finish_1',
+                messageID: 'message_1',
+                type: 'step-finish',
+                reason: 'stop',
+                tokens: { total: 3 },
+            },
+        });
+        server.emit('session.status', { status: { type: 'idle' } });
+        await expect(resumed).resolves.toEqual({ reason: 'stop' });
+        expect(texts(events)).toEqual(['Hello', ', world']);
+        expect(events.filter((event) => event.type === 'usage.updated')).toHaveLength(
+            1
+        );
+        await session.close();
+    });
+
+    test('does not repeat a delta that the transcript already holds', async () => {
+        const server = new FakeOpenCodeServer();
+        const events: WorkbenchEventDraft[] = [];
+        const session = await start(server, events);
+        server.transcript = [
+            { info: { id: 'msg_input_1', role: 'user' }, parts: [] },
+            {
+                info: {
+                    id: 'message_1',
+                    role: 'assistant',
+                    parentID: 'msg_input_1',
+                    time: { created: 1 },
+                },
+                parts: [
+                    {
+                        id: 'part_message_1',
+                        messageID: 'message_1',
+                        type: 'text',
+                        text: 'Hello again',
+                    },
+                ],
+            },
+        ];
+        // The server generated " again" before it answered the transcript request,
+        // so it arrives on the stream as well as in the transcript.
+        server.onTranscriptRead = () =>
+            server.emit('message.part.delta', {
+                messageID: 'message_1',
+                partID: 'part_message_1',
+                field: 'text',
+                delta: ' again',
+            });
+        const resumed = session.resumeTurn();
+        await Bun.sleep(5);
+        server.emit('message.part.delta', {
+            messageID: 'message_1',
+            partID: 'part_message_1',
+            field: 'text',
+            delta: '!',
+        });
+        server.emit('message.part.updated', {
+            part: {
+                id: 'finish_1',
+                messageID: 'message_1',
+                type: 'step-finish',
+                reason: 'stop',
+            },
+        });
+        server.emit('session.status', { status: { type: 'idle' } });
+        await resumed;
+        expect(texts(events).join('')).toBe('Hello again!');
+        await session.close();
+    });
+
+    test('ends as cancelled when the transcript shows an aborted message', async () => {
+        const server = new FakeOpenCodeServer();
+        server.transcript = [
+            { info: { id: 'msg_input_1', role: 'user' }, parts: [] },
+            {
+                info: {
+                    id: 'message_1',
+                    role: 'assistant',
+                    parentID: 'msg_input_1',
+                    error: { name: 'MessageAbortedError' },
+                    time: { created: 1, completed: 2 },
+                },
+                parts: [],
+            },
+        ];
+        const session = await start(server, []);
+        await expect(session.resumeTurn()).resolves.toEqual({ reason: 'cancelled' });
+        await session.close();
+    });
+
+    test('fails when the transcript shows a provider error', async () => {
+        const server = new FakeOpenCodeServer();
+        server.transcript = [
+            { info: { id: 'msg_input_1', role: 'user' }, parts: [] },
+            {
+                info: {
+                    id: 'message_1',
+                    role: 'assistant',
+                    parentID: 'msg_input_1',
+                    error: { name: 'ProviderAuthError' },
+                    time: { created: 1, completed: 2 },
+                },
+                parts: [],
+            },
+        ];
+        const session = await start(server, []);
+        await expect(session.resumeTurn()).rejects.toThrow('OpenCode session failed');
+        await session.close();
+    });
+
+    test('needs a turn to resume and an open session', async () => {
+        const server = new FakeOpenCodeServer();
+        const session = await start(server, []);
+        await expect(session.resumeTurn()).rejects.toThrow('no turn to resume');
+        await session.close();
+        await expect(session.resumeTurn()).rejects.toThrow('closed');
+    });
+});
+
 class FakeOpenCodeServer {
     readonly sessions = new Map<string, Record<string, unknown>>();
     readonly promptBodies: Record<string, unknown>[] = [];
@@ -1337,6 +1714,10 @@ class FakeOpenCodeServer {
     sessionCreationDelayMs = 0;
     authenticationDelayMs = 0;
     spawnEnvironment: Record<string, string | undefined> = {};
+    /** What `GET /session/:id/message` returns: messages with their parts. */
+    transcript: Array<{ info: Record<string, unknown>; parts: unknown[] }> = [];
+    eventSubscriptions = 0;
+    onTranscriptRead?: () => void;
     onPrompt?: (body: Record<string, unknown>) => void;
     onPermissionReply?: (body: Record<string, unknown>) => void;
     onQuestionResponse?: () => void;
@@ -1514,6 +1895,11 @@ class FakeOpenCodeServer {
         this.eventController?.error(new Error('native stream failure'));
     }
 
+    /** Ends the stream without an error, as a proxy that drops an idle connection does. */
+    endEventStream() {
+        this.eventController?.close();
+    }
+
     completeTurn(text: string) {
         this.beginAssistant();
         this.emit('message.part.updated', {
@@ -1682,6 +2068,10 @@ class FakeOpenCodeServer {
             this.resumedSessions += 1;
             return Response.json({ id: 'ses_native_1' });
         }
+        if (url.pathname === '/session/ses_native_1/message' && init.method === 'GET') {
+            this.onTranscriptRead?.();
+            return Response.json(this.transcript);
+        }
         if (url.pathname.startsWith('/session/') && init.method === 'GET') {
             const info = this.sessions.get(
                 decodeURIComponent(url.pathname.slice('/session/'.length))
@@ -1689,6 +2079,7 @@ class FakeOpenCodeServer {
             return info ? Response.json(info) : new Response(null, { status: 404 });
         }
         if (url.pathname === '/event') {
+            this.eventSubscriptions += 1;
             const stream = new ReadableStream<Uint8Array>({
                 start: (controller) => {
                     this.eventController = controller;
