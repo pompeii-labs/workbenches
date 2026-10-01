@@ -12,7 +12,10 @@ import {
 } from '../src/runners/session.js';
 import type { WorkbenchEventDraft } from '../src/runs/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
-import { activateModelCatalogFixture } from './model-catalog-fixture.js';
+import {
+    activateModelCatalogFixture,
+    modelCatalogFixture,
+} from './model-catalog-fixture.js';
 
 activateModelCatalogFixture();
 
@@ -346,7 +349,7 @@ async function start(
         workbench: harness.workbench,
         workspaceDirectory: '/workspace',
         environment: {},
-        configuration: new ModelRouter().resolve({
+        configuration: new ModelRouter(modelCatalogFixture).resolve({
             workbench: harness.workbench,
         }),
         host: {

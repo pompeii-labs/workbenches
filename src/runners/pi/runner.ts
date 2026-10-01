@@ -1,4 +1,8 @@
-import { ModelRouter, type ResolvedRunnerConfiguration } from '../../models/index.js';
+import {
+    type ModelCatalogSnapshot,
+    ModelRouter,
+    type ResolvedRunnerConfiguration,
+} from '../../models/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import { selectedRuntime } from '../../workbench/runtimes.js';
@@ -22,7 +26,11 @@ export class PiRunner extends Runner {
     readonly name = 'pi';
     readonly session: PiSessionAdapter;
 
-    constructor(private readonly config: PiConfigStaging) {
+    constructor(
+        private readonly config: PiConfigStaging,
+        /** The model catalog snapshot routes are resolved against. */
+        private readonly catalog: ModelCatalogSnapshot
+    ) {
         super();
         this.session = new PiSessionAdapter({ config });
     }
@@ -35,7 +43,8 @@ export class PiRunner extends Runner {
             workbench,
             environment,
             this.session,
-            this.config
+            this.config,
+            this.catalog
         );
     }
 }
@@ -48,12 +57,15 @@ class PreparedPiRunner implements PreparedRunner {
     readonly #workbench: ResolvedWorkbench;
     readonly #staged: StagedPiConfig;
     readonly #session: PiSessionAdapter;
+    readonly #router: ModelRouter;
 
     private constructor(options: {
         workbench: ResolvedWorkbench;
         staged: StagedPiConfig;
         session: PiSessionAdapter;
+        catalog: ModelCatalogSnapshot;
     }) {
+        this.#router = new ModelRouter(options.catalog);
         this.#workbench = options.workbench;
         this.#staged = options.staged;
         this.#session = options.session;
@@ -64,7 +76,8 @@ class PreparedPiRunner implements PreparedRunner {
         workbench: ResolvedWorkbench,
         environment: Record<string, string | undefined>,
         session: PiSessionAdapter,
-        config: PiConfigStaging
+        config: PiConfigStaging,
+        catalog: ModelCatalogSnapshot
     ): Promise<PreparedPiRunner> {
         return new PreparedPiRunner({
             workbench,
@@ -72,6 +85,7 @@ class PreparedPiRunner implements PreparedRunner {
                 linkNativeCredentials: selectedRuntime(workbench).name === 'local',
             }),
             session,
+            catalog,
         });
     }
 
@@ -84,7 +98,7 @@ class PreparedPiRunner implements PreparedRunner {
         return buildPiInvocation(
             runtime.workbench,
             task,
-            new ModelRouter().environmentForRoute(
+            this.#router.environmentForRoute(
                 this.#workbench,
                 configuration,
                 runtime.environment
@@ -130,7 +144,7 @@ class PreparedPiRunner implements PreparedRunner {
             {
                 workbench: runtime.workbench,
                 workspaceDirectory: runtime.workspaceDirectory,
-                environment: new ModelRouter().environmentForRoute(
+                environment: this.#router.environmentForRoute(
                     this.#workbench,
                     options.configuration,
                     runtime.environment

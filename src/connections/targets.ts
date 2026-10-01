@@ -1,7 +1,7 @@
 import type {
     ModelCatalogHarnessProviderRoute,
     ModelCatalogSnapshot,
-} from '../models/catalog.js';
+} from '../models/snapshot.js';
 import {
     PI_PACKAGE_VERSION,
     PI_PROVIDER_CAPABILITIES,

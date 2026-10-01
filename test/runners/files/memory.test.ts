@@ -14,6 +14,7 @@ import {
 } from '../../../src/runners/opencode/skills.js';
 import type { RunnerFiles } from '../../../src/runners/types.js';
 import type { ResolvedWorkbench } from '../../../src/types.js';
+import { modelCatalogFixture } from '../../model-catalog-fixture.js';
 
 const directories: string[] = [];
 
@@ -155,6 +156,7 @@ describe('an OpenCode runner over in-memory files', () => {
         } as unknown as ResolvedWorkbench;
         const runner = new OpenCodeRunner({
             skills: new OpenCodeSkillStaging(files, new RunnerContextStaging(files)),
+            catalog: modelCatalogFixture,
         });
         const prepared = await runner.prepare(workbench);
         try {
@@ -191,6 +193,7 @@ describe('an OpenCode runner over in-memory files', () => {
         }
         const runner = new OpenCodeRunner({
             skills: new StubSkills(files, new RunnerContextStaging(files)),
+            catalog: modelCatalogFixture,
         });
         const prepared = await runner.prepare({
             manifest: { runner: 'opencode' },

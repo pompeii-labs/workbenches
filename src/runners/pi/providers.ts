@@ -1,5 +1,8 @@
-import type { ModelCatalogHarnessProviderRoute } from '../../models/catalog.js';
-import type { AuthenticatedModelRoute, ModelRoute } from '../../models/index.js';
+import type {
+    AuthenticatedModelRoute,
+    ModelCatalogHarnessProviderRoute,
+    ModelRoute,
+} from '../../models/index.js';
 
 export const PI_PACKAGE_VERSION = '0.84.3';
 

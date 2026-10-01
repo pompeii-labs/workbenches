@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { ModelCatalog, type ModelCatalogSnapshot } from '../src/models/catalog.js';
+import { ModelCatalog } from '../src/models/catalog.js';
+import type { ModelCatalogSnapshot } from '../src/models/snapshot.js';
 
 export const modelCatalogFixture: ModelCatalogSnapshot = {
     version: 'test-fixture',

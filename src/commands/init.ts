@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 
 import { defineCommand } from 'citty';
 
-import { ModelCatalog } from '../models/index.js';
+import { ActiveModelCatalog } from '../models/index.js';
 import { runtimeProviderNames } from '../workbench/runtimes.js';
 import { CliPresenter } from './presenter.js';
 
@@ -47,7 +47,7 @@ export const initCommand = defineCommand({
             throw new Error(`Invalid Workbench name: ${args.name}`);
         }
         const model = args.model ?? 'openai/gpt-5.6-terra';
-        const routes = ModelCatalog.current().models[model]?.routes;
+        const routes = ActiveModelCatalog.current().models[model]?.routes;
         if (!routes || Object.keys(routes).length === 0) {
             throw new Error(
                 `Model is not available in the model catalog: ${model}. Configure unknown models directly with explicit routes and runner_config.`

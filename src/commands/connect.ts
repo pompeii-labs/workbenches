@@ -246,7 +246,7 @@ async function connectionTargetForWorkbench(
         }
         const providers = [
             ...new Set(
-                new ModelRouter()
+                new ModelRouter(ModelCatalog.current())
                     .routes(resolved.workbench)
                     .map((route) => route.provider)
             ),

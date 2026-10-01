@@ -1,4 +1,8 @@
-import { ModelRouter, type ResolvedRunnerConfiguration } from '../../models/index.js';
+import {
+    type ModelCatalogSnapshot,
+    ModelRouter,
+    type ResolvedRunnerConfiguration,
+} from '../../models/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import {
@@ -22,16 +26,20 @@ export interface OpenCodeRunnerDependencies {
     skills: OpenCodeSkillStaging;
     /** The session driver's own dependencies: `fetch`, the server password, timeouts. */
     session?: Omit<OpenCodeSessionDependencies, 'skills'>;
+    /** The model catalog snapshot routes are resolved against. */
+    catalog: ModelCatalogSnapshot;
 }
 
 export class OpenCodeRunner extends Runner {
     readonly name = 'opencode';
     readonly session: OpenCodeSessionAdapter;
     private readonly skills: OpenCodeSkillStaging;
+    private readonly catalog: ModelCatalogSnapshot;
 
     constructor(dependencies: OpenCodeRunnerDependencies) {
         super();
         this.skills = dependencies.skills;
+        this.catalog = dependencies.catalog;
         this.session = new OpenCodeSessionAdapter({
             ...dependencies.session,
             skills: dependencies.skills,
@@ -39,7 +47,12 @@ export class OpenCodeRunner extends Runner {
     }
 
     async prepare(workbench: ResolvedWorkbench): Promise<PreparedRunner> {
-        return PreparedOpenCodeRunner.create(workbench, this.session, this.skills);
+        return PreparedOpenCodeRunner.create(
+            workbench,
+            this.session,
+            this.skills,
+            this.catalog
+        );
     }
 }
 
@@ -52,12 +65,15 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
     readonly #workbench: ResolvedWorkbench;
     readonly #staged: StagedOpenCodeSkills;
     readonly #session: OpenCodeSessionAdapter;
+    readonly #router: ModelRouter;
 
     private constructor(options: {
         workbench: ResolvedWorkbench;
         staged: StagedOpenCodeSkills;
         session: OpenCodeSessionAdapter;
+        catalog: ModelCatalogSnapshot;
     }) {
+        this.#router = new ModelRouter(options.catalog);
         this.#workbench = options.workbench;
         this.#staged = options.staged;
         this.#session = options.session;
@@ -67,12 +83,14 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
     static async create(
         workbench: ResolvedWorkbench,
         session: OpenCodeSessionAdapter,
-        skills: OpenCodeSkillStaging
+        skills: OpenCodeSkillStaging,
+        catalog: ModelCatalogSnapshot
     ): Promise<PreparedOpenCodeRunner> {
         return new PreparedOpenCodeRunner({
             workbench,
             staged: await skills.stage(workbench),
             session,
+            catalog,
         });
     }
 
@@ -85,7 +103,7 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
         return buildOpenCodeInvocation(
             runtime.workbench,
             task,
-            new ModelRouter().environmentForRoute(
+            this.#router.environmentForRoute(
                 this.#workbench,
                 configuration,
                 runtime.environment
@@ -132,7 +150,7 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
             {
                 workbench: runtime.workbench,
                 workspaceDirectory: runtime.workspaceDirectory,
-                environment: new ModelRouter().environmentForRoute(
+                environment: this.#router.environmentForRoute(
                     this.#workbench,
                     options.configuration,
                     runtime.environment

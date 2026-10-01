@@ -13,6 +13,7 @@ import type {
 } from '../src/runners/session.js';
 import type { WorkbenchEventDraft } from '../src/runs/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { modelCatalogFixture } from './model-catalog-fixture.js';
 import {
     RUNNER_CONFORMANCE_UNSAFE_VALUES,
     type RunnerConformanceScenario,
@@ -480,7 +481,7 @@ describe('OpenCode interactive server adapter', () => {
                 workbench: fixture,
                 workspaceDirectory: '/workspace',
                 environment: {},
-                configuration: new ModelRouter().resolve({
+                configuration: new ModelRouter(modelCatalogFixture).resolve({
                     workbench: fixture,
                 }),
                 host: {
@@ -1832,5 +1833,5 @@ function workbench(): ResolvedWorkbench {
 }
 
 function configuration() {
-    return new ModelRouter().resolve({ workbench: workbench() });
+    return new ModelRouter(modelCatalogFixture).resolve({ workbench: workbench() });
 }
