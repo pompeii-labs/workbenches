@@ -101,7 +101,20 @@ wb run project-core --task "Review this migration" --final
 wb run project-core --task "Review this migration" --json
 ```
 
-Remote additions are frozen until `wb upgrade`. Local additions are live: each new run reads the registered absolute package directory. Every session captures its own package bytes, so resumed sessions keep their original package even after edits, upgrades, or removal. `run` accepts saved aliases only; `--dir` and `--repo` select the work target, never the package source. `wb publish <alias>` submits package bytes under `publisher/<manifest-name>` for registry review and reports the returned status. `--as` only names a local alias when adding a Workbench; it does not rename a registry publication.
+Remote additions are frozen until `wb upgrade`. Local additions are live: each new run reads the registered absolute package directory. Every session captures its own package bytes, so resumed sessions keep their original package even after edits, upgrades, or removal. `run` accepts saved aliases only; `--dir` and `--repo` select the work target, never the package source. `wb login` connects one organization per approval, so run `wb login --org <slug>` for each you push from, then manage them with `wb org list`, `wb org use <slug>`, `wb whoami`, and `wb logout [--org <slug>]`.
+
+### Share with your team, then publish
+
+Every organization workbench is internal until you publish it. `wb push` stores a new version under `organization/<manifest-name>`; only your organization's members and keys can see it. Teammates save it with `wb add`, using the held key for `org` automatically (`wb login --org <org>` first; without the key an internal workbench reports as missing):
+
+```sh
+wb push .#core                 # stores acme/core@<version>, internal
+wb add acme/core               # teammates: save the internal workbench
+wb publish acme/core           # submit the latest version for public review
+wb unpublish acme/core         # make a public workbench internal again
+```
+
+Each push needs a higher manifest version than the last. Publishing is the one act that makes a stored version public, and it always goes through review. `wb publish .#core` pushes and submits in one step. Saved internal workbenches show as `internal` in `wb list --saved` and `wb view`.
 
 ## What is in a Workbench?
 

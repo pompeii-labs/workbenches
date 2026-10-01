@@ -2259,6 +2259,7 @@ async function seedCreator(home: string, workspace: string): Promise<void> {
             resolve: async () => ({
                 reference: { publisher: 'pompeii', workbench: 'creator' },
                 registryUrl: 'http://127.0.0.1:1',
+                visibility: 'public',
                 versionId: 'fixture-version',
                 version: '0.1.4',
                 digest: WorkbenchPackage.digest(remote.files),

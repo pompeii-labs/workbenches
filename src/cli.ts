@@ -18,16 +18,19 @@ import { killCommand } from './commands/kill.js';
 import { listCommand } from './commands/list.js';
 import { loginCommand } from './commands/login.js';
 import { logoutCommand } from './commands/logout.js';
+import { orgCommand } from './commands/org.js';
 import { outcomeCommand } from './commands/outcome.js';
 import { exitOnBrokenPipe } from './commands/pipe.js';
 import { psCommand } from './commands/ps.js';
 import { publishCommand } from './commands/publish.js';
+import { pushCommand } from './commands/push.js';
 import { removeCommand } from './commands/remove.js';
 import { resumeCommand } from './commands/resume.js';
 import { runCommand } from './commands/run.js';
 import { sendCommand } from './commands/send.js';
 import { smokeCommand } from './commands/smoke.js';
 import { telemetryCommand } from './commands/telemetry.js';
+import { unpublishCommand } from './commands/unpublish.js';
 import { updateCommand } from './commands/update.js';
 import { upgradeCommand } from './commands/upgrade.js';
 import { validateCommand } from './commands/validate.js';
@@ -61,9 +64,12 @@ export const workbenchCommand = defineCommand({
         upgrade: upgradeCommand,
         login: loginCommand,
         logout: logoutCommand,
+        org: orgCommand,
         outcome: outcomeCommand,
         whoami: whoamiCommand,
+        push: pushCommand,
         publish: publishCommand,
+        unpublish: unpublishCommand,
         ps: psCommand,
         build: buildCommand,
         clean: cleanCommand,

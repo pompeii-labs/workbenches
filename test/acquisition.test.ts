@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { AuthoringOperation } from '../src/authoring/index.js';
 import { SavedWorkbenchCatalog, WorkbenchPackage } from '../src/catalog/index.js';
+import { CliPresenter } from '../src/commands/presenter.js';
+import { presentPushed } from '../src/commands/push.js';
 import { RegistryAccountStore, RegistryClient } from '../src/registry/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
 import { SessionResolver, SessionStore } from '../src/sessions/index.js';
@@ -311,84 +313,203 @@ describe('saved-source contract', () => {
         ).toBe('Original instructions');
     });
 
-    test('publish submits saved current bytes and reports pending review without claiming a release', async () => {
-        const { root, home, path } = await fixture('repo-engineer');
-        await new SavedWorkbenchCatalog(home).addLocal({
-            alias: 'local-expert',
-            workbench: await Workbench.load(path),
-        });
-        await writeFile(join(path, 'instructions.md'), 'Current publication bytes');
-        const files = await new WorkbenchPackage(await Workbench.load(path)).files();
-        const digest = WorkbenchPackage.digest(files).slice('sha256:'.length);
-        const requests: string[] = [];
-        let submitted: unknown;
+    test('org list, use, whoami, and logout manage held organizations', async () => {
+        const { root, home } = await fixture();
+        const deleted: string[] = [];
         const server = Bun.serve({
             port: 0,
             hostname: '127.0.0.1',
-            async fetch(request) {
-                const pathname = new URL(request.url).pathname;
-                requests.push(pathname);
-                if (pathname === '/v1/profile')
-                    return Response.json({
-                        user: { id: 'user', email: 'fixture@example.test' },
-                        publishers: [
-                            { id: 'publisher-id', slug: 'example', name: 'Example' },
-                        ],
-                    });
-                if (pathname === '/v1/submissions') {
-                    submitted = await request.json();
-                    return Response.json({
-                        submissions: [
-                            {
-                                id: 'submission-id',
-                                status: 'pending',
-                                publisher_slug: 'example',
-                                slug: 'repo-engineer',
-                                version: '0.1.0',
-                                digest,
-                                dashboard_url:
-                                    'https://registry.example/submissions/submission-id',
-                                latest_approved_version: '0.0.1',
-                            },
-                        ],
-                    });
+            fetch(request) {
+                const url = new URL(request.url);
+                if (request.method === 'DELETE') {
+                    deleted.push(url.pathname);
+                    return Response.json({ ok: true });
                 }
-                return new Response('unexpected', { status: 500 });
+                const slug = request.headers
+                    .get('authorization')
+                    ?.slice('Bearer wb_'.length);
+                return Response.json({
+                    organization: {
+                        id: `${slug}-id`,
+                        slug,
+                        name: slug,
+                        personal: false,
+                    },
+                    user: { id: 'user-1', email: 'person@example.test' },
+                    scopes: ['catalog:read', 'packages:write'],
+                    key: {
+                        id: `${slug}-key`,
+                        label: null,
+                        expires_at: '2099-01-01T00:00:00Z',
+                    },
+                });
             },
         });
         try {
-            await new RegistryAccountStore({
+            const accounts = new RegistryAccountStore({
                 home,
                 client: new RegistryClient({ apiUrl: server.url.origin }),
-            }).save({
-                url: server.url.origin,
-                token: 'fixture-token',
-                tokenId: 'token-id',
-                email: 'fixture@example.test',
-                expiresAt: '2099-01-01T00:00:00Z',
             });
-            const result = await cli(
+            await accounts.save(orgKey('first'));
+            await accounts.save(orgKey('second'));
+            const api = ['--api-url', server.url.origin];
+
+            const listed = await cli(home, ['org', 'list', ...api], root);
+            expect(listed.stdout).toContain('org\tfirst\tdefault');
+            expect(listed.stdout).toContain('org\tsecond\t\t');
+            expect((await cli(home, ['org', 'use', 'second', ...api], root)).code).toBe(
+                0
+            );
+            expect((await cli(home, ['org', 'use', 'nope', ...api], root)).code).toBe(
+                1
+            );
+
+            const who = await cli(home, ['whoami', ...api], root);
+            expect(who.code).toBe(0);
+            const text = `${who.stdout}${who.stderr}`;
+            expect(text).toContain('second');
+            expect(text).toContain('person@example.test');
+            expect(text).toContain('catalog:read, packages:write');
+            expect(text).toContain('first');
+
+            const out = await cli(home, ['logout', ...api], root);
+            expect(out.code).toBe(0);
+            expect(deleted).toEqual(['/v1/keys/second-key']);
+            expect((await accounts.list()).defaultSlug).toBe('first');
+            await cli(home, ['logout', '--org', 'first', ...api], root);
+            expect(deleted).toEqual(['/v1/keys/second-key', '/v1/keys/first-key']);
+            expect((await accounts.list()).organizations).toEqual([]);
+        } finally {
+            server.stop(true);
+        }
+    });
+});
+
+describe('private organization workbenches', () => {
+    test('add saves an internal workbench with the matching key and records visibility', async () => {
+        const { root, home, path } = await fixture('repo-engineer');
+        const registry = await privateRegistry(path);
+        try {
+            await hold(home, registry.server.url.origin, ['other', 'example']);
+            const api = ['--api-url', registry.server.url.origin];
+
+            const added = await cli(
                 home,
-                ['publish', 'local-expert', '--api-url', server.url.origin],
+                ['add', 'example/repo-engineer', ...api],
                 root
             );
-            expect(result.code).toBe(0);
-            expect(result.stdout).toContain('submitted\texample/repo-engineer\t0.1.0');
-            expect(result.stdout).toContain('pending');
-            expect(result.stdout).toContain(
-                'https://registry.example/submissions/submission-id'
+            expect(added.code).toBe(0);
+            expect(added.stdout).toContain('saved\trepo-engineer');
+            expect(registry.seen).toEqual([
+                { path: '/v1/resolutions', authorization: 'Bearer wb_example' },
+                { path: '/v1/artifacts/version', authorization: 'Bearer wb_example' },
+            ]);
+
+            const entry = await new SavedWorkbenchCatalog(home).find('repo-engineer');
+            expect(entry?.registry?.visibility).toBe('private');
+            const listed = await cli(home, ['list', '--saved'], root);
+            expect(listed.stdout).toMatch(/^repo-engineer\t.*\tinternal$/m);
+            expect(listed.stdout).not.toContain('private');
+            const viewed = await cli(home, ['view', 'repo-engineer', '--json'], root);
+            expect(JSON.parse(viewed.stdout).origin.visibility).toBe('private');
+            const rendered = await cli(home, ['view', 'repo-engineer'], root);
+            expect(rendered.stdout).toMatch(/^Visibility\s+internal$/m);
+
+            registry.seen.length = 0;
+            const upgraded = await cli(
+                home,
+                ['upgrade', 'repo-engineer', ...api],
+                root
             );
-            expect(result.stdout).not.toContain('published\t');
-            expect(requests).toEqual(['/v1/profile', '/v1/submissions']);
-            expect(submitted).toMatchObject({
-                organization_id: 'publisher-id',
+            expect(upgraded.code).toBe(0);
+            expect(registry.seen.map((request) => request.authorization)).toEqual([
+                'Bearer wb_example',
+                'Bearer wb_example',
+            ]);
+        } finally {
+            registry.server.stop(true);
+        }
+    });
+
+    test('add without the organization key fails with a sign-in hint', async () => {
+        const { root, home, path } = await fixture('repo-engineer');
+        const registry = await privateRegistry(path);
+        try {
+            const api = ['--api-url', registry.server.url.origin];
+            const anonymous = await cli(
+                home,
+                ['add', 'example/repo-engineer', ...api],
+                root
+            );
+            expect(anonymous.code).toBe(1);
+            expect(anonymous.stderr).toContain('wb login --org example');
+
+            await hold(home, registry.server.url.origin, ['other']);
+            const other = await cli(
+                home,
+                ['add', 'example/repo-engineer', ...api],
+                root
+            );
+            expect(other.code).toBe(1);
+            expect(other.stderr).toContain('wb login --org example');
+            expect(registry.seen).toEqual([
+                { path: '/v1/resolutions', authorization: '' },
+                { path: '/v1/resolutions', authorization: 'Bearer wb_other' },
+            ]);
+            expect(await new SavedWorkbenchCatalog(home).list()).toEqual([]);
+        } finally {
+            registry.server.stop(true);
+        }
+    });
+});
+
+describe('push, publish, and unpublish', () => {
+    test('push stores an internal version with the default organization and --org', async () => {
+        const { root, home, path } = await fixture('repo-engineer');
+        await writeFile(join(path, 'instructions.md'), 'Current package bytes');
+        const registry = await lifecycleRegistry(path);
+        try {
+            await hold(home, registry.server.url.origin, ['first', 'second']);
+            const api = ['--api-url', registry.server.url.origin];
+            const digest = registry.digest;
+
+            const fallback = await cli(home, ['push', '.#core', ...api], root);
+            expect(fallback.code).toBe(0);
+            expect(fallback.stdout).toBe(
+                `push\tfirst/repo-engineer\t0.1.0\tsha256:${digest}\n`
+            );
+
+            const selected = await cli(
+                home,
+                ['push', '.#core', '--org', 'second', ...api],
+                root
+            );
+            expect(selected.code).toBe(0);
+            expect(selected.stdout).toContain('push\tsecond/repo-engineer\t0.1.0');
+
+            const renamed = await cli(
+                home,
+                ['push', '.#core', '--as', 'other-name', ...api],
+                root
+            );
+            expect(renamed.stdout).toContain('push\tfirst/other-name\t');
+
+            expect(registry.requests.map((request) => request.path)).toEqual([
+                '/v1/versions',
+                '/v1/versions',
+                '/v1/versions',
+            ]);
+            expect(registry.requests[0]?.authorization).toBe('Bearer wb_first');
+            expect(registry.requests[1]?.authorization).toBe('Bearer wb_second');
+            expect(registry.requests[0]?.body).toMatchObject({
+                organization_id: 'first-id',
                 slug: 'repo-engineer',
                 package: {
                     format: 1,
                     files: expect.arrayContaining([
                         {
                             path: 'instructions.md',
-                            content: Buffer.from('Current publication bytes').toString(
+                            content: Buffer.from('Current package bytes').toString(
                                 'base64'
                             ),
                             executable: false,
@@ -396,12 +517,33 @@ describe('saved-source contract', () => {
                     ]),
                 },
             });
+            expect(registry.requests[1]?.body).toMatchObject({
+                organization_id: 'second-id',
+            });
+            expect(registry.requests[0]?.body).not.toHaveProperty('visibility');
+
+            const unheld = await cli(
+                home,
+                ['push', '.#core', '--org', 'third', ...api],
+                root
+            );
+            expect(unheld.code).toBe(1);
+            expect(unheld.stderr).toContain('Not signed in to organization third');
+            expect(registry.requests).toHaveLength(3);
+
+            const removed = await cli(
+                home,
+                ['push', '.#core', '--publisher', 'second', ...api],
+                root
+            );
+            expect(removed.code).toBe(1);
+            expect(removed.stderr).toContain('Use --org <slug>');
         } finally {
-            server.stop(true);
+            registry.server.stop(true);
         }
     });
 
-    test('publish requires a local registry login before calling the API', async () => {
+    test('push accepts a saved alias and requires a login before calling the API', async () => {
         const { root, home, path } = await fixture('repo-engineer');
         await new SavedWorkbenchCatalog(home).addLocal({
             alias: 'local-expert',
@@ -409,103 +551,376 @@ describe('saved-source contract', () => {
         });
         const result = await cli(
             home,
-            ['publish', 'local-expert', '--api-url', 'http://127.0.0.1:57499'],
+            ['push', 'local-expert', '--api-url', 'http://127.0.0.1:57499'],
             root
         );
         expect(result.code).toBe(1);
         expect(result.stderr).toContain('Sign in first with wb login');
-    });
 
-    test('publish requires an explicit publisher when more than one is available', async () => {
-        const { root, home, path } = await fixture('repo-engineer');
-        await new SavedWorkbenchCatalog(home).addLocal({
-            alias: 'local-expert',
-            workbench: await Workbench.load(path),
-        });
-        const requests: string[] = [];
-        let submitted: unknown;
-        const server = Bun.serve({
-            port: 0,
-            hostname: '127.0.0.1',
-            async fetch(request) {
-                const pathname = new URL(request.url).pathname;
-                requests.push(pathname);
-                if (pathname === '/v1/profile')
-                    return Response.json({
-                        user: { id: 'user', email: 'fixture@example.test' },
-                        publishers: [
-                            { id: 'first-id', slug: 'first', name: 'First' },
-                            { id: 'second-id', slug: 'second', name: 'Second' },
-                        ],
-                    });
-                if (pathname === '/v1/submissions') {
-                    submitted = await request.json();
-                    return Response.json({
-                        submissions: [
-                            {
-                                id: 'submission-id',
-                                status: 'pending',
-                                publisher_slug: 'second',
-                                slug: 'repo-engineer',
-                                version: '0.1.0',
-                                digest: WorkbenchPackage.digest(
-                                    await new WorkbenchPackage(
-                                        await Workbench.load(path)
-                                    ).files()
-                                ).slice('sha256:'.length),
-                                dashboard_url:
-                                    'https://registry.example/submissions/submission-id',
-                                latest_approved_version: null,
-                            },
-                        ],
-                    });
-                }
-                return new Response('unexpected', { status: 500 });
-            },
-        });
+        const registry = await lifecycleRegistry(path);
         try {
-            await new RegistryAccountStore({
+            await hold(home, registry.server.url.origin, ['first']);
+            const pushed = await cli(
                 home,
-                client: new RegistryClient({ apiUrl: server.url.origin }),
-            }).save({
-                url: server.url.origin,
-                token: 'fixture-token',
-                tokenId: 'token-id',
-                email: 'fixture@example.test',
-                expiresAt: '2099-01-01T00:00:00Z',
-            });
-            const ambiguous = await cli(
-                home,
-                ['publish', 'local-expert', '--api-url', server.url.origin],
+                ['push', 'local-expert', '--api-url', registry.server.url.origin],
                 root
             );
-            expect(ambiguous.code).toBe(1);
-            expect(ambiguous.stderr).toContain('Choose a publisher with --publisher');
-            expect(requests).toEqual(['/v1/profile']);
-
-            const selected = await cli(
-                home,
-                [
-                    'publish',
-                    'local-expert',
-                    '--publisher',
-                    'second',
-                    '--api-url',
-                    server.url.origin,
-                ],
-                root
-            );
-            expect(selected.code).toBe(0);
-            expect(selected.stdout).toContain('submitted\tsecond/repo-engineer\t0.1.0');
-            expect(submitted).toMatchObject({
-                organization_id: 'second-id',
-                slug: 'repo-engineer',
-            });
+            expect(pushed.code).toBe(0);
+            expect(pushed.stdout).toContain('push\tfirst/repo-engineer\t0.1.0');
         } finally {
-            server.stop(true);
+            registry.server.stop(true);
         }
     });
+
+    test('push prints the registry conflict message unchanged', async () => {
+        const { root, home, path } = await fixture('repo-engineer');
+        const registry = await lifecycleRegistry(path);
+        try {
+            await hold(home, registry.server.url.origin, ['first']);
+            const api = ['--api-url', registry.server.url.origin];
+
+            registry.versionConflict =
+                'Version 0.1.0 must be greater than the latest stored version 0.1.0';
+            const stale = await cli(home, ['push', '.#core', ...api], root);
+            expect(stale.code).toBe(1);
+            expect(stale.stderr).toContain(registry.versionConflict);
+
+            registry.versionConflict =
+                'repo-engineer is public. Publish new versions with wb publish';
+            const isPublic = await cli(home, ['push', '.#core', ...api], root);
+            expect(isPublic.code).toBe(1);
+            expect(isPublic.stderr).toContain(registry.versionConflict);
+        } finally {
+            registry.server.stop(true);
+        }
+    });
+
+    test('push renders the internal wording for people', () => {
+        const lines: string[] = [];
+        const output = new CliPresenter({
+            interactive: true,
+            color: false,
+            stdout: (value) => lines.push(value),
+        });
+        presentPushed(output, {
+            reference: { publisher: 'acme', workbench: 'ios-expert' },
+            workbenchId: 'wb-id',
+            visibility: 'private',
+            versionId: 'version-id',
+            version: '1.2.0',
+            digest: `sha256:${'a'.repeat(64)}`,
+        });
+        expect(lines.join('')).toContain('Pushed acme/ios-expert@1.2.0 (internal)');
+    });
+
+    test('publish by reference submits the latest stored version id', async () => {
+        const { root, home, path } = await fixture('repo-engineer');
+        const registry = await lifecycleRegistry(path);
+        try {
+            await hold(home, registry.server.url.origin, ['example']);
+            const api = ['--api-url', registry.server.url.origin];
+
+            const result = await cli(
+                home,
+                ['publish', 'example/repo-engineer', ...api],
+                root
+            );
+            expect(result.code).toBe(0);
+            expect(result.stdout).toContain('submitted\texample/repo-engineer\t0.1.0');
+            expect(result.stdout).toContain('pending');
+            expect(result.stdout).toContain('https://registry.example/submissions/id');
+            expect(result.stdout).not.toContain('push\t');
+            expect(registry.requests.map((request) => request.path)).toEqual([
+                '/v1/resolutions',
+                '/v1/submissions',
+            ]);
+            expect(registry.requests[1]?.body).toEqual({ version_id: 'version-id' });
+            expect(registry.requests[1]?.authorization).toBe('Bearer wb_example');
+
+            const latest = await cli(
+                home,
+                ['publish', 'example/repo-engineer', '--version', '0.1.0', ...api],
+                root
+            );
+            expect(latest.code).toBe(0);
+
+            const older = await cli(
+                home,
+                ['publish', 'example/repo-engineer', '--version', '0.0.9', ...api],
+                root
+            );
+            expect(older.code).toBe(1);
+            expect(older.stderr).toContain('Only the latest version can be published');
+
+            const mismatched = await cli(
+                home,
+                ['publish', 'example/repo-engineer', '--org', 'other', ...api],
+                root
+            );
+            expect(mismatched.code).toBe(1);
+            expect(mismatched.stderr).toContain('does not match example/repo-engineer');
+
+            const unheld = await cli(
+                home,
+                ['publish', 'nobody/repo-engineer', ...api],
+                root
+            );
+            expect(unheld.code).toBe(1);
+            expect(unheld.stderr).toContain('Not signed in to organization nobody');
+        } finally {
+            registry.server.stop(true);
+        }
+    });
+
+    test('publish with a local source pushes, then submits the pushed version', async () => {
+        const { root, home, path } = await fixture('repo-engineer');
+        const registry = await lifecycleRegistry(path);
+        try {
+            await hold(home, registry.server.url.origin, ['first', 'second']);
+            const api = ['--api-url', registry.server.url.origin];
+
+            const result = await cli(
+                home,
+                ['publish', '.#core', '--org', 'second', ...api],
+                root
+            );
+            expect(result.code).toBe(0);
+            const [pushLine, submitLine] = result.stdout.trim().split('\n');
+            expect(pushLine).toContain('push\tsecond/repo-engineer\t0.1.0');
+            expect(submitLine).toContain('submitted\tsecond/repo-engineer\t0.1.0');
+            expect(registry.requests.map((request) => request.path)).toEqual([
+                '/v1/versions',
+                '/v1/submissions',
+            ]);
+            expect(registry.requests[1]?.body).toEqual({ version_id: 'version-id' });
+            expect(registry.requests[1]?.authorization).toBe('Bearer wb_second');
+
+            const versioned = await cli(
+                home,
+                ['publish', '.#core', '--version', '0.1.0', ...api],
+                root
+            );
+            expect(versioned.code).toBe(1);
+            expect(versioned.stderr).toContain('--version applies to a registry');
+            expect(registry.requests).toHaveLength(2);
+
+            registry.versionConflict = 'Version 0.1.0 must be greater';
+            const stale = await cli(home, ['publish', '.#core', ...api], root);
+            expect(stale.code).toBe(1);
+            expect(stale.stderr).toContain('Version 0.1.0 must be greater');
+            expect(registry.requests.map((request) => request.path)).toEqual([
+                '/v1/versions',
+                '/v1/submissions',
+                '/v1/versions',
+            ]);
+        } finally {
+            registry.server.stop(true);
+        }
+    });
+
+    test('unpublish resolves the workbench and deletes its publication', async () => {
+        const { root, home, path } = await fixture('repo-engineer');
+        const registry = await lifecycleRegistry(path);
+        try {
+            await hold(home, registry.server.url.origin, ['example']);
+            const api = ['--api-url', registry.server.url.origin];
+
+            const result = await cli(
+                home,
+                ['unpublish', 'example/repo-engineer', ...api],
+                root
+            );
+            expect(result.code).toBe(0);
+            expect(result.stdout).toBe(
+                'unpublished\texample/repo-engineer\tinternal\n'
+            );
+            expect(
+                registry.requests.map((request) => `${request.method} ${request.path}`)
+            ).toEqual(['POST /v1/resolutions', 'DELETE /v1/publications/wb-id']);
+            expect(registry.requests[1]?.authorization).toBe('Bearer wb_example');
+
+            const local = await cli(home, ['unpublish', '.#core', ...api], root);
+            expect(local.code).toBe(1);
+            expect(local.stderr).toContain('registry org/name');
+        } finally {
+            registry.server.stop(true);
+        }
+    });
+
+    test('--private is rejected on push and publish', async () => {
+        const { root, home } = await fixture('repo-engineer');
+        const api = ['--api-url', 'http://127.0.0.1:57499'];
+        for (const command of ['push', 'publish']) {
+            const result = await cli(
+                home,
+                [command, '.#core', '--private', ...api],
+                root
+            );
+            expect(result.code).toBe(1);
+            expect(result.stderr).toContain('Unknown option --private');
+        }
+        const help = await cli(home, ['publish', '--help'], root);
+        expect(help.stdout).not.toContain('--private');
+    });
 });
+
+/** A registry that stores versions, resolves them, and accepts submissions. */
+async function lifecycleRegistry(packagePath: string) {
+    const files = await new WorkbenchPackage(await Workbench.load(packagePath)).files();
+    const digest = WorkbenchPackage.digest(files).slice('sha256:'.length);
+    const state = {
+        digest,
+        versionConflict: undefined as string | undefined,
+        requests: [] as Array<{
+            method: string;
+            path: string;
+            authorization: string;
+            body: unknown;
+        }>,
+        server: undefined as unknown as ReturnType<typeof Bun.serve>,
+    };
+    state.server = Bun.serve({
+        port: 0,
+        hostname: '127.0.0.1',
+        async fetch(request) {
+            const pathname = new URL(request.url).pathname;
+            if (pathname === '/v1/events') return Response.json({ ok: true });
+            const body = request.method === 'DELETE' ? null : await request.json();
+            state.requests.push({
+                method: request.method,
+                path: pathname,
+                authorization: request.headers.get('authorization') ?? '',
+                body,
+            });
+            if (pathname === '/v1/versions') {
+                if (state.versionConflict) {
+                    return Response.json(
+                        { error: { message: state.versionConflict } },
+                        { status: 409 }
+                    );
+                }
+                const organization = (body as { organization_id: string })
+                    .organization_id;
+                return Response.json(
+                    {
+                        workbench: {
+                            id: 'wb-id',
+                            slug: (body as { slug: string }).slug,
+                            organization_slug: organization.replace('-id', ''),
+                            visibility: 'private',
+                        },
+                        version: { id: 'version-id', version: '0.1.0', digest },
+                    },
+                    { status: 201 }
+                );
+            }
+            if (pathname === '/v1/resolutions') {
+                return Response.json({
+                    workbench_id: 'wb-id',
+                    visibility: 'private',
+                    source_path: 'workbench.yml',
+                    repository: null,
+                    latest_version: {
+                        id: 'version-id',
+                        version: '0.1.0',
+                        digest,
+                        source_commit: 'a'.repeat(40),
+                        artifact_url: null,
+                    },
+                });
+            }
+            if (pathname === '/v1/submissions') {
+                const key = request.headers.get('authorization') ?? '';
+                return Response.json({
+                    submissions: [
+                        {
+                            id: 'submission-id',
+                            status: 'pending',
+                            publisher_slug: key.replace('Bearer wb_', ''),
+                            slug: 'repo-engineer',
+                            version: '0.1.0',
+                            digest,
+                            dashboard_url: 'https://registry.example/submissions/id',
+                            latest_approved_version: null,
+                        },
+                    ],
+                });
+            }
+            if (pathname === '/v1/publications/wb-id') {
+                return Response.json({ unpublished: true });
+            }
+            return new Response('unexpected', { status: 500 });
+        },
+    });
+    return state;
+}
+
+/** A registry whose only workbench is private to the organization `example`. */
+async function privateRegistry(packagePath: string) {
+    const files = await new WorkbenchPackage(await Workbench.load(packagePath)).files();
+    const digest = WorkbenchPackage.digest(files).slice('sha256:'.length);
+    const seen: Array<{ path: string; authorization: string }> = [];
+    const server = Bun.serve({
+        port: 0,
+        hostname: '127.0.0.1',
+        fetch(request) {
+            const pathname = new URL(request.url).pathname;
+            const authorization = request.headers.get('authorization') ?? '';
+            // Save telemetry is anonymous by design and not part of key selection.
+            if (pathname === '/v1/events') return Response.json({ ok: true });
+            seen.push({ path: pathname, authorization });
+            if (authorization !== 'Bearer wb_example')
+                return new Response('missing', { status: 404 });
+            if (pathname === '/v1/resolutions') {
+                return Response.json({
+                    visibility: 'private',
+                    source_path: 'workbench.yml',
+                    repository: null,
+                    latest_version: {
+                        id: 'version',
+                        version: '0.1.0',
+                        digest,
+                        source_commit: 'a'.repeat(40),
+                        artifact_url: `${new URL(request.url).origin}/v1/artifacts/version`,
+                    },
+                });
+            }
+            if (pathname === '/v1/artifacts/version') {
+                return Response.json({
+                    format: 1,
+                    files: files.map((file) => ({
+                        path: file.path,
+                        content: Buffer.from(file.bytes).toString('base64'),
+                        executable: file.executable,
+                    })),
+                });
+            }
+            return new Response('unexpected', { status: 500 });
+        },
+    });
+    return { server, seen };
+}
+
+async function hold(home: string, apiUrl: string, slugs: string[]) {
+    const accounts = new RegistryAccountStore({
+        home,
+        client: new RegistryClient({ apiUrl }),
+    });
+    for (const slug of slugs) await accounts.save(orgKey(slug));
+}
+
+function orgKey(slug: string) {
+    return {
+        organizationId: `${slug}-id`,
+        slug,
+        name: slug,
+        personal: false,
+        token: `wb_${slug}`,
+        keyId: `${slug}-key`,
+        scopes: ['catalog:read', 'packages:write'],
+        expiresAt: '2099-01-01T00:00:00Z',
+    };
+}
 
 async function fixture(name = 'expert') {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'acquisition-')));

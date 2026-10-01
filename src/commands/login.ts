@@ -1,27 +1,11 @@
-import { hostname, platform } from 'node:os';
-
 import { defineCommand } from 'citty';
 
-import { RegistryAccountStore, RegistryClient } from '../registry/index.js';
+import {
+    RegistryAccountStore,
+    RegistryClient,
+    RegistryLogin,
+} from '../registry/index.js';
 import { CliPresenter } from './presenter.js';
-
-interface LoginRequest {
-    id: string;
-    code: string;
-    secret: string;
-    verification_url: string;
-    expires_at: string;
-    interval: number;
-}
-
-type TokenResponse =
-    | { status: 'pending' }
-    | {
-          status: 'complete';
-          token: string;
-          token_id: string;
-          expires_at: string;
-      };
 
 export const loginCommand = defineCommand({
     meta: { name: 'login', description: 'Connect the CLI to workbenches.dev.' },
@@ -31,41 +15,31 @@ export const loginCommand = defineCommand({
             description: 'Open the approval page in a browser',
             default: true,
         },
+        org: {
+            type: 'string',
+            description: 'Organization to connect and make the default',
+        },
     },
     async run({ args }) {
         const output = new CliPresenter();
         const client = new RegistryClient();
-        const accounts = new RegistryAccountStore({ client });
-        output.progress('Starting browser sign-in');
-        const login = await client.request<LoginRequest>('/v1/logins', {
-            method: 'POST',
-            body: { label: `${hostname()} (${platform()})` },
-        });
-        output.message(`Open ${login.verification_url}`, 'info');
-        output.message(`Confirm code: ${login.code}`, 'warning');
-        if (args.browser) openBrowser(login.verification_url);
-        output.progress('Waiting for approval');
-
-        while (new Date(login.expires_at) > new Date()) {
-            await wait(login.interval * 1000);
-            const result = await client.request<TokenResponse>('/v1/tokens', {
-                method: 'POST',
-                body: { login_id: login.id, secret: login.secret },
-            });
-            if (result.status === 'pending') continue;
-            const account = {
-                url: client.apiUrl,
-                token: result.token,
-                tokenId: result.token_id,
-                email: '',
-                expiresAt: result.expires_at,
-            };
-            const profile = await accounts.profile(account);
-            await accounts.save({ ...account, email: profile.user.email });
-            output.message(`Signed in as ${profile.user.email}`, 'success');
-            return;
-        }
-        throw new Error('The CLI login expired before it was approved');
+        const { account, isDefault } = await new RegistryLogin({
+            client,
+            accounts: new RegistryAccountStore({ client }),
+            ...(args.org ? { organization: args.org } : {}),
+            onProgress: (message) => output.progress(message),
+            onApproval: ({ url, code }) => {
+                output.message(`Open ${url}`, 'info');
+                output.message(`Confirm code: ${code}`, 'warning');
+                if (args.browser) openBrowser(url);
+            },
+        }).run();
+        output.message(
+            `Connected organization ${account.slug}${
+                account.email ? ` as ${account.email}` : ''
+            }${isDefault ? ' (default)' : ''}`,
+            'success'
+        );
     },
 });
 
@@ -82,8 +56,4 @@ function openBrowser(url: string): void {
         stderr: 'ignore',
     });
     child.unref();
-}
-
-function wait(milliseconds: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

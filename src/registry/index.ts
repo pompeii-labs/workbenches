@@ -2,7 +2,10 @@ export {
     type RegistryAccount,
     RegistryAccountStore,
     type RegistryAccountStoreOptions,
+    type RegistryOrganizationKey,
+    type RegistryOrganizationList,
     type RegistryProfile,
+    type RegistrySignOut,
 } from './account-store.js';
 export {
     RegistryClient,
@@ -11,6 +14,8 @@ export {
     type RegistryReference,
     type RegistryRequestOptions,
     type RegistrySearchResult,
+    type RegistryVisibility,
+    registryVisibilityLabel,
 } from './client.js';
 export {
     type OciClientRunner,
@@ -20,6 +25,16 @@ export {
     type RegistryImagePushOptions,
     registryImageReference,
 } from './images/index.js';
+export {
+    RegistryLogin,
+    type RegistryLoginOptions,
+    type RegistryLoginResult,
+} from './login.js';
+export {
+    RegistryPublisher,
+    type RegistryPushedVersion,
+    type RegistrySubmission,
+} from './publisher.js';
 export {
     RegistryWorkbenchSaver,
     type RegistryWorkbenchSaverOptions,

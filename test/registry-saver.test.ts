@@ -16,6 +16,7 @@ describe('Registry Workbench saving', () => {
                     return registryPackage();
                 },
                 fetchWorkbench: async () => remoteWorkbench(),
+                missing: async () => new Error('missing'),
             },
             telemetry: {
                 report: async () => {
@@ -41,6 +42,7 @@ describe('Registry Workbench saving', () => {
             client: {
                 resolve: async () => registryPackage(),
                 fetchWorkbench: async () => remoteWorkbench(),
+                missing: async () => new Error('missing'),
             },
             github: {
                 fetch: async () => {
@@ -70,6 +72,30 @@ describe('Registry Workbench saving', () => {
         expect(reports).toHaveLength(1);
     });
 
+    test('reports a save for a public package but not for an internal one', async () => {
+        const run = async (visibility: 'public' | 'private') => {
+            const reports: unknown[] = [];
+            const saver = new RegistryWorkbenchSaver('/tmp/workbench-registry-save', {
+                catalog: new Catalog([]),
+                client: {
+                    resolve: async () => ({ ...registryPackage(), visibility }),
+                    fetchWorkbench: async () => remoteWorkbench(),
+                    missing: async () => new Error('missing'),
+                },
+                telemetry: {
+                    report: async (event) => {
+                        reports.push(event);
+                        return true;
+                    },
+                },
+            });
+            await saver.save({ publisher: 'lux', workbench: 'auth' });
+            return reports;
+        };
+        expect(await run('private')).toHaveLength(0);
+        expect(await run('public')).toHaveLength(1);
+    });
+
     test('checks current registry bytes instead of silently returning an old package', async () => {
         const existing = catalogEntry('auth', 'lux', 'auth');
         let resolved = 0;
@@ -81,6 +107,7 @@ describe('Registry Workbench saving', () => {
                     return registryPackage();
                 },
                 fetchWorkbench: async () => remoteWorkbench(),
+                missing: async () => new Error('missing'),
             },
             telemetry: { report: async () => true },
         });
@@ -105,6 +132,7 @@ describe('Registry Workbench saving', () => {
                 fetchWorkbench: async () => {
                     throw new Error('Registry artifact should not be fetched');
                 },
+                missing: async () => new Error('missing'),
             },
             github: {
                 fetch: async (...request) => {
@@ -132,6 +160,7 @@ describe('Registry Workbench saving', () => {
             client: {
                 resolve: async () => registryPackage(),
                 fetchWorkbench: async () => remoteWorkbench(),
+                missing: async () => new Error('missing'),
             },
             telemetry: { report: async () => true },
         });
@@ -179,6 +208,7 @@ function registryPackage(): RegistryPackage {
     return {
         reference: { publisher: 'lux', workbench: 'auth' },
         registryUrl: 'https://api.workbenches.dev',
+        visibility: 'public',
         versionId: 'version-id',
         version: '0.1.0',
         digest: `sha256:${'b'.repeat(64)}`,

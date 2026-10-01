@@ -6,14 +6,14 @@ import { RegistryClient } from './client.js';
 import { RegistryTelemetry } from './telemetry.js';
 
 export interface RegistryWorkbenchSaverOptions {
-    client?: Pick<RegistryClient, 'resolve' | 'fetchWorkbench'>;
+    client?: Pick<RegistryClient, 'resolve' | 'fetchWorkbench' | 'missing'>;
     catalog?: Pick<SavedWorkbenchCatalog, 'list' | 'addRemote'>;
     github?: Pick<GitHubWorkbenchSource, 'fetch'>;
     telemetry?: Pick<RegistryTelemetry, 'report'>;
 }
 
 export class RegistryWorkbenchSaver {
-    readonly #client: Pick<RegistryClient, 'resolve' | 'fetchWorkbench'>;
+    readonly #client: Pick<RegistryClient, 'resolve' | 'fetchWorkbench' | 'missing'>;
     readonly #catalog: Pick<SavedWorkbenchCatalog, 'list' | 'addRemote'>;
     readonly #github: Pick<GitHubWorkbenchSource, 'fetch'>;
     readonly #telemetry: Pick<RegistryTelemetry, 'report'>;
@@ -22,7 +22,7 @@ export class RegistryWorkbenchSaver {
         readonly home: string,
         options: RegistryWorkbenchSaverOptions = {}
     ) {
-        this.#client = options.client ?? new RegistryClient();
+        this.#client = options.client ?? new RegistryClient({ home });
         this.#catalog = options.catalog ?? new SavedWorkbenchCatalog(home);
         this.#github = options.github ?? new GitHubWorkbenchSource();
         this.#telemetry = options.telemetry ?? new RegistryTelemetry({ home });
@@ -30,11 +30,7 @@ export class RegistryWorkbenchSaver {
 
     async save(reference: RegistryReference, alias?: string): Promise<CatalogEntry> {
         const registry = await this.#client.resolve(reference);
-        if (!registry) {
-            throw new Error(
-                `Registry Workbench does not exist: ${reference.publisher}/${reference.workbench}`
-            );
-        }
+        if (!registry) throw await this.#client.missing(reference);
         const workbench = registry.artifactUrl
             ? await this.#client.fetchWorkbench(registry)
             : await this.#github.fetch(registry.source, registry.selector, {
@@ -45,6 +41,7 @@ export class RegistryWorkbenchSaver {
             publisher: registry.reference.publisher,
             workbench: registry.reference.workbench,
             version_id: registry.versionId,
+            visibility: registry.visibility,
         };
         const savedAlias = alias ?? workbench.manifest.name;
         const existing = (await this.#catalog.list()).find(
@@ -56,7 +53,7 @@ export class RegistryWorkbenchSaver {
             expectedDigest: registry.digest,
             registry: catalogRegistry,
         });
-        if (!existing)
+        if (!existing && registry.visibility !== 'private')
             await this.#telemetry.report({ registry: catalogRegistry, kind: 'save' });
         return entry;
     }

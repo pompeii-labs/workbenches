@@ -4,6 +4,7 @@ import {
     type RegistryImageProgress,
     RegistryImagePublisher,
 } from '../registry/index.js';
+import { orgArgument, rejectPublisherFlag } from './org-option.js';
 import { CliPresenter } from './presenter.js';
 
 export const loginCommand = defineCommand({
@@ -17,11 +18,13 @@ export const loginCommand = defineCommand({
             description: 'OCI client executable',
             default: 'docker',
         },
+        org: orgArgument,
     },
     async run({ args }) {
+        rejectPublisherFlag(args);
         const output = new CliPresenter();
         output.progress(`Connecting ${args.client} to the image registry`);
-        const account = await new RegistryAccountStore().require();
+        const account = await new RegistryAccountStore().require(args.org);
         const host = await new RegistryImagePublisher({ account }).login(args.client);
         output.record({
             machine: ['connected', host, args.client],
@@ -34,7 +37,7 @@ export const loginCommand = defineCommand({
 export const pushCommand = defineCommand({
     meta: {
         name: 'push',
-        description: 'Publish a local image to a publisher repository.',
+        description: 'Publish a local image to an organization repository.',
     },
     args: {
         image: {
@@ -42,10 +45,7 @@ export const pushCommand = defineCommand({
             description: 'Local image reference',
             required: true,
         },
-        publisher: {
-            type: 'string',
-            description: 'Publisher slug',
-        },
+        org: orgArgument,
         as: {
             type: 'string',
             description: 'Registry image name',
@@ -63,17 +63,14 @@ export const pushCommand = defineCommand({
         },
     },
     async run({ args }) {
+        rejectPublisherFlag(args);
         const output = new CliPresenter();
-        const accounts = new RegistryAccountStore();
-        const account = await accounts.require();
-        const profile = await accounts.profile(account);
+        const account = await new RegistryAccountStore().require(args.org);
         const target = await new RegistryImagePublisher({
             account,
-            profile,
             progress: new ImageProgressRenderer(output).render,
         }).push({
             image: args.image,
-            ...(args.publisher ? { publisher: args.publisher } : {}),
             name: args.as,
             tag: args.tag,
             client: args.client,

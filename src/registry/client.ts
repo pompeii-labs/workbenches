@@ -2,10 +2,19 @@ import {
     GitHubWorkbenchSource,
     type RemoteWorkbenchPackage,
 } from '../sources/index.js';
+import { workbenchHome } from '../storage.js';
 import { WORKBENCH_USER_AGENT } from '../user-agent.js';
 import { WorkbenchManifestParser } from '../workbench/manifest.js';
+import { RegistryKeyring } from './keyring.js';
 
 const defaultRegistryUrl = 'https://api.workbenches.dev';
+
+export type RegistryVisibility = 'public' | 'private';
+
+/** The registry says `private` on the wire; people see `internal`. */
+export function registryVisibilityLabel(visibility: RegistryVisibility): string {
+    return visibility === 'private' ? 'internal' : visibility;
+}
 
 export interface RegistryReference {
     publisher: string;
@@ -15,6 +24,9 @@ export interface RegistryReference {
 export interface RegistryPackage {
     reference: RegistryReference;
     registryUrl: string;
+    /** Present when the registry reports the workbench identity. */
+    workbenchId?: string;
+    visibility: RegistryVisibility;
     versionId: string;
     version: string;
     digest: string;
@@ -38,11 +50,14 @@ export interface RegistrySearchResult {
     verifiedPublisher: boolean;
     saves: number;
     runs: number;
+    visibility: RegistryVisibility;
 }
 
 export interface RegistryClientOptions {
     fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
     apiUrl?: string;
+    /** Workbench home holding held organization keys. Defaults to the standard home. */
+    home?: string;
 }
 
 export interface RegistryRequestOptions {
@@ -59,6 +74,7 @@ export class RegistryClient {
     private readonly fetcher: NonNullable<RegistryClientOptions['fetch']>;
     private readonly manifestParser = new WorkbenchManifestParser();
     private readonly packageValidator = new GitHubWorkbenchSource();
+    private readonly keyring: RegistryKeyring;
     private discoveryIndex: Promise<RegistrySearchResult[]> | undefined;
 
     constructor(options: RegistryClientOptions = {}) {
@@ -66,6 +82,28 @@ export class RegistryClient {
             options.apiUrl ?? RegistryClient.configuredApiUrl()
         );
         this.fetcher = options.fetch ?? fetch;
+        this.keyring = new RegistryKeyring(
+            options.home ?? workbenchHome(),
+            this.apiUrl
+        );
+    }
+
+    /**
+     * The error for a reference the registry does not know. Private
+     * workbenches answer 404 without a qualifying key, so a publisher with no
+     * held key gets a sign-in hint.
+     */
+    async missing(reference: RegistryReference): Promise<Error> {
+        return new Error(
+            `Registry Workbench does not exist: ${reference.publisher}/${reference.workbench}${await this.signInHint(reference.publisher)}`
+        );
+    }
+
+    /** Empty when a key for the publisher is held. */
+    async signInHint(publisher: string): Promise<string> {
+        return (await this.keyring.holds(publisher))
+            ? ''
+            : `. Internal workbenches need a key for their organization: wb login --org ${publisher}`;
     }
 
     static configureApiUrl(value: string | undefined): void {
@@ -144,6 +182,7 @@ export class RegistryClient {
 
     async resolve(reference: RegistryReference): Promise<RegistryPackage | undefined> {
         const url = new URL(`${this.apiUrl}/v1/resolutions`);
+        const token = await this.keyring.select(reference.publisher);
         let response: Response;
         try {
             response = await this.fetcher(url, {
@@ -152,6 +191,7 @@ export class RegistryClient {
                     Accept: 'application/json',
                     'Content-Type': 'application/json',
                     'User-Agent': WORKBENCH_USER_AGENT,
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
                 },
                 body: JSON.stringify(reference),
                 signal: AbortSignal.timeout(10_000),
@@ -181,6 +221,8 @@ export class RegistryClient {
         return {
             reference,
             registryUrl: this.apiUrl,
+            ...(parsed.workbench_id ? { workbenchId: parsed.workbench_id } : {}),
+            visibility: parsed.visibility,
             versionId: parsed.latest_version.id,
             version: parsed.latest_version.version,
             digest: `sha256:${parsed.latest_version.digest}`,
@@ -202,10 +244,12 @@ export class RegistryClient {
                 'Workbench registry searches may not exceed 120 characters'
             );
         }
+        const token = await this.keyring.select();
         const value = await this.request<unknown>('/v1/searches', {
             method: 'POST',
             body: normalized ? { query: normalized } : {},
             timeout: 10_000,
+            ...(token ? { token } : {}),
         });
         if (!RegistryClient.isRecord(value) || !Array.isArray(value.workbenches)) {
             throw new Error('The Workbench registry returned malformed search results');
@@ -243,12 +287,17 @@ export class RegistryClient {
         if (!registry.artifactUrl) {
             throw new Error('The registry package does not include an artifact');
         }
+        // Keys only ever go to the registry itself, never another origin.
+        const token = this.sameOrigin(new URL(registry.artifactUrl))
+            ? await this.keyring.select(registry.reference.publisher)
+            : undefined;
         let response: Response;
         try {
             response = await this.fetcher(registry.artifactUrl, {
                 headers: {
                     Accept: 'application/json',
                     'User-Agent': WORKBENCH_USER_AGENT,
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
                 },
                 signal: AbortSignal.timeout(20_000),
             });
@@ -280,7 +329,21 @@ export class RegistryClient {
         return { ...summary, files };
     }
 
+    private sameOrigin(url: URL): boolean {
+        const api = new URL(this.apiUrl);
+        if (url.origin === api.origin) return true;
+        const loopback = new Set(['localhost', '127.0.0.1', '[::1]']);
+        return (
+            url.protocol === api.protocol &&
+            url.port === api.port &&
+            loopback.has(url.hostname) &&
+            loopback.has(api.hostname)
+        );
+    }
+
     private parsePackage(value: unknown): {
+        workbench_id: string | undefined;
+        visibility: RegistryVisibility;
         source_path: string;
         repository: { url: string } | null;
         latest_version: {
@@ -302,6 +365,9 @@ export class RegistryClient {
         }
         if (
             typeof value.source_path !== 'string' ||
+            (value.workbench_id !== undefined &&
+                typeof value.workbench_id !== 'string') ||
+            !RegistryClient.isVisibility(value.visibility) ||
             (repository !== null && typeof repository.url !== 'string') ||
             typeof version.id !== 'string' ||
             typeof version.version !== 'string' ||
@@ -321,15 +387,26 @@ export class RegistryClient {
                 if (source.protocol !== 'https:' || source.hostname !== 'github.com')
                     return null;
             }
-            if (typeof version.artifact_url === 'string') {
-                const artifact = new URL(version.artifact_url);
-                if (artifact.origin !== new URL(this.apiUrl).origin) return null;
-                if (artifact.username || artifact.password) return null;
-            }
         } catch {
             return null;
         }
+        if (typeof version.artifact_url === 'string') {
+            let artifact: URL;
+            try {
+                artifact = new URL(version.artifact_url);
+            } catch {
+                return null;
+            }
+            if (!this.sameOrigin(artifact)) {
+                throw new Error(
+                    `The registry returned an artifact URL on ${artifact.origin}, which does not match the API URL ${this.apiUrl}. Keys are only sent to the API origin.`
+                );
+            }
+            if (artifact.username || artifact.password) return null;
+        }
         return {
+            workbench_id: value.workbench_id as string | undefined,
+            visibility: value.visibility ?? 'public',
             source_path: value.source_path,
             repository: repository ? { url: repository.url as string } : null,
             latest_version: {
@@ -408,6 +485,7 @@ export class RegistryClient {
             typeof publisher.slug !== 'string' ||
             typeof publisher.name !== 'string' ||
             typeof publisher.verified !== 'boolean' ||
+            !RegistryClient.isVisibility(value.visibility) ||
             typeof version.version !== 'string' ||
             typeof metrics.saves !== 'number' ||
             !Number.isSafeInteger(metrics.saves) ||
@@ -441,6 +519,7 @@ export class RegistryClient {
             verifiedPublisher: publisher.verified,
             saves: metrics.saves,
             runs: metrics.runs,
+            visibility: value.visibility ?? 'public',
         };
     }
 
@@ -479,6 +558,13 @@ export class RegistryClient {
             throw new Error('The Workbench registry returned an invalid source path');
         }
         return match[1];
+    }
+
+    /** A missing field means public, so older registries keep working. */
+    private static isVisibility(
+        value: unknown
+    ): value is RegistryVisibility | undefined {
+        return value === undefined || value === 'public' || value === 'private';
     }
 
     private static isRecord(value: unknown): value is Record<string, unknown> {

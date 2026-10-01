@@ -307,6 +307,7 @@ describe.serial('repository keyboard interface', () => {
                         verifiedPublisher: false,
                         saves: 0,
                         runs: 0,
+                        visibility: 'public',
                     },
                 ]}
                 onSaveRegistry={async () => {

@@ -17,6 +17,11 @@ selects a package; `--ref` selects a branch, tag, or commit. Multi-package sourc
 offer an interactive picker or a non-interactive error listing the available
 `--name` choices. Source fragments (`#name`) are not acquisition syntax.
 
+Registry references can require a held organization key: an internal workbench
+resolves only with the key of its owning organization (`wb login --org
+<publisher>`), and looks missing without it. Keys are sent to the registry only,
+never to GitHub.
+
 Aliases default to manifest names. `--as` selects another alias. Identical adds
 are idempotent, collisions never overwrite, and changed remote packages at an
 existing alias require `wb upgrade <alias>`.
@@ -50,11 +55,15 @@ improvement at the same directory preserves its alias. Alias collisions do not
 turn a verified creation into failure: the result includes the package path and
 an explicit `wb add ... --as ...` instruction.
 
-`wb publish <saved-alias>` submits package bytes to the registry for review as
-`publisher/<workbench.yml name>`, independent of the local alias and package
-directory. `--as` is only for local aliases when adding a Workbench. Publish
-reports the submission status, dashboard URL, and latest approved version when
-available. A pending submission is not a published release.
+`wb push [source]` stores a new version as `organization/<workbench.yml name>`,
+independent of the local alias and package directory. The source is a local
+package reference or a saved alias. Pushed workbenches are internal: members and
+organization keys see them, nobody else does. `wb publish <org/name | source>`
+submits a stored version for public review and reports the submission status,
+dashboard URL, and latest approved version when available. A pending submission
+is not a public release. `wb unpublish <org/name>` makes a public workbench
+internal again. All three use the default connected organization; `--org <slug>`
+selects another one.
 
 ## Inspection and safety
 
