@@ -202,6 +202,7 @@ export const runCommand = defineCommand({
                 environment,
                 workspaces,
                 allowHostDocker: args['allow-host-docker'],
+                ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
             });
             return;
         }
@@ -241,6 +242,9 @@ export const runCommand = defineCommand({
                         runtime: selectedRuntime(resolved.workbench).name,
                         workspaces,
                         allowHostDocker: args['allow-host-docker'],
+                        ...(args['allow-unchecked-gpu']
+                            ? { allowUncheckedGpu: true }
+                            : {}),
                         reference: args.workbench,
                         home,
                         ...(args.connection ? { connection: args.connection } : {}),
@@ -298,6 +302,7 @@ export const runCommand = defineCommand({
                     reference: args.workbench,
                     workspaces,
                     allowHostDocker: args['allow-host-docker'],
+                    ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
                     ...(args.connection ? { connection: args.connection } : {}),
                 });
                 await dispatcher.dispatch({
@@ -326,6 +331,7 @@ export const runCommand = defineCommand({
                 reference: args.workbench,
                 workspaces,
                 allowHostDocker: args['allow-host-docker'],
+                ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
                 ...(args.connection ? { connection: args.connection } : {}),
             });
             const renderer = createEventRenderer({

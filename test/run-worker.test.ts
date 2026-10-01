@@ -46,6 +46,37 @@ describe('stored one-shot worker', () => {
         ]);
     });
 
+    test('hands the stored gpu acknowledgement to the run', async () => {
+        const home = await temporaryHome();
+        const run = await new RunStore(home).create({
+            metadata: {
+                workbench: 'fixture-core',
+                workbench_version: '0.1.0',
+                runner: 'opencode',
+                model: 'openrouter/openai/gpt-5.6-terra',
+                workspace: '/workspace',
+                mode: 'detached',
+            },
+            request: {
+                workbench_path: '/repo/.workbenches/core',
+                workspace: '/workspace',
+                task: 'task',
+                allow_unchecked_gpu: true,
+            },
+        });
+        let received: WorkbenchRunOptions | undefined;
+        const worker = new RunWorker(home, {
+            executeRun: async (options) => {
+                received = options;
+                await emit(options, run.id, 1, 'run.completed');
+                return 0;
+            },
+        });
+
+        await worker.execute({ id: run.id });
+        expect(received?.allowUncheckedGpu).toBe(true);
+    });
+
     test('accepts run cancellation but rejects interactive input', async () => {
         const home = await temporaryHome();
         const run = await fixtureRun(home);

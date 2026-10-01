@@ -23,6 +23,7 @@ export async function launchWorkbenchTui(
         environment?: Record<string, string | undefined>;
         workspaces?: WorkbenchWorkspaceBinding[];
         allowHostDocker?: boolean;
+        allowUncheckedGpu?: boolean;
     } = {}
 ): Promise<void> {
     assertWorkbenchTuiSupported();

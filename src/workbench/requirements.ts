@@ -124,13 +124,13 @@ export class RequirementsPreflight {
                 report.checked.push(`cpu ${this.host.cpus}`);
             }
             if (requirements.memory_gb !== undefined) {
-                const available = this.host.memoryBytes / bytesPerGibibyte;
+                const available = nearestGibibytes(this.host.memoryBytes);
                 if (available < requirements.memory_gb) {
                     fail(
-                        `requires ${requirements.memory_gb} GiB of memory but this host has ${available.toFixed(1)} GiB`
+                        `requires ${requirements.memory_gb} GiB of memory but this host has ${available} GiB`
                     );
                 }
-                report.checked.push(`memory ${available.toFixed(1)} GiB`);
+                report.checked.push(`memory ${available} GiB`);
             }
             if (requirements.gpu) {
                 if (!options.allowUncheckedGpu) {
@@ -208,6 +208,42 @@ export class RequirementsPreflight {
             }
         }
     }
+}
+
+/**
+ * Throws when a container daemon cannot give a container the declared cpu or
+ * memory. The runtime applies both as limits, which fail late with the
+ * daemon's own error when the daemon has less.
+ */
+export function assertDaemonCapacity(
+    workbench: ResolvedWorkbench,
+    daemon: { cpus: number; memoryBytes: number }
+): void {
+    const requirements = requirementsOf(workbench.manifest);
+    const runtime = selectedRuntime(workbench).name;
+    const fail = (message: string): never => {
+        throw new Error(
+            `Workbench ${workbench.manifest.name} cannot run on the ${runtime} runtime: ${message}`
+        );
+    };
+    if (requirements.cpu !== undefined && daemon.cpus < requirements.cpu) {
+        fail(
+            `requires ${requirements.cpu} CPUs but the Docker daemon has ${daemon.cpus}`
+        );
+    }
+    if (requirements.memory_gb !== undefined) {
+        const available = nearestGibibytes(daemon.memoryBytes);
+        if (available < requirements.memory_gb) {
+            fail(
+                `requires ${requirements.memory_gb} GiB of memory but the Docker daemon has ${available} GiB`
+            );
+        }
+    }
+}
+
+/** Hosts report slightly below nominal (a 16 GB Linux host shows about 15.6 GiB). */
+function nearestGibibytes(bytes: number): number {
+    return Math.round(bytes / bytesPerGibibyte);
 }
 
 /** Throws unless the selected runtime can satisfy the Workbench requirements. */

@@ -63,6 +63,8 @@ export interface StoredRunRequest {
     task: string;
     workspaces?: WorkbenchWorkspaceBinding[];
     allow_host_docker?: boolean;
+    /** The caller accepted a GPU requirement the runtime cannot verify. */
+    allow_unchecked_gpu?: boolean;
     reference?: string;
     session_id?: string;
     native_session_id?: string;
@@ -217,7 +219,9 @@ export class RunStore {
             typeof value.workspace !== 'string' ||
             typeof value.task !== 'string' ||
             (value.connection !== undefined && typeof value.connection !== 'string') ||
-            (value.runtime !== undefined && typeof value.runtime !== 'string')
+            (value.runtime !== undefined && typeof value.runtime !== 'string') ||
+            (value.allow_unchecked_gpu !== undefined &&
+                typeof value.allow_unchecked_gpu !== 'boolean')
         ) {
             throw new Error(`Invalid Workbench run request: ${id}`);
         }

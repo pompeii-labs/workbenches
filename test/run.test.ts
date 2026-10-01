@@ -54,6 +54,42 @@ describe('local run lifecycle', () => {
         expect(spawned).toBeFalse();
     });
 
+    test('refuses an unchecked gpu requirement unless the run acknowledges it', async () => {
+        const fixture = await createFixture({ gpu: true });
+        const run = async (acknowledged: boolean) => {
+            const events: WorkbenchEvent[] = [];
+            const code = await WorkbenchRun.execute(
+                {
+                    workbenchPath: fixture.packageDirectory,
+                    task: 'inspect',
+                    dryRun: true,
+                    ...(acknowledged ? { allowUncheckedGpu: true } : {}),
+                    onEvent: (event) => {
+                        events.push(event);
+                    },
+                },
+                {
+                    env: TEST_ENVIRONMENT,
+                    findExecutable: () => '/bin/opencode',
+                    write() {},
+                }
+            );
+            return { code, events };
+        };
+
+        const refused = await run(false);
+        expect(refused.code).toBe(1);
+        expect(refused.events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: {
+                message: expect.stringContaining(
+                    'GPU requirements are not checked on the local runtime'
+                ),
+            },
+        });
+        expect((await run(true)).code).toBe(0);
+    });
+
     test('fails declared-tool preflight before spawning', async () => {
         const fixture = await createFixture({ tools: ['cargo', 'lux'] });
         const checked: string[] = [];
@@ -553,7 +589,13 @@ describe('local run lifecycle', () => {
 });
 
 async function createFixture(
-    options: { tools?: string[]; skill?: boolean; runner?: string; env?: string[] } = {}
+    options: {
+        tools?: string[];
+        skill?: boolean;
+        runner?: string;
+        env?: string[];
+        gpu?: boolean;
+    } = {}
 ) {
     const root = await mkdtemp(join(tmpdir(), 'workbench-run-'));
     temporaryDirectories.push(root);
@@ -571,7 +613,7 @@ async function createFixture(
     await writeFile(
         join(packageDirectory, 'workbench.yml'),
         [
-            'spec: 0',
+            `spec: ${options.gpu ? 1 : 0}`,
             'version: 0.1.0',
             'name: fixture-core',
             `runner: ${options.runner ?? 'opencode'}`,
@@ -594,7 +636,9 @@ async function createFixture(
                       ]),
                   ]
                 : ['env: {}']),
-            'runtime: local',
+            ...(options.gpu
+                ? ['requirements:', '  gpu: true', 'runtimes:', '  local: {}']
+                : ['runtime: local']),
             '',
         ].join('\n')
     );

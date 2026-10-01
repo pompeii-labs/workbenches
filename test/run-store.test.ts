@@ -385,6 +385,57 @@ describe('durable Workbench runs', () => {
         expect((await sessions.read(first.id)).latest_run_id).toBe(second.id);
     });
 
+    test('a resumed session inherits the original gpu acknowledgement', async () => {
+        const home = await temporaryHome();
+        const dispatcher = new RunDispatcher(home);
+        const runs = new RunStore(home);
+        const sessions = new SessionStore(home);
+        const resolved = await fixtureReference(home, 'opencode');
+        const first = await dispatcher.prepare({
+            resolved,
+            mode: 'interactive',
+            allowUncheckedGpu: true,
+        });
+        expect(await runs.takeRequest(first.id)).toMatchObject({
+            allow_unchecked_gpu: true,
+        });
+        const ready = await sessions.update(first.id, {
+            native_session_id: 'ses_native_1',
+        });
+        expect(ready.allow_unchecked_gpu).toBe(true);
+
+        const second = await dispatcher.prepare({
+            resolved: (await new SessionResolver(home).resolve(ready.id)).resolved,
+            task: 'continue',
+            mode: 'detached',
+            session: ready,
+        });
+        expect(await runs.takeRequest(second.id)).toMatchObject({
+            allow_unchecked_gpu: true,
+        });
+    });
+
+    test('a session started without the acknowledgement does not gain it on resume', async () => {
+        const home = await temporaryHome();
+        const dispatcher = new RunDispatcher(home);
+        const runs = new RunStore(home);
+        const sessions = new SessionStore(home);
+        const first = await dispatcher.prepare({
+            resolved: await fixtureReference(home, 'opencode'),
+            mode: 'interactive',
+        });
+        const ready = await sessions.update(first.id, {
+            native_session_id: 'ses_native_1',
+        });
+        const second = await dispatcher.prepare({
+            resolved: (await new SessionResolver(home).resolve(ready.id)).resolved,
+            task: 'continue',
+            mode: 'detached',
+            session: ready,
+        });
+        expect((await runs.takeRequest(second.id)).allow_unchecked_gpu).toBeUndefined();
+    });
+
     test('rejects resuming a session with a different locked Workbench', async () => {
         const home = await temporaryHome();
         const dispatcher = new RunDispatcher(home);

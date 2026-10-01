@@ -81,6 +81,7 @@ export class RuntimeSmoke {
                 authorizations: {
                     hostDocker: this.options.allowHostDocker ?? false,
                 },
+                allowUncheckedGpu: this.options.allowUncheckedGpu ?? false,
                 ...(selected.name === 'e2b' && this.options.home
                     ? {
                           credentials: await new RunnerCredentialStore(

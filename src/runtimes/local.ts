@@ -3,7 +3,7 @@ import {
     type OutcomeStore,
     type RuntimeOutcomeCollection,
 } from '../outcomes/index.js';
-import type { ResolvedWorkbench, RunnerInvocation, SpawnedRunner } from '../types.js';
+import type { RunnerInvocation, SpawnedRunner } from '../types.js';
 import { type PreflightResult, WorkbenchPreflight } from '../workbench/preflight.js';
 import {
     type RequirementsHost,
@@ -72,7 +72,7 @@ export class LocalRuntimeProvider implements RuntimeProvider {
                 'image is not supported with the local runtime'
             );
         }
-        this.checkRequirements(request.workbench);
+        this.checkRequirements(request);
         const outcome = request.outcome
             ? await HostOutcomeCapture.create(request, {
                   bestEffortWorkspaceChanges: !request.repository,
@@ -84,14 +84,13 @@ export class LocalRuntimeProvider implements RuntimeProvider {
 
     /**
      * Host requirements are checked here. A GPU requirement cannot be
-     * verified on the host, so the command that starts the run refuses it
-     * unless `--allow-unchecked-gpu` was passed; by this point it is
-     * acknowledged.
+     * verified on the host, so it is refused unless the request carries the
+     * caller's explicit acknowledgement.
      */
-    private checkRequirements(workbench: ResolvedWorkbench): void {
+    private checkRequirements(request: RuntimePrepareRequest): void {
         try {
-            new RequirementsPreflight(this.dependencies.host).check(workbench, {
-                allowUncheckedGpu: true,
+            new RequirementsPreflight(this.dependencies.host).check(request.workbench, {
+                allowUncheckedGpu: request.allowUncheckedGpu ?? false,
             });
         } catch (error) {
             throw RuntimeError.from(this.name, 'prepare', error);
@@ -111,12 +110,14 @@ export class LocalRuntime implements PreparedRuntime {
     private cleaned = false;
     private readonly workspaceBindings = new WorkbenchWorkspaces();
     private readonly requiresGitHubCli;
+    private readonly allowUncheckedGpu: boolean;
 
     constructor(
         request: RuntimePrepareRequest,
         private readonly dependencies: ResolvedLocalDependencies,
         private readonly outcome?: HostOutcomeCapture
     ) {
+        this.allowUncheckedGpu = request.allowUncheckedGpu ?? false;
         this.requiresGitHubCli = request.repository?.delivery === 'pr';
         this.workbench = request.workbench;
         this.workspaceDirectory = request.workspaceDirectory;
@@ -163,7 +164,7 @@ export class LocalRuntime implements PreparedRuntime {
             }).check(this.workbench);
             const requirements = new RequirementsPreflight(
                 this.dependencies.host
-            ).check(this.workbench, { allowUncheckedGpu: true });
+            ).check(this.workbench, { allowUncheckedGpu: this.allowUncheckedGpu });
             this.ready = true;
             return { ...result, workspaces: this.workspaces, requirements };
         } catch (error) {

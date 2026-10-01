@@ -153,7 +153,9 @@ const invalid: Case[] = [
     ['empty runtimes', { runtimes: {} }],
     ['unknown provider', { runtimes: { kubernetes: {} } }],
     ['local with configuration', { runtimes: { local: { image: 'alpine:3.22' } } }],
+    ['local that is a string', { runtimes: { local: 'yes' } }],
     ['docker without an image', { runtimes: { docker: {} } }],
+    ['docker with no value', { runtimes: { docker: null } }],
     ['e2b without an image', { runtimes: { e2b: {} } }],
     [
         'e2b with a docker engine',
@@ -253,6 +255,22 @@ describe('manifest schemas', () => {
             expect(parses(document)).toBe(false);
         }
     );
+});
+
+describe('runtime entry values', () => {
+    test('an empty local entry parses as no configuration', () => {
+        const manifest = parser.parse({ ...base, runtimes: { local: null } });
+        expect(manifest.runtimes).toEqual({ local: {} });
+    });
+
+    test('a wrong type says an object or an empty value is expected', () => {
+        expect(() => parser.parse({ ...base, runtimes: { local: 'yes' } })).toThrow(
+            'runtimes.local must be an object or an empty value'
+        );
+        expect(() => parser.parse({ ...base, runtimes: { local: [] } })).toThrow(
+            'runtimes.local must be an object or an empty value'
+        );
+    });
 });
 
 describe('manifest parser dispatch', () => {

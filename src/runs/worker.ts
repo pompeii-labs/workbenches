@@ -91,6 +91,7 @@ export class RunWorker {
                     task: request.task,
                     workspaces: request.workspaces ?? [],
                     allowHostDocker: request.allow_host_docker ?? false,
+                    allowUncheckedGpu: request.allow_unchecked_gpu ?? false,
                     ...(request.runtime ? { runtime: request.runtime } : {}),
                     reference: request.reference ?? metadata.workbench,
                     home: this.home,

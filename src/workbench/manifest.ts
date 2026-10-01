@@ -189,7 +189,14 @@ export class WorkbenchManifestParser {
                 `Unknown runtime provider: ${name}. Known providers: ${runtimeProviderNames.join(', ')}`
             );
         }
-        const body = this.record(value, field);
+        // YAML `local:` with no value parses as null: an empty entry.
+        if (
+            value !== null &&
+            (typeof value !== 'object' || value === undefined || Array.isArray(value))
+        ) {
+            throw new Error(`${field} must be an object or an empty value`);
+        }
+        const body = value === null ? {} : this.record(value, field);
         const allowed: Record<string, string[]> = {
             local: [],
             docker: ['image', 'docker'],

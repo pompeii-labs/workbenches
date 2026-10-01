@@ -40,6 +40,8 @@ export interface RuntimePrepareRequest {
     assets: RuntimeAsset[];
     credentials?: RuntimeCredentialBinding;
     authorizations?: { hostDocker: boolean };
+    /** The caller accepted a GPU requirement the runtime cannot verify. */
+    allowUncheckedGpu?: boolean;
     purpose?: 'build' | 'connect' | 'run';
     run?: { id: string; scope: string };
     outcome?: { directory: string; home?: string };

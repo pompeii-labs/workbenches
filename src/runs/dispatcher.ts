@@ -26,6 +26,8 @@ export interface PrepareRunOptions {
     mode: 'foreground' | 'detached' | 'interactive';
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
+    /** Accept a GPU requirement the runtime cannot verify. A resumed session inherits it. */
+    allowUncheckedGpu?: boolean;
     reference?: string;
     session?: StoredSession;
     connection?: string;
@@ -56,6 +58,8 @@ export class RunDispatcher {
             options.resolved.workbench.selectedRuntime
         );
         const runtime = selectedRuntime(workbench).name;
+        const allowUncheckedGpu =
+            options.allowUncheckedGpu ?? options.session?.allow_unchecked_gpu ?? false;
         const id = RunStore.createId();
         const execution = this.executionFor(workbench.manifest.runner);
         const reference =
@@ -107,6 +111,7 @@ export class RunDispatcher {
                 runner: workbench.manifest.runner,
                 model: modelLabel(workbench.manifest.model),
                 runtime,
+                ...(allowUncheckedGpu ? { allow_unchecked_gpu: true } : {}),
                 reference,
                 workbench_path: packagePath,
                 ...(options.resolved.source === 'local'
@@ -159,6 +164,7 @@ export class RunDispatcher {
                     task: options.task ?? '',
                     workspaces,
                     allow_host_docker: options.allowHostDocker ?? false,
+                    ...(allowUncheckedGpu ? { allow_unchecked_gpu: true } : {}),
                     runtime,
                     reference,
                     session_id: session.id,

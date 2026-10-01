@@ -65,6 +65,7 @@ export interface InteractiveRunOptions {
     dependencies?: InteractiveRunDependencies;
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
+    allowUncheckedGpu?: boolean;
     session?: RunnerSessionContext;
     interactive?: boolean;
     connection?: string;

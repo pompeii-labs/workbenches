@@ -118,14 +118,29 @@ describe('local requirements', () => {
 
     test('checks cpu and memory against the host', () => {
         expect(check(withRuntimes({ cpu: 8, memory_gb: 16 }), 'local').checked).toEqual(
-            ['cpu 8', 'memory 16.0 GiB']
+            ['cpu 8', 'memory 16 GiB']
         );
         expect(() => check(withRuntimes({ cpu: 9 }), 'local')).toThrow(
             'requires 9 CPUs but this host has 8'
         );
         expect(() => check(withRuntimes({ memory_gb: 32 }), 'local')).toThrow(
-            'requires 32 GiB of memory but this host has 16.0 GiB'
+            'requires 32 GiB of memory but this host has 16 GiB'
         );
+    });
+
+    test('rounds host memory to the nearest GiB before comparing', () => {
+        const reported = (gibibytes: number): RequirementsHost => ({
+            ...macArm,
+            memoryBytes: Math.floor(gibibytes * 1024 ** 3),
+        });
+        // A 16 GB Linux host reports about 15.6 GiB and still satisfies 16.
+        expect(
+            check(withRuntimes({ memory_gb: 16 }), 'local', reported(15.6)).checked
+        ).toEqual(['memory 16 GiB']);
+        // Just under the rounding midpoint rounds down and is refused.
+        expect(() =>
+            check(withRuntimes({ memory_gb: 16 }), 'local', reported(15.49))
+        ).toThrow('requires 16 GiB of memory but this host has 15 GiB');
     });
 
     test('refuses a gpu requirement unless it is explicitly accepted', () => {
@@ -255,7 +270,10 @@ describe('daytona requirements', () => {
     });
 });
 
-function prepareRequest(target: ResolvedWorkbench): RuntimePrepareRequest {
+function prepareRequest(
+    target: ResolvedWorkbench,
+    allowUncheckedGpu = false
+): RuntimePrepareRequest {
     return {
         workbench: target,
         workspaceDirectory: root,
@@ -264,6 +282,7 @@ function prepareRequest(target: ResolvedWorkbench): RuntimePrepareRequest {
             { path: root, access: 'read-write' },
             { path: packageDirectory, access: 'read-only' },
         ],
+        ...(allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
     };
 }
 
@@ -280,12 +299,22 @@ describe('providers apply requirements before preparing', () => {
         ).resolves.toBeDefined();
     });
 
+    test('the local provider refuses a gpu requirement the request does not acknowledge', async () => {
+        const target = workbench(withRuntimes({ gpu: true }), 'local');
+        await expect(
+            new LocalRuntimeProvider({ host: macArm }).prepare(prepareRequest(target))
+        ).rejects.toThrow('GPU requirements are not checked on the local runtime');
+    });
+
     test('the local provider reports checked requirements from preflight', async () => {
         const runtime = await new LocalRuntimeProvider({
             host: macArm,
             findExecutable: (name) => `/bin/${name}`,
         }).prepare(
-            prepareRequest(workbench(withRuntimes({ cpu: 2, gpu: true }), 'local'))
+            prepareRequest(
+                workbench(withRuntimes({ cpu: 2, gpu: true }), 'local'),
+                true
+            )
         );
         const preflight = await runtime.preflight();
         expect(preflight.requirements).toEqual({
@@ -351,6 +380,48 @@ describe('providers apply requirements before preparing', () => {
         } finally {
             await runtime.cleanup();
         }
+    });
+
+    test('the docker provider refuses a daemon with too few CPUs or too little memory', async () => {
+        const provider = (daemon: { cpus: number; memoryBytes: number }) =>
+            new DockerRuntimeProvider({
+                findExecutable: () => '/usr/bin/docker',
+                command: dockerDouble([], daemon),
+                host: linuxX64,
+            });
+        const target = (requirements: Record<string, unknown>) =>
+            prepareRequest(workbench(withRuntimes(requirements), 'docker'));
+
+        await expect(
+            provider({ cpus: 2, memoryBytes: 16 * 1024 ** 3 }).prepare(
+                target({ cpu: 4 })
+            )
+        ).rejects.toThrow('requires 4 CPUs but the Docker daemon has 2');
+        await expect(
+            provider({ cpus: 8, memoryBytes: 4 * 1024 ** 3 }).prepare(
+                target({ memory_gb: 8 })
+            )
+        ).rejects.toThrow('requires 8 GiB of memory but the Docker daemon has 4 GiB');
+        // A daemon that reports just under nominal still satisfies the requirement.
+        const satisfied = await provider({
+            cpus: 4,
+            memoryBytes: Math.floor(7.7 * 1024 ** 3),
+        }).prepare(target({ cpu: 4, memory_gb: 8 }));
+        await satisfied.cleanup();
+    });
+
+    test('the docker provider does not query the daemon when no limits are declared', async () => {
+        const commands: string[][] = [];
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerDouble(commands),
+        }).prepare(
+            prepareRequest(
+                workbench({ runtimes: { docker: { image: 'alpine:3.22' } } })
+            )
+        );
+        await runtime.cleanup();
+        expect(commands.some((command) => command[1] === 'info')).toBe(false);
     });
 
     test('the docker provider adds no limits when none are declared', async () => {
@@ -492,7 +563,13 @@ describe('smoke runtime selection', () => {
     });
 });
 
-function dockerDouble(commands: string[][]) {
+function dockerDouble(
+    commands: string[][],
+    daemon: { cpus: number; memoryBytes: number } = {
+        cpus: 8,
+        memoryBytes: 16 * 1024 ** 3,
+    }
+) {
     return async (command: string[]): Promise<DockerCommandResult> => {
         commands.push(command);
         const ok = (stdout = ''): DockerCommandResult => ({
@@ -501,6 +578,7 @@ function dockerDouble(commands: string[][]) {
             stderr: '',
         });
         if (command[1] === 'version') return ok('28.1.1\n');
+        if (command[1] === 'info') return ok(`${daemon.cpus} ${daemon.memoryBytes}\n`);
         if (command[1] === 'image' && command[2] === 'pull')
             return ok('sha256:local\n');
         if (command[1] === 'image' && command[2] === 'inspect') {

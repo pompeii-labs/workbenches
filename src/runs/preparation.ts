@@ -41,6 +41,7 @@ interface ExecutionPreparationOptions {
     workspaces?: WorkbenchWorkspaceBinding[];
     session?: RunnerSessionContext;
     allowHostDocker?: boolean;
+    allowUncheckedGpu?: boolean;
     captureOutcomes?: boolean;
     connection?: string;
     allowAuthentication?: boolean;
@@ -248,6 +249,7 @@ export class ExecutionPreparation {
                     : []),
             ],
             authorizations: { hostDocker: this.options.allowHostDocker ?? false },
+            allowUncheckedGpu: this.options.allowUncheckedGpu ?? false,
             purpose: 'run',
             ...(this.options.repository
                 ? {

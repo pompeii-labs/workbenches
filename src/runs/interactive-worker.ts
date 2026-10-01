@@ -108,6 +108,7 @@ export class InteractiveRunWorker {
                 ...(request.repository ? { repository: request.repository } : {}),
                 workspaces: request.workspaces ?? [],
                 allowHostDocker: request.allow_host_docker ?? false,
+                allowUncheckedGpu: request.allow_unchecked_gpu ?? false,
                 interactive: metadata.mode === 'interactive',
                 allowAuthentication: metadata.mode !== 'detached',
                 ...(request.connection ? { connection: request.connection } : {}),

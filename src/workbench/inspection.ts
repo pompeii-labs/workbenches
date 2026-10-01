@@ -484,6 +484,8 @@ export class WorkbenchInspector {
                     ],
                     purpose: 'connect',
                     authorizations: { hostDocker: false },
+                    // Inspection only reads authentication state and runs nothing.
+                    allowUncheckedGpu: true,
                 });
             const authentication = await new ConnectionInspector({
                 workbench,
