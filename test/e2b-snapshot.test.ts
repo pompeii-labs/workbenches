@@ -12,9 +12,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { OutcomeApplier, OutcomeStore } from '../src/outcomes/index.js';
+import { E2BArchive } from '../src/runtimes/e2b/archive.js';
 import type { E2BAssetBinding } from '../src/runtimes/e2b/paths.js';
-import { E2BAssetSnapshot, extractArchive } from '../src/runtimes/e2b/snapshot.js';
+import { E2BAssetSnapshot } from '../src/runtimes/e2b/snapshot.js';
+import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
+import { TransferRules } from '../src/runtimes/staging/rules.js';
 
+const diskAssetSource = new DiskAssetSource();
+const rules = new TransferRules('E2B');
+const sources = { assets: diskAssetSource, local: diskAssetSource, rules };
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -35,10 +41,17 @@ describe('E2B workspace snapshots', () => {
             await writeFile(join(before, 'module'), 'file');
             await mkdir(join(after, 'module'));
             await writeFile(join(after, 'module', 'index.ts'), 'nested');
-            const baseline = await E2BAssetSnapshot.create(binding(local), 1024 * 1024);
+            const baseline = await E2BAssetSnapshot.create(
+                binding(local),
+                1024 * 1024,
+                undefined,
+                sources
+            );
             const output = await E2BAssetSnapshot.create(
                 binding(remote, 'asset'),
-                1024 * 1024
+                1024 * 1024,
+                undefined,
+                sources
             );
             try {
                 await applyPending(baseline, output.archive, [
@@ -90,7 +103,12 @@ describe('E2B workspace snapshots', () => {
             directory
         );
 
-        const snapshot = await E2BAssetSnapshot.create(binding(directory), 1024 * 1024);
+        const snapshot = await E2BAssetSnapshot.create(
+            binding(directory),
+            1024 * 1024,
+            undefined,
+            sources
+        );
         try {
             expect([...snapshot.entries.keys()]).toEqual([
                 '.env.example',
@@ -130,11 +148,19 @@ describe('E2B workspace snapshots', () => {
         // Untracked config must remain private, even when its contents look safe.
         await writeFile(join(directory, '.npmrc'), 'engine-strict=true\n');
         const remote = await temporaryDirectory();
-        const snapshot = await E2BAssetSnapshot.create(binding(directory), 1024 * 1024);
+        const snapshot = await E2BAssetSnapshot.create(
+            binding(directory),
+            1024 * 1024,
+            undefined,
+            sources
+        );
         try {
             expect([...snapshot.entries.keys()]).toEqual([config]);
             expect(snapshot.excludedPaths).toEqual(['.npmrc']);
-            await extractArchive(snapshot.archive, remote);
+            await new E2BArchive(rules).extract(snapshot.archive, remote, {
+                maximumBytes: Number.POSITIVE_INFINITY,
+                reportedMaximumBytes: Number.POSITIVE_INFINITY,
+            });
             expect(await readFile(join(remote, config), 'utf8')).toBe(
                 'engine-strict=true\n'
             );
@@ -171,7 +197,12 @@ describe('E2B workspace snapshots', () => {
             await run(['git', 'init', '-q'], directory);
             await run(['git', 'add', '.npmrc'], directory);
             await expect(
-                E2BAssetSnapshot.create(binding(directory), 1024 * 1024)
+                E2BAssetSnapshot.create(
+                    binding(directory),
+                    1024 * 1024,
+                    undefined,
+                    sources
+                )
             ).rejects.toThrow('Cannot safely transfer tracked project config .npmrc');
         });
     }
@@ -182,14 +213,19 @@ describe('E2B workspace snapshots', () => {
         await symlink('config', join(directory, '.npmrc'));
         await run(['git', 'init', '-q'], directory);
         await run(['git', 'add', '.npmrc'], directory);
-        await expect(E2BAssetSnapshot.create(binding(directory), 1024)).rejects.toThrow(
-            'Cannot safely transfer tracked project config .npmrc'
-        );
+        await expect(
+            E2BAssetSnapshot.create(binding(directory), 1024, undefined, sources)
+        ).rejects.toThrow('Cannot safely transfer tracked project config .npmrc');
         await run(['git', 'rm', '-f', '.npmrc'], directory);
         await mkdir(join(directory, '.aws'));
         await writeFile(join(directory, '.aws', '.npmrc'), 'engine-strict=true\n');
         await run(['git', 'add', '.aws/.npmrc'], directory);
-        const snapshot = await E2BAssetSnapshot.create(binding(directory), 1024);
+        const snapshot = await E2BAssetSnapshot.create(
+            binding(directory),
+            1024,
+            undefined,
+            sources
+        );
         try {
             expect(snapshot.entries.has('.aws/.npmrc')).toBeFalse();
         } finally {
@@ -206,7 +242,12 @@ describe('E2B workspace snapshots', () => {
         await run(['git', 'init', '-q'], directory);
         await run(['git', 'init', '-q'], nested);
 
-        const snapshot = await E2BAssetSnapshot.create(binding(directory), 1024);
+        const snapshot = await E2BAssetSnapshot.create(
+            binding(directory),
+            1024,
+            undefined,
+            sources
+        );
         try {
             expect([...snapshot.entries.keys()]).toEqual(['visible.txt']);
             expect(snapshot.excludedPaths).toEqual(['.codex/worktrees/other']);
@@ -251,7 +292,12 @@ describe('E2B workspace snapshots', () => {
             directory
         );
 
-        const snapshot = await E2BAssetSnapshot.create(binding(directory), 1024);
+        const snapshot = await E2BAssetSnapshot.create(
+            binding(directory),
+            1024,
+            undefined,
+            sources
+        );
         try {
             expect([...snapshot.entries.keys()]).toEqual(['visible.txt']);
             expect(snapshot.excludedPaths).toEqual(['vendor/module']);
@@ -263,9 +309,9 @@ describe('E2B workspace snapshots', () => {
     test('enforces the uncompressed transfer cap before upload', async () => {
         const directory = await temporaryDirectory();
         await writeFile(join(directory, 'large.txt'), '123456789');
-        await expect(E2BAssetSnapshot.create(binding(directory), 8)).rejects.toThrow(
-            'E2B transfer exceeds the 8 B safety limit'
-        );
+        await expect(
+            E2BAssetSnapshot.create(binding(directory), 8, undefined, sources)
+        ).rejects.toThrow('E2B transfer exceeds the 8 B safety limit');
     });
 
     test('measures an oversized sparse transfer before reading file contents', async () => {
@@ -273,7 +319,7 @@ describe('E2B workspace snapshots', () => {
         await writeFile(join(directory, 'oversized.bin'), '');
         await truncate(join(directory, 'oversized.bin'), 16 * 1_024 * 1_024 * 1_024);
         await expect(
-            E2BAssetSnapshot.create(binding(directory), 1_024)
+            E2BAssetSnapshot.create(binding(directory), 1_024, undefined, sources)
         ).rejects.toThrow('16 GiB');
     }, 2_000);
 
@@ -281,7 +327,12 @@ describe('E2B workspace snapshots', () => {
         const directory = await temporaryDirectory();
         await symlink('../outside', join(directory, 'escape'));
         await expect(
-            E2BAssetSnapshot.create(binding(directory, 'asset'), 1024)
+            E2BAssetSnapshot.create(
+                binding(directory, 'asset'),
+                1024,
+                undefined,
+                sources
+            )
         ).rejects.toThrow('Escaping symlink is not allowed in E2B transfer');
     });
 
@@ -301,11 +352,15 @@ describe('E2B workspace snapshots', () => {
                 ...binding(directory),
                 excludedHostPaths: [child],
             },
-            1024 * 1024
+            1024 * 1024,
+            undefined,
+            sources
         );
         const output = await E2BAssetSnapshot.create(
             binding(remote, 'asset'),
-            1024 * 1024
+            1024 * 1024,
+            undefined,
+            sources
         );
         try {
             expect([...snapshot.entries.keys()]).toEqual(['visible.txt']);
@@ -330,10 +385,17 @@ describe('E2B workspace snapshots', () => {
         await writeFile(join(local, 'deleted.txt'), 'delete me');
         await writeFile(join(remote, 'edited.txt'), 'after');
         await writeFile(join(remote, 'added.txt'), 'new');
-        const baseline = await E2BAssetSnapshot.create(binding(local), 1024 * 1024);
+        const baseline = await E2BAssetSnapshot.create(
+            binding(local),
+            1024 * 1024,
+            undefined,
+            sources
+        );
         const output = await E2BAssetSnapshot.create(
             binding(remote, 'asset'),
-            1024 * 1024
+            1024 * 1024,
+            undefined,
+            sources
         );
         try {
             await applyPending(baseline, output.archive, ['deleted.txt']);
@@ -356,10 +418,17 @@ describe('E2B workspace snapshots', () => {
         await writeFile(join(local, 'deleted.txt'), 'delete me');
         await writeFile(join(remote, 'edited.txt'), 'after');
         await writeFile(join(remote, 'added.txt'), 'new');
-        const baseline = await E2BAssetSnapshot.create(binding(local), 1024 * 1024);
+        const baseline = await E2BAssetSnapshot.create(
+            binding(local),
+            1024 * 1024,
+            undefined,
+            sources
+        );
         const output = await E2BAssetSnapshot.create(
             binding(remote, 'asset'),
-            1024 * 1024
+            1024 * 1024,
+            undefined,
+            sources
         );
         const capture = await baseline.prepareOutcome(
             output.archive,
@@ -397,8 +466,18 @@ describe('E2B workspace snapshots', () => {
         const remote = await temporaryDirectory();
         await writeFile(join(local, 'unchanged.txt'), 'baseline');
         await writeFile(join(remote, 'large.txt'), '123456789');
-        const baseline = await E2BAssetSnapshot.create(binding(local), 1024);
-        const output = await E2BAssetSnapshot.create(binding(remote, 'asset'), 1024);
+        const baseline = await E2BAssetSnapshot.create(
+            binding(local),
+            1024,
+            undefined,
+            sources
+        );
+        const output = await E2BAssetSnapshot.create(
+            binding(remote, 'asset'),
+            1024,
+            undefined,
+            sources
+        );
         try {
             await expect(
                 baseline.prepareOutcome(output.archive, [], { kind: 'primary' }, 8)
@@ -420,13 +499,20 @@ describe('E2B workspace snapshots', () => {
         const remote = await temporaryDirectory();
         await writeFile(join(local, 'conflict.txt'), 'baseline');
         await writeFile(join(local, 'safe.txt'), 'baseline');
-        const baseline = await E2BAssetSnapshot.create(binding(local), 1024 * 1024);
+        const baseline = await E2BAssetSnapshot.create(
+            binding(local),
+            1024 * 1024,
+            undefined,
+            sources
+        );
         await writeFile(join(local, 'conflict.txt'), 'host edit');
         await writeFile(join(remote, 'conflict.txt'), 'remote edit');
         await writeFile(join(remote, 'safe.txt'), 'remote safe edit');
         const output = await E2BAssetSnapshot.create(
             binding(remote, 'asset'),
-            1024 * 1024
+            1024 * 1024,
+            undefined,
+            sources
         );
         try {
             await expect(applyPending(baseline, output.archive, [])).rejects.toThrow(
@@ -451,10 +537,17 @@ describe('E2B workspace snapshots', () => {
         await writeFile(join(local, 'nested', 'value.txt'), 'baseline');
         await writeFile(join(remote, 'nested', 'value.txt'), 'remote edit');
         await writeFile(join(outside, 'value.txt'), 'outside');
-        const baseline = await E2BAssetSnapshot.create(binding(local), 1024 * 1024);
+        const baseline = await E2BAssetSnapshot.create(
+            binding(local),
+            1024 * 1024,
+            undefined,
+            sources
+        );
         const output = await E2BAssetSnapshot.create(
             binding(remote, 'asset'),
-            1024 * 1024
+            1024 * 1024,
+            undefined,
+            sources
         );
         await rm(join(local, 'nested'), { recursive: true });
         await symlink(outside, join(local, 'nested'));

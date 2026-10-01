@@ -19,9 +19,11 @@ import type {
 import { DockerMountPlan } from '../../src/runtimes/docker/mounts.js';
 import { E2BPathPlan } from '../../src/runtimes/e2b/paths.js';
 import { RuntimeRegistry } from '../../src/runtimes/registry.js';
+import { TransferRules } from '../../src/runtimes/staging/rules.js';
 import type { ResolvedWorkbench } from '../../src/types.js';
 import { checkoutFixture, fixtureIdentity } from '../repositories/fixture.js';
 
+const rules = new TransferRules('E2B');
 const directories: string[] = [];
 afterEach(async () => {
     await Promise.all(
@@ -54,7 +56,7 @@ describe('shared execution preparation', () => {
                     runtime === 'docker'
                         ? new DockerMountPlan(request).containerEnvironment()
                         : runtime === 'e2b'
-                          ? new E2BPathPlan(request).environment()
+                          ? new E2BPathPlan(request, rules).environment()
                           : request.environment;
                 expect(visible.GH_TOKEN).toBe('github-account-credential');
                 expect(visible.GIT_CONFIG_COUNT).toBe('4');
@@ -153,7 +155,7 @@ describe('shared execution preparation', () => {
                             ).toBeUndefined();
                         }
                         if (runtime === 'e2b') {
-                            const plan = new E2BPathPlan(request);
+                            const plan = new E2BPathPlan(request, rules);
                             expect(
                                 plan.bindings.find(
                                     (asset) =>

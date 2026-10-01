@@ -15,6 +15,7 @@ import {
     RuntimeRegistry,
     RuntimeSmoke,
 } from '../src/runtimes/index.js';
+import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import {
     type RequirementsHost,
@@ -22,6 +23,9 @@ import {
     WorkbenchManifestParser,
     withRuntime,
 } from '../src/workbench/index.js';
+
+const diskAssetSource = new DiskAssetSource();
+const disk = { assets: diskAssetSource, local: diskAssetSource };
 
 const root = await mkdtemp(join(tmpdir(), 'runtime-requirements-'));
 const packageDirectory = join(root, '.workbenches', 'core');
@@ -455,7 +459,7 @@ describe('providers apply requirements before preparing', () => {
     test('the e2b provider refuses gpu before creating anything', async () => {
         const target = workbench(withRuntimes({ gpu: true }), 'e2b');
         await expect(
-            new E2BRuntimeProvider().prepare(prepareRequest(target))
+            new E2BRuntimeProvider(disk).prepare(prepareRequest(target))
         ).rejects.toThrow('GPU requirements are not supported on the e2b runtime');
     });
 

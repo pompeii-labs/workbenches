@@ -27,10 +27,12 @@ import {
 import { type E2BRuntimeDependencies, E2BRuntimeProvider } from './e2b/index.js';
 import { RuntimeError } from './error.js';
 import { type LocalRuntimeDependencies, LocalRuntimeProvider } from './local.js';
+import { DiskAssetSource } from './staging/disk.js';
 
 export interface RuntimeDependencies extends LocalRuntimeDependencies {
     docker?: DockerRuntimeDependencies;
-    e2b?: E2BRuntimeDependencies;
+    /** Anything left out is wired here: assets are read from the local disk. */
+    e2b?: Partial<E2BRuntimeDependencies>;
 }
 
 export class RuntimeRegistry {
@@ -48,10 +50,15 @@ export class RuntimeRegistry {
     }
 
     static standard(dependencies: RuntimeDependencies = {}): RuntimeRegistry {
+        const disk = new DiskAssetSource();
         return new RuntimeRegistry([
             new LocalRuntimeProvider(dependencies),
             new DockerRuntimeProvider(dependencies.docker),
-            new E2BRuntimeProvider(dependencies.e2b),
+            new E2BRuntimeProvider({
+                assets: disk,
+                local: disk,
+                ...dependencies.e2b,
+            }),
             new DaytonaRuntimeProvider(),
         ]);
     }

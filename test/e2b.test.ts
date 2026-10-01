@@ -21,8 +21,14 @@ import { E2BManagedSandboxes } from '../src/runtimes/e2b/managed.js';
 import { E2BRuntimeProvider } from '../src/runtimes/e2b/provider.js';
 import { E2BAssetSnapshot } from '../src/runtimes/e2b/snapshot.js';
 import { RuntimeRegistry } from '../src/runtimes/index.js';
+import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
+import { TransferRules } from '../src/runtimes/staging/rules.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { runtimeProviderContract } from './runtime-provider-contract.js';
+
+const diskAssetSource = new DiskAssetSource();
+const disk = { assets: diskAssetSource, local: diskAssetSource };
+const sources = { ...disk, rules: new TransferRules('E2B') };
 
 const temporaryDirectories: string[] = [];
 
@@ -36,7 +42,8 @@ afterEach(async () => {
 
 describe('E2B runtime provider', () => {
     runtimeProviderContract({
-        createProvider: () => new E2BRuntimeProvider({ client: new FakeClient() }),
+        createProvider: () =>
+            new E2BRuntimeProvider({ ...disk, client: new FakeClient() }),
         request: async () => request(await fixture()),
     });
 
@@ -45,7 +52,7 @@ describe('E2B runtime provider', () => {
         const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-empty-home-'));
         temporaryDirectories.push(home);
         await expect(
-            new E2BRuntimeProvider().prepare({
+            new E2BRuntimeProvider(disk).prepare({
                 ...request(resolved),
                 environment: { WORKBENCH_HOME: home },
             })
@@ -59,7 +66,7 @@ describe('E2B runtime provider', () => {
             id: `wb_${'a'.repeat(20)}`,
             scope: 'b'.repeat(24),
         };
-        const runtime = await new E2BRuntimeProvider({ client }).prepare({
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare({
             ...request(resolved),
             run,
         });
@@ -93,9 +100,10 @@ describe('E2B runtime provider', () => {
         const client = new FakeClient();
         const ordinaryClient = new FakeClient();
         const ordinary = await new E2BRuntimeProvider({
+            ...disk,
             client: ordinaryClient,
         }).prepare(request(resolved));
-        const runtime = await new E2BRuntimeProvider({ client }).prepare({
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare({
             ...request(resolved),
             repository: {
                 name: 'example/project',
@@ -120,7 +128,7 @@ describe('E2B runtime provider', () => {
 
     test('provisions staging paths for non-root users without elevating the harness', async () => {
         const client = new FakeClient();
-        const runtime = await new E2BRuntimeProvider({ client }).prepare(
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare(
             request(await fixture())
         );
         try {
@@ -154,7 +162,7 @@ describe('E2B runtime provider', () => {
     test('refuses malformed user identities before privileged directory setup', async () => {
         const client = new FakeClient();
         client.sandbox.runtimeIdentity = '1000:1000; touch /unsafe';
-        const runtime = await new E2BRuntimeProvider({ client }).prepare(
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare(
             request(await fixture())
         );
         try {
@@ -179,6 +187,7 @@ describe('E2B runtime provider', () => {
             memoryMB: 4_096,
         };
         const runtime = await new E2BRuntimeProvider({
+            ...disk,
             client,
             now: () => new Date('2026-09-11T12:00:10.000Z'),
         }).prepare(request(resolved));
@@ -206,6 +215,7 @@ describe('E2B runtime provider', () => {
         const client = new FakeClient();
         client.sandbox.infoFailure = new Error('metadata unavailable');
         const runtime = await new E2BRuntimeProvider({
+            ...disk,
             client,
             now: () => new Date('2026-09-11T12:00:10.000Z'),
         }).prepare(request(resolved));
@@ -224,7 +234,9 @@ describe('E2B runtime provider', () => {
     test('streams process output, forwards input, and resolves service URLs', async () => {
         const resolved = await fixture();
         const client = new FakeClient();
-        const runtime = await new RuntimeRegistry([new E2BRuntimeProvider({ client })])
+        const runtime = await new RuntimeRegistry([
+            new E2BRuntimeProvider({ ...disk, client }),
+        ])
             .resolve('e2b')
             .prepare(request(resolved));
         try {
@@ -281,7 +293,7 @@ describe('E2B runtime provider', () => {
         const resolved = await fixture();
         resolved.manifest.env.E2B_API_KEY = { required: false };
         const client = new FakeClient();
-        const runtime = await new E2BRuntimeProvider({ client }).prepare({
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare({
             ...request(resolved),
             environment: {
                 E2B_API_KEY: 'e2b-secret',
@@ -307,7 +319,7 @@ describe('E2B runtime provider', () => {
             mode: 0o600,
         });
         const client = new FakeClient();
-        const runtime = await new E2BRuntimeProvider({ client }).prepare({
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare({
             ...request(resolved),
             environment: {
                 E2B_API_KEY: 'e2b-secret',
@@ -340,7 +352,7 @@ describe('E2B runtime provider', () => {
         const resolved = await fixture();
         const credentials = await mkdtemp(join(tmpdir(), 'workbench-e2b-credentials-'));
         temporaryDirectories.push(credentials);
-        const provider = new E2BRuntimeProvider({ client: new FakeClient() });
+        const provider = new E2BRuntimeProvider({ ...disk, client: new FakeClient() });
 
         await expect(
             provider.prepare({
@@ -369,7 +381,7 @@ describe('E2B runtime provider', () => {
         resolved.manifest.tools = ['fixture-tool'];
         const client = new FakeClient();
         client.sandbox.missingCommands.add('fixture-tool');
-        const runtime = await new E2BRuntimeProvider({ client }).prepare(
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare(
             request(resolved)
         );
         try {
@@ -386,7 +398,7 @@ describe('E2B runtime provider', () => {
         const client = new FakeClient();
         client.templateFailure = new Error('template network unavailable');
         await expect(
-            new RuntimeRegistry([new E2BRuntimeProvider({ client })])
+            new RuntimeRegistry([new E2BRuntimeProvider({ ...disk, client })])
                 .resolve('e2b')
                 .prepare(request(resolved))
         ).rejects.toThrow('template network unavailable');
@@ -397,7 +409,7 @@ describe('E2B runtime provider', () => {
         const resolved = await fixture();
         const client = new FakeClient();
         client.sandbox.uploadFailure = new Error('upload network unavailable');
-        const runtime = await new E2BRuntimeProvider({ client }).prepare(
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare(
             request(resolved)
         );
         await expect(runtime.preflight()).rejects.toThrow('upload network unavailable');
@@ -408,7 +420,7 @@ describe('E2B runtime provider', () => {
     test('closes output streams and cleans up when command start fails', async () => {
         const resolved = await fixture();
         const client = new FakeClient();
-        const runtime = await new E2BRuntimeProvider({ client }).prepare(
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare(
             request(resolved)
         );
         await runtime.preflight();
@@ -433,7 +445,7 @@ describe('E2B runtime provider', () => {
         temporaryDirectories.push(workspace);
         await writeFile(join(workspace, 'project.txt'), 'active project');
         const client = new FakeClient();
-        const runtime = await new E2BRuntimeProvider({ client }).prepare({
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare({
             ...request(resolved),
             workspaceDirectory: workspace,
             assets: [
@@ -486,7 +498,9 @@ describe('E2B runtime provider', () => {
                 excludedHostPaths: [],
                 kind: 'outcome',
             },
-            1024 * 1024
+            1024 * 1024,
+            undefined,
+            sources
         );
         const client = new FakeClient();
         client.sandbox.artifactDownload = new Uint8Array(
@@ -517,7 +531,9 @@ describe('E2B runtime provider', () => {
             );
             const revision = await E2BAssetSnapshot.create(
                 remoteSnapshot.binding,
-                1024 * 1024
+                1024 * 1024,
+                undefined,
+                sources
             );
             try {
                 client.sandbox.artifactDownload = new Uint8Array(
@@ -568,7 +584,7 @@ describe('E2B runtime provider', () => {
         const file = join(resolved.repositoryDirectory, 'state.json');
         await writeFile(file, '{}');
         await expect(
-            new E2BRuntimeProvider({ client: new FakeClient() }).prepare({
+            new E2BRuntimeProvider({ ...disk, client: new FakeClient() }).prepare({
                 ...request(resolved),
                 assets: [
                     ...request(resolved).assets,
@@ -584,6 +600,7 @@ describe('E2B runtime provider', () => {
         client.sandbox.outputSize = 1;
         client.sandbox.deletedOutput = new TextEncoder().encode('x'.repeat(4_096));
         const runtime = await new E2BRuntimeProvider({
+            ...disk,
             client,
             maxTransferBytes: 4_096,
         }).prepare(request(resolved));
@@ -608,6 +625,7 @@ describe('E2B runtime provider', () => {
         client.sandbox.outputSize = 1;
         client.sandbox.outputDownload = new Uint8Array(65);
         const runtime = await new E2BRuntimeProvider({
+            ...disk,
             client,
             maxTransferBytes: 64,
         }).prepare(request(resolved));
@@ -633,6 +651,7 @@ describe('E2B runtime provider', () => {
         const home = await mkdtemp(join(tmpdir(), 'workbench-e2b-failure-'));
         temporaryDirectories.push(home);
         const runtime = await new E2BRuntimeProvider({
+            ...disk,
             client,
             maxTransferBytes: 64,
         }).prepare({
@@ -662,6 +681,7 @@ describe('E2B runtime provider', () => {
         temporaryDirectories.push(state);
         await writeFile(join(state, 'session.json'), '{}');
         const runtime = await new E2BRuntimeProvider({
+            ...disk,
             client,
             maxTransferBytes: 128,
         }).prepare({

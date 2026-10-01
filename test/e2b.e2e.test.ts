@@ -16,16 +16,22 @@ import {
     type WorkbenchEvent,
 } from '../src/runs/index.js';
 import type { PreparedRuntime } from '../src/runtimes/contracts.js';
+import { E2BArchive } from '../src/runtimes/e2b/archive.js';
 import type { E2BPty, E2BSandbox } from '../src/runtimes/e2b/contracts.js';
 import { E2BManagedSandboxes } from '../src/runtimes/e2b/managed.js';
 import { E2BRuntimeProvider } from '../src/runtimes/e2b/provider.js';
 import { E2BOutcomeRecovery } from '../src/runtimes/e2b/recovery.js';
 import { E2BSdkClient, e2bMetadata } from '../src/runtimes/e2b/sdk.js';
 import { E2BStateStore } from '../src/runtimes/e2b/state.js';
+import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
+import { TransferRules } from '../src/runtimes/staging/rules.js';
 import { SessionRetention } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { seedModelCatalogFixture } from './model-catalog-fixture.js';
 
+const diskAssetSource = new DiskAssetSource();
+const disk = { assets: diskAssetSource, local: diskAssetSource };
+const archives = new E2BArchive(new TransferRules('E2B'));
 const enabled = process.env.WORKBENCH_E2B_E2E === '1';
 const sessionEnabled = process.env.WORKBENCH_E2B_SESSION_E2E === '1';
 const projectDirectory = resolve(import.meta.dir, '..');
@@ -118,7 +124,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
         });
         const scope = RunStore.scope(home);
         const lifecycle = await OutcomeLifecycle.create({ home, runId: run.id });
-        const runtime = await new E2BRuntimeProvider({ client }).prepare({
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare({
             workbench,
             workspaceDirectory: workbench.repositoryDirectory,
             environment: process.env,
@@ -245,7 +251,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                 id: RunStore.createId(),
                 scope: RunStore.scope(home),
             };
-            const runtime = await new E2BRuntimeProvider({ client }).prepare({
+            const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare({
                 workbench,
                 workspaceDirectory: workbench.repositoryDirectory,
                 environment: process.env,
@@ -410,7 +416,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                 id: RunStore.createId(),
                 scope: RunStore.scope(home),
             };
-            const runtime = await new E2BRuntimeProvider({ client }).prepare({
+            const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare({
                 workbench,
                 workspaceDirectory: workbench.repositoryDirectory,
                 environment: process.env,
@@ -495,7 +501,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             ];
 
             const firstRun = { id: RunStore.createId(), scope };
-            const first = await new E2BRuntimeProvider({ client }).prepare({
+            const first = await new E2BRuntimeProvider({ ...disk, client }).prepare({
                 workbench,
                 workspaceDirectory: workbench.repositoryDirectory,
                 environment: process.env,
@@ -522,8 +528,12 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             expect(
                 await readFile(
                     join(
-                        (await new E2BStateStore(credentials.directory).source())
-                            .directory,
+                        (
+                            await new E2BStateStore(
+                                archives,
+                                credentials.directory
+                            ).source()
+                        ).directory,
                         'opencode',
                         'auth.json'
                     ),
@@ -532,7 +542,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             ).toBe('{"fixture":"persistent"}\n');
 
             const secondRun = { id: RunStore.createId(), scope };
-            const second = await new E2BRuntimeProvider({ client }).prepare({
+            const second = await new E2BRuntimeProvider({ ...disk, client }).prepare({
                 workbench,
                 workspaceDirectory: workbench.repositoryDirectory,
                 environment: process.env,
@@ -551,7 +561,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             expect(restored.code, restored.stderr).toBe(0);
             expect(restored.stdout).toBe('{"fixture":"persistent"}\n');
             const thirdRun = { id: RunStore.createId(), scope };
-            const third = await new E2BRuntimeProvider({ client }).prepare({
+            const third = await new E2BRuntimeProvider({ ...disk, client }).prepare({
                 workbench,
                 workspaceDirectory: workbench.repositoryDirectory,
                 environment: process.env,
@@ -579,8 +589,9 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             activeRuntimes.delete(third);
             await expectManagedSandboxGone(client, scope, secondRun.id);
             await expectManagedSandboxGone(client, scope, thirdRun.id);
-            const current = (await new E2BStateStore(credentials.directory).source())
-                .directory;
+            const current = (
+                await new E2BStateStore(archives, credentials.directory).source()
+            ).directory;
             expect(await readFile(join(current, 'opencode', 'auth.json'), 'utf8')).toBe(
                 '{"fixture":"persistent"}\n'
             );
@@ -883,7 +894,10 @@ describe.skipIf(!sessionEnabled)('E2B interactive sessions end to end', () => {
             await first.close();
             activeSessions.delete(first);
             await expectManagedSandboxGone(client, scope, runId);
-            const savedNativeState = await new E2BStateStore(nativeDirectory).source();
+            const savedNativeState = await new E2BStateStore(
+                archives,
+                nativeDirectory
+            ).source();
             expect(
                 (await stat(join(savedNativeState.directory, 'opencode.sqlite'))).size
             ).toBeGreaterThan(0);
