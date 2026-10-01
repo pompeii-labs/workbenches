@@ -1181,8 +1181,20 @@ over the `AssetSource` and `TransferRules` the host constructs it with.
 `OutcomeSink` the caller passes to `collectOutcome`. The CLI passes the disk for
 all of these. A host passes stores of its own, or the in-memory ones.
 
-The disk implementations live in separate subpaths that the CLI wires in, and a
-portable module never imports one, statically or dynamically.
+Every subpath in the `exports` map is portable except the root and the
+disk-backed ones: `./outcomes/disk`, `./runners/files/disk`,
+`./runtimes/assets/disk`, `./runtimes/e2b`, and `./runtimes`. A test bundles
+each portable subpath with `Bun.build` and fails if the output imports `fs`,
+`os`, `zlib`, `stream`, `child_process`, or any built-in module outside this
+list, with or without the `node:` prefix. A host must provide `node:path`,
+`node:crypto`, `node:util`, `node:buffer`, and `node:events`. Today the portable
+subpaths import only `node:path` and `node:util`, and the rest of what they need
+is global: web `crypto`, `fetch`, and the Compression Streams API. The test
+checks imports in the bundle. It does not run the bundles in another runtime.
+It also checks that each disk-backed subpath does import a filesystem, process,
+or compression module, so the list stays accurate. The disk implementations
+live in those separate subpaths that the CLI wires in, and a portable module
+never imports one, statically or dynamically.
 
 #### In-memory transfer
 
