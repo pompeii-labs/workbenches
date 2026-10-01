@@ -11,6 +11,7 @@ export type {
     E2BSandboxInfo,
     E2BTemplateSource,
 } from './contracts.js';
+export { DiskTransfer } from './disk.js';
 export {
     E2BManagedSandboxes,
     type ManagedE2BSandbox,

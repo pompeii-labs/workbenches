@@ -20,28 +20,25 @@ import type {
     RuntimeSessionOptions,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
-import type { TransferRules } from '../staging/rules.js';
-import type { AssetSource } from '../staging/source.js';
-import { E2BOutcomeCollector } from './collector.js';
+import { quote } from '../staging/shell.js';
+import { remoteExclusions, workspaceTracking } from '../staging/tracking.js';
 import type { E2BClient, E2BCommand, E2BSandbox } from './contracts.js';
 import { prepareE2BDirectories } from './directories.js';
+import type { DiskTransfer } from './disk.js';
 import { e2bPricingSource, estimateE2BCost } from './infrastructure.js';
-import { E2BNativeState } from './native.js';
 import type { E2BPathPlan } from './paths.js';
 import { E2BOutcomeRecovery } from './recovery.js';
 import { e2bMetadata } from './sdk.js';
-import { definedEnvironment, gitExcludePattern, quote, shellCommand } from './shell.js';
-import { E2BAssetSnapshot } from './snapshot.js';
+import { definedEnvironment, gitExcludePattern, shellCommand } from './shell.js';
+import type { E2BAssetSnapshot } from './snapshot.js';
 import { terminalDimensions } from './terminal.js';
-import { remoteExclusions, workspaceTracking } from './tracking.js';
 
 interface E2BRuntimeOptions {
     request: RuntimePrepareRequest;
     client: E2BClient;
     paths: E2BPathPlan;
-    assets: AssetSource;
-    local: AssetSource;
-    rules: TransferRules;
+    /** Packs files into the sandbox and takes outcomes and native state back. */
+    transfer: DiskTransfer;
     preparation: RuntimePreparation & {
         kind: 'image';
         reference: string;
@@ -445,14 +442,15 @@ export class E2BRuntime implements PreparedRuntime {
     private persistNativeState(): Promise<void> {
         if (!this.sandbox) return Promise.resolve();
         if (!this.statePersistence) {
-            this.statePersistence = new E2BNativeState(this.sandbox)
-                .capture(
-                    this.snapshots,
-                    this.options.maximumTransferBytes,
-                    this.persistedState,
-                    (completed) =>
-                        this.recovery?.progress(completed) ?? Promise.resolve()
-                )
+            this.statePersistence = this.options.transfer
+                .captureNativeState({
+                    sandbox: this.sandbox,
+                    snapshots: this.snapshots,
+                    maximumBytes: this.options.maximumTransferBytes,
+                    completed: this.persistedState,
+                    checkpoint: (completed) =>
+                        this.recovery?.progress(completed) ?? Promise.resolve(),
+                })
                 .catch((error) => {
                     this.statePersistence = undefined;
                     throw error;
@@ -475,11 +473,12 @@ export class E2BRuntime implements PreparedRuntime {
                 this.recovery = recovery;
             }
             for (const binding of this.options.paths.bindings) {
-                const snapshot = await E2BAssetSnapshot.create(
+                const snapshot = await this.options.transfer.pack(
                     binding,
                     this.options.maximumTransferBytes - transferred,
-                    binding.kind === 'workspace' ? this.recovery?.directory : undefined,
-                    this.options
+                    binding.kind === 'workspace' && this.recovery
+                        ? { persistentDirectory: this.recovery.directory }
+                        : {}
                 );
                 transferred += snapshot.bytes;
                 snapshots.push(snapshot);
@@ -593,13 +592,12 @@ export class E2BRuntime implements PreparedRuntime {
         }
     }
 
-    private collector(): E2BOutcomeCollector {
-        return new E2BOutcomeCollector({
+    private collector() {
+        return this.options.transfer.collector({
             sandbox: this.requireReady(),
             snapshots: this.snapshots,
             baselines: this.snapshotBaselines,
             maximumTransferBytes: this.options.maximumTransferBytes,
-            rules: this.options.rules,
         });
     }
 

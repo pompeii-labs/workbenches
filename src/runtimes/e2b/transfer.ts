@@ -1,6 +1,7 @@
 import { createWriteStream } from 'node:fs';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
 import { formatOutcomeBytes } from '../../outcomes/presentation.js';
 import type { E2BSandbox } from './contracts.js';
@@ -14,7 +15,7 @@ export interface DownloadLimits {
 
 /** Copies files out of one E2B sandbox onto the host. */
 export class E2BTransfer {
-    constructor(private readonly sandbox: E2BSandbox) {}
+    constructor(private readonly sandbox: Pick<E2BSandbox, 'download'>) {}
 
     /** Downloads `remote` to `local` and returns the bytes written. */
     async download(
@@ -39,7 +40,7 @@ export class E2BTransfer {
             },
         });
         await pipeline(
-            Readable.fromWeb(stream as globalThis.ReadableStream<Uint8Array>),
+            Readable.fromWeb(stream as unknown as NodeReadableStream<Uint8Array>),
             limit,
             createWriteStream(local, { mode: 0o600 })
         );

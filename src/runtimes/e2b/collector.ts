@@ -9,21 +9,23 @@ import {
     type RuntimeOutcomeCollection,
 } from '../../outcomes/index.js';
 import { formatOutcomeBytes } from '../../outcomes/presentation.js';
+import { CollectionCommands } from '../staging/commands.js';
 import type { TransferRules } from '../staging/rules.js';
+import { quote } from '../staging/shell.js';
+import { workspaceTracking } from '../staging/tracking.js';
+import type { OutcomeCollector, TransferSandbox } from '../staging/transfer.js';
 import { E2BArchive } from './archive.js';
-import type { E2BSandbox } from './contracts.js';
-import { quote } from './shell.js';
 import type { E2BAssetSnapshot } from './snapshot.js';
-import { workspaceTracking } from './tracking.js';
 import { E2BTransfer } from './transfer.js';
 
-export class E2BOutcomeCollector {
+export class E2BOutcomeCollector implements OutcomeCollector {
     private readonly transfer: E2BTransfer;
     private readonly archive: E2BArchive;
+    private readonly commands: CollectionCommands;
 
     constructor(
         private readonly options: {
-            sandbox: E2BSandbox;
+            sandbox: TransferSandbox;
             snapshots: E2BAssetSnapshot[];
             baselines: Map<number, string>;
             maximumTransferBytes: number;
@@ -32,6 +34,7 @@ export class E2BOutcomeCollector {
     ) {
         this.transfer = new E2BTransfer(options.sandbox);
         this.archive = new E2BArchive(options.rules);
+        this.commands = new CollectionCommands(options.rules);
     }
 
     async collect(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
@@ -63,17 +66,18 @@ export class E2BOutcomeCollector {
                     );
                 }
                 const root = snapshot.binding.runtimePath;
-                const remoteArchive = `/tmp/workbench-output-${index}.tar.gz`;
-                const remoteChanged = `/tmp/workbench-changed-${index}`;
-                const remoteDeleted = `/tmp/workbench-deleted-${index}`;
+                const paths = this.commands.workspacePaths(index);
+                const remoteArchive = paths.archive;
+                const remoteChanged = paths.changed;
+                const remoteDeleted = paths.deleted;
                 const tracking = workspaceTracking(this.options.snapshots, index);
-                const command = [
-                    `${tracking.git} add -A`,
-                    `${tracking.git} diff --cached --name-only --diff-filter=ACMRTUXB -z ${quote(baseline)} > ${quote(remoteChanged)}`,
-                    `${tracking.git} diff --cached --name-only --diff-filter=D -z ${quote(baseline)} > ${quote(remoteDeleted)}`,
-                    `tar -C ${quote(root)} --null --files-from=${quote(remoteChanged)} -czf ${quote(remoteArchive)}`,
-                ].join(' && ');
-                requireSuccess(
+                const command = this.commands.workspace({
+                    git: tracking.git,
+                    root,
+                    baseline,
+                    paths,
+                });
+                this.commands.requireSuccess(
                     await sandbox.run(command),
                     `Failed to collect E2B workspace changes: ${snapshot.binding.hostPath}`
                 );
@@ -157,7 +161,7 @@ export class E2BOutcomeCollector {
                 changesets,
                 artifacts: output.artifacts,
                 links: output.links,
-                warnings: exclusionWarnings([...excluded]),
+                warnings: this.commands.warnings([...excluded]),
             };
         } finally {
             await Promise.allSettled(captures.map((capture) => capture.cleanup()));
@@ -177,12 +181,13 @@ export class E2BOutcomeCollector {
         const remoteArchive = `/tmp/workbench-artifacts-${token}.tar.gz`;
         const remoteFiles = `/tmp/workbench-artifacts-files-${token}`;
         try {
-            requireSuccess(
+            this.commands.requireSuccess(
                 await sandbox.run(
-                    [
-                        `(cd ${quote(root)} && find . -mindepth 1 -print0) > ${quote(remoteFiles)}`,
-                        `tar -C ${quote(root)} --no-recursion --null --files-from=${quote(remoteFiles)} -czf ${quote(remoteArchive)}`,
-                    ].join(' && ')
+                    this.commands.output({
+                        root,
+                        files: remoteFiles,
+                        archive: remoteArchive,
+                    })
                 ),
                 'Failed to collect E2B outcome artifacts'
             );
@@ -211,28 +216,4 @@ export class E2BOutcomeCollector {
             await rm(directory, { recursive: true, force: true });
         }
     }
-}
-
-function exclusionWarnings(paths: string[]) {
-    if (paths.length === 0) return [];
-    const visible = paths
-        .slice(0, 3)
-        .map((path) => JSON.stringify(path))
-        .join(', ');
-    const remaining = paths.length - 3;
-    return [
-        {
-            code: 'workspace_paths_excluded',
-            message: `${paths.length} protected or nested workspace path${paths.length === 1 ? ' was' : 's were'} not sent to E2B: ${visible}${remaining > 0 ? `, and ${remaining} more` : ''}. ${paths.length === 1 ? 'This path' : 'These paths'} cannot appear in returned changes.`,
-        },
-    ];
-}
-
-function requireSuccess(
-    result: { code: number; stdout: string; stderr: string },
-    message: string
-): void {
-    if (result.code === 0) return;
-    const detail = result.stderr.trim() || result.stdout.trim();
-    throw new Error(`${message}${detail ? `: ${detail}` : ''}`);
 }

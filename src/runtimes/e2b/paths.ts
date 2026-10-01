@@ -5,22 +5,9 @@ import type { ResolvedWorkbench } from '../../types.js';
 import type { RuntimePrepareRequest } from '../contracts.js';
 import type { TransferRules } from '../staging/rules.js';
 import type { AssetSource } from '../staging/source.js';
+import type { AssetBinding } from '../staging/transfer.js';
 
-export interface E2BAssetBinding {
-    hostPath: string;
-    runtimePath: string;
-    access: 'read-only' | 'read-write';
-    excludedHostPaths: string[];
-    workspace?: string;
-    kind:
-        | 'workspace'
-        | 'package'
-        | 'asset'
-        | 'credentials'
-        | 'state'
-        | 'outcome'
-        | 'git';
-}
+export type E2BAssetBinding = AssetBinding;
 
 export class E2BPathPlan {
     readonly bindings: E2BAssetBinding[];

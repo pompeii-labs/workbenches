@@ -1,4 +1,6 @@
+import { createReadStream } from 'node:fs';
 import { lstat, readdir, readFile, readlink, stat } from 'node:fs/promises';
+import { Readable } from 'node:stream';
 
 import type { AssetGit, AssetSource, AssetStat } from './source.js';
 
@@ -96,5 +98,11 @@ export class DiskAssetSource implements AssetSource {
 
     async read(path: string): Promise<Uint8Array> {
         return new Uint8Array(await readFile(path));
+    }
+
+    stream(path: string): ReadableStream<Uint8Array> {
+        return Readable.toWeb(
+            createReadStream(path)
+        ) as unknown as ReadableStream<Uint8Array>;
     }
 }

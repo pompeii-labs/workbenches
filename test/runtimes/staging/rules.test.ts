@@ -7,6 +7,8 @@ const rules = new TransferRules('E2B');
 describe('transfer rules', () => {
     test('normalizes archive paths and tests nested assets', () => {
         expect(rules.normalizeArchivePath('./src/app.ts')).toBe('src/app.ts');
+        expect(rules.normalizeArchivePath('src/./lib/./app.ts')).toBe('src/lib/app.ts');
+        expect(rules.normalizeArchivePath('./dir/')).toBe('dir/');
         expect(rules.excludedByNestedAsset('pkg/a.ts', ['pkg'])).toBeTrue();
         expect(rules.excludedByNestedAsset('pkgs/a.ts', ['pkg'])).toBeFalse();
     });
@@ -19,7 +21,15 @@ describe('transfer rules', () => {
     });
 
     test('names the provider when it refuses a path', () => {
-        for (const unsafe of ['', '.', '/etc/passwd', '../out', 'a//b', 'a/../b']) {
+        for (const unsafe of [
+            '',
+            '.',
+            '/etc/passwd',
+            '../out',
+            'a//b',
+            'a/../b',
+            'a/./b',
+        ]) {
             expect(() => rules.validateRelativePath(unsafe)).toThrow(
                 `Unsafe E2B archive path: ${unsafe}`
             );

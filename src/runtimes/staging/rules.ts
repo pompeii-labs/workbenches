@@ -13,14 +13,19 @@ export interface SymlinkCheck {
 
 /**
  * Which paths are safe inside a transfer archive, for every provider that
- * copies host files into a sandbox. `provider` names the transfer in messages,
- * for example `E2B`.
+ * copies host files into a sandbox. `provider` names the transfer in messages.
  */
 export class TransferRules {
     constructor(readonly provider: string) {}
 
+    /** Uses forward slashes and drops `.` segments, so `a/./b` and `a/b` are one path. */
     normalizeArchivePath(path: string): string {
-        return path.split(sep).join('/').replace(/^\.\//, '');
+        return path
+            .split(sep)
+            .join('/')
+            .split('/')
+            .filter((segment) => segment !== '.')
+            .join('/');
     }
 
     contains(parent: string, child: string): boolean {
@@ -40,7 +45,11 @@ export class TransferRules {
             !path ||
             path === '.' ||
             isAbsolute(path) ||
-            path.split('/').some((segment) => segment === '..' || segment === '')
+            path
+                .split('/')
+                .some(
+                    (segment) => segment === '..' || segment === '.' || segment === ''
+                )
         ) {
             throw new Error(`Unsafe ${this.provider} archive path: ${path}`);
         }

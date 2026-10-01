@@ -1,6 +1,6 @@
 import { posix } from 'node:path';
+import { quote } from '../staging/shell.js';
 import type { E2BSandbox } from './contracts.js';
-import { quote } from './shell.js';
 
 export const e2bIdentityCommand = 'printf "%s:%s" "$(id -u)" "$(id -g)"';
 

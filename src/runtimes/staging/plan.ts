@@ -1,9 +1,9 @@
 import { dirname, join, resolve } from 'node:path';
-import type { Pack } from 'tar-stream';
 
 import { WorkspaceProtection } from './protection.js';
 import type { TransferRules } from './rules.js';
 import type { AssetSource } from './source.js';
+import { TarArchive, type TarEntry } from './tar.js';
 
 export interface SnapshotEntry {
     path: string;
@@ -21,6 +21,19 @@ export interface WalkOptions {
     protectWorkspace?: boolean;
     excludedPaths?: string[];
     syncExcludedPaths?: string[];
+}
+
+/**
+ * A file whose body is still to be read. The writer digests it while copying it
+ * into the archive and records the digest on `entry`.
+ */
+export interface StreamedRecord {
+    type: 'stream';
+    name: string;
+    mode: number;
+    size: number;
+    body: ReadableStream<Uint8Array>;
+    entry: SnapshotEntry;
 }
 
 /**
@@ -200,13 +213,21 @@ export class TransferPlan {
         return { path, type: 'file', mode: details.mode, size: details.size };
     }
 
+    /**
+     * Records the digest of each file by reading it. With `streaming`, and a
+     * source that can stream, only project npm configs are read here: the writer
+     * digests every other file while packing, so each file is read once.
+     */
     async digestEntries(
         source: string,
         entries: Map<string, SnapshotEntry>,
-        sourceIsDirectory: boolean
+        sourceIsDirectory: boolean,
+        streaming = false
     ): Promise<void> {
+        const streamed = streaming && this.source.stream !== undefined;
         for (const entry of entries.values()) {
             if (entry.type !== 'file') continue;
+            if (streamed && !this.protection.projectNpmrcPath(entry.path)) continue;
             entry.digest = await digestBytes(
                 await this.source.read(
                     sourceIsDirectory ? join(source, entry.path) : source
@@ -216,17 +237,19 @@ export class TransferPlan {
     }
 
     /**
-     * Writes the selected entries into `pack` and finalizes it. Symlinks are
-     * written as links. Project npm settings are re-validated against the digest
-     * taken during selection, so a file that changes in between is refused rather
-     * than copied.
+     * Yields the selected entries as archive records, reading each file as it
+     * goes. Symlinks become links. Project npm settings are re-validated against
+     * the digest taken during selection, so a file that changes in between is
+     * refused rather than copied. The caller writes the records into a tar: a
+     * stream on disk, or bytes in memory. With `streaming`, and a source that
+     * can stream, other files come back as `StreamedRecord` instead of bytes.
      */
-    async fillArchive(
-        pack: Pack,
+    async *archiveRecords(
         source: string,
         entries: Map<string, SnapshotEntry>,
-        sourceIsDirectory: boolean
-    ): Promise<void> {
+        sourceIsDirectory: boolean,
+        streaming = false
+    ): AsyncGenerator<TarEntry | StreamedRecord> {
         // Validate and retain the exact config bytes before writing the archive.
         const configs = new Map<string, Uint8Array>();
         for (const entry of entries.values()) {
@@ -248,49 +271,59 @@ export class TransferPlan {
         for (const entry of entries.values()) {
             const absolutePath = sourceIsDirectory ? join(source, entry.path) : source;
             if (entry.type === 'symlink') {
-                await write(pack, {
+                yield {
                     name: entry.path,
                     type: 'symlink',
-                    linkname: entry.link,
                     mode: entry.mode,
-                });
+                    content: new Uint8Array(),
+                    link: entry.link ?? '',
+                };
                 continue;
             }
-            const content =
-                configs.get(entry.path) ?? (await this.source.read(absolutePath));
+            const config = configs.get(entry.path);
+            if (!config && streaming && this.source.stream) {
+                yield {
+                    type: 'stream',
+                    name: entry.path,
+                    mode: entry.mode,
+                    size: entry.size,
+                    body: this.source.stream(absolutePath),
+                    entry,
+                };
+                continue;
+            }
+            const content = config ?? (await this.source.read(absolutePath));
             if (content.byteLength !== entry.size) {
                 throw new Error(
                     `${this.rules.provider} transfer source changed while reading: ${entry.path}`
                 );
             }
-            await write(
-                pack,
-                {
-                    name: entry.path,
-                    type: 'file',
-                    size: content.byteLength,
-                    mode: entry.mode,
-                },
-                content
-            );
+            yield { name: entry.path, type: 'file', mode: entry.mode, content };
         }
-        pack.finalize();
+    }
+
+    /** Builds the whole archive in memory. */
+    async archiveBytes(
+        source: string,
+        entries: Map<string, SnapshotEntry>,
+        sourceIsDirectory: boolean
+    ): Promise<Uint8Array> {
+        const records: TarEntry[] = [];
+        for await (const record of this.archiveRecords(
+            source,
+            entries,
+            sourceIsDirectory
+        )) {
+            if (record.type === 'stream') {
+                throw new Error('A byte-array archive cannot hold a streamed record');
+            }
+            records.push(record);
+        }
+        return TarArchive.pack(records).gzip();
     }
 }
 
-function write(
-    pack: Pack,
-    header: Parameters<Pack['entry']>[0],
-    content?: Uint8Array
-): Promise<void> {
-    return new Promise<void>((resolveEntry, reject) => {
-        const done = (error?: Error | null) => (error ? reject(error) : resolveEntry());
-        if (content) pack.entry(header, Buffer.from(content), done);
-        else pack.entry(header, done);
-    });
-}
-
-async function digestBytes(bytes: Uint8Array): Promise<string> {
+export async function digestBytes(bytes: Uint8Array): Promise<string> {
     const digest = await crypto.subtle.digest(
         'SHA-256',
         bytes as Uint8Array<ArrayBuffer>

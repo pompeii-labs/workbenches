@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 
+import { MemoryAssetSource } from '../../../src/runtimes/staging/memory/source.js';
 import { TransferPlan } from '../../../src/runtimes/staging/plan.js';
 import { TransferRules } from '../../../src/runtimes/staging/rules.js';
-import { MemoryAssetSource } from './memory.js';
 
 describe('transfer plan', () => {
     test('names the provider it was built for in its messages', async () => {

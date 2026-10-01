@@ -1,13 +1,8 @@
+import { quote } from '../staging/shell.js';
+
 export function shellCommand(command: string[]): string {
     if (command.length === 0) throw new Error('Runner command is empty');
     return command.map(quote).join(' ');
-}
-
-export function quote(value: string): string {
-    if (value.includes('\0')) {
-        throw new Error('E2B command values must not contain NUL');
-    }
-    return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 export function definedEnvironment(

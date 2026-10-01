@@ -2,14 +2,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { nativeCredentialPaths } from '../../connections/index.js';
+import { quote } from '../staging/shell.js';
 import type { E2BSandbox } from './contracts.js';
-import { quote } from './shell.js';
 import type { E2BAssetSnapshot } from './snapshot.js';
 import { E2BTransfer } from './transfer.js';
 
 /** Copies native state and credentials out of one E2B sandbox into their host stores. */
 export class E2BNativeState {
-    constructor(private readonly sandbox: E2BSandbox) {}
+    constructor(private readonly sandbox: Pick<E2BSandbox, 'run' | 'download'>) {}
 
     async capture(
         snapshots: E2BAssetSnapshot[],

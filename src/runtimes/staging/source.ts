@@ -21,6 +21,12 @@ export interface AssetSource {
     /** Reads a whole file. */
     read(path: string): Promise<Uint8Array>;
     /**
+     * Optional. Streams a file's body without holding it in memory. A transfer
+     * that writes a file archive uses it, when present, to digest and pack each
+     * file in a single read. Hosts without it are read through `read`.
+     */
+    stream?(path: string): ReadableStream<Uint8Array>;
+    /**
      * Optional Git awareness. With it, a workspace that is a Git repository is
      * staged as its tracked and unignored files, exactly as a developer would see
      * it. Without it, every workspace is staged by walking its files.

@@ -12,10 +12,11 @@ import { E2BPathPlan } from '../../../src/runtimes/e2b/paths.js';
 import { E2BRuntimeProvider } from '../../../src/runtimes/e2b/provider.js';
 import { E2BAssetSnapshot } from '../../../src/runtimes/e2b/snapshot.js';
 import { DiskAssetSource } from '../../../src/runtimes/staging/disk.js';
+import { MemoryAssetSource } from '../../../src/runtimes/staging/memory/source.js';
 import { TransferRules } from '../../../src/runtimes/staging/rules.js';
 import type { AssetSource } from '../../../src/runtimes/staging/source.js';
 import type { ResolvedWorkbench } from '../../../src/types.js';
-import { MemoryAssetSource, readArchive } from './memory.js';
+import { readArchive } from './archive.js';
 
 const diskAssetSource = new DiskAssetSource();
 const rules = new TransferRules('E2B');
