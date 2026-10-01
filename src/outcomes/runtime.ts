@@ -2,24 +2,14 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { RuntimePrepareRequest } from '../runtimes/contracts.js';
 import type {
-    OutcomeApplicationState,
-    OutcomeArtifact,
-    OutcomeChangeset,
-    OutcomeLink,
-    OutcomeWarning,
-} from './contracts.js';
-import { type CollectedOutput, OutcomeOutput } from './output.js';
-import type { OutcomeStore } from './store.js';
-import { WorkspaceSnapshot, WorkspaceSnapshotLimitError } from './workspace.js';
-
-export interface RuntimeOutcomeCollection {
-    application_state: OutcomeApplicationState;
-    summary?: string;
-    changesets: OutcomeChangeset[];
-    artifacts: OutcomeArtifact[];
-    links: OutcomeLink[];
-    warnings: OutcomeWarning[];
-}
+    CollectedOutput,
+    OutcomeSink,
+    RuntimeOutcomeCollection,
+} from './collection.js';
+import type { OutcomeChangeset, OutcomeWarning } from './contracts.js';
+import { OutcomeOutput } from './output.js';
+import { WorkspaceSnapshotLimitError } from './snapshot/limit.js';
+import { WorkspaceSnapshot } from './workspace.js';
 
 export interface HostOutcomeCaptureOptions {
     bestEffortWorkspaceChanges?: boolean;
@@ -97,7 +87,7 @@ export class HostOutcomeCapture {
         }
     }
 
-    async collect(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+    async collect(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
         if (!this.collection) {
             this.collection = this.collectOnce(store).catch((error) => {
                 this.collection = undefined;
@@ -108,11 +98,11 @@ export class HostOutcomeCapture {
     }
 
     /** Capture current repository edits without freezing final collection. */
-    snapshot(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+    snapshot(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
         return this.collectOnce(store);
     }
 
-    private async collectOnce(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+    private async collectOnce(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
         const changesets: OutcomeChangeset[] = [];
         const warnings = [...this.warnings];
         for (const snapshot of this.snapshots) {
@@ -146,7 +136,7 @@ export class HostOutcomeCapture {
         };
     }
 
-    collectOutput(store: OutcomeStore): Promise<CollectedOutput> {
+    collectOutput(store: OutcomeSink): Promise<CollectedOutput> {
         return this.output.collect(store);
     }
 

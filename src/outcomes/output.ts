@@ -1,19 +1,17 @@
 import { lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 
-import type { DeclaredOutcome, OutcomeArtifact, OutcomeLink } from './contracts.js';
+import type { CollectedOutput, OutcomeSink } from './collection.js';
+import type { DeclaredOutcome } from './contracts.js';
+import {
+    DeclaredOutput,
+    maximumDeclarationBytes,
+    outcomeDeclarationName,
+    parseDeclarationSource,
+} from './declared.js';
 import { outcomeStorageDirectory } from './directories.js';
-import { inferMediaType, type OutcomeStore } from './store.js';
-import { assertOutcomeRunId, parseDeclaredOutcome } from './validation.js';
-
-const declarationName = 'outcome.json';
-const maximumDeclarationBytes = 1_024 * 1_024;
-
-export interface CollectedOutput {
-    summary?: string;
-    artifacts: OutcomeArtifact[];
-    links: OutcomeLink[];
-}
+import { OutcomeFiles } from './files.js';
+import { assertOutcomeRunId } from './validation.js';
 
 export class OutcomeOutput {
     private constructor(
@@ -39,43 +37,12 @@ export class OutcomeOutput {
         return new OutcomeOutput(directory);
     }
 
-    async collect(store: OutcomeStore): Promise<CollectedOutput> {
+    async collect(store: OutcomeSink): Promise<CollectedOutput> {
         const declaration = await this.declaration();
-        const metadata = new Map(
-            (declaration?.artifacts ?? []).map((artifact) => [artifact.path, artifact])
-        );
-        if (metadata.size !== (declaration?.artifacts?.length ?? 0)) {
-            throw new Error('Declared outcome artifact paths must be unique');
-        }
-        const paths = await walkFiles(this.directory);
-        for (const path of metadata.keys()) {
-            if (!paths.includes(path)) {
-                throw new Error(`Declared outcome artifact does not exist: ${path}`);
-            }
-        }
-        const artifacts: OutcomeArtifact[] = [];
-        for (const [index, path] of paths.entries()) {
-            const declared = metadata.get(path);
-            artifacts.push({
-                id: uniqueId('artifact', declared?.name ?? path, index),
-                name: declared?.name ?? path,
-                path,
-                content: await store.putFile(
-                    join(this.directory, path),
-                    declared?.media_type ?? inferMediaType(path)
-                ),
-                ...(declared?.description ? { description: declared.description } : {}),
-            });
-        }
-        const links = (declaration?.links ?? []).map((link, index) => ({
-            id: uniqueId('link', link.label, index),
-            ...link,
-        }));
-        return {
-            ...(declaration?.summary ? { summary: declaration.summary } : {}),
-            artifacts,
-            links,
-        };
+        const files = new OutcomeFiles(store);
+        return new DeclaredOutput({
+            put: (path, mediaType) => files.put(join(this.directory, path), mediaType),
+        }).assemble({ declaration, paths: await walkFiles(this.directory) });
     }
 
     cleanup(): Promise<void> {
@@ -85,7 +52,7 @@ export class OutcomeOutput {
     }
 
     private async declaration(): Promise<DeclaredOutcome | undefined> {
-        const path = join(this.directory, declarationName);
+        const path = join(this.directory, outcomeDeclarationName);
         const details = await lstat(path).catch(() => undefined);
         if (!details) return undefined;
         if (details.isSymbolicLink() || !details.isFile()) {
@@ -94,15 +61,7 @@ export class OutcomeOutput {
         if (details.size > maximumDeclarationBytes) {
             throw new Error('Outcome declaration exceeds the 1 MiB safety limit');
         }
-        let value: unknown;
-        try {
-            value = JSON.parse(await readFile(path, 'utf8'));
-        } catch (error) {
-            throw new Error(
-                `Outcome declaration is not valid JSON: ${error instanceof Error ? error.message : String(error)}`
-            );
-        }
-        return parseDeclaredOutcome(value);
+        return parseDeclarationSource(await readFile(path, 'utf8'));
     }
 }
 
@@ -115,7 +74,7 @@ async function walkFiles(root: string, prefix = ''): Promise<string[]> {
         left.name.localeCompare(right.name)
     )) {
         const path = prefix ? `${prefix}/${entry.name}` : entry.name;
-        if (path === declarationName) continue;
+        if (path === outcomeDeclarationName) continue;
         if (entry.isSymbolicLink()) {
             throw new Error(`Outcome artifacts cannot be symlinks: ${path}`);
         }
@@ -128,13 +87,4 @@ async function walkFiles(root: string, prefix = ''): Promise<string[]> {
         }
     }
     return paths;
-}
-
-function uniqueId(prefix: string, value: string, index: number): string {
-    const slug = basename(value)
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '_')
-        .replace(/^_+|_+$/g, '')
-        .slice(0, 80);
-    return `${prefix}_${slug || 'output'}_${index + 1}`;
 }

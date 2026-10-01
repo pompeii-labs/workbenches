@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import {
     type OutcomeChangeset,
     OutcomeOutput,
-    type OutcomeStore,
+    type OutcomeSink,
     type RuntimeOutcomeCollection,
 } from '../../outcomes/index.js';
 import { formatOutcomeBytes } from '../../outcomes/presentation.js';
@@ -34,7 +34,7 @@ export class E2BOutcomeCollector {
         this.archive = new E2BArchive(options.rules);
     }
 
-    async collect(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+    async collect(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
         const sandbox = this.options.sandbox;
         const directory = await mkdtemp(join(tmpdir(), 'workbench-e2b-collect-'));
         let transferred = 0;
@@ -165,7 +165,7 @@ export class E2BOutcomeCollector {
         }
     }
 
-    async collectOutput(store: OutcomeStore, transferred = 0, materialized = 0) {
+    async collectOutput(store: OutcomeSink, transferred = 0, materialized = 0) {
         const snapshot = this.options.snapshots.find(
             (candidate) => candidate.binding.kind === 'outcome'
         );

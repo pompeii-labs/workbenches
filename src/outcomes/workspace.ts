@@ -11,8 +11,8 @@ import {
     symlink,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { OutcomeSink } from './collection.js';
 import type {
     OutcomeChangeEntry,
     OutcomeChangeset,
@@ -21,11 +21,15 @@ import type {
     OutcomeWarning,
     OutcomeWorkspace,
 } from './contracts.js';
+import { OutcomeFiles } from './files.js';
 import { GitBaseline } from './git.js';
-import type { OutcomeStore } from './store.js';
-import { validateFilesystemSymlink } from './symlinks.js';
+import { WorkspaceSnapshotLimitError } from './snapshot/limit.js';
+import { SnapshotProtection } from './snapshot/protection.js';
+import { changesetId, snapshotDigestSource } from './snapshot/rules.js';
+import { FilesystemSymlinks } from './symlink/filesystem.js';
 
 const defaultMaximumSnapshotBytes = 512 * 1_024 * 1_024;
+const protection = new SnapshotProtection();
 
 interface SnapshotEntry {
     path: string;
@@ -42,20 +46,6 @@ export interface WorkspaceSnapshotOptions {
     excludedPaths?: string[];
     maximumBytes?: number;
     baseline?: 'copy' | 'git';
-}
-
-export class WorkspaceSnapshotLimitError extends Error {
-    readonly maximumBytes: number;
-    readonly actualBytes: number;
-
-    constructor(root: string, maximumBytes: number, actualBytes: number) {
-        super(
-            `Workspace snapshot exceeds the ${formatBytes(maximumBytes)} safety limit: ${root} is ${formatBytes(actualBytes)}`
-        );
-        this.name = 'WorkspaceSnapshotLimitError';
-        this.maximumBytes = maximumBytes;
-        this.actualBytes = actualBytes;
-    }
 }
 
 export class WorkspaceSnapshot {
@@ -156,7 +146,7 @@ export class WorkspaceSnapshot {
         }
     }
 
-    async collect(store: OutcomeStore): Promise<OutcomeChangeset | undefined> {
+    async collect(store: OutcomeSink): Promise<OutcomeChangeset | undefined> {
         const currentPaths = await selectedPaths(this.root, this.excludedPaths);
         const current = await describeEntries(
             this.root,
@@ -260,7 +250,7 @@ export class WorkspaceSnapshot {
         this.indexedFiles.delete(entry.path);
     }
 
-    private async outcomeState(store: OutcomeStore, entry: SnapshotEntry) {
+    private async outcomeState(store: OutcomeSink, entry: SnapshotEntry) {
         if (entry.type === 'symlink') {
             return {
                 kind: 'symlink' as const,
@@ -271,7 +261,7 @@ export class WorkspaceSnapshot {
         return {
             kind: 'file' as const,
             mode: entry.mode,
-            content: await store.putFile(join(this.root, entry.path)),
+            content: await new OutcomeFiles(store).put(join(this.root, entry.path)),
         };
     }
 
@@ -369,7 +359,7 @@ async function selectedPaths(root: string, excludedPaths: string[]): Promise<str
     const selected: string[] = [];
     for (const value of new TextDecoder().decode(output).split('\0').filter(Boolean)) {
         const path = normalizePath(value);
-        if (excluded(path, excludedPaths) || protectedPath(path)) continue;
+        if (excluded(path, excludedPaths) || protection.isProtected(path)) continue;
         const details = await lstat(join(root, path)).catch(() => undefined);
         if (!details || details.isDirectory()) continue;
         if (details.isFile() || details.isSymbolicLink()) selected.push(path);
@@ -390,7 +380,7 @@ async function walk(
         left.name.localeCompare(right.name)
     )) {
         const path = normalizePath(prefix ? `${prefix}/${entry.name}` : entry.name);
-        if (excluded(path, excludedPaths) || protectedPath(path)) continue;
+        if (excluded(path, excludedPaths) || protection.isProtected(path)) continue;
         if (entry.isDirectory()) {
             paths.push(...(await walk(root, path, excludedPaths)));
         } else if (entry.isFile() || entry.isSymbolicLink()) {
@@ -408,20 +398,16 @@ async function describeEntries(
     gitObjectFormat?: 'sha1' | 'sha256'
 ): Promise<Map<string, SnapshotEntry>> {
     const entries = new Map<string, SnapshotEntry>();
+    const symlinks = new FilesystemSymlinks(root);
     let bytes = 0;
     for (const path of paths) {
         if (excluded(path, unsafePaths)) continue;
         const absolute = join(root, path);
         try {
             // Validate parents before reading a tracked path through a replaced directory.
-            await validateFilesystemSymlink(root, path, '.', []);
+            await symlinks.validate(path, '.', []);
             if ((await lstat(absolute)).isSymbolicLink()) {
-                await validateFilesystemSymlink(
-                    root,
-                    path,
-                    await readlink(absolute),
-                    []
-                );
+                await symlinks.validate(path, await readlink(absolute), []);
             }
         } catch (error) {
             if (
@@ -531,22 +517,9 @@ function sameEntry(
 }
 
 function digestEntries(entries: Map<string, SnapshotEntry>): OutcomeDigest {
-    const hash = createHash('sha256');
-    for (const entry of [...entries.values()].toSorted((left, right) =>
-        left.path.localeCompare(right.path)
-    )) {
-        hash.update(entry.path);
-        hash.update('\0');
-        hash.update(entry.type);
-        hash.update('\0');
-        hash.update(String(entry.mode));
-        hash.update('\0');
-        hash.update(entry.digest ?? entry.target ?? '');
-        hash.update('\0');
-        hash.update(String(entry.size));
-        hash.update('\0');
-    }
-    return `sha256:${hash.digest('hex')}`;
+    return `sha256:${createHash('sha256')
+        .update(snapshotDigestSource(entries.values()))
+        .digest('hex')}`;
 }
 
 async function digestFile(path: string): Promise<OutcomeDigest> {
@@ -590,36 +563,6 @@ async function isBinaryFile(path: string): Promise<boolean> {
     return bytes.includes(0);
 }
 
-function protectedPath(path: string): boolean {
-    const segments = path.split('/');
-    if (
-        segments.some((segment) =>
-            ['.git', '.hg', '.svn', '.ssh', '.aws', '.gnupg', 'node_modules'].includes(
-                segment
-            )
-        )
-    ) {
-        return true;
-    }
-    const name = basename(path).toLowerCase();
-    if (
-        name === '.env' ||
-        (name.startsWith('.env.') && !['.env.example', '.env.sample'].includes(name))
-    ) {
-        return true;
-    }
-    if (
-        ['.npmrc', '.netrc', '.pypirc', 'id_rsa', 'id_ed25519', 'credentials'].includes(
-            name
-        )
-    ) {
-        return true;
-    }
-    return ['.pem', '.key', '.p12', '.pfx', '.kubeconfig'].some((extension) =>
-        name.endsWith(extension)
-    );
-}
-
 function excluded(path: string, roots: Iterable<string>): boolean {
     for (const root of roots)
         if (path === root || path.startsWith(`${root}/`)) return true;
@@ -659,12 +602,6 @@ function normalizePath(path: string): string {
     return path.split(sep).join('/').replace(/^\.\//, '').replace(/\/$/, '');
 }
 
-function changesetId(workspace: OutcomeWorkspace): string {
-    if (workspace.kind === 'primary') return 'change_primary';
-    const normalized = workspace.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-    return `change_${normalized || 'workspace'}`;
-}
-
 function isCloneUnsupported(error: unknown): boolean {
     return (
         error instanceof Error &&
@@ -673,17 +610,4 @@ function isCloneUnsupported(error: unknown): boolean {
             (error as NodeJS.ErrnoException).code ?? ''
         )
     );
-}
-
-function formatBytes(bytes: number): string {
-    if (bytes < 1_024) return `${bytes} B`;
-    const units = ['KiB', 'MiB', 'GiB'];
-    let value = bytes;
-    let unit = 'B';
-    for (const next of units) {
-        value /= 1_024;
-        unit = next;
-        if (value < 1_024) break;
-    }
-    return `${value.toFixed(value < 10 ? 1 : 0)} ${unit}`;
 }

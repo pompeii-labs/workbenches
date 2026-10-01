@@ -15,13 +15,11 @@ import { dirname, join } from 'node:path';
 
 import {
     digestFile,
-    inferMediaType,
     installExclusive,
     referencedContent,
     validExistingBlob,
     verifyBlob,
 } from './content.js';
-
 import type {
     OutcomeApplicationReceipt,
     OutcomeApplicationState,
@@ -32,6 +30,7 @@ import type {
 import { outcomeStorageDirectory } from './directories.js';
 import { OutcomeStorageLease, processIsAlive } from './lease.js';
 import { materializeOutcomeArtifacts } from './materialize.js';
+import { inferMediaType } from './media.js';
 import {
     atomicWriteJson,
     jsonSource,
@@ -51,8 +50,6 @@ const defaultMaximumOutcomeBytes = 512 * 1_024 * 1_024;
 const defaultMaximumContentBytes = 256 * 1_024 * 1_024;
 const defaultMaximumStoreBytes = 5 * 1_024 * 1_024 * 1_024;
 const defaultMaximumMetadataBytes = 16 * 1_024 * 1_024;
-
-export { inferMediaType } from './content.js';
 
 export interface OutcomeStoreOptions {
     maximumOutcomeBytes?: number;
