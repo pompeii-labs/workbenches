@@ -19,6 +19,7 @@ import type {
 } from '../runners/session.js';
 import type { RunHandle } from '../runs/index.js';
 import { SessionStore } from '../sessions/index.js';
+import { selectedRuntime } from '../workbench/runtimes.js';
 import { startupLabel, usageLabel } from './activity.js';
 import { ChatHeader } from './chat-header.js';
 import type { ChatScreenProps } from './chat-types.js';
@@ -531,11 +532,12 @@ export function ChatScreen(props: ChatScreenProps) {
     });
 
     const manifest = props.resolved.workbench.manifest;
+    const runtime = selectedRuntime(props.resolved.workbench).name;
     const transcript = createMemo(() => groupTranscriptItems(state().items));
     const activityStatus = createMemo(() => {
         if (!sessionReady() && !error()) {
             return startupLabel(
-                manifest.runtime,
+                runtime,
                 manifest.runner,
                 state().status,
                 Boolean(props.session)
@@ -566,7 +568,7 @@ export function ChatScreen(props: ChatScreenProps) {
                       open: showRepository,
                       workspace: () =>
                           repository.state().status?.workspace ??
-                          (props.resolved.workbench.manifest.runtime === 'local'
+                          (runtime === 'local'
                               ? 'Preparing managed checkout'
                               : '/workspace'),
                   },
@@ -596,6 +598,7 @@ export function ChatScreen(props: ChatScreenProps) {
                 alias={props.alias}
                 sessionName={sessionName()}
                 manifest={manifest}
+                runtime={runtime}
             />
 
             <RepositoryStrip controller={repository} />

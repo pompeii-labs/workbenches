@@ -1,4 +1,5 @@
 import type { ResolvedWorkbenchReference } from '../workbench/resolver.js';
+import { withRuntime } from '../workbench/runtimes.js';
 import { Workbench } from '../workbench/workbench.js';
 import { SessionLifecycle } from './lifecycle.js';
 import type { StoredSession } from './store.js';
@@ -23,7 +24,10 @@ export class SessionResolver {
                 `Session ${session.id} never reached a resumable runner state`
             );
         }
-        const workbench = await Workbench.load(session.workbench_path);
+        const workbench = withRuntime(
+            await Workbench.load(session.workbench_path),
+            session.runtime
+        );
         if (
             workbench.manifest.name !== session.workbench ||
             workbench.manifest.version !== session.workbench_version ||

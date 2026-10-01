@@ -15,11 +15,26 @@ export {
     WorkbenchPreflight,
 } from './preflight.js';
 export {
+    assertRequirements,
+    type RequirementsCheckOptions,
+    type RequirementsHost,
+    RequirementsPreflight,
+    type RequirementsReport,
+} from './requirements.js';
+export {
     type ResolvedWorkbenchReference,
     WorkbenchResolver,
     type WorkbenchResolverOptions,
 } from './resolver.js';
 export { RunnerConfiguration } from './runner-configuration.js';
+export {
+    declaredRuntimeNames,
+    declaredRuntimes,
+    requirementsOf,
+    runtimeProviderNames,
+    selectedRuntime,
+    withRuntime,
+} from './runtimes.js';
 export {
     type LocalWorkbenchSource,
     type WorkbenchReference,

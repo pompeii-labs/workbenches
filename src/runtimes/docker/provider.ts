@@ -3,6 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { HostOutcomeCapture } from '../../outcomes/index.js';
+import {
+    assertDaemonCapacity,
+    RequirementsPreflight,
+} from '../../workbench/requirements.js';
+import { requirementsOf, selectedRuntime } from '../../workbench/runtimes.js';
 import type {
     PreparedRuntime,
     RuntimePrepareRequest,
@@ -33,16 +38,22 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                 'Docker CLI is unavailable on the host'
             );
         }
-        if (!request.workbench.manifest.image) {
+        const runtime = selectedRuntime(request.workbench);
+        if (!runtime.image) {
             throw new RuntimeError(
                 this.name,
                 'prepare',
                 'Docker runtime requires an image or local image build'
             );
         }
+        try {
+            new RequirementsPreflight(this.dependencies.host).check(request.workbench);
+        } catch (error) {
+            throw RuntimeError.from(this.name, 'prepare', error);
+        }
         const needsHostDocker =
             (request.purpose ?? 'run') === 'run' &&
-            request.workbench.manifest.docker?.engine !== undefined;
+            runtime.docker?.engine !== undefined;
         if (needsHostDocker && !request.authorizations?.hostDocker) {
             throw new RuntimeError(
                 this.name,
@@ -60,6 +71,19 @@ export class DockerRuntimeProvider implements RuntimeProvider {
             [executable, 'version', '--format', '{{.Server.Version}}'],
             'Docker daemon is unavailable'
         );
+        // cpu and memory become container limits for the run, never for an
+        // image build, so only a run checks that the daemon can satisfy them.
+        const requirements = requirementsOf(request.workbench.manifest);
+        if (
+            request.purpose !== 'build' &&
+            (requirements.cpu !== undefined || requirements.memory_gb !== undefined)
+        ) {
+            try {
+                assertDaemonCapacity(request.workbench, await client.daemonCapacity());
+            } catch (error) {
+                throw RuntimeError.from(this.name, 'prepare', error);
+            }
+        }
         const hostSocket = needsHostDocker
             ? await client.resolveHostSocket()
             : undefined;
@@ -95,6 +119,7 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                 preparation: image.preparation,
                 stateDirectory: directory,
                 ...(outcome ? { outcome } : {}),
+                ...(this.dependencies.host ? { host: this.dependencies.host } : {}),
                 cleanupPreparation: async () => {
                     await Promise.all([
                         image.cleanup(),

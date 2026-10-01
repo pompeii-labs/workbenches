@@ -1,7 +1,10 @@
 import { modelLabel } from '../../models/index.js';
 import { RunnerRegistry } from '../../runners/registry.js';
 import { SessionStore, type StoredSession } from '../../sessions/index.js';
-import type { ResolvedWorkbenchReference } from '../../workbench/index.js';
+import {
+    type ResolvedWorkbenchReference,
+    selectedRuntime,
+} from '../../workbench/index.js';
 import type { DialogContextValue } from '../dialog/index.js';
 import { InfoDialog } from '../dialog/info.js';
 import { SelectDialog } from '../dialog/select.js';
@@ -71,6 +74,7 @@ export class SessionCommands {
 
     #definitions(): TuiCommand[] {
         const manifest = this.options.resolved.workbench.manifest;
+        const runtime = selectedRuntime(this.options.resolved.workbench).name;
         const declaration = this.#runner.session(manifest.runner).declaration;
         return [
             this.#command(
@@ -94,7 +98,7 @@ export class SessionCommands {
                                 { label: 'Version', value: manifest.version },
                                 { label: 'Runner', value: manifest.runner },
                                 { label: 'Model', value: modelLabel(manifest.model) },
-                                { label: 'Runtime', value: manifest.runtime },
+                                { label: 'Runtime', value: runtime },
                                 {
                                     label: 'Package',
                                     value: this.options.resolved.workbench
@@ -121,7 +125,7 @@ export class SessionCommands {
                         <InfoDialog
                             title="Runtime"
                             sections={[
-                                { label: 'Type', value: manifest.runtime },
+                                { label: 'Type', value: runtime },
                                 {
                                     label: 'Workspace',
                                     value:

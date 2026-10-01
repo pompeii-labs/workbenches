@@ -13,6 +13,7 @@ export type {
     RuntimeServiceBinding,
     RuntimeSessionOptions,
 } from './contracts.js';
+export { DaytonaRuntimeProvider } from './daytona.js';
 export {
     type DockerCommandResult,
     DockerManagedContainers,

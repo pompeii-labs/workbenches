@@ -1,11 +1,12 @@
 import type {
-    WorkbenchDockerConfiguration,
     WorkbenchEnvRequirement,
     WorkbenchManifest,
     WorkbenchMcp,
     WorkbenchModelPolicy,
     WorkbenchWorkspaceRequirement,
 } from '../types.js';
+import { WorkbenchRuntimeParser } from './manifest-runtimes.js';
+import { ManifestValues } from './manifest-values.js';
 
 const manifestKeys = new Set([
     'spec',
@@ -20,23 +21,23 @@ const manifestKeys = new Set([
     'mcps',
     'env',
     'workspaces',
-    'runtime',
-    'image',
-    'docker',
     'runner_config',
 ]);
+const specZeroKeys = new Set([...manifestKeys, 'runtime', 'image', 'docker']);
+const specOneKeys = new Set([...manifestKeys, 'requirements', 'runtimes']);
 
-export class WorkbenchManifestParser {
-    readonly supportedSpecs = [0] as const;
+export class WorkbenchManifestParser extends ManifestValues {
+    readonly supportedSpecs = [0, 1] as const;
+    private readonly runtimeParser = new WorkbenchRuntimeParser();
 
     parse(value: unknown): WorkbenchManifest {
         const body = this.record(value, 'Workbench manifest');
-        if (body.spec !== 0) {
-            throw new Error(
-                `Unsupported Workbench spec: ${String(body.spec)}. Supported specs: ${this.supportedSpecs.join(', ')}`
-            );
+        if (body.spec === 0 || body.spec === 1) {
+            return this.parseManifest(body, body.spec);
         }
-        return this.parseV0(body);
+        throw new Error(
+            `Manifest spec ${String(body.spec)} is not supported by this engine; upgrade wb`
+        );
     }
 
     parseSkill(
@@ -63,9 +64,23 @@ export class WorkbenchManifestParser {
         return { name, description };
     }
 
-    private parseV0(body: Record<string, unknown>): WorkbenchManifest {
+    private parseManifest(
+        body: Record<string, unknown>,
+        spec: 0 | 1
+    ): WorkbenchManifest {
+        if (spec === 1) {
+            const legacy = ['runtime', 'image', 'docker'].filter(
+                (key) => body[key] !== undefined
+            );
+            if (legacy.length > 0) {
+                throw new Error(
+                    `Spec 1 manifests declare runtimes, not ${legacy.join(', ')}. Move them under runtimes; runtime, image, and docker are spec 0 fields.`
+                );
+            }
+        }
+        const allowed = spec === 1 ? specOneKeys : specZeroKeys;
         for (const key of Object.keys(body)) {
-            if (!manifestKeys.has(key)) {
+            if (!allowed.has(key)) {
                 throw new Error(`Unknown manifest field: ${key}`);
             }
         }
@@ -84,14 +99,11 @@ export class WorkbenchManifestParser {
                 this.workspaceRequirement(requirement, name),
             ])
         );
-        const runtime = this.text(body.runtime, 'runtime');
-        const docker = this.docker(body.docker);
-        if (docker?.engine && runtime !== 'docker') {
-            throw new Error('docker.engine requires runtime: docker');
-        }
+        const runtimes = this.runtimeParser.runtimes(body, spec);
+        const requirements = this.runtimeParser.requirements(body.requirements);
 
         return {
-            spec: 0,
+            spec,
             version: this.semanticVersion(body.version),
             name: this.text(body.name, 'name'),
             ...(body.description === undefined
@@ -105,9 +117,9 @@ export class WorkbenchManifestParser {
             mcps: this.mcps(body.mcps),
             env,
             ...(body.workspaces === undefined ? {} : { workspaces }),
-            runtime,
-            ...(body.image === undefined ? {} : { image: this.image(body.image) }),
-            ...(docker ? { docker } : {}),
+            requirements,
+            runtimes: runtimes.declared,
+            ...runtimes.singular,
             ...(body.runner_config === undefined
                 ? {}
                 : {
@@ -160,43 +172,6 @@ export class WorkbenchManifestParser {
             };
         });
         return { id, routes };
-    }
-
-    private docker(value: unknown): WorkbenchDockerConfiguration | undefined {
-        if (value === undefined) return undefined;
-        const body = this.record(value, 'docker');
-        for (const key of Object.keys(body)) {
-            if (key !== 'engine') {
-                throw new Error(`Unknown docker field: ${key}`);
-            }
-        }
-        if (body.engine === undefined) return {};
-        const engine = this.record(body.engine, 'docker.engine');
-        for (const key of Object.keys(engine)) {
-            if (key !== 'mode') {
-                throw new Error(`Unknown docker.engine field: ${key}`);
-            }
-        }
-        if (engine.mode !== 'host') {
-            throw new Error('docker.engine.mode must be host');
-        }
-        return { engine: { mode: 'host' } };
-    }
-
-    private image(value: unknown) {
-        if (typeof value === 'string') return this.text(value, 'image');
-        const body = this.record(value, 'image');
-        for (const key of Object.keys(body)) {
-            if (!['build', 'context'].includes(key)) {
-                throw new Error(`Unknown image field: ${key}`);
-            }
-        }
-        return {
-            build: this.text(body.build, 'image.build'),
-            ...(body.context === undefined
-                ? {}
-                : { context: this.text(body.context, 'image.context') }),
-        };
     }
 
     private mcps(value: unknown): WorkbenchMcp[] {
@@ -309,25 +284,6 @@ export class WorkbenchManifestParser {
             throw new Error(`${field} must be an array of strings`);
         }
         return value.map((entry) => entry.trim()).filter(Boolean);
-    }
-
-    private optionalRecord(value: unknown, field: string): Record<string, unknown> {
-        if (value === undefined) return {};
-        return this.record(value, field);
-    }
-
-    private record(value: unknown, field: string): Record<string, unknown> {
-        if (!value || typeof value !== 'object' || Array.isArray(value)) {
-            throw new Error(`${field} must be an object`);
-        }
-        return value as Record<string, unknown>;
-    }
-
-    private text(value: unknown, field: string): string {
-        if (typeof value !== 'string' || !value.trim()) {
-            throw new Error(`${field} must be a non-empty string`);
-        }
-        return value.trim();
     }
 
     private environmentName(value: string): string {

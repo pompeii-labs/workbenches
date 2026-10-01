@@ -6,10 +6,12 @@ import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
 import type { ResolvedWorkbench } from '../types.js';
 import {
+    selectedRuntime,
     WorkbenchEnvironment,
     WorkbenchResolver,
     WorkbenchSource,
     WorkbenchWorkspaces,
+    withRuntime,
 } from '../workbench/index.js';
 import { CliPresenter } from './presenter.js';
 
@@ -46,6 +48,17 @@ export const smokeCommand = defineCommand({
                 'Authorize a declared host Docker engine binding for this smoke',
             default: false,
         },
+        runtime: {
+            type: 'string',
+            valueHint: 'name',
+            description:
+                'Declared runtime to check (defaults to the first declared runtime)',
+        },
+        'allow-unchecked-gpu': {
+            type: 'boolean',
+            description: 'Accept a GPU requirement on a runtime that cannot check it',
+            default: false,
+        },
     },
     async run({ args, rawArgs }) {
         const workbenchEnvironment = new WorkbenchEnvironment();
@@ -62,25 +75,21 @@ export const smokeCommand = defineCommand({
             const resolved = await new WorkbenchResolver().resolve(args.source, {
                 home,
             });
+            const workbench = withRuntime(resolved.workbench, args.runtime);
             const workspaces = await workbenchWorkspaces.bind({
-                workbench: resolved.workbench,
+                workbench,
                 rawArgs,
             });
-            validateHostDockerAuthorization(
-                resolved.workbench,
-                args['allow-host-docker']
-            );
+            validateHostDockerAuthorization(workbench, args['allow-host-docker']);
             await printResult(
-                resolved.workbench.manifest.name,
+                workbench.manifest.name,
                 new RuntimeSmoke({
-                    workbench: resolved.workbench,
+                    workbench,
                     workspaceDirectory: resolved.workspaceDirectory,
-                    environment: workbenchEnvironment.bind(
-                        resolved.workbench,
-                        overrides
-                    ),
+                    environment: workbenchEnvironment.bind(workbench, overrides),
                     workspaces,
                     allowHostDocker: args['allow-host-docker'],
+                    allowUncheckedGpu: args['allow-unchecked-gpu'],
                     reference: args.source,
                     home,
                 }).check()
@@ -95,7 +104,8 @@ export const smokeCommand = defineCommand({
                 ? [await source.select(local.directory, reference.selector)]
                 : await source.discover(local.directory);
             if (selected.length === 0) throw new Error('No matching Workbenches found');
-            for (const workbench of selected) {
+            for (const candidate of selected) {
+                const workbench = withRuntime(candidate, args.runtime);
                 const workspaces = await workbenchWorkspaces.bind({
                     workbench,
                     rawArgs,
@@ -108,6 +118,7 @@ export const smokeCommand = defineCommand({
                         environment: workbenchEnvironment.bind(workbench, overrides),
                         workspaces,
                         allowHostDocker: args['allow-host-docker'],
+                        allowUncheckedGpu: args['allow-unchecked-gpu'],
                         reference: args.source,
                         home,
                     }).check()
@@ -119,7 +130,7 @@ export const smokeCommand = defineCommand({
         const workbenches = await github.fetchAll(reference.source, reference.selector);
         if (workbenches.length === 0) throw new Error('No matching Workbenches found');
         for (const workbench of workbenches) {
-            const resolved = github.resolve(workbench);
+            const resolved = withRuntime(github.resolve(workbench), args.runtime);
             const workspaces = await workbenchWorkspaces.bind({
                 workbench: resolved,
                 rawArgs,
@@ -132,6 +143,7 @@ export const smokeCommand = defineCommand({
                     environment: workbenchEnvironment.bind(resolved, overrides),
                     workspaces,
                     allowHostDocker: args['allow-host-docker'],
+                    allowUncheckedGpu: args['allow-unchecked-gpu'],
                     reference: args.source,
                     home,
                 }).check()
@@ -153,6 +165,13 @@ async function printResult(name: string, pending: Promise<WorkbenchSmokeResult>)
     const dockerEngine = result.dockerEngine
         ? `; docker-engine: ${result.dockerEngine}`
         : '';
+    const requirements = [
+        ...(result.requirements?.applied ?? []).map((entry) => `applied ${entry}`),
+        ...(result.requirements?.unchecked ?? []).map((entry) => `unchecked: ${entry}`),
+    ];
+    const unchecked = requirements.length
+        ? `; requirements: ${requirements.join(', ')}`
+        : '';
     const authentication = result.authentication.ready
         ? `; auth: ready (${result.authentication.configuration?.provider ?? 'environment'})`
         : `; auth: required (${result.authentication.connectCommand})`;
@@ -162,7 +181,7 @@ async function printResult(name: string, pending: Promise<WorkbenchSmokeResult>)
             status,
             name,
             `runner=${result.runner.path}`,
-            `tools=${result.tools.map((tool) => tool.path).join(',') || '-'}${authentication}${workspaces}${dockerEngine}${disabled}`,
+            `tools=${result.tools.map((tool) => tool.path).join(',') || '-'}${authentication}${workspaces}${dockerEngine}${unchecked}${disabled}`,
         ],
         title: result.authentication.ready
             ? `${name} is ready`
@@ -175,6 +194,7 @@ async function printResult(name: string, pending: Promise<WorkbenchSmokeResult>)
             result.authentication.ready
                 ? `auth ${result.authentication.configuration?.provider ?? 'environment'}`
                 : result.authentication.connectCommand,
+            ...requirements,
         ],
         tone: result.authentication.ready ? 'success' : 'warning',
     });
@@ -185,7 +205,7 @@ function validateHostDockerAuthorization(
     workbench: ResolvedWorkbench,
     authorized: boolean
 ): void {
-    if (authorized && !workbench.manifest.docker?.engine) {
+    if (authorized && !selectedRuntime(workbench).docker?.engine) {
         throw new Error(
             '--allow-host-docker requires a Workbench that declares docker.engine'
         );

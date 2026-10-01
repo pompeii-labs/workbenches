@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type { ResolvedWorkbench } from '../../types.js';
+import { selectedRuntime } from '../../workbench/runtimes.js';
 
 export class DockerBuildContext {
     private constructor(
@@ -27,7 +28,7 @@ export class DockerBuildContext {
     ) {}
 
     static async stage(workbench: ResolvedWorkbench): Promise<DockerBuildContext> {
-        const image = workbench.manifest.image;
+        const image = selectedRuntime(workbench).image;
         if (!image || typeof image === 'string') {
             throw new Error('Workbench does not declare a local image build');
         }

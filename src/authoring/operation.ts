@@ -27,12 +27,17 @@ export interface AuthoringFinishOptions {
     workspaces?: WorkbenchWorkspaceBinding[];
     workspaceDirectory?: string;
     allowHostDocker?: boolean;
+    /** Runtime the candidate is verified on. Defaults to its first declared runtime. */
+    runtime?: string;
+    allowUncheckedGpu?: boolean;
 }
 
 export interface AuthoringSmokeOptions {
     environment: Record<string, string | undefined>;
     workspaces: WorkbenchWorkspaceBinding[];
     allowHostDocker: boolean;
+    runtime?: string;
+    allowUncheckedGpu?: boolean;
 }
 
 export interface AuthoringOperationResult {
@@ -424,6 +429,8 @@ export class AuthoringOperation {
             environment,
             workspaces,
             allowHostDocker: options.allowHostDocker ?? false,
+            ...(options.runtime ? { runtime: options.runtime } : {}),
+            ...(options.allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
         };
     }
 
@@ -437,6 +444,8 @@ export class AuthoringOperation {
             environment: options.environment,
             workspaces: options.workspaces,
             allowHostDocker: options.allowHostDocker,
+            ...(options.runtime ? { runtime: options.runtime } : {}),
+            ...(options.allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
             reference: `${this.record.repository}#${workbench.manifest.name}`,
             home: this.home,
         }).check();

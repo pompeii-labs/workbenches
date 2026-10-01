@@ -7,10 +7,13 @@ import { RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import { assertWorkbenchTuiSupported, launchWorkbenchTui } from '../tui.js';
 import {
+    assertRequirements,
+    selectedRuntime,
     WorkbenchEnvironment,
     WorkbenchPreflight,
     WorkbenchResolver,
     WorkbenchWorkspaces,
+    withRuntime,
 } from '../workbench/index.js';
 import { CliInput } from './input.js';
 import { CliPresenter } from './presenter.js';
@@ -111,6 +114,18 @@ export const runCommand = defineCommand({
             type: 'string',
             description: 'Use an authenticated provider connection for this run',
         },
+        runtime: {
+            type: 'string',
+            valueHint: 'name',
+            description:
+                'Declared runtime to run on (defaults to the first declared runtime)',
+        },
+        'allow-unchecked-gpu': {
+            type: 'boolean',
+            description:
+                'Run a Workbench with a GPU requirement on a runtime that cannot check it',
+            default: false,
+        },
     },
     async run({ args, rawArgs }) {
         rejectUnknownRunOptions(rawArgs);
@@ -161,12 +176,13 @@ export const runCommand = defineCommand({
                 ...(args.dir ? { workspaceDirectory: args.dir } : {}),
             });
             if (repository) resolved.repository = repository;
+            selectRuntime(resolved, args);
             const workspaces = await workbenchWorkspaces.bind({
                 workbench: resolved.workbench,
                 rawArgs,
             });
             validateHostDockerAuthorization(
-                resolved.workbench.manifest.docker?.engine !== undefined,
+                selectedRuntime(resolved.workbench).docker?.engine !== undefined,
                 args['allow-host-docker']
             );
             const environment = {
@@ -174,7 +190,7 @@ export const runCommand = defineCommand({
                 ...workbenchEnvironment.bind(resolved.workbench, overrides),
                 ...workbenchWorkspaces.environment(workspaces),
             };
-            if (resolved.workbench.manifest.runtime === 'local') {
+            if (selectedRuntime(resolved.workbench).name === 'local') {
                 new WorkbenchPreflight({ environment }).check(resolved.workbench);
             }
             await launchWorkbenchTui({
@@ -186,6 +202,7 @@ export const runCommand = defineCommand({
                 environment,
                 workspaces,
                 allowHostDocker: args['allow-host-docker'],
+                ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
             });
             return;
         }
@@ -199,12 +216,13 @@ export const runCommand = defineCommand({
         });
         if (repository) resolved.repository = repository;
         try {
+            selectRuntime(resolved, args);
             const workspaces = await workbenchWorkspaces.bind({
                 workbench: resolved.workbench,
                 rawArgs,
             });
             validateHostDockerAuthorization(
-                resolved.workbench.manifest.docker?.engine !== undefined,
+                selectedRuntime(resolved.workbench).docker?.engine !== undefined,
                 args['allow-host-docker']
             );
             const environment = {
@@ -221,8 +239,12 @@ export const runCommand = defineCommand({
                         workspaceDirectory: resolved.workspaceDirectory,
                         task,
                         dryRun: true,
+                        runtime: selectedRuntime(resolved.workbench).name,
                         workspaces,
                         allowHostDocker: args['allow-host-docker'],
+                        ...(args['allow-unchecked-gpu']
+                            ? { allowUncheckedGpu: true }
+                            : {}),
                         reference: args.workbench,
                         home,
                         ...(args.connection ? { connection: args.connection } : {}),
@@ -255,9 +277,10 @@ export const runCommand = defineCommand({
             if (args.detach) {
                 // E2B preparation creates a billable sandbox. The dispatched
                 // worker performs the same preflight before startup completes.
-                if (!repository && resolved.workbench.manifest.runtime !== 'e2b') {
+                if (!repository && selectedRuntime(resolved.workbench).name !== 'e2b') {
                     const smoke = await new RuntimeSmoke({
                         workbench: resolved.workbench,
+                        allowUncheckedGpu: args['allow-unchecked-gpu'],
                         workspaceDirectory: resolved.workspaceDirectory,
                         environment,
                         workspaces,
@@ -279,6 +302,7 @@ export const runCommand = defineCommand({
                     reference: args.workbench,
                     workspaces,
                     allowHostDocker: args['allow-host-docker'],
+                    ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
                     ...(args.connection ? { connection: args.connection } : {}),
                 });
                 await dispatcher.dispatch({
@@ -307,6 +331,7 @@ export const runCommand = defineCommand({
                 reference: args.workbench,
                 workspaces,
                 allowHostDocker: args['allow-host-docker'],
+                ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
                 ...(args.connection ? { connection: args.connection } : {}),
             });
             const renderer = createEventRenderer({
@@ -365,6 +390,8 @@ const runOptions = new Set([
     '--workspace',
     '--allow-host-docker',
     '--connection',
+    '--runtime',
+    '--allow-unchecked-gpu',
 ]);
 
 function rejectUnknownRunOptions(rawArgs: string[]): void {
@@ -376,6 +403,17 @@ function rejectUnknownRunOptions(rawArgs: string[]): void {
             throw new Error(`Unknown run option: ${name ?? argument}`);
         }
     }
+}
+
+/** Binds the requested runtime and refuses requirements it cannot satisfy. */
+function selectRuntime(
+    resolved: Awaited<ReturnType<WorkbenchResolver['resolve']>>,
+    args: { runtime?: string | undefined; 'allow-unchecked-gpu': boolean }
+): void {
+    resolved.workbench = withRuntime(resolved.workbench, args.runtime);
+    assertRequirements(resolved.workbench, {
+        ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
+    });
 }
 
 function validateHostDockerAuthorization(declared: boolean, authorized: boolean): void {
@@ -401,7 +439,7 @@ function renderDryRun(
         title: `Dry run ready for ${resolved.workbench.manifest.name}`,
         details: [
             resolved.workbench.manifest.runner,
-            resolved.workbench.manifest.runtime,
+            selectedRuntime(resolved.workbench).name,
         ],
         tone: 'info',
     });

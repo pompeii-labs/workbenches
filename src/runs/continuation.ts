@@ -34,6 +34,7 @@ export interface OpenInteractiveRunOptions {
     environment: Record<string, string | undefined>;
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
+    allowUncheckedGpu?: boolean;
     session?: StoredSession;
     connection?: string;
 }
@@ -182,6 +183,9 @@ export class RunContinuation {
             workspaces: options.workspaces ?? options.session?.workspaces ?? [],
             ...(options.allowHostDocker !== undefined
                 ? { allowHostDocker: options.allowHostDocker }
+                : {}),
+            ...(options.allowUncheckedGpu !== undefined
+                ? { allowUncheckedGpu: options.allowUncheckedGpu }
                 : {}),
             ...(options.connection ? { connection: options.connection } : {}),
             ...(options.session ? { session: options.session } : {}),

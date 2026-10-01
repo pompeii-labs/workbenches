@@ -33,6 +33,8 @@ export interface StoredSession {
     repository?: RepositoryBinding;
     workspaces: WorkbenchWorkspaceBinding[];
     registry?: CatalogRegistryReference;
+    /** The original run accepted a GPU requirement the runtime cannot verify. */
+    allow_unchecked_gpu?: boolean;
     native_session_id?: string;
     latest_run_id: string;
     created_at: string;
@@ -118,6 +120,8 @@ export class SessionStore {
                     !/^sha256:[0-9a-f]{64}$/.test(value.workbench_digest))) ||
             typeof value.workspace !== 'string' ||
             !Array.isArray(value.workspaces) ||
+            (value.allow_unchecked_gpu !== undefined &&
+                typeof value.allow_unchecked_gpu !== 'boolean') ||
             (value.native_session_id !== undefined &&
                 typeof value.native_session_id !== 'string') ||
             typeof value.latest_run_id !== 'string' ||

@@ -10,11 +10,13 @@ execution requirements without turning the package into an agent framework.
 
 ## Load the standard
 
-Read [references/spec.md](references/spec.md) before designing or reviewing a
-package. Consult
-[references/workbench.schema.json](references/workbench.schema.json) when exact
-fields or constraints matter. These files are packaged copies of the normative
-draft-0 sources so saved and remote Workbenches remain self-contained.
+Author every package as `spec: 1`. Read the "Spec 1" section of
+[references/spec.md](references/spec.md) before designing or reviewing a
+package; the sections above it describe the older frozen spec 0 and do not apply
+to packages you write. Consult
+[references/workbench.schema.json](references/workbench.schema.json), the spec 1
+schema, when exact fields or constraints matter. These files are packaged copies
+of the normative sources so saved and remote Workbenches remain self-contained.
 
 ## Inspect before designing
 
@@ -85,8 +87,12 @@ Then refine the generated files.
   variables from headers as `${NAME}`.
 - Mark an environment binding optional only when the Workbench remains useful
   without it. An MCP depending on an unset optional binding is disabled.
-- Select `runtime: local` only when host execution is intentional. Use an image
-  only with a runtime provider that supports it.
+- Declare `runtimes` as a map of the providers the Workbench supports, first
+  entry as the default. Declare `local: {}` only when host execution is
+  intentional. Give `docker` and `e2b` an `image`. Never write `runtime`, a
+  top-level `image`, or a top-level `docker`; spec 1 rejects them.
+- Declare `requirements` (`os`, `arch`, `cpu`, `memory_gb`, `disk_gb`, `gpu`)
+  only for constraints the work truly depends on.
 
 ### Instructions
 
@@ -132,8 +138,9 @@ registry, uploads missing blobs in bounded chunks, and publishes the original
 OCI manifest. The resulting manifest reference is:
 
 ```yaml
-runtime: docker
-image: images.workbenches.dev/<publisher>/<image-name>:<version>
+runtimes:
+  docker:
+    image: images.workbenches.dev/<publisher>/<image-name>:<version>
 ```
 
 Use `wb image login` when a standard OCI client needs explicit registry

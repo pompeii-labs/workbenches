@@ -1,4 +1,5 @@
 import type { ResolvedWorkbench } from '../types.js';
+import { selectedRuntime } from '../workbench/runtimes.js';
 
 export function runnerSetupError(error: unknown, workbench: ResolvedWorkbench): Error {
     const message = error instanceof Error ? error.message : String(error);
@@ -8,7 +9,7 @@ export function runnerSetupError(error: unknown, workbench: ResolvedWorkbench): 
     ) {
         return error instanceof Error ? error : new Error(message);
     }
-    if (workbench.manifest.runtime === 'local') {
+    if (selectedRuntime(workbench).name === 'local') {
         return new Error(
             'Pi is required for this Workbench but is not installed. Install it with: npm install -g @earendil-works/pi-coding-agent',
             { cause: error }

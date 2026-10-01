@@ -61,8 +61,29 @@ that none cross that boundary. Unknown native events become a minimal
 
 ## Runtime provider contract
 
-The engine resolves the manifest before selecting the provider named by
-`runtime`. Every provider implements the same lifecycle:
+The engine resolves the manifest before selecting a runtime. A spec 1 manifest
+declares its supported runtimes in `runtimes`. A spec 0 manifest declares one
+`runtime`, which the engine turns into a one-entry map internally. The caller can name one with `--runtime <name>`;
+otherwise the first declared runtime is used, and naming an undeclared runtime
+fails before any preparation. The selected name is recorded with the run and its
+session, so a detached worker and a resumed session prepare the same runtime.
+`daytona` is a reserved provider name: its provider is registered and fails
+`prepare` with "The daytona runtime is not available in this engine yet".
+
+The `ResolvedWorkbench` a provider receives carries the selection. Providers read
+the selected runtime's configuration (`image`, `docker`, `class`) and the
+Workbench `requirements` from it, never a top-level manifest field.
+
+Before `prepare`, the engine checks the requirements against the selected
+runtime. Local compares `os`, `arch`, `cpu`, and `memory_gb` with the host.
+Docker requires `linux` and the host architecture, and applies `cpu` and
+`memory_gb` as `--cpus` and `--memory` limits on every container. E2B requires
+`linux` and reports `arch`, `cpu`, `memory_gb`, and `disk_gb` as unchecked. A
+`gpu: true` requirement is refused on local unless the caller passes
+`--allow-unchecked-gpu`, and always refused on Docker and E2B. Daytona checks its
+class against `os`. What a provider applies or could not check is returned in
+`PreflightResult.requirements` as `checked`, `applied`, and `unchecked` lists.
+Every provider implements the same lifecycle:
 
 ```ts
 interface RuntimeProvider {
@@ -777,6 +798,8 @@ or any future remote runtime, checks run inside the provisioned environment.
 
 Preflight verifies at least:
 
+- The selected runtime satisfies the Workbench requirements, and any it cannot
+  verify are reported as unchecked.
 - The selected runner is installed.
 - Every declared CLI tool resolves inside the runtime.
 - Required environment bindings exist.

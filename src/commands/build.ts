@@ -1,7 +1,7 @@
 import { defineCommand } from 'citty';
 
 import { type PreparedRuntime, RuntimeRegistry } from '../runtimes/index.js';
-import { WorkbenchResolver } from '../workbench/index.js';
+import { selectedRuntime, WorkbenchResolver, withRuntime } from '../workbench/index.js';
 import { CliPresenter } from './presenter.js';
 
 export const buildCommand = defineCommand({
@@ -19,6 +19,12 @@ export const buildCommand = defineCommand({
             type: 'string',
             description: 'Workspace directory (defaults to the current directory)',
         },
+        runtime: {
+            type: 'string',
+            valueHint: 'name',
+            description:
+                'Declared runtime to prepare (defaults to the first declared runtime)',
+        },
         json: {
             type: 'boolean',
             description: 'Emit preparation metadata as JSON',
@@ -30,12 +36,13 @@ export const buildCommand = defineCommand({
         const resolved = await new WorkbenchResolver().resolve(args.workbench, {
             ...(args.dir ? { workspaceDirectory: args.dir } : {}),
         });
-        const workbench = resolved.workbench;
         let runtime: PreparedRuntime | undefined;
         try {
-            if (!['docker', 'e2b'].includes(workbench.manifest.runtime)) {
+            const workbench = withRuntime(resolved.workbench, args.runtime);
+            const runtimeName = selectedRuntime(workbench).name;
+            if (!['docker', 'e2b'].includes(runtimeName)) {
                 throw new Error(
-                    `wb build only applies to image-backed Workbenches. ${workbench.manifest.name} uses the ${workbench.manifest.runtime} runtime.`
+                    `wb build only applies to image-backed Workbenches. ${workbench.manifest.name} uses the ${runtimeName} runtime.`
                 );
             }
             if (!args.json) {
@@ -46,7 +53,7 @@ export const buildCommand = defineCommand({
                 );
             }
             runtime = await RuntimeRegistry.standard()
-                .resolve(workbench.manifest.runtime)
+                .resolve(runtimeName)
                 .prepare({
                     workbench,
                     workspaceDirectory: resolved.workspaceDirectory,

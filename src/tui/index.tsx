@@ -44,6 +44,7 @@ export async function renderWorkbenchTui(
         environment?: Record<string, string | undefined>;
         workspaces?: WorkbenchWorkspaceBinding[];
         allowHostDocker?: boolean;
+        allowUncheckedGpu?: boolean;
     } = {}
 ): Promise<WorkbenchTuiResult> {
     const home = workbenchHome();
@@ -146,6 +147,9 @@ export async function renderWorkbenchTui(
                                     allowHostDocker: creator
                                         ? false
                                         : (options.allowHostDocker ?? false),
+                                    ...(!creator && options.allowUncheckedGpu
+                                        ? { allowUncheckedGpu: true }
+                                        : {}),
                                     ...(run.connection
                                         ? { connection: run.connection }
                                         : {}),

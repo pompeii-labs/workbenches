@@ -107,6 +107,26 @@ export class DockerClient {
         }
     }
 
+    /** The CPUs and memory the daemon can give containers. */
+    async daemonCapacity(): Promise<{ cpus: number; memoryBytes: number }> {
+        const result = await this.require(
+            [this.executable, 'info', '--format', '{{.NCPU}} {{.MemTotal}}'],
+            'Docker daemon capacity is unavailable'
+        );
+        const [cpus, memoryBytes] = result.stdout.trim().split(/\s+/).map(Number);
+        if (
+            cpus === undefined ||
+            memoryBytes === undefined ||
+            !Number.isFinite(cpus) ||
+            !Number.isFinite(memoryBytes)
+        ) {
+            throw new Error(
+                `Docker returned invalid daemon capacity: ${result.stdout.trim()}`
+            );
+        }
+        return { cpus, memoryBytes };
+    }
+
     immutableReference(reference: string, image: DockerImageInspect): string {
         if (reference.includes('@sha256:')) return reference;
         const digest = image.RepoDigests?.[0];

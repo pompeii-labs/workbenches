@@ -2155,6 +2155,242 @@ describe('CLI integration', () => {
         expect(duplicate.stderr).toContain('Workbench already exists');
     });
 
+    test('initializes a manifest with the requested runtimes in order', async () => {
+        const repository = await temporaryDirectory('workbench-init-runtimes-');
+        const initialized = await executeCli(
+            [
+                'init',
+                'core',
+                '--runtimes',
+                'local,docker,daytona',
+                '--image',
+                'alpine:3.22',
+            ],
+            {},
+            repository
+        );
+        expect(initialized.code).toBe(0);
+        const manifest = await readFile(
+            join(repository, '.workbenches/core/workbench.yml'),
+            'utf8'
+        );
+        expect(manifest).toContain(
+            'runtimes:\n  local: {}\n  docker:\n    image: "alpine:3.22"\n  daytona:\n    class: linux\n'
+        );
+        expect(manifest.startsWith('spec: 1\n')).toBe(true);
+        expect(manifest).not.toContain('runtime: local');
+        const validated = await executeCli(['validate', repository], {}, repository);
+        expect(validated.code).toBe(0);
+
+        const defaulted = await executeCli(['init', 'plain'], {}, repository);
+        expect(defaulted.code).toBe(0);
+        expect(
+            await readFile(join(repository, '.workbenches/plain/workbench.yml'), 'utf8')
+        ).toContain('runtimes:\n  local: {}\n');
+    });
+
+    test('rejects init runtimes that cannot produce a valid manifest', async () => {
+        const repository = await temporaryDirectory('workbench-init-runtimes-bad-');
+        const missingImage = await executeCli(
+            ['init', 'core', '--runtimes', 'docker'],
+            {},
+            repository
+        );
+        expect(missingImage.code).toBe(1);
+        expect(missingImage.stderr).toContain(
+            '--image is required for the docker runtime'
+        );
+        const unknown = await executeCli(
+            ['init', 'core', '--runtimes', 'kubernetes'],
+            {},
+            repository
+        );
+        expect(unknown.code).toBe(1);
+        expect(unknown.stderr).toContain('Unknown runtime: kubernetes');
+        expect(
+            await stat(join(repository, '.workbenches/core')).catch(() => null)
+        ).toBeNull();
+    });
+
+    test('views every declared runtime and the requirements', async () => {
+        const fixture = await createFixture();
+        await writeRuntimesManifest(
+            fixture.packageDirectory,
+            [
+                'requirements:',
+                '  os: [linux, macos]',
+                '  cpu: 2',
+                '  gpu: true',
+                'runtimes:',
+                '  local: {}',
+                '  docker:',
+                '    image: alpine:3.22',
+            ].join('\n')
+        );
+        const bin = await fakeBin();
+        const environment = { PATH: `${bin}:${process.env.PATH}` };
+
+        const json = await executeCli(
+            ['view', fixture.packageDirectory, '--json'],
+            environment
+        );
+        expect(json.code).toBe(0);
+        const view = JSON.parse(json.stdout) as {
+            runtime: string;
+            runtimes: Array<{ name: string; image?: string }>;
+            requirements: Record<string, unknown>;
+        };
+        expect(view.runtime).toBe('local');
+        expect(view.runtimes).toEqual([
+            { name: 'local' },
+            { name: 'docker', image: 'alpine:3.22' },
+        ]);
+        expect(view.requirements).toEqual({
+            os: ['linux', 'macos'],
+            cpu: 2,
+            gpu: true,
+        });
+
+        const text = await executeCli(['view', fixture.packageDirectory], environment);
+        expect(text.stdout).toContain('Spec         1');
+        expect(text.stdout).toContain('local (default), docker');
+        expect(text.stdout).toContain('os linux or macos · 2+ CPUs · gpu');
+        expect(text.stdout).toContain('docker · image alpine:3.22');
+    });
+
+    test('shows a single runtime and no requirements for a draft 0 manifest', async () => {
+        const fixture = await createFixture({
+            runtime: 'docker',
+            image: 'alpine:3.22',
+        });
+        const view = await executeCli(['view', fixture.packageDirectory]);
+        expect(view.code).toBe(0);
+        expect(view.stdout).toContain('Spec         0');
+        expect(view.stdout).toContain('Runtime      docker');
+        expect(view.stdout).toContain('Image        alpine:3.22');
+        expect(view.stdout).toContain('Requires     none');
+    });
+
+    test('rejects a runtime the manifest does not declare', async () => {
+        const fixture = await createFixture();
+        await writeRuntimesManifest(
+            fixture.packageDirectory,
+            ['runtimes:', '  local: {}', '  docker:', '    image: alpine:3.22'].join(
+                '\n'
+            )
+        );
+        const bin = await fakeBin();
+        const environment = { PATH: `${bin}:${process.env.PATH}` };
+        const smoke = await executeCli(
+            ['smoke', fixture.packageDirectory, '--runtime', 'e2b'],
+            environment
+        );
+        expect(smoke.code).toBe(1);
+        expect(smoke.stderr).toContain(
+            'does not declare runtime: e2b. Declared runtimes: local, docker'
+        );
+
+        const run = await executeSavedCli(
+            ['run', fixture.packageDirectory, '--task', 'work', '--runtime', 'e2b'],
+            environment
+        );
+        expect(run.code).toBe(1);
+        expect(run.stderr).toContain(
+            'does not declare runtime: e2b. Declared runtimes: local, docker'
+        );
+    });
+
+    test('carries the selected runtime through a run to its worker', async () => {
+        const fixture = await createFixture();
+        await writeRuntimesManifest(
+            fixture.packageDirectory,
+            [
+                'tools:',
+                '  - missing-workbench-tool',
+                'runtimes:',
+                '  daytona:',
+                '    class: linux',
+                '  local: {}',
+            ].join('\n')
+        );
+        const bin = await fakeBin();
+        const home = await temporaryDirectory('workbench-runtime-select-');
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+        expect(
+            (
+                await executeCli(
+                    ['add', fixture.packageDirectory, '--as', 'multi'],
+                    environment
+                )
+            ).code
+        ).toBe(0);
+
+        const defaulted = await executeCli(
+            ['run', 'multi', '--task', 'work', '--final'],
+            environment
+        );
+        expect(defaulted.code).toBe(1);
+        expect(defaulted.stderr).toContain(
+            'The daytona runtime is not available in this engine yet'
+        );
+
+        const selected = await executeCli(
+            ['run', 'multi', '--task', 'work', '--final', '--runtime', 'local'],
+            environment
+        );
+        expect(selected.code).toBe(1);
+        expect(selected.stderr).toContain(
+            'Required CLI tool is unavailable: missing-workbench-tool'
+        );
+        const sessions = await new SessionStore(home).list();
+        expect(sessions.map((session) => session.runtime).toSorted()).toEqual([
+            'daytona',
+            'local',
+        ]);
+    });
+
+    test('refuses a gpu requirement on the local runtime unless it is accepted', async () => {
+        const fixture = await createFixture();
+        await writeRuntimesManifest(
+            fixture.packageDirectory,
+            ['requirements:', '  gpu: true', 'runtimes:', '  local: {}'].join('\n')
+        );
+        const bin = await fakeBin();
+        const home = await temporaryDirectory('workbench-gpu-gate-');
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+        expect(
+            (
+                await executeCli(
+                    ['add', fixture.packageDirectory, '--as', 'gpu'],
+                    environment
+                )
+            ).code
+        ).toBe(0);
+
+        const refused = await executeCli(
+            ['run', 'gpu', '--task', 'work', '--final'],
+            environment
+        );
+        expect(refused.code).toBe(1);
+        expect(refused.stderr).toContain(
+            'GPU requirements are not checked on the local runtime'
+        );
+
+        const accepted = await executeCli(
+            ['run', 'gpu', '--task', 'work', '--final', '--allow-unchecked-gpu'],
+            environment
+        );
+        expect(accepted.stderr).not.toContain(
+            'GPU requirements are not checked on the local runtime'
+        );
+    });
+
     test('refuses to materialize a remote Workbench for a direct run', async () => {
         const result = await executeCli([
             'run',
@@ -2446,6 +2682,27 @@ async function createFixture(
         ].join('\n')
     );
     return { root, packageDirectory };
+}
+
+/** Replaces a fixture manifest with one that declares its runtimes and requirements. */
+async function writeRuntimesManifest(
+    packageDirectory: string,
+    body: string
+): Promise<void> {
+    await writeFile(
+        join(packageDirectory, 'workbench.yml'),
+        [
+            'spec: 1',
+            'version: 0.1.0',
+            'name: fixture-core',
+            'runner: opencode',
+            'model:',
+            '  id: openai/gpt-5.6-terra',
+            'instructions: ./instructions.md',
+            body,
+            '',
+        ].join('\n')
+    );
 }
 
 async function fakeDocker() {

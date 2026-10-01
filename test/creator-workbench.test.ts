@@ -21,12 +21,12 @@ async function digest(path: string): Promise<string> {
 }
 
 describe('creator Workbench', () => {
-    test('is a valid self-contained draft-0 package', async () => {
+    test('is a valid self-contained spec 1 package', async () => {
         const workbench = await Workbench.load(creatorDirectory);
 
         expect(workbench.manifest).toEqual({
-            spec: 0,
-            version: '0.1.7',
+            spec: 1,
+            version: '0.1.8',
             name: 'workbench-creator',
             description:
                 'Design, author, review, and test repository-owned Workbenches.',
@@ -37,7 +37,8 @@ describe('creator Workbench', () => {
             tools: ['wb'],
             mcps: [],
             env: {},
-            runtime: 'local',
+            requirements: { gpu: false },
+            runtimes: { local: {} },
         });
         expect(workbench.skills.map((skill) => skill.name)).toEqual([
             'workbench-authoring',
@@ -46,10 +47,10 @@ describe('creator Workbench', () => {
 
     test('keeps the candidate reference snapshot pinned to its version', async () => {
         expect(await digest(join(referencesDirectory, 'spec.md'))).toBe(
-            '4e1b595e86f4b4089c5828af1537f190f0864caaf11ad4c9a023b9244a615790'
+            '85f12fabd9e5904429c29d9699b155ecb4d5ee13b621e943c0136302cd03c213'
         );
         expect(await digest(join(referencesDirectory, 'workbench.schema.json'))).toBe(
-            '8f44c19b7cc4594fe80d5371064df05a7c46cce505e705eba8d7573762aed072'
+            'e11f0e669cbf77220e472c79fe0fd5e153601d86b44c89bd2abc52bbc067c44f'
         );
     });
 });

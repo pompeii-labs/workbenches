@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { WorkbenchPreflight } from '../../workbench/preflight.js';
+import { RequirementsPreflight } from '../../workbench/requirements.js';
 import type {
     PreparedRuntime,
     RuntimePrepareRequest,
@@ -22,6 +23,11 @@ export class E2BRuntimeProvider implements RuntimeProvider {
     constructor(private readonly dependencies: E2BRuntimeDependencies = {}) {}
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
+        try {
+            new RequirementsPreflight().check(request.workbench);
+        } catch (error) {
+            throw RuntimeError.from(this.name, 'prepare', error);
+        }
         const paths = new E2BPathPlan(request);
         await paths.verify();
         new WorkbenchPreflight({

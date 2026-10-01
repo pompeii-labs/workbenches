@@ -21,8 +21,16 @@ import {
     type RemoteWorkbenchSummary,
 } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
-import type { ResolvedWorkbench } from '../types.js';
+import type { ResolvedWorkbench, WorkbenchRequirements } from '../types.js';
+import {
+    describeRuntime,
+    renderRequirements,
+    renderRuntimeDetails,
+    renderRuntimeFields,
+    type WorkbenchRuntimeView,
+} from './inspection-runtimes.js';
 import { WorkbenchPreflight } from './preflight.js';
+import { declaredRuntimes, requirementsOf, selectedRuntime } from './runtimes.js';
 import { WorkbenchSource } from './source.js';
 import { Workbench } from './workbench.js';
 
@@ -52,6 +60,8 @@ export type WorkbenchOrigin =
           revision: string;
       };
 
+export type { WorkbenchRuntimeView };
+
 export interface WorkbenchView {
     origin: WorkbenchOrigin;
     spec: number;
@@ -70,9 +80,13 @@ export interface WorkbenchView {
         connect_command: string;
         provider?: string;
     };
+    /** The default runtime: the first declared. */
     runtime: string;
     image?: string;
     docker_engine?: { mode: 'host'; authorization: 'explicit' };
+    /** Every declared runtime in declaration order. */
+    runtimes: WorkbenchRuntimeView[];
+    requirements: WorkbenchRequirements;
     instructions: string;
     skills: string[];
     tools: string[];
@@ -105,6 +119,10 @@ export class WorkbenchInspection {
     static describe(options: WorkbenchInspectionOptions): WorkbenchInspection {
         const manifest = options.workbench.manifest;
         const environment = options.environment ?? process.env;
+        const runtimes = Object.entries(declaredRuntimes(manifest)).map(
+            ([name, runtime]) => describeRuntime(name, runtime)
+        );
+        const defaultRuntime = runtimes[0] as WorkbenchRuntimeView;
         return new WorkbenchInspection({
             origin: options.origin,
             spec: manifest.spec,
@@ -118,23 +136,13 @@ export class WorkbenchInspection {
                 options.authentication
             ),
             runner_auth: WorkbenchInspection.runnerAuthentication(options),
-            runtime: manifest.runtime,
-            ...(manifest.image
-                ? {
-                      image:
-                          typeof manifest.image === 'string'
-                              ? manifest.image
-                              : `${manifest.image.build} (build context ${manifest.image.context ?? '.'})`,
-                  }
+            runtime: defaultRuntime.name,
+            ...(defaultRuntime.image ? { image: defaultRuntime.image } : {}),
+            ...(defaultRuntime.docker_engine
+                ? { docker_engine: defaultRuntime.docker_engine }
                 : {}),
-            ...(manifest.docker?.engine
-                ? {
-                      docker_engine: {
-                          mode: manifest.docker.engine.mode,
-                          authorization: 'explicit' as const,
-                      },
-                  }
-                : {}),
+            runtimes,
+            requirements: requirementsOf(manifest),
             instructions: manifest.instructions,
             skills: options.workbench.skills.map((skill) => skill.name),
             tools: manifest.tools,
@@ -196,15 +204,10 @@ export class WorkbenchInspection {
             'Runner auth',
             `${view.runner_auth.status}${view.runner_auth.provider ? ` via ${view.runner_auth.provider}` : ''} · ${view.runner_auth.connect_command}`
         );
-        this.field(lines, 'Runtime', view.runtime);
-        this.field(lines, 'Image', view.image ?? 'none');
-        this.field(
-            lines,
-            'Docker engine',
-            view.docker_engine
-                ? `${view.docker_engine.mode} · explicit authorization required`
-                : 'none'
-        );
+        for (const [label, value] of renderRuntimeFields(view)) {
+            this.field(lines, label, value);
+        }
+        this.field(lines, 'Requires', renderRequirements(view.requirements));
         this.field(lines, 'Instructions', view.instructions);
         this.field(lines, 'Skills', view.skills.join(', ') || 'none');
         this.field(lines, 'Tools', view.tools.join(', ') || 'none');
@@ -229,6 +232,7 @@ export class WorkbenchInspection {
     }
 
     private renderCollections(lines: string[]): void {
+        lines.push(...renderRuntimeDetails(this.data.runtimes));
         lines.push('', 'Workspaces');
         if (this.data.workspaces.length === 0) lines.push('  none');
         for (const workspace of this.data.workspaces) {
@@ -382,7 +386,7 @@ export class WorkbenchInspector {
         reference: string,
         origin: WorkbenchOrigin
     ): Promise<WorkbenchInspection> {
-        if (workbench.manifest.runtime !== 'local') {
+        if (selectedRuntime(workbench).name !== 'local') {
             return WorkbenchInspection.describe({ workbench, reference, origin });
         }
         let runner: PreparedRunner | undefined;
@@ -402,6 +406,8 @@ export class WorkbenchInspector {
                     ],
                     purpose: 'connect',
                     authorizations: { hostDocker: false },
+                    // Inspection only reads authentication state and runs nothing.
+                    allowUncheckedGpu: true,
                 });
             const authentication = await new ConnectionInspector({
                 workbench,

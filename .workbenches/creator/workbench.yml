@@ -1,5 +1,5 @@
-spec: 0
-version: 0.1.7
+spec: 1
+version: 0.1.8
 
 name: workbench-creator
 description: Design, author, review, and test repository-owned Workbenches.
@@ -18,4 +18,5 @@ tools:
 mcps: []
 env: {}
 
-runtime: local
+runtimes:
+  local: {}

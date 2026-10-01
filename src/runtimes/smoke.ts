@@ -8,6 +8,8 @@ import { RunnerRegistry } from '../runners/registry.js';
 import { RunStore } from '../runs/store.js';
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
 import type { PreflightResult } from '../workbench/preflight.js';
+import { assertRequirements } from '../workbench/requirements.js';
+import { selectedRuntime, withRuntime } from '../workbench/runtimes.js';
 import { WorkbenchWorkspaces } from '../workbench/workspaces.js';
 import type { PreparedRuntime } from './contracts.js';
 import { RuntimeRegistry } from './registry.js';
@@ -22,6 +24,10 @@ export interface RuntimeSmokeOptions {
     environment?: Record<string, string | undefined>;
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
+    /** Runtime to prepare. Defaults to the first declared runtime. */
+    runtime?: string;
+    /** Accept a GPU requirement on a runtime that cannot verify it. */
+    allowUncheckedGpu?: boolean;
     registry?: RuntimeRegistry;
     reference?: string;
     home?: string;
@@ -35,73 +41,66 @@ export class RuntimeSmoke {
 
     async check(): Promise<WorkbenchSmokeResult> {
         const environment = this.options.environment ?? process.env;
+        const workbench = withRuntime(this.options.workbench, this.options.runtime);
+        const selected = selectedRuntime(workbench);
         const workspaceDirectory =
-            this.options.workspaceDirectory ??
-            this.options.workbench.repositoryDirectory;
+            this.options.workspaceDirectory ?? workbench.repositoryDirectory;
         const workspaces = this.options.workspaces ?? [];
-        await this.workspaceBindings.validate(this.options.workbench, workspaces);
-        if (
-            this.options.allowHostDocker &&
-            !this.options.workbench.manifest.docker?.engine
-        ) {
+        await this.workspaceBindings.validate(workbench, workspaces);
+        assertRequirements(workbench, {
+            ...(this.options.allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
+        });
+        if (this.options.allowHostDocker && !selected.docker?.engine) {
             throw new Error(
                 'Host Docker authorization was supplied to a Workbench that does not declare docker.engine'
             );
         }
         const registry = this.options.registry ?? RuntimeRegistry.standard();
-        const runner = await RunnerRegistry.standard().prepare(
-            this.options.workbench,
-            environment
-        );
+        const runner = await RunnerRegistry.standard().prepare(workbench, environment);
         let runtime: PreparedRuntime | undefined;
         let result: WorkbenchSmokeResult | undefined;
         let operationError: unknown;
         try {
-            runtime = await registry
-                .resolve(this.options.workbench.manifest.runtime)
-                .prepare({
-                    workbench: this.options.workbench,
-                    workspaceDirectory,
-                    environment,
-                    assets: [
-                        { path: workspaceDirectory, access: 'read-write' },
-                        {
-                            path: this.options.workbench.packageDirectory,
-                            access: 'read-only',
-                        },
-                        ...workspaces.map((workspace) => ({
-                            path: workspace.path,
-                            access: workspace.access,
-                            workspace: workspace.name,
-                        })),
-                        ...runner.assets,
-                    ],
-                    authorizations: {
-                        hostDocker: this.options.allowHostDocker ?? false,
+            runtime = await registry.resolve(selected.name).prepare({
+                workbench,
+                workspaceDirectory,
+                environment,
+                assets: [
+                    { path: workspaceDirectory, access: 'read-write' },
+                    {
+                        path: workbench.packageDirectory,
+                        access: 'read-only',
                     },
-                    ...(this.options.workbench.manifest.runtime === 'e2b' &&
-                    this.options.home
-                        ? {
-                              credentials: await new RunnerCredentialStore(
-                                  this.options.home
-                              ).prepare(
-                                  this.options.workbench.manifest.runtime,
-                                  this.options.workbench.manifest.runner
-                              ),
-                          }
-                        : {}),
-                    ...(this.options.home
-                        ? {
-                              run: {
-                                  id: RunStore.createId(),
-                                  scope: RunStore.scope(this.options.home),
-                              },
-                          }
-                        : {}),
-                });
+                    ...workspaces.map((workspace) => ({
+                        path: workspace.path,
+                        access: workspace.access,
+                        workspace: workspace.name,
+                    })),
+                    ...runner.assets,
+                ],
+                authorizations: {
+                    hostDocker: this.options.allowHostDocker ?? false,
+                },
+                allowUncheckedGpu: this.options.allowUncheckedGpu ?? false,
+                ...(selected.name === 'e2b' && this.options.home
+                    ? {
+                          credentials: await new RunnerCredentialStore(
+                              this.options.home
+                          ).prepare(selected.name, workbench.manifest.runner),
+                      }
+                    : {}),
+                ...(this.options.home
+                    ? {
+                          run: {
+                              id: RunStore.createId(),
+                              scope: RunStore.scope(this.options.home),
+                          },
+                      }
+                    : {}),
+            });
             const preflight = await runtime.preflight();
             const authentication = await new ConnectionInspector({
-                workbench: this.options.workbench,
+                workbench,
                 runtime,
                 runner,
                 ...(this.options.reference

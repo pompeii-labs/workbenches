@@ -17,7 +17,10 @@ import {
     RuntimeRegistry,
 } from '../runtimes/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
-import type { ResolvedWorkbenchReference } from '../workbench/index.js';
+import {
+    type ResolvedWorkbenchReference,
+    selectedRuntime,
+} from '../workbench/index.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
 import { ExecutionPreparation } from './preparation.js';
 import { RunStore } from './store.js';
@@ -62,6 +65,7 @@ export interface InteractiveRunOptions {
     dependencies?: InteractiveRunDependencies;
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
+    allowUncheckedGpu?: boolean;
     session?: RunnerSessionContext;
     interactive?: boolean;
     connection?: string;
@@ -126,13 +130,14 @@ export class InteractiveRun {
                         ? { catalog_version: prepared.configuration.catalogVersion }
                         : {}),
                 },
-                runtime: workbench.manifest.runtime,
+                runtime: selectedRuntime(workbench).name,
                 workspace: this.options.resolved.workspaceDirectory,
                 ...(this.options.interactive ? { interactive: true } : {}),
                 workspaces: this.options.workspaces ?? [],
-                ...(workbench.manifest.docker?.engine
+                ...(selectedRuntime(workbench).docker?.engine
                     ? {
-                          docker_engine: workbench.manifest.docker.engine.mode,
+                          docker_engine:
+                              selectedRuntime(workbench).docker?.engine?.mode,
                           host_docker_authorized: this.options.allowHostDocker ?? false,
                       }
                     : {}),
