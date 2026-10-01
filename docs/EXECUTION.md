@@ -146,6 +146,18 @@ state can be a separate writable ephemeral asset. Local execution uses host
 paths unchanged. Isolated providers mount or copy only the declared
 assets and return remapped paths.
 
+Providers that mount host paths, local and Docker, never read file contents and
+need nothing beyond the host filesystem. Providers that copy bytes into a remote
+sandbox, E2B, read the package, workspace, and named workspace files
+through an asset source: a small interface that stats, lists, and reads files and
+may report Git state. The provider's dependencies take it as `assets`. The
+reference CLI passes the local disk, and an embedding host can pass any store
+that answers the same calls. The asset source changes where bytes come from, not
+which bytes are sent: selection, exclusions, size limits, and symlink rules are
+applied identically. The runner adapter's staging of skills and native config
+follows the same idea: the OpenCode runner takes a staging object built over its
+own `RunnerFiles` interface.
+
 Preparation must be safe to repeat with the same inputs, including after an
 interrupted attempt. `cleanup` must be safe to call more than once. A provider
 must reject `launch` until its own preflight has succeeded. Cancellation targets

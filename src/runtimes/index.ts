@@ -23,6 +23,7 @@ export {
     type ManagedDockerContainer,
 } from './docker/index.js';
 export {
+    DiskTransfer,
     type E2BClient,
     type E2BCommand,
     type E2BCommandOptions,
@@ -51,3 +52,16 @@ export {
     type RuntimeSmokeOptions,
     type WorkbenchSmokeResult,
 } from './smoke.js';
+export { DiskAssetSource } from './staging/disk.js';
+export {
+    type AssetBinding,
+    type AssetGit,
+    type AssetSource,
+    type AssetStat,
+    MemoryAssetSource,
+    MemoryTransfer,
+    type OutcomeCollector,
+    type RemoteTransfer,
+    type StagedAsset,
+    TransferRules,
+} from './staging/index.js';

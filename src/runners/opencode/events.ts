@@ -1,4 +1,4 @@
-import type { WorkbenchEventDraft } from '../../runs/index.js';
+import type { WorkbenchEventDraft } from '../../runs/events.js';
 import { describeTool } from '../tool.js';
 
 export interface OpenCodeAdapterResult {
