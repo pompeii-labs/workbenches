@@ -9,6 +9,11 @@ import type {
 /** Providers a manifest can declare under `runtimes`. */
 export const runtimeProviderNames = ['local', 'docker', 'e2b', 'daytona'] as const;
 
+export type RuntimeProviderName = (typeof runtimeProviderNames)[number];
+
+/** The machine classes the daytona provider offers. */
+export const daytonaClasses = ['linux', 'windows', 'gpu', 'macos'] as const;
+
 /**
  * The runtimes a manifest declares, in declaration order. Manifests built
  * before `runtimes` existed fall back to their singular `runtime` form.

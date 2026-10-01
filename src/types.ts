@@ -1,3 +1,5 @@
+import type { daytonaClasses } from './workbench/runtimes.js';
+
 export interface WorkbenchEnvRequirement {
     required: boolean;
 }
@@ -31,7 +33,7 @@ export interface WorkbenchDockerConfiguration {
 
 export type WorkbenchOs = 'linux' | 'macos' | 'windows';
 export type WorkbenchArch = 'x64' | 'arm64';
-export type WorkbenchDaytonaClass = 'linux' | 'windows' | 'gpu' | 'macos';
+export type WorkbenchDaytonaClass = (typeof daytonaClasses)[number];
 
 /** What the execution environment must satisfy regardless of provider. */
 export interface WorkbenchRequirements {

@@ -2,9 +2,11 @@ import { arch, cpus, platform, totalmem } from 'node:os';
 
 import type {
     ResolvedWorkbench,
+    SelectedRuntime,
     WorkbenchArch,
     WorkbenchDaytonaClass,
     WorkbenchOs,
+    WorkbenchRequirements,
 } from '../types.js';
 import { requirementsOf, selectedRuntime } from './runtimes.js';
 
@@ -28,6 +30,17 @@ export interface RequirementsCheckOptions {
     /** Accept a GPU requirement on a runtime that cannot verify it. */
     allowUncheckedGpu?: boolean;
 }
+
+/** One check in flight: what is required, where, and what has been learned. */
+interface RequirementsCheck {
+    requirements: WorkbenchRequirements;
+    runtime: SelectedRuntime;
+    options: RequirementsCheckOptions;
+    report: RequirementsReport;
+    fail: (message: string) => never;
+}
+
+type PendingField = 'arch' | 'cpu' | 'memory' | 'disk';
 
 const bytesPerGibibyte = 1024 ** 3;
 
@@ -67,134 +80,143 @@ export class RequirementsPreflight {
         workbench: ResolvedWorkbench,
         options: RequirementsCheckOptions = {}
     ): RequirementsReport {
-        const requirements = requirementsOf(workbench.manifest);
         const runtime = selectedRuntime(workbench);
-        const report: RequirementsReport = { checked: [], applied: [], unchecked: [] };
-        const fail: (message: string) => never = (message) => {
-            throw new Error(
-                `Workbench ${workbench.manifest.name} cannot run on the ${runtime.name} runtime: ${message}`
-            );
+        const check: RequirementsCheck = {
+            requirements: requirementsOf(workbench.manifest),
+            runtime,
+            options,
+            report: { checked: [], applied: [], unchecked: [] },
+            fail: (message) => {
+                throw new Error(
+                    `Workbench ${workbench.manifest.name} cannot run on the ${runtime.name} runtime: ${message}`
+                );
+            },
         };
-        const list = (values: readonly string[]) => values.join(' or ');
+        if (runtime.name === 'daytona') this.checkDaytona(check);
+        else if (runtime.name === 'local') this.checkLocal(check);
+        else this.checkContainer(check);
+        return check.report;
+    }
+
+    private checkDaytona(check: RequirementsCheck): void {
+        const { requirements, runtime, report, fail } = check;
+        const daytonaClass = runtime.class;
+        if (!daytonaClass) {
+            fail('the daytona runtime declares no class');
+            return;
+        }
+        const provided = daytonaClassOs[daytonaClass];
+        const { os } = requirements;
+        if (os && !os.includes(provided)) {
+            fail(
+                `the ${daytonaClass} class provides ${provided} but the Workbench requires ${this.list(os)}`
+            );
+        }
+        if (daytonaClass === 'gpu' && !requirements.gpu) {
+            fail('the gpu class requires gpu: true in requirements');
+        }
+        if (requirements.gpu && daytonaClass !== 'gpu') {
+            fail(
+                `requirements.gpu is true but the ${daytonaClass} class has no GPU. Use the gpu class.`
+            );
+        }
+        report.checked.push(`class ${daytonaClass} provides ${provided}`);
+        this.pending(check, ['arch', 'cpu', 'memory']);
+    }
+
+    private checkLocal(check: RequirementsCheck): void {
+        const { requirements, options, report, fail } = check;
         const { os, arch: architectures } = requirements;
-
-        if (runtime.name === 'daytona') {
-            const daytonaClass = runtime.class;
-            if (!daytonaClass) return fail('the daytona runtime declares no class');
-            const provided = daytonaClassOs[daytonaClass];
-            if (os && !os.includes(provided)) {
+        if (os) {
+            if (!os.includes(this.host.os as WorkbenchOs)) {
+                fail(`requires os ${this.list(os)} but this host is ${this.host.os}`);
+            }
+            report.checked.push(`os ${this.host.os}`);
+        }
+        if (architectures) {
+            if (!architectures.includes(this.host.arch as WorkbenchArch)) {
                 fail(
-                    `the ${daytonaClass} class provides ${provided} but the Workbench requires ${list(os)}`
+                    `requires arch ${this.list(architectures)} but this host is ${this.host.arch}`
                 );
             }
-            if (daytonaClass === 'gpu' && !requirements.gpu) {
-                fail('the gpu class requires gpu: true in requirements');
-            }
-            if (requirements.gpu && daytonaClass !== 'gpu') {
+            report.checked.push(`arch ${this.host.arch}`);
+        }
+        if (requirements.cpu !== undefined) {
+            if (this.host.cpus < requirements.cpu) {
                 fail(
-                    `requirements.gpu is true but the ${daytonaClass} class has no GPU. Use the gpu class.`
+                    `requires ${requirements.cpu} CPUs but this host has ${this.host.cpus}`
                 );
             }
-            report.checked.push(`class ${daytonaClass} provides ${provided}`);
-            this.pending(requirements, report, 'daytona', ['arch', 'cpu', 'memory']);
-            return report;
+            report.checked.push(`cpu ${this.host.cpus}`);
         }
-
-        if (runtime.name === 'local') {
-            if (os) {
-                if (!os.includes(this.host.os as WorkbenchOs)) {
-                    fail(`requires os ${list(os)} but this host is ${this.host.os}`);
-                }
-                report.checked.push(`os ${this.host.os}`);
+        if (requirements.memory_gb !== undefined) {
+            const available = nearestGibibytes(this.host.memoryBytes);
+            if (available < requirements.memory_gb) {
+                fail(
+                    `requires ${requirements.memory_gb} GiB of memory but this host has ${available} GiB`
+                );
             }
-            if (architectures) {
-                if (!architectures.includes(this.host.arch as WorkbenchArch)) {
-                    fail(
-                        `requires arch ${list(architectures)} but this host is ${this.host.arch}`
-                    );
-                }
-                report.checked.push(`arch ${this.host.arch}`);
-            }
-            if (requirements.cpu !== undefined) {
-                if (this.host.cpus < requirements.cpu) {
-                    fail(
-                        `requires ${requirements.cpu} CPUs but this host has ${this.host.cpus}`
-                    );
-                }
-                report.checked.push(`cpu ${this.host.cpus}`);
-            }
-            if (requirements.memory_gb !== undefined) {
-                const available = nearestGibibytes(this.host.memoryBytes);
-                if (available < requirements.memory_gb) {
-                    fail(
-                        `requires ${requirements.memory_gb} GiB of memory but this host has ${available} GiB`
-                    );
-                }
-                report.checked.push(`memory ${available} GiB`);
-            }
-            if (requirements.gpu) {
-                if (!options.allowUncheckedGpu) {
-                    fail(
-                        'GPU requirements are not checked on the local runtime. Pass --allow-unchecked-gpu to run anyway.'
-                    );
-                }
-                report.unchecked.push('gpu is not checked on the local runtime');
-            }
-            if (requirements.disk_gb !== undefined) {
-                report.unchecked.push('disk_gb is not checked on the local runtime');
-            }
-            return report;
+            report.checked.push(`memory ${available} GiB`);
         }
+        if (requirements.gpu) {
+            if (!options.allowUncheckedGpu) {
+                fail(
+                    'GPU requirements are not checked on the local runtime. Pass --allow-unchecked-gpu to run anyway.'
+                );
+            }
+            report.unchecked.push('gpu is not checked on the local runtime');
+        }
+        if (requirements.disk_gb !== undefined) {
+            report.unchecked.push('disk_gb is not checked on the local runtime');
+        }
+    }
 
-        // docker, e2b, and any other Linux container or sandbox provider
+    /** docker, e2b, and any other Linux container or sandbox provider. */
+    private checkContainer(check: RequirementsCheck): void {
+        const { requirements, runtime, report, fail } = check;
+        const { os, arch: architectures } = requirements;
         if (os && !os.includes('linux')) {
             fail(
-                `requires os ${list(os)} but the ${runtime.name} runtime provides linux`
+                `requires os ${this.list(os)} but the ${runtime.name} runtime provides linux`
             );
         }
         if (requirements.gpu) {
             fail(`GPU requirements are not supported on the ${runtime.name} runtime`);
         }
-        if (runtime.name === 'docker') {
-            if (architectures) {
-                if (!architectures.includes(this.host.arch as WorkbenchArch)) {
-                    fail(
-                        `requires arch ${list(architectures)} but the docker runtime runs on ${this.host.arch}`
-                    );
-                }
-                report.checked.push(`arch ${this.host.arch}`);
-            }
-            if (requirements.cpu !== undefined) {
-                report.applied.push(`cpu limit ${requirements.cpu}`);
-            }
-            if (requirements.memory_gb !== undefined) {
-                report.applied.push(`memory limit ${requirements.memory_gb} GiB`);
-            }
-            this.pending(requirements, report, 'docker', ['disk']);
-        } else {
-            this.pending(requirements, report, runtime.name, [
-                'arch',
-                'cpu',
-                'memory',
-                'disk',
-            ]);
+        if (runtime.name !== 'docker') {
+            this.pending(check, ['arch', 'cpu', 'memory', 'disk']);
+            return;
         }
-        return report;
+        if (architectures) {
+            if (!architectures.includes(this.host.arch as WorkbenchArch)) {
+                fail(
+                    `requires arch ${this.list(architectures)} but the docker runtime runs on ${this.host.arch}`
+                );
+            }
+            report.checked.push(`arch ${this.host.arch}`);
+        }
+        if (requirements.cpu !== undefined) {
+            report.applied.push(`cpu limit ${requirements.cpu}`);
+        }
+        if (requirements.memory_gb !== undefined) {
+            report.applied.push(`memory limit ${requirements.memory_gb} GiB`);
+        }
+        this.pending(check, ['disk']);
     }
 
-    private pending(
-        requirements: ReturnType<typeof requirementsOf>,
-        report: RequirementsReport,
-        runtime: string,
-        fields: Array<'arch' | 'cpu' | 'memory' | 'disk'>
-    ): void {
-        const declared: Record<string, boolean> = {
+    private list(values: readonly string[]): string {
+        return values.join(' or ');
+    }
+
+    private pending(check: RequirementsCheck, fields: PendingField[]): void {
+        const { requirements, runtime, report } = check;
+        const declared: Record<PendingField, boolean> = {
             arch: requirements.arch !== undefined,
             cpu: requirements.cpu !== undefined,
             memory: requirements.memory_gb !== undefined,
             disk: requirements.disk_gb !== undefined,
         };
-        const names: Record<string, string> = {
+        const names: Record<PendingField, string> = {
             arch: 'arch',
             cpu: 'cpu',
             memory: 'memory_gb',
@@ -203,7 +225,7 @@ export class RequirementsPreflight {
         for (const field of fields) {
             if (declared[field]) {
                 report.unchecked.push(
-                    `${names[field]} is not checked on the ${runtime} runtime`
+                    `${names[field]} is not checked on the ${runtime.name} runtime`
                 );
             }
         }
