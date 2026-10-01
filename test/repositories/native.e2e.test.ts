@@ -4,9 +4,14 @@ import { join } from 'node:path';
 import { RepositoryWorkspace } from '../../src/repositories/workspace.js';
 import { DockerRuntimeProvider } from '../../src/runtimes/docker/provider.js';
 import { E2BRuntimeProvider } from '../../src/runtimes/e2b/provider.js';
+import { DiskAssetSource } from '../../src/runtimes/staging/disk.js';
 import type { ResolvedWorkbench } from '../../src/types.js';
+import { NodeHost } from '../../src/workbench/host.js';
 import { activateModelCatalogFixture } from '../model-catalog-fixture.js';
 import { checkoutFixture, fixtureIdentity } from './fixture.js';
+
+const diskAssetSource = new DiskAssetSource();
+const disk = { assets: diskAssetSource, local: diskAssetSource };
 
 const identityEnvironment = (
     identity: Awaited<ReturnType<typeof fixtureIdentity>>
@@ -68,7 +73,7 @@ describe.skipIf(process.env.WORKBENCH_REPOSITORY_NATIVE_E2E !== '1')(
                 fixture.git,
                 fixtureIdentity
             );
-            const provider = new E2BRuntimeProvider();
+            const provider = new E2BRuntimeProvider(disk);
             const prepare = async () => {
                 const identity = await workspace.prepare('e2b');
                 if (!identity) throw new Error('Repository identity is missing');
@@ -193,7 +198,7 @@ describe.skipIf(process.env.WORKBENCH_REPOSITORY_DOCKER_E2E !== '1')(
                 fixture.git,
                 fixtureIdentity
             );
-            const provider = new DockerRuntimeProvider();
+            const provider = new DockerRuntimeProvider({ host: new NodeHost() });
             const prepare = async () => {
                 const identity = await workspace.prepare('docker');
                 if (!identity) throw new Error('Repository identity is missing');

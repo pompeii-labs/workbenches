@@ -10,12 +10,17 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stageOpenCodeSkills } from '../src/runners/opencode/assets.js';
+import { RunnerContextStaging } from '../src/runners/context/stage.js';
+import { DiskRunnerFiles } from '../src/runners/files/disk.js';
 import {
     buildOpenCodeInvocation,
     publicInvocation,
 } from '../src/runners/opencode/invocation.js';
+import { OpenCodeSkillStaging } from '../src/runners/opencode/skills.js';
 import { Workbench } from '../src/workbench/index.js';
+
+const files = new DiskRunnerFiles();
+const skills = new OpenCodeSkillStaging(files, new RunnerContextStaging(files));
 
 const temporaryDirectories: string[] = [];
 
@@ -56,7 +61,7 @@ describe('Workbench package', () => {
     test('rejects a runner that the reference engine does not implement', async () => {
         const fixture = await createFixture({ runner: 'codex' });
         const workbench = await Workbench.load(fixture.workbenchDirectory);
-        expect(() => buildOpenCodeInvocation(workbench, 'Do work')).toThrow(
+        expect(() => buildOpenCodeInvocation(workbench, 'Do work', {})).toThrow(
             'Unsupported runner: codex'
         );
     });
@@ -83,7 +88,7 @@ describe('Workbench package', () => {
     test('stages package skills for native OpenCode discovery', async () => {
         const fixture = await createFixture({ skill: true });
         const workbench = await Workbench.load(fixture.workbenchDirectory);
-        const staged = await stageOpenCodeSkills(workbench);
+        const staged = await skills.stage(workbench);
 
         expect(staged).toBeDefined();
         if (!staged) throw new Error('expected staged skills');
@@ -106,7 +111,7 @@ describe('Workbench package', () => {
     test('stages packaged OpenCode configuration with Workbench skills', async () => {
         const fixture = await createFixture({ skill: true, runnerConfig: true });
         const workbench = await Workbench.load(fixture.workbenchDirectory);
-        const staged = await stageOpenCodeSkills(workbench);
+        const staged = await skills.stage(workbench);
         expect(staged).toBeDefined();
         if (!staged) throw new Error('expected staged OpenCode config');
 

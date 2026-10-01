@@ -1,9 +1,10 @@
-import { stat } from 'node:fs/promises';
-import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
+import { posix, relative, resolve, sep } from 'node:path';
 
 import { ModelRouter } from '../../models/index.js';
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RuntimePrepareRequest } from '../contracts.js';
+import type { TransferRules } from '../staging/rules.js';
+import type { AssetSource } from '../staging/source.js';
 
 export interface E2BAssetBinding {
     hostPath: string;
@@ -24,7 +25,10 @@ export interface E2BAssetBinding {
 export class E2BPathPlan {
     readonly bindings: E2BAssetBinding[];
 
-    constructor(private readonly request: RuntimePrepareRequest) {
+    constructor(
+        private readonly request: RuntimePrepareRequest,
+        private readonly rules: TransferRules
+    ) {
         const workspace = resolve(request.workspaceDirectory);
         const packageDirectory = resolve(request.workbench.packageDirectory);
         const unique = new Map<string, E2BAssetBinding>();
@@ -138,23 +142,24 @@ export class E2BPathPlan {
                 .filter(
                     (candidate) =>
                         candidate.hostPath !== binding.hostPath &&
-                        contains(binding.hostPath, candidate.hostPath)
+                        this.rules.contains(binding.hostPath, candidate.hostPath)
                 )
                 .map((candidate) => candidate.hostPath)
                 .toSorted(),
         }));
     }
 
-    async verify(): Promise<void> {
+    /** Checks every staged path exists in `source`. */
+    async verify(source: AssetSource): Promise<void> {
         for (const binding of this.bindings) {
-            const entry = await stat(binding.hostPath).catch(() => null);
+            const entry = await source.stat(binding.hostPath);
             if (!entry) {
                 throw new Error(`Runtime asset does not exist: ${binding.hostPath}`);
             }
-            if (!entry.isDirectory() && !entry.isFile()) {
+            if (entry.kind !== 'directory' && entry.kind !== 'file') {
                 throw new Error(`Unsupported runtime asset: ${binding.hostPath}`);
             }
-            if (entry.isFile() && binding.access === 'read-write') {
+            if (entry.kind === 'file' && binding.access === 'read-write') {
                 throw new Error(
                     `E2B read-write runtime assets must be directories: ${binding.hostPath}`
                 );
@@ -168,7 +173,7 @@ export class E2BPathPlan {
     pathFor(hostPath: string): string {
         const requested = resolve(hostPath);
         const match = this.bindings
-            .filter((binding) => contains(binding.hostPath, requested))
+            .filter((binding) => this.rules.contains(binding.hostPath, requested))
             .toSorted((left, right) => right.hostPath.length - left.hostPath.length)[0];
         if (!match) {
             throw new Error(`Path is not staged in E2B runtime: ${hostPath}`);
@@ -253,17 +258,13 @@ export class E2BPathPlan {
 
     private repositoryPathFor(workbench: ResolvedWorkbench): string {
         const repository = resolve(workbench.repositoryDirectory);
-        if (this.bindings.some((binding) => contains(binding.hostPath, repository))) {
+        if (
+            this.bindings.some((binding) =>
+                this.rules.contains(binding.hostPath, repository)
+            )
+        ) {
             return this.pathFor(repository);
         }
         return this.pathFor(workbench.packageDirectory);
     }
-}
-
-function contains(parent: string, child: string): boolean {
-    const suffix = relative(parent, child);
-    return (
-        suffix === '' ||
-        (!suffix.startsWith(`..${sep}`) && suffix !== '..' && !isAbsolute(suffix))
-    );
 }

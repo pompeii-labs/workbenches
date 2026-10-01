@@ -13,10 +13,7 @@ import type {
     WorkbenchWorkspaceBinding,
 } from '../../types.js';
 import { type PreflightResult, WorkbenchPreflight } from '../../workbench/preflight.js';
-import {
-    type RequirementsHost,
-    RequirementsPreflight,
-} from '../../workbench/requirements.js';
+import type { RequirementsPreflight } from '../../workbench/requirements.js';
 import { requirementsOf } from '../../workbench/runtimes.js';
 import { WorkbenchWorkspaces } from '../../workbench/workspaces.js';
 import type {
@@ -48,7 +45,7 @@ export interface DockerRuntimeOptions {
     preparation: DockerPreparation;
     stateDirectory: string;
     outcome?: HostOutcomeCapture;
-    host?: RequirementsHost;
+    requirements: RequirementsPreflight;
     cleanupPreparation(): Promise<void>;
 }
 
@@ -158,7 +155,7 @@ export class DockerRuntime implements PreparedRuntime {
             runner: { name: this.workbench.manifest.runner, path: runnerPath },
             tools,
             workspaces: this.workspaces,
-            requirements: new RequirementsPreflight(this.options.host).check(
+            requirements: this.options.requirements.check(
                 this.options.request.workbench
             ),
             ...(this.options.hostSocket ? { dockerEngine: 'host' as const } : {}),

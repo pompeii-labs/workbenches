@@ -12,7 +12,7 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { OutcomeStorageLease } from '../../outcomes/lease.js';
-import { extractArchive } from './archive.js';
+import type { E2BArchive } from './archive.js';
 
 const stateName = '.workbench-state';
 interface StatePointer {
@@ -28,6 +28,7 @@ export interface E2BStateSource {
 export class E2BStateStore {
     private readonly root: string;
     constructor(
+        private readonly archive: E2BArchive,
         private readonly directory: string,
         private readonly files?: readonly string[]
     ) {
@@ -66,7 +67,10 @@ export class E2BStateStore {
             await mkdir(pending, { mode: 0o700 });
             const pointerTemporary = join(this.root, `${generation}.json.tmp`);
             try {
-                const bytes = await extractArchive(archive, pending, maximumBytes);
+                const bytes = await this.archive.extract(archive, pending, {
+                    maximumBytes,
+                    reportedMaximumBytes: maximumBytes,
+                });
                 await privatize(pending);
                 if (this.files) await retainFiles(pending, this.files);
                 if (

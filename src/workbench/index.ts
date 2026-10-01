@@ -3,6 +3,7 @@ export {
     type EnvironmentOverrides,
     WorkbenchEnvironment,
 } from './environment.js';
+export { type HostDescriber, NodeHost } from './host.js';
 export {
     WorkbenchInspection,
     WorkbenchInspector,
@@ -15,7 +16,6 @@ export {
     WorkbenchPreflight,
 } from './preflight.js';
 export {
-    assertRequirements,
     type RequirementsCheckOptions,
     type RequirementsHost,
     RequirementsPreflight,

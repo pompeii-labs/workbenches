@@ -34,6 +34,45 @@ export function valueImports(sources: Map<string, string>): ImportGraph {
     return graph;
 }
 
+/** Package and built-in specifiers each file imports at run time. */
+export function externalValueImports(sources: Map<string, string>): ImportGraph {
+    const graph: ImportGraph = new Map();
+    for (const [file, source] of sources) {
+        const syntax = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+        const specifiers: string[] = [];
+        for (const statement of syntax.statements) {
+            if (
+                !(
+                    ts.isImportDeclaration(statement) ||
+                    ts.isExportDeclaration(statement)
+                ) ||
+                !statement.moduleSpecifier ||
+                !ts.isStringLiteral(statement.moduleSpecifier) ||
+                isTypeOnly(statement) ||
+                statement.moduleSpecifier.text.startsWith('.')
+            )
+                continue;
+            specifiers.push(statement.moduleSpecifier.text);
+        }
+        graph.set(file, specifiers);
+    }
+    return graph;
+}
+
+/** Every file reachable from `roots` through run-time relative imports. */
+export function reachable(graph: ImportGraph, roots: string[]): Map<string, string[]> {
+    const paths = new Map<string, string[]>();
+    const queue = roots.map((root) => [root] as string[]);
+    while (queue.length) {
+        const path = queue.shift() as string[];
+        const file = path.at(-1) as string;
+        if (paths.has(file)) continue;
+        paths.set(file, path);
+        for (const target of graph.get(file) ?? []) queue.push([...path, target]);
+    }
+    return paths;
+}
+
 export function importCycles(graph: ImportGraph): string[][] {
     let next = 0;
     const nodes = new Map<string, { index: number; low: number }>();

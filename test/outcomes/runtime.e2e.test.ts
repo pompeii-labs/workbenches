@@ -7,6 +7,7 @@ import type { PreparedRuntime } from '../../src/runtimes/contracts.js';
 import { DockerRuntimeProvider } from '../../src/runtimes/docker/provider.js';
 import { LocalRuntimeProvider } from '../../src/runtimes/local.js';
 import type { ResolvedWorkbench } from '../../src/types.js';
+import { NodeHost } from '../../src/workbench/host.js';
 
 const directories: string[] = [];
 const runtimes: PreparedRuntime[] = [];
@@ -135,8 +136,8 @@ describe('Outcome runtime process end to end', () => {
                 lifecycles.push(lifecycle);
                 const provider =
                     target === 'local'
-                        ? new LocalRuntimeProvider()
-                        : new DockerRuntimeProvider();
+                        ? new LocalRuntimeProvider({ host: new NodeHost() })
+                        : new DockerRuntimeProvider({ host: new NodeHost() });
                 const runtime = await provider.prepare({
                     workbench,
                     workspaceDirectory: root,
@@ -223,7 +224,9 @@ describe('Outcome runtime process end to end', () => {
             runId: 'wb_1234567890abcdefghij',
         });
         lifecycles.push(lifecycle);
-        const runtime = await new LocalRuntimeProvider().prepare({
+        const runtime = await new LocalRuntimeProvider({
+            host: new NodeHost(),
+        }).prepare({
             workbench,
             workspaceDirectory: root,
             environment: process.env,
@@ -262,7 +265,9 @@ describe('Outcome runtime process end to end', () => {
             runId: 'wb_abcdefghij1234567890',
         });
         lifecycles.push(lifecycle);
-        const runtime = await new LocalRuntimeProvider().prepare({
+        const runtime = await new LocalRuntimeProvider({
+            host: new NodeHost(),
+        }).prepare({
             workbench,
             workspaceDirectory: root,
             environment: process.env,
@@ -296,7 +301,9 @@ describe('Outcome runtime process end to end', () => {
             runId: 'wb_abcdefghij1234567891',
         });
         lifecycles.push(lifecycle);
-        const runtime = await new LocalRuntimeProvider().prepare({
+        const runtime = await new LocalRuntimeProvider({
+            host: new NodeHost(),
+        }).prepare({
             workbench,
             workspaceDirectory: root,
             environment: process.env,

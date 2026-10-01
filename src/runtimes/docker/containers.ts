@@ -1,5 +1,5 @@
 import { DockerClient } from './client.js';
-import type { DockerRuntimeDependencies } from './contracts.js';
+import type { DockerClientDependencies } from './contracts.js';
 
 const managedLabel = 'dev.workbenches.managed';
 const runLabel = 'dev.workbenches.run';
@@ -32,7 +32,7 @@ export class DockerManagedContainers {
 
     static async connect(
         scope: string,
-        dependencies: DockerRuntimeDependencies = {}
+        dependencies: DockerClientDependencies = {}
     ): Promise<DockerManagedContainers | undefined> {
         DockerManagedContainers.validateScope(scope);
         const executable = (dependencies.findExecutable ?? Bun.which)('docker');

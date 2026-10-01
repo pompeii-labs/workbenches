@@ -7,7 +7,7 @@ import type {
     WorkbenchWorkspaceBinding,
 } from '../../types.js';
 import { type PreflightResult, WorkbenchPreflight } from '../../workbench/preflight.js';
-import { RequirementsPreflight } from '../../workbench/requirements.js';
+import type { RequirementsPreflight } from '../../workbench/requirements.js';
 import { WorkbenchWorkspaces } from '../../workbench/workspaces.js';
 import type {
     PreparedRuntime,
@@ -20,11 +20,13 @@ import type {
     RuntimeSessionOptions,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
+import type { TransferRules } from '../staging/rules.js';
+import type { AssetSource } from '../staging/source.js';
 import { E2BOutcomeCollector } from './collector.js';
 import type { E2BClient, E2BCommand, E2BSandbox } from './contracts.js';
 import { prepareE2BDirectories } from './directories.js';
 import { e2bPricingSource, estimateE2BCost } from './infrastructure.js';
-import { captureE2BNativeState } from './native.js';
+import { E2BNativeState } from './native.js';
 import type { E2BPathPlan } from './paths.js';
 import { E2BOutcomeRecovery } from './recovery.js';
 import { e2bMetadata } from './sdk.js';
@@ -37,6 +39,9 @@ interface E2BRuntimeOptions {
     request: RuntimePrepareRequest;
     client: E2BClient;
     paths: E2BPathPlan;
+    assets: AssetSource;
+    local: AssetSource;
+    rules: TransferRules;
     preparation: RuntimePreparation & {
         kind: 'image';
         reference: string;
@@ -44,6 +49,7 @@ interface E2BRuntimeOptions {
         action: 'built' | 'cache-hit';
     };
     run: { id: string; scope: string };
+    requirements: RequirementsPreflight;
     maximumTransferBytes: number;
     leaseMilliseconds: number;
     now(): Date;
@@ -171,7 +177,7 @@ export class E2BRuntime implements PreparedRuntime {
             runner: { name: this.workbench.manifest.runner, path: runnerPath },
             tools,
             workspaces: this.workspaces,
-            requirements: new RequirementsPreflight().check(
+            requirements: this.options.requirements.check(
                 this.options.request.workbench
             ),
             ...configuration,
@@ -371,7 +377,7 @@ export class E2BRuntime implements PreparedRuntime {
     async collectOutcome(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
         if (!this.outcomeCollection) {
             this.outcomeCollection = this.persistNativeState()
-                .then(() => this.collectSnapshots(store))
+                .then(() => this.collector().collect(store))
                 .catch((error) => {
                     this.outcomeCollection = undefined;
                     if (this.recovery)
@@ -392,16 +398,11 @@ export class E2BRuntime implements PreparedRuntime {
     }
 
     snapshotRepository(store: OutcomeStore) {
-        return this.collectSnapshots(store);
+        return this.collector().collect(store);
     }
 
     collectOutput(store: OutcomeStore) {
-        return new E2BOutcomeCollector({
-            sandbox: this.requireReady(),
-            snapshots: this.snapshots,
-            baselines: this.snapshotBaselines,
-            maximumTransferBytes: this.options.maximumTransferBytes,
-        }).collectOutput(store);
+        return this.collector().collectOutput(store);
     }
 
     async cleanup(): Promise<void> {
@@ -444,16 +445,18 @@ export class E2BRuntime implements PreparedRuntime {
     private persistNativeState(): Promise<void> {
         if (!this.sandbox) return Promise.resolve();
         if (!this.statePersistence) {
-            this.statePersistence = captureE2BNativeState(
-                this.sandbox,
-                this.snapshots,
-                this.options.maximumTransferBytes,
-                this.persistedState,
-                (completed) => this.recovery?.progress(completed) ?? Promise.resolve()
-            ).catch((error) => {
-                this.statePersistence = undefined;
-                throw error;
-            });
+            this.statePersistence = new E2BNativeState(this.sandbox)
+                .capture(
+                    this.snapshots,
+                    this.options.maximumTransferBytes,
+                    this.persistedState,
+                    (completed) =>
+                        this.recovery?.progress(completed) ?? Promise.resolve()
+                )
+                .catch((error) => {
+                    this.statePersistence = undefined;
+                    throw error;
+                });
         }
         return this.statePersistence;
     }
@@ -475,7 +478,8 @@ export class E2BRuntime implements PreparedRuntime {
                 const snapshot = await E2BAssetSnapshot.create(
                     binding,
                     this.options.maximumTransferBytes - transferred,
-                    binding.kind === 'workspace' ? this.recovery?.directory : undefined
+                    binding.kind === 'workspace' ? this.recovery?.directory : undefined,
+                    this.options
                 );
                 transferred += snapshot.bytes;
                 snapshots.push(snapshot);
@@ -589,13 +593,14 @@ export class E2BRuntime implements PreparedRuntime {
         }
     }
 
-    private collectSnapshots(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
+    private collector(): E2BOutcomeCollector {
         return new E2BOutcomeCollector({
             sandbox: this.requireReady(),
             snapshots: this.snapshots,
             baselines: this.snapshotBaselines,
             maximumTransferBytes: this.options.maximumTransferBytes,
-        }).collect(store);
+            rules: this.options.rules,
+        });
     }
 
     private async preflightAssets(sandbox: E2BSandbox): Promise<void> {

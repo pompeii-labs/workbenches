@@ -8,6 +8,7 @@ import type {
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
 import { RuntimeSecretStore } from '../secrets.js';
+import { TransferRules } from '../staging/rules.js';
 import type { E2BRuntimeDependencies } from './contracts.js';
 import { E2BPathPlan } from './paths.js';
 import { E2BRuntime } from './runtime.js';
@@ -19,17 +20,22 @@ const defaultLeaseMilliseconds = 60 * 60 * 1_000;
 
 export class E2BRuntimeProvider implements RuntimeProvider {
     readonly name = 'e2b';
+    private readonly rules = new TransferRules('E2B');
 
-    constructor(private readonly dependencies: E2BRuntimeDependencies = {}) {}
+    /** A sandbox provides its own machine, so no host is described. */
+    private readonly requirements = new RequirementsPreflight();
+
+    constructor(private readonly dependencies: E2BRuntimeDependencies) {}
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
         try {
-            new RequirementsPreflight().check(request.workbench);
+            this.requirements.check(request.workbench);
         } catch (error) {
             throw RuntimeError.from(this.name, 'prepare', error);
         }
-        const paths = new E2BPathPlan(request);
-        await paths.verify();
+        const assets = this.dependencies.assets;
+        const paths = new E2BPathPlan(request, this.rules);
+        await paths.verify(assets);
         new WorkbenchPreflight({
             environment: paths.environment(),
         }).checkConfiguration(paths.remap(request.workbench));
@@ -58,7 +64,11 @@ export class E2BRuntimeProvider implements RuntimeProvider {
             request,
             client,
             paths,
+            assets,
+            rules: this.rules,
+            local: this.dependencies.local,
             preparation: template.preparation,
+            requirements: this.requirements,
             run,
             maximumTransferBytes:
                 this.dependencies.maxTransferBytes ?? defaultMaximumTransferBytes,

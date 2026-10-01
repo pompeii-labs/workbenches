@@ -17,7 +17,7 @@ export class E2BManagedSandboxes {
     static connect(
         scope: string,
         environment: Record<string, string | undefined> = process.env,
-        dependencies: E2BRuntimeDependencies = {}
+        dependencies: Pick<E2BRuntimeDependencies, 'client'> = {}
     ): E2BManagedSandboxes | undefined {
         validateScope(scope);
         const client =

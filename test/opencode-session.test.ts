@@ -3,7 +3,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRouter } from '../src/models/index.js';
+import { RunnerContextStaging } from '../src/runners/context/stage.js';
+import { DiskRunnerFiles } from '../src/runners/files/disk.js';
 import { OpenCodeSessionAdapter } from '../src/runners/opencode/adapter.js';
+import { OpenCodeSkillStaging } from '../src/runners/opencode/skills.js';
 import type {
     RunnerPermissionRequest,
     RunnerQuestionRequest,
@@ -1353,7 +1356,9 @@ class FakeOpenCodeServer {
     });
 
     adapter() {
+        const files = new DiskRunnerFiles();
         return new OpenCodeSessionAdapter({
+            skills: new OpenCodeSkillStaging(files, new RunnerContextStaging(files)),
             password: () => 'test-password',
             spawn: (_command, options) => {
                 this.spawnEnvironment = options.env;

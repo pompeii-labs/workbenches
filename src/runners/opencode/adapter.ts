@@ -1,11 +1,9 @@
-import type { RunnerContextFiles } from '../context.js';
-
+import type { RunnerContext } from '../context/files.js';
 import type {
     RunnerSession,
     RunnerSessionAdapter,
     RunnerSessionStartOptions,
 } from '../session.js';
-import { stageOpenCodeSkills } from './assets.js';
 import { OPENCODE_SESSION_DECLARATION } from './capabilities.js';
 import {
     launchLocalOpenCodeServer,
@@ -15,8 +13,14 @@ import {
     spawnOpenCodeServer,
 } from './server.js';
 import { OpenCodeServerSession } from './session.js';
+import type { OpenCodeSkillStaging } from './skills.js';
 
 export interface OpenCodeSessionDependencies {
+    /**
+     * Stages skills and native config for a session the adapter starts itself
+     * with `start`. The adapter has no storage of its own.
+     */
+    skills: OpenCodeSkillStaging;
     spawn?: (
         command: string[],
         options: {
@@ -34,7 +38,7 @@ export interface OpenCodeSessionDependencies {
 }
 
 export interface PreparedOpenCodeSession {
-    context?: RunnerContextFiles;
+    context?: RunnerContext;
     configDirectory?: string;
     nativeConfigFile?: string;
     startupTimeoutMs?: number;
@@ -44,9 +48,13 @@ export interface PreparedOpenCodeSession {
 export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
     readonly runner = 'opencode';
     readonly declaration = OPENCODE_SESSION_DECLARATION;
-    private readonly dependencies: Required<OpenCodeSessionDependencies>;
+    private readonly dependencies: Required<
+        Omit<OpenCodeSessionDependencies, 'skills'>
+    >;
+    private readonly skills: OpenCodeSkillStaging;
 
-    constructor(dependencies: OpenCodeSessionDependencies = {}) {
+    constructor(dependencies: OpenCodeSessionDependencies) {
+        this.skills = dependencies.skills;
         this.dependencies = {
             spawn: dependencies.spawn ?? spawnOpenCodeServer,
             fetch: dependencies.fetch ?? globalThis.fetch,
@@ -58,17 +66,17 @@ export class OpenCodeSessionAdapter implements RunnerSessionAdapter {
     }
 
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
-        const staged = await stageOpenCodeSkills(options.workbench);
+        const staged = await this.skills.stage(options.workbench);
         const nativeConfigFile = staged.nativeConfigFile;
         return this.startConfigured(
             options,
             {
                 context: staged.context,
-                ...(staged?.directory ? { configDirectory: staged.directory } : {}),
+                configDirectory: staged.directory,
                 ...(nativeConfigFile ? { nativeConfigFile } : {}),
                 launch: launchLocalOpenCodeServer(this.dependencies.spawn),
             },
-            staged?.cleanup ?? (async () => {})
+            () => staged.cleanup()
         );
     }
 

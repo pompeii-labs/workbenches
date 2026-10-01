@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { E2BPathPlan } from '../src/runtimes/e2b/paths.js';
+import { TransferRules } from '../src/runtimes/staging/rules.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { WorkbenchEnvironment } from '../src/workbench/index.js';
 
@@ -96,12 +97,15 @@ describe('Workbench environment overrides', () => {
         ]) {
             const bound = environment.bind(workbench, overrides, {});
             expect(bound.E2B_API_KEY).toBe('fixture-host-only-key');
-            const paths = new E2BPathPlan({
-                workbench,
-                workspaceDirectory: '/repo',
-                environment: bound,
-                assets: [],
-            });
+            const paths = new E2BPathPlan(
+                {
+                    workbench,
+                    workspaceDirectory: '/repo',
+                    environment: bound,
+                    assets: [],
+                },
+                new TransferRules('E2B')
+            );
             expect(paths.environment()).not.toHaveProperty('E2B_API_KEY');
             expect(JSON.stringify(paths.environment())).not.toContain(
                 'fixture-host-only-key'

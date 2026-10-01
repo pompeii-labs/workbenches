@@ -229,9 +229,10 @@ export type {
     WorkbenchWorkspaceRequirement,
 } from './types.js';
 export {
-    assertRequirements,
     declaredRuntimeNames,
     declaredRuntimes,
+    type HostDescriber,
+    NodeHost,
     type PreflightResult,
     type RequirementsCheckOptions,
     type RequirementsHost,

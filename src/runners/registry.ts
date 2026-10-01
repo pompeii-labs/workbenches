@@ -1,5 +1,9 @@
 import type { ResolvedWorkbench } from '../types.js';
+import { RunnerContextStaging } from './context/stage.js';
+import { DiskRunnerFiles } from './files/disk.js';
 import { OpenCodeRunner } from './opencode/runner.js';
+import { OpenCodeSkillStaging } from './opencode/skills.js';
+import { PiConfigStaging } from './pi/config.js';
 import { PiRunner } from './pi/runner.js';
 import type { PreparedRunner, Runner } from './runner.js';
 import {
@@ -29,7 +33,12 @@ export class RunnerRegistry {
     }
 
     static standard(): RunnerRegistry {
-        return new RunnerRegistry([new OpenCodeRunner(), new PiRunner()]);
+        const files = new DiskRunnerFiles();
+        const context = new RunnerContextStaging(files);
+        return new RunnerRegistry([
+            new OpenCodeRunner({ skills: new OpenCodeSkillStaging(files, context) }),
+            new PiRunner(new PiConfigStaging(files, context)),
+        ]);
     }
 
     resolve(name: string): Runner {
@@ -40,7 +49,7 @@ export class RunnerRegistry {
 
     async prepare(
         workbench: ResolvedWorkbench,
-        environment: Record<string, string | undefined> = process.env
+        environment: Record<string, string | undefined>
     ): Promise<PreparedRunner> {
         return await this.resolve(workbench.manifest.runner).prepare(
             workbench,

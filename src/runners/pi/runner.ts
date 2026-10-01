@@ -2,7 +2,6 @@ import { ModelRouter, type ResolvedRunnerConfiguration } from '../../models/inde
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import { selectedRuntime } from '../../workbench/runtimes.js';
-import { type RunnerContextFiles, remapRunnerContext } from '../context.js';
 import {
     assertRunnerConfiguration,
     type PreparedRunner,
@@ -10,7 +9,7 @@ import {
     Runner,
     type RunnerEventNormalizer,
 } from '../runner.js';
-import { stagePiConfig } from './assets.js';
+import type { PiConfigStaging, StagedPiConfig } from './config.js';
 import { PiEventAdapter } from './events.js';
 import {
     buildPiInvocation,
@@ -21,13 +20,23 @@ import { PiSessionAdapter, type SpawnedPi } from './session.js';
 
 export class PiRunner extends Runner {
     readonly name = 'pi';
-    readonly session = new PiSessionAdapter();
+    readonly session: PiSessionAdapter;
+
+    constructor(private readonly config: PiConfigStaging) {
+        super();
+        this.session = new PiSessionAdapter({ config });
+    }
 
     async prepare(
         workbench: ResolvedWorkbench,
         environment: Record<string, string | undefined>
     ): Promise<PreparedRunner> {
-        return PreparedPiRunner.create(workbench, environment, this.session);
+        return PreparedPiRunner.create(
+            workbench,
+            environment,
+            this.session,
+            this.config
+        );
     }
 }
 
@@ -36,41 +45,33 @@ class PreparedPiRunner implements PreparedRunner {
     readonly failureLabel = 'Pi';
     readonly assets: RuntimeAsset[];
 
-    readonly #cleanup: () => Promise<void>;
-    readonly #stagedDirectory: string;
     readonly #workbench: ResolvedWorkbench;
+    readonly #staged: StagedPiConfig;
     readonly #session: PiSessionAdapter;
-    readonly #context: RunnerContextFiles;
 
     private constructor(options: {
         workbench: ResolvedWorkbench;
-        stagedDirectory: string;
-        cleanup: () => Promise<void>;
+        staged: StagedPiConfig;
         session: PiSessionAdapter;
-        context: RunnerContextFiles;
     }) {
         this.#workbench = options.workbench;
-        this.#stagedDirectory = options.stagedDirectory;
-        this.#cleanup = options.cleanup;
+        this.#staged = options.staged;
         this.#session = options.session;
-        this.#context = options.context;
-        this.assets = [{ path: options.stagedDirectory, access: 'read-write' }];
+        this.assets = [{ path: options.staged.directory, access: 'read-write' }];
     }
 
     static async create(
         workbench: ResolvedWorkbench,
         environment: Record<string, string | undefined>,
-        session = new PiSessionAdapter()
+        session: PiSessionAdapter,
+        config: PiConfigStaging
     ): Promise<PreparedPiRunner> {
-        const staged = await stagePiConfig(workbench, environment, {
-            linkNativeCredentials: selectedRuntime(workbench).name === 'local',
-        });
         return new PreparedPiRunner({
             workbench,
-            stagedDirectory: staged.directory,
-            cleanup: staged.cleanup,
+            staged: await config.stage(workbench, environment, {
+                linkNativeCredentials: selectedRuntime(workbench).name === 'local',
+            }),
             session,
-            context: staged.context,
         });
     }
 
@@ -90,8 +91,8 @@ class PreparedPiRunner implements PreparedRunner {
             ),
             runtime.workspaceDirectory,
             configuration.model,
-            runtime.pathFor(this.#stagedDirectory),
-            remapRunnerContext(this.#context, (path) => runtime.pathFor(path))
+            runtime.pathFor(this.#staged.directory),
+            this.#staged.context.remap((path) => runtime.pathFor(path))
         );
     }
 
@@ -108,7 +109,7 @@ class PreparedPiRunner implements PreparedRunner {
             command: piCredentialCommand(
                 command,
                 environment,
-                runtime.pathFor(this.#stagedDirectory)
+                runtime.pathFor(this.#staged.directory)
             ),
             cwd: runtime.workspaceDirectory,
             env: environment,
@@ -139,10 +140,8 @@ class PreparedPiRunner implements PreparedRunner {
                 ...(options.session ? { session: options.session } : {}),
             },
             {
-                context: remapRunnerContext(this.#context, (path) =>
-                    runtime.pathFor(path)
-                ),
-                configDirectory: runtime.pathFor(this.#stagedDirectory),
+                context: this.#staged.context.remap((path) => runtime.pathFor(path)),
+                configDirectory: runtime.pathFor(this.#staged.directory),
                 spawn: (command, spawnOptions): SpawnedPi => {
                     const process = runtime.launchSession(
                         {
@@ -174,6 +173,6 @@ class PreparedPiRunner implements PreparedRunner {
     }
 
     cleanup(): Promise<void> {
-        return this.#cleanup();
+        return this.#staged.cleanup();
     }
 }

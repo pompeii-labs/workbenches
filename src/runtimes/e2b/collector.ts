@@ -8,22 +8,31 @@ import {
     type OutcomeStore,
     type RuntimeOutcomeCollection,
 } from '../../outcomes/index.js';
+import { formatOutcomeBytes } from '../../outcomes/presentation.js';
+import type { TransferRules } from '../staging/rules.js';
+import { E2BArchive } from './archive.js';
 import type { E2BSandbox } from './contracts.js';
-import { formatBytes } from './infrastructure.js';
 import { quote } from './shell.js';
-import { type E2BAssetSnapshot, extractArchive } from './snapshot.js';
-import { downloadE2BFile } from './streams.js';
+import type { E2BAssetSnapshot } from './snapshot.js';
 import { workspaceTracking } from './tracking.js';
+import { E2BTransfer } from './transfer.js';
 
 export class E2BOutcomeCollector {
+    private readonly transfer: E2BTransfer;
+    private readonly archive: E2BArchive;
+
     constructor(
         private readonly options: {
             sandbox: E2BSandbox;
             snapshots: E2BAssetSnapshot[];
             baselines: Map<number, string>;
             maximumTransferBytes: number;
+            rules: TransferRules;
         }
-    ) {}
+    ) {
+        this.transfer = new E2BTransfer(options.sandbox);
+        this.archive = new E2BArchive(options.rules);
+    }
 
     async collect(store: OutcomeStore): Promise<RuntimeOutcomeCollection> {
         const sandbox = this.options.sandbox;
@@ -77,30 +86,32 @@ export class E2BOutcomeCollector {
                     this.options.maximumTransferBytes
                 ) {
                     throw new Error(
-                        `E2B output exceeds the ${formatBytes(this.options.maximumTransferBytes)} transfer safety limit`
+                        `E2B output exceeds the ${formatOutcomeBytes(this.options.maximumTransferBytes)} transfer safety limit`
                     );
                 }
                 const localArchive = join(directory, `output-${index}.tar.gz`);
                 const localDeleted = join(directory, `deleted-${index}`);
-                transferred += await downloadE2BFile(
-                    sandbox,
+                transferred += await this.transfer.download(
                     remoteArchive,
                     localArchive,
-                    this.options.maximumTransferBytes - transferred,
-                    this.options.maximumTransferBytes
+                    {
+                        maximumBytes: this.options.maximumTransferBytes - transferred,
+                        reportedMaximumBytes: this.options.maximumTransferBytes,
+                    }
                 );
-                const deletionBytes = await downloadE2BFile(
-                    sandbox,
+                const deletionBytes = await this.transfer.download(
                     remoteDeleted,
                     localDeleted,
-                    this.options.maximumTransferBytes - transferred,
-                    this.options.maximumTransferBytes
+                    {
+                        maximumBytes: this.options.maximumTransferBytes - transferred,
+                        reportedMaximumBytes: this.options.maximumTransferBytes,
+                    }
                 );
                 transferred += deletionBytes;
                 materialized += deletionBytes;
                 if (materialized > this.options.maximumTransferBytes) {
                     throw new Error(
-                        `E2B output exceeds the ${formatBytes(this.options.maximumTransferBytes)} transfer safety limit`
+                        `E2B output exceeds the ${formatOutcomeBytes(this.options.maximumTransferBytes)} transfer safety limit`
                     );
                 }
                 const deletions = (await readFile(localDeleted))
@@ -178,20 +189,20 @@ export class E2BOutcomeCollector {
             const maximum = this.options.maximumTransferBytes;
             if (transferred + (await sandbox.fileSize(remoteArchive)) > maximum) {
                 throw new Error(
-                    `E2B output exceeds the ${formatBytes(maximum)} transfer safety limit`
+                    `E2B output exceeds the ${formatOutcomeBytes(maximum)} transfer safety limit`
                 );
             }
             const archive = join(directory, 'artifacts.tar.gz');
-            await downloadE2BFile(
-                sandbox,
-                remoteArchive,
-                archive,
-                maximum - transferred,
-                maximum
-            );
+            await this.transfer.download(remoteArchive, archive, {
+                maximumBytes: maximum - transferred,
+                reportedMaximumBytes: maximum,
+            });
             const artifacts = join(directory, 'artifacts');
             await mkdir(artifacts, { mode: 0o700 });
-            await extractArchive(archive, artifacts, maximum - materialized, maximum);
+            await this.archive.extract(archive, artifacts, {
+                maximumBytes: maximum - materialized,
+                reportedMaximumBytes: maximum,
+            });
             return await OutcomeOutput.open(artifacts).collect(store);
         } finally {
             await sandbox

@@ -1,11 +1,12 @@
 import type { RunnerConnectionSelection } from '../connections/store.js';
-import type { ResolvedWorkbench, WorkbenchModelPolicy } from '../types.js';
+import type { ResolvedWorkbench } from '../types.js';
 import {
     ModelCatalog,
     type ModelCatalogModel,
     type ModelCatalogProvider,
     type ModelCatalogSnapshot,
 } from './catalog.js';
+import { modelLabel } from './label.js';
 
 export type ModelCatalogData = ModelCatalogSnapshot;
 export type { ModelCatalogModel, ModelCatalogProvider };
@@ -188,10 +189,6 @@ export class ModelRouter {
         if (model) return model;
         throw new Error(`Provider ${provider} does not serve model ${id}`);
     }
-}
-
-export function modelLabel(model: WorkbenchModelPolicy): string {
-    return model.id;
 }
 
 export function connectCommand(reference: string): string {

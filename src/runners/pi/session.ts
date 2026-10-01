@@ -1,4 +1,5 @@
-import { type RunnerContextFiles, runtimeContext } from '../context.js';
+import type { RunnerContext } from '../context/files.js';
+import { runtimeContext } from '../context/runtime.js';
 import type {
     RunnerAdapterDeclaration,
     RunnerInput,
@@ -9,7 +10,7 @@ import type {
     RunnerTurnResult,
 } from '../session.js';
 import { normalizeRunnerInput } from '../session.js';
-import { stagePiConfig } from './assets.js';
+import type { PiConfigStaging } from './config.js';
 import { PiEventAdapter } from './events.js';
 import { buildPiRpcInvocation } from './invocation.js';
 import { PI_PACKAGE_VERSION } from './providers.js';
@@ -64,6 +65,11 @@ export interface SpawnedPi {
 }
 
 export interface PiSessionDependencies {
+    /**
+     * Stages config and context for a session the adapter starts itself with
+     * `start`.
+     */
+    config: PiConfigStaging;
     spawn?: (
         command: string[],
         options: {
@@ -78,7 +84,7 @@ export interface PiSessionDependencies {
 }
 
 export interface PreparedPiSession {
-    context?: RunnerContextFiles;
+    context?: RunnerContext;
     configDirectory: string;
     spawn: NonNullable<PiSessionDependencies['spawn']>;
 }
@@ -86,9 +92,11 @@ export interface PreparedPiSession {
 export class PiSessionAdapter implements RunnerSessionAdapter {
     readonly runner = 'pi';
     readonly declaration = PI_SESSION_DECLARATION;
-    private readonly dependencies: Required<PiSessionDependencies>;
+    private readonly dependencies: Required<Omit<PiSessionDependencies, 'config'>>;
+    private readonly config: PiConfigStaging;
 
-    constructor(dependencies: PiSessionDependencies = {}) {
+    constructor(dependencies: PiSessionDependencies) {
+        this.config = dependencies.config;
         this.dependencies = {
             spawn: dependencies.spawn ?? defaultSpawn,
             startupTimeoutMs: dependencies.startupTimeoutMs ?? 10_000,
@@ -96,7 +104,11 @@ export class PiSessionAdapter implements RunnerSessionAdapter {
     }
 
     async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
-        const staged = await stagePiConfig(options.workbench, options.environment);
+        const staged = await this.config.stage(
+            options.workbench,
+            options.environment,
+            {}
+        );
         return this.startConfigured(
             options,
             {
@@ -104,7 +116,7 @@ export class PiSessionAdapter implements RunnerSessionAdapter {
                 configDirectory: staged.directory,
                 spawn: this.dependencies.spawn,
             },
-            staged.cleanup
+            () => staged.cleanup()
         );
     }
 
@@ -153,10 +165,10 @@ interface PendingResponse {
 
 class PiRpcSession implements RunnerSession {
     private readonly options: RunnerSessionStartOptions &
-        Required<PiSessionDependencies> & {
+        Required<Omit<PiSessionDependencies, 'config'>> & {
             configuration: RunnerSessionStartOptions['configuration'];
             configDirectory: string;
-            context?: RunnerContextFiles;
+            context?: RunnerContext;
             cleanup: () => Promise<void>;
         };
     private readonly responses = new Map<string, PendingResponse>();
@@ -172,10 +184,10 @@ class PiRpcSession implements RunnerSession {
 
     constructor(
         options: RunnerSessionStartOptions &
-            Required<PiSessionDependencies> & {
+            Required<Omit<PiSessionDependencies, 'config'>> & {
                 configuration: RunnerSessionStartOptions['configuration'];
                 configDirectory: string;
-                context?: RunnerContextFiles;
+                context?: RunnerContext;
                 cleanup: () => Promise<void>;
             }
     ) {

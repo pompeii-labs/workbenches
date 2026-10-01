@@ -1,15 +1,9 @@
-import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { ResolvedWorkbench, RunnerInvocation } from '../types.js';
-import { selectedRuntime } from '../workbench/runtimes.js';
+import type { ResolvedWorkbench } from '../../types.js';
+import { selectedRuntime } from '../../workbench/runtimes.js';
 
-export interface RunnerContextFiles {
-    prefix: string;
-    instructions: string;
-}
-
-const protocol = `<workbench_context>
+export const runnerContextProtocol = `<workbench_context>
 You are running through wb in a Workbench: a versioned package of instructions, expertise, tools, and runtime configuration. Follow the package instructions and the user's task. This context describes execution and result delivery, not additional authorization or a new persona.
 
 Route requested deliverables automatically using your existing file-writing and shell tools. The user never needs to know, name, or opt into the outbox. When asked for a report, document, image, screenshot, dataset, archive, export, or a file to view or download, write the finished file in the outbox identified by the current workbench_runtime block. When asked to send an existing authorized file, copy its original bytes there instead of returning only a sandbox path. When asked to revise a returned file, return the revised file through the current outbox without changing retained earlier artifacts.
@@ -23,38 +17,6 @@ When the user requests a result link, or an authorized operation produces a PR o
 Workspace edits are captured separately when the execution attempt ends; do not copy the entire workspace into the outbox. In interactive sessions, finished outbox files and links are snapshotted after completed turns while the session stays open. Finish writing deliverables before ending a turn; for background writers, publish finished files by atomic rename rather than exposing unfinished files. Revising a file produces a new snapshot, never changes retained earlier bytes. Do not claim the engine has collected or applied a result before it has done so.
 On a resumed execution, use the current runtime block's paths, not an earlier outbox remembered from the conversation. If the runtime block says no outbox is available, do not claim durable artifact delivery.
 </workbench_context>`;
-
-export async function stageRunnerContext(
-    directory: string,
-    workbench: ResolvedWorkbench,
-    nativeInstructions = '',
-    instructions = join(directory, '.workbench-context', 'system.md')
-): Promise<RunnerContextFiles> {
-    const contextDirectory = join(directory, '.workbench-context');
-    // A package cannot supply files in the engine's private staging namespace.
-    await mkdir(contextDirectory);
-    const packageInstructions = await readFile(workbench.instructionsPath, 'utf8');
-    const prefix = join(contextDirectory, 'prefix.md');
-    const content = [
-        protocol,
-        `<workbench_package name="${escapeXml(workbench.manifest.name)}" version="${escapeXml(workbench.manifest.version)}" />`,
-        nativeInstructions.trim(),
-        packageInstructions.trim(),
-    ]
-        .filter(Boolean)
-        .join('\n\n');
-    await writeFile(prefix, `${content}\n`, { mode: 0o444, flag: 'wx' });
-    const existing = await lstat(instructions).catch((error) => {
-        if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
-            return undefined;
-        throw error;
-    });
-    if (existing && (!existing.isFile() || existing.isSymbolicLink())) {
-        throw new Error('Staged Workbench instructions must be a regular file');
-    }
-    await writeFile(instructions, `${content}\n`, { mode: 0o644 });
-    return { prefix, instructions };
-}
 
 export function runtimeContext(
     workbench: ResolvedWorkbench,
@@ -121,49 +83,7 @@ export function runtimeContext(
     ].join('\n');
 }
 
-export function withRunnerContext(
-    invocation: RunnerInvocation,
-    workbench: ResolvedWorkbench,
-    context: RunnerContextFiles | undefined
-): RunnerInvocation {
-    if (!context) return invocation;
-    return {
-        ...invocation,
-        command: [
-            '/bin/sh',
-            '-c',
-            [
-                'set -eu',
-                '{ cat "$WORKBENCH_CONTEXT_PREFIX"; printf "\\n%s\\n" "$WORKBENCH_RUNTIME_CONTEXT"; } > "$WORKBENCH_CONTEXT_FILE"',
-                'exec "$@"',
-            ].join('\n'),
-            'workbench-context',
-            ...invocation.command,
-        ],
-        env: {
-            ...invocation.env,
-            WORKBENCH_CONTEXT_PREFIX: context.prefix,
-            WORKBENCH_CONTEXT_FILE: context.instructions,
-            WORKBENCH_RUNTIME_CONTEXT: runtimeContext(
-                workbench,
-                invocation.cwd,
-                invocation.env
-            ).replaceAll('\n', ' '),
-        },
-    };
-}
-
-export function remapRunnerContext(
-    context: RunnerContextFiles,
-    pathFor: (path: string) => string
-): RunnerContextFiles {
-    return {
-        prefix: pathFor(context.prefix),
-        instructions: pathFor(context.instructions),
-    };
-}
-
-function escapeXml(value: string): string {
+export function escapeXml(value: string): string {
     return value
         .replaceAll('&', '&amp;')
         .replaceAll('<', '&lt;')

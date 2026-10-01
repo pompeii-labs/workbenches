@@ -22,6 +22,7 @@ import {
 } from '../src/runtimes/docker/index.js';
 import { RuntimeRegistry } from '../src/runtimes/index.js';
 import type { ResolvedWorkbench, SpawnedRunner } from '../src/types.js';
+import { NodeHost } from '../src/workbench/host.js';
 import { runtimeProviderContract } from './runtime-provider-contract.js';
 
 const temporaryDirectories: string[] = [];
@@ -42,6 +43,7 @@ describe('Docker runtime provider', () => {
         const output = await OutcomeOutput.create(home, RunStore.createId());
         let spawnedCommand: string[] = [];
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock([]),
             spawn(command) {
@@ -81,6 +83,7 @@ describe('Docker runtime provider', () => {
         };
         let spawnedCommand: string[] = [];
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock([]),
             spawn(command) {
@@ -158,13 +161,15 @@ describe('Docker runtime provider', () => {
     test('reports unavailable host Docker dependencies before image work', async () => {
         const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
         await expect(
-            new DockerRuntimeProvider({ findExecutable: () => null }).prepare(
-                request(fixture)
-            )
+            new DockerRuntimeProvider({
+                host: new NodeHost(),
+                findExecutable: () => null,
+            }).prepare(request(fixture))
         ).rejects.toThrow('Docker CLI is unavailable on the host');
 
         await expect(
             new DockerRuntimeProvider({
+                host: new NodeHost(),
                 findExecutable: () => '/usr/bin/docker',
                 command: async () => result(1, '', 'daemon stopped'),
             }).prepare(request(fixture))
@@ -175,6 +180,7 @@ describe('Docker runtime provider', () => {
         const fixture = await createFixture({});
         await expect(
             new DockerRuntimeProvider({
+                host: new NodeHost(),
                 findExecutable: () => '/usr/bin/docker',
                 command: dockerMock([]),
             }).prepare(request(fixture))
@@ -188,6 +194,7 @@ describe('Docker runtime provider', () => {
         });
         let resolvedSocket = false;
         const provider = new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock([]),
             hostSocket: async () => {
@@ -203,6 +210,7 @@ describe('Docker runtime provider', () => {
 
         let spawnedCommand: string[] = [];
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock([]),
             hostSocket: async () => ({
@@ -247,6 +255,7 @@ describe('Docker runtime provider', () => {
         });
         const mockedDocker = dockerMock([]);
         const provider = new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command(command) {
                 if (command[1] === 'context') {
@@ -270,6 +279,7 @@ describe('Docker runtime provider', () => {
         const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
         const commands: string[][] = [];
         const provider = new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock(commands),
         });
@@ -300,6 +310,7 @@ describe('Docker runtime provider', () => {
         const fixture = await createFixture({ image: reference });
         const commands: string[][] = [];
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock(commands),
         }).prepare(request(fixture));
@@ -334,6 +345,7 @@ describe('Docker runtime provider', () => {
             },
         });
         const provider = new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command,
         });
@@ -390,6 +402,7 @@ describe('Docker runtime provider', () => {
             },
         });
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command,
         }).prepare({
@@ -419,6 +432,7 @@ describe('Docker runtime provider', () => {
         await writeFile(runnerConfigPath, '{"share":"disabled"}\n');
         fixture.workbench.runnerConfigPath = runnerConfigPath;
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock([]),
         }).prepare(request(fixture));
@@ -435,6 +449,7 @@ describe('Docker runtime provider', () => {
         });
         const commands: string[][] = [];
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock(commands),
         }).prepare({ ...request(fixture), purpose: 'build' });
@@ -458,6 +473,7 @@ describe('Docker runtime provider', () => {
         let interactiveCommand: string[] = [];
         let interactiveEnvironment = '';
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock(commands),
             interact(command) {
@@ -505,6 +521,7 @@ describe('Docker runtime provider', () => {
         let spawned = false;
         const runtime = await new RuntimeRegistry([
             new DockerRuntimeProvider({
+                host: new NodeHost(),
                 findExecutable: () => '/usr/bin/docker',
                 command: dockerMock([], { missing: 'lux' }),
                 spawn: () => {
@@ -534,6 +551,7 @@ describe('Docker runtime provider', () => {
         let active = 0;
         let peak = 0;
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             async command(command) {
                 const preflight =
@@ -580,6 +598,7 @@ describe('Docker runtime provider', () => {
             stderr: { value: stderr, enumerable: false },
         });
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command(command, options) {
                 dockerEnvironments.push(options?.env ?? {});
@@ -673,6 +692,7 @@ describe('Docker runtime provider', () => {
         let spawnedCommand: string[] = [];
         let containerEnvironment = '';
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock([]),
             spawn(command) {
@@ -727,6 +747,7 @@ describe('Docker runtime provider', () => {
         let spawnedInput: string | undefined;
         const mockedDocker = dockerMock([]);
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command(command) {
                 if (command[1] === 'port') {
@@ -791,6 +812,7 @@ describe('Docker runtime provider', () => {
         let killed = false;
         let environmentFile = '';
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command(command) {
                 if (command[1] === 'container') {
@@ -842,6 +864,7 @@ describe('Docker runtime provider', () => {
         const mockedDocker = dockerMock(commands);
         let inspections = 0;
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command(command) {
                 if (command[1] === 'container' && command[2] === 'rm') {
@@ -892,6 +915,7 @@ describe('Docker runtime provider', () => {
         });
         const runtime = await new RuntimeRegistry([
             new DockerRuntimeProvider({
+                host: new NodeHost(),
                 findExecutable: () => '/usr/bin/docker',
                 command: dockerMock([]),
             }),
@@ -940,6 +964,7 @@ describe('Docker build preparation', () => {
             },
         });
         const provider = new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command,
         });
@@ -966,6 +991,7 @@ describe('Docker build preparation', () => {
         const mockedDocker = dockerMock(commands);
         let stagedContext = '';
         const provider = new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command(command) {
                 if (command[1] === 'buildx') {
@@ -1167,6 +1193,7 @@ describe('Docker runtime provider contract', () => {
         },
         createProvider: () =>
             new DockerRuntimeProvider({
+                host: new NodeHost(),
                 findExecutable: () => '/usr/bin/docker',
                 command: dockerMock([]),
                 spawn: () => ({ exited: Promise.resolve(0), kill() {} }),

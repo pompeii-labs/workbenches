@@ -2,6 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 
 import type { SpawnedRunner } from '../../types.js';
 import type {
+    DockerClientDependencies,
     DockerCommandResult,
     DockerHostSocket,
     DockerImageInspect,
@@ -25,7 +26,7 @@ export class DockerClient {
 
     constructor(
         readonly executable: string,
-        dependencies: DockerRuntimeDependencies,
+        dependencies: DockerClientDependencies,
         private readonly protectedEnvironmentNames: string[]
     ) {
         this.commandProcess = dependencies.command ?? DockerClient.commandProcess;

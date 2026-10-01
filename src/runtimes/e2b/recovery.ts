@@ -5,13 +5,14 @@ import { outcomeStorageDirectory } from '../../outcomes/directories.js';
 import { OutcomeStorageLease, processIsAlive } from '../../outcomes/lease.js';
 import { OutcomeStore } from '../../outcomes/store.js';
 import { RunStore } from '../../runs/store.js';
+import { TransferRules } from '../staging/rules.js';
 import {
     parseE2BRecoveryRecord,
     type E2BRecoveryRecord as RecoveryRecord,
 } from './checkpoint.js';
 import { E2BOutcomeCollector } from './collector.js';
 import type { E2BClient, E2BSandbox } from './contracts.js';
-import { captureE2BNativeState } from './native.js';
+import { E2BNativeState } from './native.js';
 import { E2BAssetSnapshot } from './snapshot.js';
 
 export interface E2BRecoveryReview {
@@ -189,13 +190,14 @@ export class E2BOutcomeRecovery {
                         record.sandboxId,
                         5 * 60 * 1_000
                     );
+                    // Recovery runs from the CLI with no provider to hand it rules.
+                    const rules = new TransferRules('E2B');
                     const snapshots = record.snapshots.map((value) =>
-                        E2BAssetSnapshot.fromRecovery(value, this.directory)
+                        E2BAssetSnapshot.fromRecovery(value, this.directory, rules)
                     );
                     const persisted = new Set(record.persistedState);
                     try {
-                        await captureE2BNativeState(
-                            sandbox,
+                        await new E2BNativeState(sandbox).capture(
                             snapshots,
                             record.maximumBytes,
                             persisted,
@@ -213,6 +215,7 @@ export class E2BOutcomeRecovery {
                         snapshots,
                         baselines: new Map(record.baselines),
                         maximumTransferBytes: record.maximumBytes,
+                        rules,
                     }).collect(store);
                     outcome = await store.commit(
                         {

@@ -3,12 +3,18 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRouter } from '../src/models/index.js';
+import { RunnerContextStaging } from '../src/runners/context/stage.js';
+import { DiskRunnerFiles } from '../src/runners/files/disk.js';
+import { PiConfigStaging } from '../src/runners/pi/config.js';
 import { PiSessionAdapter } from '../src/runners/pi/session.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import {
     type RunnerConformanceScenario,
     runnerAdapterContract,
 } from './runner-adapter-contract.js';
+
+const files = new DiskRunnerFiles();
+const config = new PiConfigStaging(files, new RunnerContextStaging(files));
 
 const root = await mkdtemp(join(tmpdir(), 'pi-session-contract-'));
 const packageDirectory = join(root, '.workbenches', 'core');
@@ -44,7 +50,10 @@ runnerAdapterContract({
     createHarness() {
         const native = new FakePiRpc();
         return {
-            adapter: new PiSessionAdapter({ spawn: () => native.process }),
+            adapter: new PiSessionAdapter({
+                config,
+                spawn: () => native.process,
+            }),
             workbench,
             arrange(scenario) {
                 native.scenario = scenario;
@@ -57,6 +66,7 @@ describe('Pi RPC session adapter', () => {
     test('refreshes current attempt facts once when reopening native context, preserving images and later input', async () => {
         const native = new FakePiRpc();
         const session = await new PiSessionAdapter({
+            config,
             spawn: () => native.process,
         }).start({
             workbench,
@@ -103,6 +113,7 @@ describe('Pi RPC session adapter', () => {
         const native = new FakePiRpc();
         native.scenario = 'cancellation';
         const session = await new PiSessionAdapter({
+            config,
             spawn: () => native.process,
         }).start({
             workbench,
@@ -158,6 +169,7 @@ describe('Pi RPC session adapter', () => {
         native.scenario = 'cancellation';
         native.abortEndsBeforeResponse = true;
         const session = await new PiSessionAdapter({
+            config,
             spawn: () => native.process,
         }).start({
             workbench,
@@ -184,6 +196,7 @@ describe('Pi RPC session adapter', () => {
         const native = new FakePiRpc();
         native.scenario = 'cancellation';
         const session = await new PiSessionAdapter({
+            config,
             spawn: () => native.process,
         }).start({
             workbench,
@@ -209,6 +222,7 @@ describe('Pi RPC session adapter', () => {
     test('rejects a later turn when the native RPC stream failed while idle', async () => {
         const native = new FakePiRpc();
         const session = await new PiSessionAdapter({
+            config,
             spawn: () => native.process,
         }).start({
             workbench,

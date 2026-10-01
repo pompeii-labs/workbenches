@@ -12,6 +12,7 @@ import {
 } from '../src/runtimes/index.js';
 import { LocalRuntime } from '../src/runtimes/local.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { NodeHost } from '../src/workbench/host.js';
 import { runtimeProviderContract } from './runtime-provider-contract.js';
 
 const instructionDirectory = await mkdtemp(join(tmpdir(), 'runtime-instructions-'));
@@ -34,7 +35,9 @@ let cancellationCount = 0;
 
 describe('local runtime provider contract', () => {
     test('registry forwards live repository snapshots and guards collection failures', async () => {
-        const native = await new LocalRuntimeProvider().prepare(request);
+        const native = await new LocalRuntimeProvider({ host: new NodeHost() }).prepare(
+            request
+        );
         let calls = 0;
         let fail = false;
         native.snapshotRepository = async () => {
@@ -106,6 +109,7 @@ describe('local runtime provider contract', () => {
         request,
         createProvider: () =>
             new LocalRuntimeProvider({
+                host: new NodeHost(),
                 findExecutable: (name) => `/bin/${name}`,
                 spawn: () => ({
                     exited: Promise.resolve(0),
@@ -118,6 +122,7 @@ describe('local runtime provider contract', () => {
 
     test('uses host paths and records cancellation', async () => {
         const runtime = await new LocalRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: (name) => `/bin/${name}`,
             spawn: () => ({
                 exited: Promise.resolve(0),
@@ -142,6 +147,7 @@ describe('local runtime provider contract', () => {
     test('launches session processes and loopback services on the host', async () => {
         let input: string | undefined;
         const runtime = await new LocalRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: (name) => `/bin/${name}`,
             spawn: (_command, options) => {
                 input = options.stdin;
@@ -174,6 +180,7 @@ describe('local runtime provider contract', () => {
         let interactiveCommand: string[] = [];
         let interactiveOptions: Record<string, unknown> = {};
         const provider = new LocalRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: (name) => `/bin/${name}`,
             spawn: () => ({
                 exited: Promise.resolve(7),
@@ -243,6 +250,7 @@ describe('local runtime provider contract', () => {
 
     test('rejects launch after cleanup', async () => {
         const runtime = await new LocalRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: (name) => `/bin/${name}`,
         }).prepare(request);
         await runtime.preflight();
@@ -255,7 +263,7 @@ describe('local runtime provider contract', () => {
 
 describe('runtime provider registry', () => {
     test('rejects duplicate, blank, and unsupported providers', () => {
-        const local = new LocalRuntimeProvider();
+        const local = new LocalRuntimeProvider({ host: new NodeHost() });
         expect(() => new RuntimeRegistry([local, local])).toThrow(
             'Duplicate runtime provider: local'
         );
