@@ -404,7 +404,8 @@ constraint.
 ### Runtimes
 
 `runtimes` is a map from provider name to that provider's configuration.
-Declaration order matters: the first entry is the default.
+Declaration order matters: the first entry is the default. The `local` entry
+may be written `local: {}` or with no value (`local:`).
 
 | Provider  | Configuration                           | Status                                            |
 | --------- | --------------------------------------- | ------------------------------------------------- |

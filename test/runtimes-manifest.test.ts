@@ -73,6 +73,7 @@ const valid: Case[] = [
         0,
     ],
     ['runtimes local', { runtimes: { local: {} } }],
+    ['runtimes local with no value', { runtimes: { local: null } }],
     [
         'runtimes docker with a published image',
         { runtimes: { docker: { image: 'alpine:3.22' } } },

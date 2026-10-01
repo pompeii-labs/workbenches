@@ -47,10 +47,10 @@ describe('creator Workbench', () => {
 
     test('keeps the candidate reference snapshot pinned to its version', async () => {
         expect(await digest(join(referencesDirectory, 'spec.md'))).toBe(
-            '17b1ef2950f446d442ab40ede9e9e8c49757bdb324c9c964e41cc8e52c99d1dc'
+            '85f12fabd9e5904429c29d9699b155ecb4d5ee13b621e943c0136302cd03c213'
         );
         expect(await digest(join(referencesDirectory, 'workbench.schema.json'))).toBe(
-            '88c57cd9698c9e6255fab15ebe4500533d63cb7ea76511261424c65794d116c8'
+            'e11f0e669cbf77220e472c79fe0fd5e153601d86b44c89bd2abc52bbc067c44f'
         );
     });
 });
