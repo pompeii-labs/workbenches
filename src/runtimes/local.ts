@@ -4,11 +4,9 @@ import {
     type RuntimeOutcomeCollection,
 } from '../outcomes/index.js';
 import type { RunnerInvocation, SpawnedRunner } from '../types.js';
+import type { HostDescriber } from '../workbench/host.js';
 import { type PreflightResult, WorkbenchPreflight } from '../workbench/preflight.js';
-import {
-    type RequirementsHost,
-    RequirementsPreflight,
-} from '../workbench/requirements.js';
+import { RequirementsPreflight } from '../workbench/requirements.js';
 import { selectedRuntime } from '../workbench/runtimes.js';
 import { WorkbenchWorkspaces } from '../workbench/workspaces.js';
 import type {
@@ -34,8 +32,8 @@ export interface LocalRuntimeDependencies {
             stderr: 'pipe';
         }
     ) => SpawnedRunner;
-    /** Host facts used to check requirements. Defaults to this machine. */
-    host?: RequirementsHost;
+    /** Describes the machine requirements are checked against. */
+    host: HostDescriber;
     interact?: (
         command: string[],
         options: {
@@ -48,20 +46,20 @@ export interface LocalRuntimeDependencies {
     ) => Promise<number>;
 }
 
-type ResolvedLocalDependencies = Required<Omit<LocalRuntimeDependencies, 'host'>> &
-    Pick<LocalRuntimeDependencies, 'host'>;
+type ResolvedLocalDependencies = Required<Omit<LocalRuntimeDependencies, 'host'>>;
 
 export class LocalRuntimeProvider implements RuntimeProvider {
     readonly name = 'local';
     private readonly dependencies: ResolvedLocalDependencies;
+    private readonly requirements: RequirementsPreflight;
 
-    constructor(dependencies: LocalRuntimeDependencies = {}) {
+    constructor(dependencies: LocalRuntimeDependencies) {
         this.dependencies = {
             findExecutable: dependencies.findExecutable ?? Bun.which,
             spawn: dependencies.spawn ?? LocalRuntime.spawn,
             interact: dependencies.interact ?? LocalRuntime.interactProcess,
-            ...(dependencies.host ? { host: dependencies.host } : {}),
         };
+        this.requirements = new RequirementsPreflight(dependencies.host);
     }
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
@@ -79,7 +77,7 @@ export class LocalRuntimeProvider implements RuntimeProvider {
                   gitBaseline: true,
               })
             : undefined;
-        return new LocalRuntime(request, this.dependencies, outcome);
+        return new LocalRuntime(request, this.dependencies, this.requirements, outcome);
     }
 
     /**
@@ -89,7 +87,7 @@ export class LocalRuntimeProvider implements RuntimeProvider {
      */
     private checkRequirements(request: RuntimePrepareRequest): void {
         try {
-            new RequirementsPreflight(this.dependencies.host).check(request.workbench, {
+            this.requirements.check(request.workbench, {
                 allowUncheckedGpu: request.allowUncheckedGpu ?? false,
             });
         } catch (error) {
@@ -115,6 +113,7 @@ export class LocalRuntime implements PreparedRuntime {
     constructor(
         request: RuntimePrepareRequest,
         private readonly dependencies: ResolvedLocalDependencies,
+        private readonly requirementsPreflight: RequirementsPreflight,
         private readonly outcome?: HostOutcomeCapture
     ) {
         this.allowUncheckedGpu = request.allowUncheckedGpu ?? false;
@@ -162,9 +161,9 @@ export class LocalRuntime implements PreparedRuntime {
                 environment: this.environment,
                 findExecutable: this.dependencies.findExecutable,
             }).check(this.workbench);
-            const requirements = new RequirementsPreflight(
-                this.dependencies.host
-            ).check(this.workbench, { allowUncheckedGpu: this.allowUncheckedGpu });
+            const requirements = this.requirementsPreflight.check(this.workbench, {
+                allowUncheckedGpu: this.allowUncheckedGpu,
+            });
             this.ready = true;
             return { ...result, workspaces: this.workspaces, requirements };
         } catch (error) {

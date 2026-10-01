@@ -3,11 +3,10 @@ import { defineCommand } from 'citty';
 import { createEventRenderer } from '../rendering/index.js';
 import { parseRepository, RepositoryDeliveryStore } from '../repositories/index.js';
 import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
-import { RuntimeSmoke } from '../runtimes/index.js';
+import { RuntimeRegistry, RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import { assertWorkbenchTuiSupported, launchWorkbenchTui } from '../tui.js';
 import {
-    assertRequirements,
     selectedRuntime,
     WorkbenchEnvironment,
     WorkbenchPreflight,
@@ -151,6 +150,7 @@ export const runCommand = defineCommand({
             rawArgs,
         });
         const home = workbenchHome();
+        const runtimes = RuntimeRegistry.standard();
         const dispatcher = new RunDispatcher(home);
         const taskSources = [
             args.prompt !== undefined,
@@ -176,7 +176,7 @@ export const runCommand = defineCommand({
                 ...(args.dir ? { workspaceDirectory: args.dir } : {}),
             });
             if (repository) resolved.repository = repository;
-            selectRuntime(resolved, args);
+            selectRuntime(resolved, args, runtimes);
             const workspaces = await workbenchWorkspaces.bind({
                 workbench: resolved.workbench,
                 rawArgs,
@@ -216,7 +216,7 @@ export const runCommand = defineCommand({
         });
         if (repository) resolved.repository = repository;
         try {
-            selectRuntime(resolved, args);
+            selectRuntime(resolved, args, runtimes);
             const workspaces = await workbenchWorkspaces.bind({
                 workbench: resolved.workbench,
                 rawArgs,
@@ -281,6 +281,7 @@ export const runCommand = defineCommand({
                     const smoke = await new RuntimeSmoke({
                         workbench: resolved.workbench,
                         allowUncheckedGpu: args['allow-unchecked-gpu'],
+                        registry: runtimes,
                         workspaceDirectory: resolved.workspaceDirectory,
                         environment,
                         workspaces,
@@ -408,10 +409,11 @@ function rejectUnknownRunOptions(rawArgs: string[]): void {
 /** Binds the requested runtime and refuses requirements it cannot satisfy. */
 function selectRuntime(
     resolved: Awaited<ReturnType<WorkbenchResolver['resolve']>>,
-    args: { runtime?: string | undefined; 'allow-unchecked-gpu': boolean }
+    args: { runtime?: string | undefined; 'allow-unchecked-gpu': boolean },
+    runtimes: RuntimeRegistry
 ): void {
     resolved.workbench = withRuntime(resolved.workbench, args.runtime);
-    assertRequirements(resolved.workbench, {
+    runtimes.requirements.check(resolved.workbench, {
         ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
     });
 }

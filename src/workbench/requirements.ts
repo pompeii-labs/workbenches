@@ -1,5 +1,3 @@
-import { arch, cpus, platform, totalmem } from 'node:os';
-
 import type {
     ResolvedWorkbench,
     SelectedRuntime,
@@ -8,6 +6,7 @@ import type {
     WorkbenchOs,
     WorkbenchRequirements,
 } from '../types.js';
+import type { HostDescriber } from './host.js';
 import { requirementsOf, selectedRuntime } from './runtimes.js';
 
 export interface RequirementsHost {
@@ -56,24 +55,25 @@ const daytonaClassOs: Record<WorkbenchDaytonaClass, WorkbenchOs> = {
  * selected, before anything is prepared or launched.
  */
 export class RequirementsPreflight {
-    private readonly host: RequirementsHost;
+    private described: RequirementsHost | undefined;
 
-    constructor(host: RequirementsHost = RequirementsPreflight.currentHost()) {
-        this.host = host;
-    }
+    /**
+     * `describer` describes the machine a local or Docker runtime runs on, and is
+     * asked only when a check needs it. A runtime that provides its own machine,
+     * such as a remote sandbox, never asks, so a host on another JavaScript
+     * runtime passes nothing. `NodeHost` in `workbench/host.ts` describes the
+     * local machine.
+     */
+    constructor(private readonly describer?: HostDescriber) {}
 
-    static currentHost(): RequirementsHost {
-        const systems: Record<string, string> = {
-            darwin: 'macos',
-            linux: 'linux',
-            win32: 'windows',
-        };
-        return {
-            os: systems[platform()] ?? platform(),
-            arch: arch(),
-            cpus: cpus().length,
-            memoryBytes: totalmem(),
-        };
+    private get host(): RequirementsHost {
+        if (!this.describer) {
+            throw new Error(
+                'Checking requirements on this runtime needs a host description'
+            );
+        }
+        this.described ??= this.describer.describe();
+        return this.described;
     }
 
     check(
@@ -230,35 +230,35 @@ export class RequirementsPreflight {
             }
         }
     }
-}
 
-/**
- * Throws when a container daemon cannot give a container the declared cpu or
- * memory. The runtime applies both as limits, which fail late with the
- * daemon's own error when the daemon has less.
- */
-export function assertDaemonCapacity(
-    workbench: ResolvedWorkbench,
-    daemon: { cpus: number; memoryBytes: number }
-): void {
-    const requirements = requirementsOf(workbench.manifest);
-    const runtime = selectedRuntime(workbench).name;
-    const fail = (message: string): never => {
-        throw new Error(
-            `Workbench ${workbench.manifest.name} cannot run on the ${runtime} runtime: ${message}`
-        );
-    };
-    if (requirements.cpu !== undefined && daemon.cpus < requirements.cpu) {
-        fail(
-            `requires ${requirements.cpu} CPUs but the Docker daemon has ${daemon.cpus}`
-        );
-    }
-    if (requirements.memory_gb !== undefined) {
-        const available = nearestGibibytes(daemon.memoryBytes);
-        if (available < requirements.memory_gb) {
-            fail(
-                `requires ${requirements.memory_gb} GiB of memory but the Docker daemon has ${available} GiB`
+    /**
+     * Throws when a container daemon cannot give a container the declared cpu or
+     * memory. The runtime applies both as limits, which fail late with the
+     * daemon's own error when the daemon has less.
+     */
+    checkDaemon(
+        workbench: ResolvedWorkbench,
+        daemon: { cpus: number; memoryBytes: number }
+    ): void {
+        const requirements = requirementsOf(workbench.manifest);
+        const runtime = selectedRuntime(workbench).name;
+        const fail = (message: string): never => {
+            throw new Error(
+                `Workbench ${workbench.manifest.name} cannot run on the ${runtime} runtime: ${message}`
             );
+        };
+        if (requirements.cpu !== undefined && daemon.cpus < requirements.cpu) {
+            fail(
+                `requires ${requirements.cpu} CPUs but the Docker daemon has ${daemon.cpus}`
+            );
+        }
+        if (requirements.memory_gb !== undefined) {
+            const available = nearestGibibytes(daemon.memoryBytes);
+            if (available < requirements.memory_gb) {
+                fail(
+                    `requires ${requirements.memory_gb} GiB of memory but the Docker daemon has ${available} GiB`
+                );
+            }
         }
     }
 }
@@ -266,13 +266,4 @@ export function assertDaemonCapacity(
 /** Hosts report slightly below nominal (a 16 GB Linux host shows about 15.6 GiB). */
 function nearestGibibytes(bytes: number): number {
     return Math.round(bytes / bytesPerGibibyte);
-}
-
-/** Throws unless the selected runtime can satisfy the Workbench requirements. */
-export function assertRequirements(
-    workbench: ResolvedWorkbench,
-    options: RequirementsCheckOptions = {},
-    host?: RequirementsHost
-): RequirementsReport {
-    return new RequirementsPreflight(host).check(workbench, options);
 }

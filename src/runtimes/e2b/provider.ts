@@ -22,11 +22,14 @@ export class E2BRuntimeProvider implements RuntimeProvider {
     readonly name = 'e2b';
     private readonly rules = new TransferRules('E2B');
 
+    /** A sandbox provides its own machine, so no host is described. */
+    private readonly requirements = new RequirementsPreflight();
+
     constructor(private readonly dependencies: E2BRuntimeDependencies) {}
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
         try {
-            new RequirementsPreflight().check(request.workbench);
+            this.requirements.check(request.workbench);
         } catch (error) {
             throw RuntimeError.from(this.name, 'prepare', error);
         }
@@ -65,6 +68,7 @@ export class E2BRuntimeProvider implements RuntimeProvider {
             rules: this.rules,
             local: this.dependencies.local,
             preparation: template.preparation,
+            requirements: this.requirements,
             run,
             maximumTransferBytes:
                 this.dependencies.maxTransferBytes ?? defaultMaximumTransferBytes,

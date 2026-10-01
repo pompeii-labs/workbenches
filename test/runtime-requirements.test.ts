@@ -18,6 +18,8 @@ import {
 import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import {
+    type HostDescriber,
+    NodeHost,
     type RequirementsHost,
     RequirementsPreflight,
     WorkbenchManifestParser,
@@ -58,23 +60,32 @@ function workbench(
     return withRuntime(resolved, runtime);
 }
 
-const macArm: RequirementsHost = {
+class FixedHost implements HostDescriber {
+    constructor(private readonly facts: RequirementsHost) {}
+
+    describe(): RequirementsHost {
+        return this.facts;
+    }
+}
+
+const macArmFacts: RequirementsHost = {
     os: 'macos',
     arch: 'arm64',
     cpus: 8,
     memoryBytes: 16 * 1024 ** 3,
 };
-const linuxX64: RequirementsHost = {
+const macArm = new FixedHost(macArmFacts);
+const linuxX64 = new FixedHost({
     os: 'linux',
     arch: 'x64',
     cpus: 2,
     memoryBytes: 4 * 1024 ** 3,
-};
+});
 
 function check(
     manifest: Record<string, unknown>,
     runtime: string,
-    host: RequirementsHost = macArm,
+    host: HostDescriber = macArm,
     options: { allowUncheckedGpu?: boolean } = {}
 ) {
     return new RequirementsPreflight(host).check(workbench(manifest, runtime), options);
@@ -133,10 +144,11 @@ describe('local requirements', () => {
     });
 
     test('rounds host memory to the nearest GiB before comparing', () => {
-        const reported = (gibibytes: number): RequirementsHost => ({
-            ...macArm,
-            memoryBytes: Math.floor(gibibytes * 1024 ** 3),
-        });
+        const reported = (gibibytes: number): HostDescriber =>
+            new FixedHost({
+                ...macArmFacts,
+                memoryBytes: Math.floor(gibibytes * 1024 ** 3),
+            });
         // A 16 GB Linux host reports about 15.6 GiB and still satisfies 16.
         expect(
             check(withRuntimes({ memory_gb: 16 }), 'local', reported(15.6)).checked
@@ -417,6 +429,7 @@ describe('providers apply requirements before preparing', () => {
     test('the docker provider does not query the daemon when no limits are declared', async () => {
         const commands: string[][] = [];
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerDouble(commands),
         }).prepare(
@@ -431,6 +444,7 @@ describe('providers apply requirements before preparing', () => {
     test('the docker provider adds no limits when none are declared', async () => {
         const spawned: string[][] = [];
         const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerDouble([]),
             spawn(command) {

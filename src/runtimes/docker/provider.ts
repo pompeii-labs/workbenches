@@ -3,10 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { HostOutcomeCapture } from '../../outcomes/index.js';
-import {
-    assertDaemonCapacity,
-    RequirementsPreflight,
-} from '../../workbench/requirements.js';
+import { RequirementsPreflight } from '../../workbench/requirements.js';
 import { requirementsOf, selectedRuntime } from '../../workbench/runtimes.js';
 import type {
     PreparedRuntime,
@@ -25,8 +22,11 @@ export class DockerRuntimeProvider implements RuntimeProvider {
     readonly name = 'docker';
     private readonly findExecutable: (name: string) => string | null;
 
-    constructor(private readonly dependencies: DockerRuntimeDependencies = {}) {
+    private readonly requirements: RequirementsPreflight;
+
+    constructor(private readonly dependencies: DockerRuntimeDependencies) {
         this.findExecutable = dependencies.findExecutable ?? Bun.which;
+        this.requirements = new RequirementsPreflight(dependencies.host);
     }
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
@@ -47,7 +47,7 @@ export class DockerRuntimeProvider implements RuntimeProvider {
             );
         }
         try {
-            new RequirementsPreflight(this.dependencies.host).check(request.workbench);
+            this.requirements.check(request.workbench);
         } catch (error) {
             throw RuntimeError.from(this.name, 'prepare', error);
         }
@@ -79,7 +79,10 @@ export class DockerRuntimeProvider implements RuntimeProvider {
             (requirements.cpu !== undefined || requirements.memory_gb !== undefined)
         ) {
             try {
-                assertDaemonCapacity(request.workbench, await client.daemonCapacity());
+                this.requirements.checkDaemon(
+                    request.workbench,
+                    await client.daemonCapacity()
+                );
             } catch (error) {
                 throw RuntimeError.from(this.name, 'prepare', error);
             }
@@ -119,7 +122,7 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                 preparation: image.preparation,
                 stateDirectory: directory,
                 ...(outcome ? { outcome } : {}),
-                ...(this.dependencies.host ? { host: this.dependencies.host } : {}),
+                requirements: this.requirements,
                 cleanupPreparation: async () => {
                     await Promise.all([
                         image.cleanup(),

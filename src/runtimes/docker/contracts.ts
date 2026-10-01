@@ -1,5 +1,5 @@
 import type { SpawnedRunner } from '../../types.js';
-import type { RequirementsHost } from '../../workbench/requirements.js';
+import type { HostDescriber } from '../../workbench/host.js';
 import type { RuntimePreparation } from '../contracts.js';
 
 export interface DockerPreparation extends RuntimePreparation {
@@ -44,8 +44,8 @@ export interface DockerHostSocket {
 
 export interface DockerRuntimeDependencies {
     findExecutable?: (name: string) => string | null;
-    /** Host facts used to check requirements. Defaults to this machine. */
-    host?: RequirementsHost;
+    /** Describes the machine requirements are checked against. */
+    host: HostDescriber;
     command?: (
         command: string[],
         options?: DockerProcessOptions
@@ -61,6 +61,9 @@ export interface DockerRuntimeDependencies {
         command: NonNullable<DockerRuntimeDependencies['command']>
     ) => Promise<DockerHostSocket>;
 }
+
+/** What the Docker CLI wrapper needs: everything but the host description. */
+export type DockerClientDependencies = Omit<DockerRuntimeDependencies, 'host'>;
 
 export interface DockerImageInspect {
     Id?: string;

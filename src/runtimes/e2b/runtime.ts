@@ -7,7 +7,7 @@ import type {
     WorkbenchWorkspaceBinding,
 } from '../../types.js';
 import { type PreflightResult, WorkbenchPreflight } from '../../workbench/preflight.js';
-import { RequirementsPreflight } from '../../workbench/requirements.js';
+import type { RequirementsPreflight } from '../../workbench/requirements.js';
 import { WorkbenchWorkspaces } from '../../workbench/workspaces.js';
 import type {
     PreparedRuntime,
@@ -49,6 +49,7 @@ interface E2BRuntimeOptions {
         action: 'built' | 'cache-hit';
     };
     run: { id: string; scope: string };
+    requirements: RequirementsPreflight;
     maximumTransferBytes: number;
     leaseMilliseconds: number;
     now(): Date;
@@ -176,7 +177,7 @@ export class E2BRuntime implements PreparedRuntime {
             runner: { name: this.workbench.manifest.runner, path: runnerPath },
             tools,
             workspaces: this.workspaces,
-            requirements: new RequirementsPreflight().check(
+            requirements: this.options.requirements.check(
                 this.options.request.workbench
             ),
             ...configuration,

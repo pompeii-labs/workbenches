@@ -10,6 +10,7 @@ import {
 } from '../src/runtimes/docker/index.js';
 import { SessionRetention } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { NodeHost } from '../src/workbench/host.js';
 import { activateModelCatalogFixture } from './model-catalog-fixture.js';
 
 const temporaryDirectories: string[] = [];
@@ -46,7 +47,9 @@ describe('Docker runtime end-to-end', () => {
         async () => {
             activateModelCatalogFixture();
             const fixture = await createFixture();
-            const runtime = await new DockerRuntimeProvider().prepare({
+            const runtime = await new DockerRuntimeProvider({
+                host: new NodeHost(),
+            }).prepare({
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
@@ -145,7 +148,9 @@ describe('Docker runtime end-to-end', () => {
             const schemas = await mkdtemp(join(tmpdir(), 'workbench-docker-schemas-'));
             temporaryDirectories.push(api, schemas);
             await writeFile(join(schemas, 'schema.txt'), 'schema-input\n');
-            const runtime = await new DockerRuntimeProvider().prepare({
+            const runtime = await new DockerRuntimeProvider({
+                host: new NodeHost(),
+            }).prepare({
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
@@ -231,7 +236,9 @@ describe('Docker runtime end-to-end', () => {
             temporaryDirectories.push(sibling);
             await writeFile(join(fixture.root, 'primary-input'), 'primary\n');
             await writeFile(join(sibling, 'sibling-input'), 'sibling\n');
-            const runtime = await new DockerRuntimeProvider().prepare({
+            const runtime = await new DockerRuntimeProvider({
+                host: new NodeHost(),
+            }).prepare({
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
@@ -285,7 +292,9 @@ describe('Docker runtime end-to-end', () => {
             const fixture = await createFixture();
             const before = await workbenchContainers();
 
-            const cancelledRuntime = await new DockerRuntimeProvider().prepare({
+            const cancelledRuntime = await new DockerRuntimeProvider({
+                host: new NodeHost(),
+            }).prepare({
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
@@ -308,7 +317,9 @@ describe('Docker runtime end-to-end', () => {
             await cancelledRuntime.cleanup();
             await expectWorkbenchContainers(before);
 
-            const failedRuntime = await new DockerRuntimeProvider().prepare({
+            const failedRuntime = await new DockerRuntimeProvider({
+                host: new NodeHost(),
+            }).prepare({
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},

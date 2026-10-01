@@ -6,7 +6,9 @@ import type {
     SpawnedRunner,
     WorkbenchWorkspaceBinding,
 } from '../types.js';
-import type { PreflightResult } from '../workbench/index.js';
+import { type HostDescriber, NodeHost } from '../workbench/host.js';
+import type { PreflightResult } from '../workbench/preflight.js';
+import { RequirementsPreflight } from '../workbench/requirements.js';
 import type {
     PreparedRuntime,
     RuntimeCommandOptions,
@@ -29,16 +31,19 @@ import { RuntimeError } from './error.js';
 import { type LocalRuntimeDependencies, LocalRuntimeProvider } from './local.js';
 import { DiskAssetSource } from './staging/disk.js';
 
-export interface RuntimeDependencies extends LocalRuntimeDependencies {
-    docker?: DockerRuntimeDependencies;
+export interface RuntimeDependencies extends Partial<LocalRuntimeDependencies> {
+    docker?: Omit<DockerRuntimeDependencies, 'host'>;
     /** Anything left out is wired here: assets are read from the local disk. */
     e2b?: Partial<E2BRuntimeDependencies>;
 }
 
 export class RuntimeRegistry {
     private readonly providers = new Map<string, RuntimeProvider>();
+    /** Checks Workbench requirements against `host`, the machine the providers run on. */
+    readonly requirements: RequirementsPreflight;
 
-    constructor(providers: RuntimeProvider[]) {
+    constructor(providers: RuntimeProvider[], host?: HostDescriber) {
+        this.requirements = new RequirementsPreflight(host);
         for (const provider of providers) {
             const name = provider.name.trim();
             if (!name) throw new Error('Runtime provider name must not be empty');
@@ -51,16 +56,20 @@ export class RuntimeRegistry {
 
     static standard(dependencies: RuntimeDependencies = {}): RuntimeRegistry {
         const disk = new DiskAssetSource();
-        return new RuntimeRegistry([
-            new LocalRuntimeProvider(dependencies),
-            new DockerRuntimeProvider(dependencies.docker),
-            new E2BRuntimeProvider({
-                assets: disk,
-                local: disk,
-                ...dependencies.e2b,
-            }),
-            new DaytonaRuntimeProvider(),
-        ]);
+        const host = dependencies.host ?? new NodeHost();
+        return new RuntimeRegistry(
+            [
+                new LocalRuntimeProvider({ ...dependencies, host }),
+                new DockerRuntimeProvider({ ...dependencies.docker, host }),
+                new E2BRuntimeProvider({
+                    assets: disk,
+                    local: disk,
+                    ...dependencies.e2b,
+                }),
+                new DaytonaRuntimeProvider(),
+            ],
+            host
+        );
     }
 
     resolve(name: string): RuntimeProvider {

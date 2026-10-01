@@ -8,7 +8,6 @@ import { RunnerRegistry } from '../runners/registry.js';
 import { RunStore } from '../runs/store.js';
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
 import type { PreflightResult } from '../workbench/preflight.js';
-import { assertRequirements } from '../workbench/requirements.js';
 import { selectedRuntime, withRuntime } from '../workbench/runtimes.js';
 import { WorkbenchWorkspaces } from '../workbench/workspaces.js';
 import type { PreparedRuntime } from './contracts.js';
@@ -47,7 +46,8 @@ export class RuntimeSmoke {
             this.options.workspaceDirectory ?? workbench.repositoryDirectory;
         const workspaces = this.options.workspaces ?? [];
         await this.workspaceBindings.validate(workbench, workspaces);
-        assertRequirements(workbench, {
+        const registry = this.options.registry ?? RuntimeRegistry.standard();
+        registry.requirements.check(workbench, {
             ...(this.options.allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
         });
         if (this.options.allowHostDocker && !selected.docker?.engine) {
@@ -55,7 +55,6 @@ export class RuntimeSmoke {
                 'Host Docker authorization was supplied to a Workbench that does not declare docker.engine'
             );
         }
-        const registry = this.options.registry ?? RuntimeRegistry.standard();
         const runner = await RunnerRegistry.standard().prepare(workbench, environment);
         let runtime: PreparedRuntime | undefined;
         let result: WorkbenchSmokeResult | undefined;

@@ -24,6 +24,7 @@ import {
 import { LocalRuntimeProvider, RuntimeRegistry } from '../src/runtimes/index.js';
 import { SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { NodeHost } from '../src/workbench/host.js';
 import { supportedRunnerDeclaration } from './runner-adapter-contract.js';
 
 const temporaryDirectories: string[] = [];
@@ -1074,6 +1075,7 @@ function workerFor(
         registry: new RunnerRegistry([new InteractiveWorkerTestRunner(adapter)]),
         runtimeRegistry: new RuntimeRegistry([
             new LocalRuntimeProvider({
+                host: new NodeHost(),
                 findExecutable: (name) => `/bin/${name}`,
                 spawn: () => ({
                     exited: Promise.resolve(0),
