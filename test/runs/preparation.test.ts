@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { ConnectionStore } from '../../src/connections/store.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
 import { RepositoryWorkspace } from '../../src/repositories/workspace.js';
-import { runtimeContext } from '../../src/runners/context.js';
+import { runtimeContext } from '../../src/runners/context/runtime.js';
 import { RunnerRegistry } from '../../src/runners/registry.js';
 import { type PreparedRunner, Runner } from '../../src/runners/runner.js';
 import { RunEvents } from '../../src/runs/events.js';

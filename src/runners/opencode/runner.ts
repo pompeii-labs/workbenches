@@ -1,7 +1,6 @@
 import { ModelRouter, type ResolvedRunnerConfiguration } from '../../models/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
-import { type RunnerContextFiles, remapRunnerContext } from '../context.js';
 import {
     assertRunnerConfiguration,
     type PreparedRunner,
@@ -9,66 +8,71 @@ import {
     Runner,
     type RunnerEventNormalizer,
 } from '../runner.js';
-import { OpenCodeSessionAdapter } from './adapter.js';
-import { stageOpenCodeSkills } from './assets.js';
+import { OpenCodeSessionAdapter, type OpenCodeSessionDependencies } from './adapter.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeInvocation, publicInvocation } from './invocation.js';
+import type { OpenCodeSkillStaging, StagedOpenCodeSkills } from './skills.js';
+
+export interface OpenCodeRunnerDependencies {
+    /**
+     * Stages skills, native config, and context. Required: the runner has no
+     * storage of its own. The CLI passes one over the local disk; a host passes
+     * one over any store that can answer the same calls.
+     */
+    skills: OpenCodeSkillStaging;
+    /** The session driver's own dependencies: `fetch`, the server password, timeouts. */
+    session?: Omit<OpenCodeSessionDependencies, 'skills'>;
+}
 
 export class OpenCodeRunner extends Runner {
     readonly name = 'opencode';
-    readonly session = new OpenCodeSessionAdapter();
+    readonly session: OpenCodeSessionAdapter;
+    private readonly skills: OpenCodeSkillStaging;
+
+    constructor(dependencies: OpenCodeRunnerDependencies) {
+        super();
+        this.skills = dependencies.skills;
+        this.session = new OpenCodeSessionAdapter({
+            ...dependencies.session,
+            skills: dependencies.skills,
+        });
+    }
 
     async prepare(workbench: ResolvedWorkbench): Promise<PreparedRunner> {
-        return PreparedOpenCodeRunner.create(workbench, this.session);
+        return PreparedOpenCodeRunner.create(workbench, this.session, this.skills);
     }
 }
 
-class PreparedOpenCodeRunner implements PreparedRunner {
+/** An OpenCode runner with its skills staged, ready to build invocations and start sessions. */
+export class PreparedOpenCodeRunner implements PreparedRunner {
     readonly name = 'opencode';
     readonly failureLabel = 'OpenCode';
     readonly assets: RuntimeAsset[];
 
-    readonly #cleanup: () => Promise<void>;
-    readonly #nativeConfigFile: string | undefined;
-    readonly #stagedDirectory: string | undefined;
     readonly #workbench: ResolvedWorkbench;
+    readonly #staged: StagedOpenCodeSkills;
     readonly #session: OpenCodeSessionAdapter;
-    readonly #context: RunnerContextFiles;
 
     private constructor(options: {
         workbench: ResolvedWorkbench;
-        stagedDirectory?: string;
-        nativeConfigFile?: string;
-        cleanup: () => Promise<void>;
+        staged: StagedOpenCodeSkills;
         session: OpenCodeSessionAdapter;
-        context: RunnerContextFiles;
     }) {
         this.#workbench = options.workbench;
-        this.#stagedDirectory = options.stagedDirectory;
-        this.#nativeConfigFile = options.nativeConfigFile;
-        this.#cleanup = options.cleanup;
+        this.#staged = options.staged;
         this.#session = options.session;
-        this.#context = options.context;
-        this.assets = [
-            ...(options.stagedDirectory
-                ? [{ path: options.stagedDirectory, access: 'read-write' as const }]
-                : []),
-        ];
+        this.assets = [{ path: options.staged.directory, access: 'read-write' }];
     }
 
     static async create(
         workbench: ResolvedWorkbench,
-        session = new OpenCodeSessionAdapter()
+        session: OpenCodeSessionAdapter,
+        skills: OpenCodeSkillStaging
     ): Promise<PreparedOpenCodeRunner> {
-        const staged = await stageOpenCodeSkills(workbench);
-        const nativeConfigFile = staged.nativeConfigFile;
         return new PreparedOpenCodeRunner({
             workbench,
-            ...(staged?.directory ? { stagedDirectory: staged.directory } : {}),
-            ...(nativeConfigFile ? { nativeConfigFile } : {}),
-            cleanup: staged?.cleanup ?? (async () => {}),
+            staged: await skills.stage(workbench),
             session,
-            context: staged.context,
         });
     }
 
@@ -86,13 +90,13 @@ class PreparedOpenCodeRunner implements PreparedRunner {
                 configuration,
                 runtime.environment
             ),
-            this.#stagedDirectory ? runtime.pathFor(this.#stagedDirectory) : undefined,
+            runtime.pathFor(this.#staged.directory),
             runtime.workspaceDirectory,
             configuration.model,
-            this.#nativeConfigFile
-                ? runtime.pathFor(this.#nativeConfigFile)
+            this.#staged.nativeConfigFile
+                ? runtime.pathFor(this.#staged.nativeConfigFile)
                 : undefined,
-            remapRunnerContext(this.#context, (path) => runtime.pathFor(path))
+            this.#staged.context.remap((path) => runtime.pathFor(path))
         );
     }
 
@@ -102,14 +106,14 @@ class PreparedOpenCodeRunner implements PreparedRunner {
             cwd: runtime.workspaceDirectory,
             env: {
                 ...runtime.environment,
-                ...(this.#nativeConfigFile
-                    ? { OPENCODE_CONFIG: runtime.pathFor(this.#nativeConfigFile) }
-                    : {}),
-                ...(this.#stagedDirectory
+                ...(this.#staged.nativeConfigFile
                     ? {
-                          OPENCODE_CONFIG_DIR: runtime.pathFor(this.#stagedDirectory),
+                          OPENCODE_CONFIG: runtime.pathFor(
+                              this.#staged.nativeConfigFile
+                          ),
                       }
                     : {}),
+                OPENCODE_CONFIG_DIR: runtime.pathFor(this.#staged.directory),
             },
         };
     }
@@ -144,14 +148,14 @@ class PreparedOpenCodeRunner implements PreparedRunner {
                 // Cloud proxy setup and cold native session loading share this
                 // bounded readiness budget, not the ten-second local deadline.
                 ...(runtime.name === 'e2b' ? { startupTimeoutMs: 60_000 } : {}),
-                context: remapRunnerContext(this.#context, (path) =>
-                    runtime.pathFor(path)
-                ),
-                ...(this.#stagedDirectory
-                    ? { configDirectory: runtime.pathFor(this.#stagedDirectory) }
-                    : {}),
-                ...(this.#nativeConfigFile
-                    ? { nativeConfigFile: runtime.pathFor(this.#nativeConfigFile) }
+                context: this.#staged.context.remap((path) => runtime.pathFor(path)),
+                configDirectory: runtime.pathFor(this.#staged.directory),
+                ...(this.#staged.nativeConfigFile
+                    ? {
+                          nativeConfigFile: runtime.pathFor(
+                              this.#staged.nativeConfigFile
+                          ),
+                      }
                     : {}),
                 launch: (buildInvocation) => {
                     const service = runtime.launchService(buildInvocation);
@@ -171,6 +175,6 @@ class PreparedOpenCodeRunner implements PreparedRunner {
     }
 
     cleanup(): Promise<void> {
-        return this.#cleanup();
+        return this.#staged.cleanup();
     }
 }

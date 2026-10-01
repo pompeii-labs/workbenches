@@ -10,7 +10,9 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stagePiConfig } from '../src/runners/pi/assets.js';
+import { RunnerContextStaging } from '../src/runners/context/stage.js';
+import { DiskRunnerFiles } from '../src/runners/files/disk.js';
+import { PiConfigStaging } from '../src/runners/pi/config.js';
 import {
     buildPiInvocation,
     buildPiRpcInvocation,
@@ -18,6 +20,9 @@ import {
     publicPiInvocation,
 } from '../src/runners/pi/invocation.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+
+const files = new DiskRunnerFiles();
+const staging = new PiConfigStaging(files, new RunnerContextStaging(files));
 
 const temporaryDirectories: string[] = [];
 
@@ -32,7 +37,7 @@ afterEach(async () => {
 describe('Pi adapter translation', () => {
     test('builds deterministic JSON and RPC invocations from one effective model', async () => {
         const workbench = await fixture();
-        const config = await stagePiConfig(workbench);
+        const config = await staging.stage(workbench, process.env, {});
         temporaryDirectories.push(config.directory);
 
         const oneShot = buildPiInvocation(
@@ -85,7 +90,7 @@ describe('Pi adapter translation', () => {
         await writeFile(join(config, 'APPEND_SYSTEM.md'), '# Package settings\n');
         await writeFile(join(config, 'models.json'), '{"providers":{}}\n');
 
-        const staged = await stagePiConfig(workbench, {});
+        const staged = await staging.stage(workbench, {}, {});
         temporaryDirectories.push(staged.directory);
 
         const instructions = await readFile(
@@ -103,7 +108,7 @@ describe('Pi adapter translation', () => {
 
     test('uses Pi native session storage for resumable interactive runs', async () => {
         const workbench = await fixture();
-        const config = await stagePiConfig(workbench);
+        const config = await staging.stage(workbench, process.env, {});
         temporaryDirectories.push(config.directory);
 
         const first = buildPiRpcInvocation(
@@ -144,9 +149,11 @@ describe('Pi adapter translation', () => {
         const credentials = join(native, 'auth.json');
         await writeFile(credentials, '{"secret":"must-stay-native"}\n');
 
-        const staged = await stagePiConfig(workbench, {
-            PI_CODING_AGENT_DIR: native,
-        });
+        const staged = await staging.stage(
+            workbench,
+            { PI_CODING_AGENT_DIR: native },
+            {}
+        );
         temporaryDirectories.push(staged.directory);
         const linked = join(staged.directory, 'auth.json');
 
@@ -156,7 +163,7 @@ describe('Pi adapter translation', () => {
 
     test('stages declared skills into the runner configuration', async () => {
         const workbench = await fixture();
-        const staged = await stagePiConfig(workbench, {});
+        const staged = await staging.stage(workbench, {}, {});
         temporaryDirectories.push(staged.directory);
 
         expect(
@@ -169,7 +176,7 @@ describe('Pi adapter translation', () => {
 
     test('does not inject unsupported question tooling into Pi', async () => {
         const workbench = await fixture();
-        const staged = await stagePiConfig(workbench, {});
+        const staged = await staging.stage(workbench, {}, {});
         temporaryDirectories.push(staged.directory);
 
         await expect(lstat(join(staged.directory, 'extensions'))).rejects.toThrow();
@@ -185,7 +192,7 @@ describe('Pi adapter translation', () => {
                 headers: {},
             },
         ];
-        expect(() => buildPiInvocation(workbench, 'inspect')).toThrow(
+        expect(() => buildPiInvocation(workbench, 'inspect', {})).toThrow(
             'Pi does not provide a native MCP transport'
         );
     });

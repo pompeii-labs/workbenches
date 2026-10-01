@@ -1,5 +1,6 @@
 import { join } from 'node:path';
-import { type RunnerContextFiles, runtimeContext } from '../context.js';
+import type { RunnerContext } from '../context/files.js';
+import { runtimeContext } from '../context/runtime.js';
 import type {
     RunnerInput,
     RunnerInputDelivery,
@@ -27,7 +28,7 @@ interface AlwaysPermission {
 }
 
 export interface OpenCodeServerSessionOptions extends RunnerSessionStartOptions {
-    context?: RunnerContextFiles;
+    context?: RunnerContext;
     fetch: OpenCodeFetch;
     password: () => string;
     startupTimeoutMs: number;

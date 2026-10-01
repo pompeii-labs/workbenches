@@ -11,15 +11,16 @@ import type { ResolvedWorkbench, WorkbenchManifest } from '../src/types.js';
 describe('OpenCode adapter translation', () => {
     test('rejects unsupported runners without coupling translation to a runtime', () => {
         expect(() =>
-            buildOpenCodeInvocation(workbench({ runner: 'codex' }), 'task')
+            buildOpenCodeInvocation(workbench({ runner: 'codex' }), 'task', {})
         ).toThrow('Unsupported runner: codex');
         expect(
-            buildOpenCodeInvocation(workbench({ runtime: 'docker' }), 'task').command
+            buildOpenCodeInvocation(workbench({ runtime: 'docker' }), 'task', {})
+                .command
         ).toContain('opencode');
     });
 
     test('rejects empty tasks before launch', () => {
-        expect(() => buildOpenCodeInvocation(workbench(), '   ')).toThrow(
+        expect(() => buildOpenCodeInvocation(workbench(), '   ', {})).toThrow(
             'task must not be empty'
         );
     });
@@ -157,7 +158,7 @@ describe('OpenCode adapter translation', () => {
 
     test('rejects an empty native session identifier', () => {
         expect(() =>
-            buildOpenCodeSessionInvocation(workbench(), 'Follow up', '   ')
+            buildOpenCodeSessionInvocation(workbench(), 'Follow up', '   ', {})
         ).toThrow('sessionId must not be empty');
     });
 

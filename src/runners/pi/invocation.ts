@@ -2,17 +2,17 @@ import { join } from 'node:path';
 
 import { modelLabel } from '../../models/index.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
-import { type RunnerContextFiles, withRunnerContext } from '../context.js';
+import type { RunnerContext } from '../context/files.js';
 import type { RunnerSessionContext } from '../session.js';
 
 export function buildPiInvocation(
     workbench: ResolvedWorkbench,
     task: string,
-    baseEnv: Record<string, string | undefined> = process.env,
+    baseEnv: Record<string, string | undefined>,
     workspaceDirectory = workbench.repositoryDirectory,
     model = modelLabel(workbench.manifest.model),
     configDirectory?: string,
-    context?: RunnerContextFiles
+    context?: RunnerContext
 ): RunnerInvocation {
     validatePiWorkbench(workbench);
     const normalizedTask = task.trim();
@@ -34,25 +34,22 @@ export function buildPiInvocation(
         normalizedTask,
     ];
     const env = buildPiEnvironment(baseEnv, workspaceDirectory, configDirectory);
-    return withRunnerContext(
-        {
-            command: piCredentialCommand(command, env, configDirectory),
-            cwd: workspaceDirectory,
-            env,
-        },
-        workbench,
-        context
-    );
+    const invocation: RunnerInvocation = {
+        command: piCredentialCommand(command, env, configDirectory),
+        cwd: workspaceDirectory,
+        env,
+    };
+    return context ? context.apply(invocation, workbench) : invocation;
 }
 
 export function buildPiRpcInvocation(
     workbench: ResolvedWorkbench,
-    baseEnv: Record<string, string | undefined> = process.env,
+    baseEnv: Record<string, string | undefined>,
     workspaceDirectory = workbench.repositoryDirectory,
     model = modelLabel(workbench.manifest.model),
     configDirectory?: string,
     session?: RunnerSessionContext,
-    context?: RunnerContextFiles
+    context?: RunnerContext
 ): RunnerInvocation {
     validatePiWorkbench(workbench);
     const route = splitModelRoute(model);
@@ -77,15 +74,12 @@ export function buildPiRpcInvocation(
         ...piSkillArguments(workbench, configDirectory),
     ];
     const env = buildPiEnvironment(baseEnv, workspaceDirectory, configDirectory);
-    return withRunnerContext(
-        {
-            command: piCredentialCommand(command, env, configDirectory),
-            cwd: workspaceDirectory,
-            env,
-        },
-        workbench,
-        context
-    );
+    const invocation: RunnerInvocation = {
+        command: piCredentialCommand(command, env, configDirectory),
+        cwd: workspaceDirectory,
+        env,
+    };
+    return context ? context.apply(invocation, workbench) : invocation;
 }
 
 function piSkillArguments(
