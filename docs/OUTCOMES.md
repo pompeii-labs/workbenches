@@ -20,11 +20,12 @@ selected harness.
 | Local | Runs against host directories | `present` |
 | Docker | Runs against mounted host directories | `present` |
 | E2B | Runs against selected copies in a fresh sandbox | `pending` |
+| Daytona | Runs against selected copies in a fresh sandbox | `pending` |
 
 Local and Docker preserve their existing in-place editing behavior. Their
 outcomes record the run's changes; the engine does not undo those edits when a
-run fails or when its client disconnects. E2B never silently applies collected
-workspace edits to the host. Returning remote results and accepting them are
+run fails or when its client disconnects. E2B and Daytona never silently apply
+collected workspace edits to the host. Returning remote results and accepting them are
 separate operations.
 
 Local execution does not copy the workspace before launching the runner. For a
@@ -92,7 +93,7 @@ host control. The context itself does not grant authorization.
 For Local, each execution attempt uses `~/.workbench/runs/<run-id>/outbox`
 alongside its existing run metadata and logs (beneath the configured engine home
 when overridden). The private per-run directory keeps concurrent runs separate.
-Docker and E2B expose `/outbox` inside their runtime, where the container or
+Docker, E2B, and Daytona expose `/outbox` inside their runtime, where the container or
 sandbox provides the execution's filesystem namespace. No path is relative to
 the Workbench package or assumed to be the user's current directory. The agent
 receives the exact path in both the runtime block and `WORKBENCH_OUTPUT_DIR`.
@@ -250,7 +251,7 @@ wb outcome wbo_... --apply
 wb outcome wbo_... --apply --workspace ./another-checkout
 ```
 
-Inspect, export, and apply use locally collected bytes and require no E2B key,
+Inspect, export, and apply use locally collected bytes and require no runtime key,
 live sandbox, harness login, or model request. Applying resolves the original
 run's workspace bindings; `--workspace` overrides only the primary workspace.
 Named changesets require their recorded named bindings. Export can be used to
@@ -337,6 +338,10 @@ discard. Once collection is durable, the engine destroys the original sandbox
 and removes its checkpoint. A failure to destroy it retains cleanup information.
 Discard explicitly releases uncollected work without changing host files.
 
+Daytona keeps no recovery checkpoint. Its sandbox is deleted at cleanup even
+when collection failed, so `wb outcome --recover` has nothing to reconnect to
+and a failed collection loses the uncollected work.
+
 Recovery depends on the checkpoint and original provider-side filesystem still
 existing. It is not a guarantee against provider expiration, provider data loss,
 or a host crash before the checkpoint was written. Resume uses saved native
@@ -360,7 +365,7 @@ materialized artifact copies, manifests, and receipts also count. A quota failur
 does not silently evict previously retained outcomes. Inspect `wb clean` before
 explicitly removing history.
 
-Workspace baselines and E2B uncompressed input/output transfers have their own
+Workspace baselines and E2B and Daytona uncompressed input/output transfers have their own
 512 MiB safety limits. The result quota is not a whole-disk budget: it excludes
 the agent's workspace, native harness history, private recovery baselines,
 provider caches, and caller-selected exports. Runtime and model costs remain

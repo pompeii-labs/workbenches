@@ -483,6 +483,7 @@ class FakeAdapter implements RunnerSessionAdapter {
 
 class CapturingRuntimeProvider implements RuntimeProvider {
     readonly name = 'docker';
+    readonly placement = 'container' as const;
     request: RuntimePrepareRequest | undefined;
     cleanupCount = 0;
     infrastructureCount = 0;

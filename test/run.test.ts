@@ -487,6 +487,7 @@ describe('local run lifecycle', () => {
         const runtimeRegistry = new RuntimeRegistry([
             {
                 name: 'local',
+                placement: 'host',
                 async prepare(request) {
                     assets = request.assets;
                     return {

@@ -5,6 +5,7 @@ import {
 } from '../../models/index.js';
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
+import { isRemoteRuntime } from '../../workbench/runtimes.js';
 import {
     assertRunnerConfiguration,
     type PreparedRunner,
@@ -165,7 +166,7 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
             {
                 // Cloud proxy setup and cold native session loading share this
                 // bounded readiness budget, not the ten-second local deadline.
-                ...(runtime.name === 'e2b' ? { startupTimeoutMs: 60_000 } : {}),
+                ...(isRemoteRuntime(runtime.name) ? { startupTimeoutMs: 60_000 } : {}),
                 context: this.#staged.context.remap((path) => runtime.pathFor(path)),
                 configDirectory: runtime.pathFor(this.#staged.directory),
                 ...(this.#staged.nativeConfigFile

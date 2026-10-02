@@ -7,43 +7,48 @@ import {
     OutcomeOutput,
     type OutcomeSink,
     type RuntimeOutcomeCollection,
-} from '../../outcomes/index.js';
-import { formatOutcomeBytes } from '../../outcomes/presentation.js';
-import { CollectionCommands } from '../staging/commands.js';
-import type { TransferRules } from '../staging/rules.js';
-import { quote } from '../staging/shell.js';
-import { workspaceTracking } from '../staging/tracking.js';
-import type { OutcomeCollector, TransferSandbox } from '../staging/transfer.js';
-import { E2BArchive } from './archive.js';
-import type { E2BAssetSnapshot } from './snapshot.js';
-import { E2BTransfer } from './transfer.js';
+} from '../../../outcomes/index.js';
+import { formatOutcomeBytes } from '../../../outcomes/presentation.js';
+import { CollectionCommands } from '../../staging/commands.js';
+import type { TransferRules } from '../../staging/rules.js';
+import { quote } from '../../staging/shell.js';
+import { workspaceTracking } from '../../staging/tracking.js';
+import type { OutcomeCollector, TransferSandbox } from '../../staging/transfer.js';
+import { SandboxArchive } from './archive.js';
+import { SandboxDownload } from './download.js';
+import type { DiskAssetSnapshot } from './snapshot.js';
 
-export class E2BOutcomeCollector implements OutcomeCollector {
-    private readonly transfer: E2BTransfer;
-    private readonly archive: E2BArchive;
+export class DiskOutcomeCollector implements OutcomeCollector {
+    private readonly transfer: SandboxDownload;
+    private readonly archive: SandboxArchive;
     private readonly commands: CollectionCommands;
+    private readonly provider: string;
 
     constructor(
         private readonly options: {
             sandbox: TransferSandbox;
-            snapshots: E2BAssetSnapshot[];
+            snapshots: DiskAssetSnapshot[];
             baselines: Map<number, string>;
             maximumTransferBytes: number;
             rules: TransferRules;
         }
     ) {
-        this.transfer = new E2BTransfer(options.sandbox);
-        this.archive = new E2BArchive(options.rules);
+        this.provider = options.rules.provider;
+        this.transfer = new SandboxDownload(options.sandbox, options.rules);
+        this.archive = new SandboxArchive(options.rules);
         this.commands = new CollectionCommands(options.rules);
     }
 
     async collect(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
         const sandbox = this.options.sandbox;
-        const directory = await mkdtemp(join(tmpdir(), 'workbench-e2b-collect-'));
+        const directory = await mkdtemp(
+            join(tmpdir(), `workbench-${this.provider.toLowerCase()}-collect-`)
+        );
         let transferred = 0;
         let materialized = 0;
-        const captures: Array<Awaited<ReturnType<E2BAssetSnapshot['prepareOutcome']>>> =
-            [];
+        const captures: Array<
+            Awaited<ReturnType<DiskAssetSnapshot['prepareOutcome']>>
+        > = [];
         const changesets: OutcomeChangeset[] = [];
         let output: Awaited<ReturnType<OutcomeOutput['collect']>> = {
             artifacts: [],
@@ -62,7 +67,7 @@ export class E2BOutcomeCollector implements OutcomeCollector {
                 const baseline = this.options.baselines.get(index);
                 if (!baseline) {
                     throw new Error(
-                        `E2B workspace baseline is unavailable: ${snapshot.binding.hostPath}`
+                        `${this.provider} workspace baseline is unavailable: ${snapshot.binding.hostPath}`
                     );
                 }
                 const root = snapshot.binding.runtimePath;
@@ -79,7 +84,7 @@ export class E2BOutcomeCollector implements OutcomeCollector {
                 });
                 this.commands.requireSuccess(
                     await sandbox.run(command),
-                    `Failed to collect E2B workspace changes: ${snapshot.binding.hostPath}`
+                    `Failed to collect ${this.provider} workspace changes: ${snapshot.binding.hostPath}`
                 );
                 const reportedSizes = await Promise.all([
                     sandbox.fileSize(remoteArchive),
@@ -90,7 +95,7 @@ export class E2BOutcomeCollector implements OutcomeCollector {
                     this.options.maximumTransferBytes
                 ) {
                     throw new Error(
-                        `E2B output exceeds the ${formatOutcomeBytes(this.options.maximumTransferBytes)} transfer safety limit`
+                        `${this.provider} output exceeds the ${formatOutcomeBytes(this.options.maximumTransferBytes)} transfer safety limit`
                     );
                 }
                 const localArchive = join(directory, `output-${index}.tar.gz`);
@@ -115,7 +120,7 @@ export class E2BOutcomeCollector implements OutcomeCollector {
                 materialized += deletionBytes;
                 if (materialized > this.options.maximumTransferBytes) {
                     throw new Error(
-                        `E2B output exceeds the ${formatOutcomeBytes(this.options.maximumTransferBytes)} transfer safety limit`
+                        `${this.provider} output exceeds the ${formatOutcomeBytes(this.options.maximumTransferBytes)} transfer safety limit`
                     );
                 }
                 const deletions = (await readFile(localDeleted))
@@ -175,7 +180,9 @@ export class E2BOutcomeCollector implements OutcomeCollector {
         );
         if (!snapshot) return { artifacts: [], links: [] };
         const sandbox = this.options.sandbox;
-        const directory = await mkdtemp(join(tmpdir(), 'workbench-e2b-results-'));
+        const directory = await mkdtemp(
+            join(tmpdir(), `workbench-${this.provider.toLowerCase()}-results-`)
+        );
         const root = snapshot.binding.runtimePath;
         const token = randomUUID();
         const remoteArchive = `/tmp/workbench-artifacts-${token}.tar.gz`;
@@ -189,12 +196,12 @@ export class E2BOutcomeCollector implements OutcomeCollector {
                         archive: remoteArchive,
                     })
                 ),
-                'Failed to collect E2B outcome artifacts'
+                `Failed to collect ${this.provider} outcome artifacts`
             );
             const maximum = this.options.maximumTransferBytes;
             if (transferred + (await sandbox.fileSize(remoteArchive)) > maximum) {
                 throw new Error(
-                    `E2B output exceeds the ${formatOutcomeBytes(maximum)} transfer safety limit`
+                    `${this.provider} output exceeds the ${formatOutcomeBytes(maximum)} transfer safety limit`
                 );
             }
             const archive = join(directory, 'artifacts.tar.gz');

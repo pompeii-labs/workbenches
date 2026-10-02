@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 
 import { OutcomeStore } from '../src/outcomes/index.js';
 import type {
@@ -16,11 +16,11 @@ import type {
     E2BSandboxInfo,
     E2BTemplateSource,
 } from '../src/runtimes/e2b/contracts.js';
-import { e2bIdentityCommand } from '../src/runtimes/e2b/directories.js';
 import { E2BManagedSandboxes } from '../src/runtimes/e2b/managed.js';
 import { E2BRuntimeProvider } from '../src/runtimes/e2b/provider.js';
-import { E2BAssetSnapshot } from '../src/runtimes/e2b/snapshot.js';
 import { RuntimeRegistry } from '../src/runtimes/index.js';
+import { identityCommand } from '../src/runtimes/remote/directories.js';
+import { DiskAssetSnapshot } from '../src/runtimes/remote/disk/snapshot.js';
 import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
 import { TransferRules } from '../src/runtimes/staging/rules.js';
 import type { ResolvedWorkbench } from '../src/types.js';
@@ -123,6 +123,45 @@ describe('E2B runtime provider', () => {
         } finally {
             await runtime.cleanup();
             await ordinary.cleanup();
+        }
+    });
+
+    test('skips root when the staging paths are pre-created and owned', async () => {
+        const client = new FakeClient();
+        client.sandbox.directoriesOwned = true;
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare(
+            request(await fixture())
+        );
+        try {
+            await runtime.preflight();
+            expect(
+                client.sandbox.runs.some((run) => run.options.user === 'root')
+            ).toBeFalse();
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('creates a writable-parent staging path as the user without root', async () => {
+        const client = new FakeClient();
+        client.sandbox.rootUnavailable = true;
+        for (const path of ['/workspace', '/workbench'])
+            client.sandbox.preOwned.add(path);
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare(
+            request(await fixture())
+        );
+        try {
+            await runtime.preflight();
+            expect(
+                client.sandbox.runs.some((run) => run.options.user === 'root')
+            ).toBeFalse();
+            expect(
+                client.sandbox.runs.some((run) =>
+                    run.command.includes("mkdir -p '/tmp/workbench-home'")
+                )
+            ).toBeTrue();
+        } finally {
+            await runtime.cleanup();
         }
     });
 
@@ -490,7 +529,7 @@ describe('E2B runtime provider', () => {
                 artifacts: [{ path: 'report.txt', name: 'Report' }],
             })
         );
-        const remoteSnapshot = await E2BAssetSnapshot.create(
+        const remoteSnapshot = await DiskAssetSnapshot.create(
             {
                 hostPath: remoteOutput,
                 runtimePath: '/outbox',
@@ -529,7 +568,7 @@ describe('E2B runtime provider', () => {
                 join(remoteOutput, 'report.txt'),
                 'remote artifact revised'
             );
-            const revision = await E2BAssetSnapshot.create(
+            const revision = await DiskAssetSnapshot.create(
                 remoteSnapshot.binding,
                 1024 * 1024,
                 undefined,
@@ -794,13 +833,36 @@ class FakeSandbox implements E2BSandbox {
     uploadFailure: Error | undefined;
     startFailure: Error | undefined;
     readonly missingCommands = new Set<string>();
+    directoriesOwned = false;
+    rootUnavailable = false;
+    readonly preOwned = new Set<string>();
 
     async run(
         command: string,
         options: E2BRunOptions = {}
     ): Promise<{ code: number; stdout: string; stderr: string }> {
         this.runs.push({ command, options });
-        if (command === e2bIdentityCommand) return result(0, this.runtimeIdentity);
+        if (command === identityCommand) return result(0, this.runtimeIdentity);
+        if (options.user === 'root' && command.includes('mkdir -p')) {
+            return this.rootUnavailable
+                ? result(1, '', 'root access is required')
+                : result(0);
+        }
+        if (command.includes('mkdir -p') && command.includes('chmod 700')) {
+            const targets = [...command.matchAll(/mkdir -p '([^']+)'/g)].map(
+                (match) => match[1] as string
+            );
+            // Nested targets have a writable parent; targets under / need pre-owning.
+            return this.directoriesOwned ||
+                targets.every(
+                    (path) => posix.dirname(path) !== '/' || this.preOwned.has(path)
+                )
+                ? result(0)
+                : result(1, '', 'Permission denied');
+        }
+        if (command.includes('test -O')) {
+            return this.directoriesOwned ? result(0) : result(1);
+        }
         if (command === 'tar --help 2>&1') {
             return result(0, 'Usage: tar [OPTION...]\n      --null');
         }

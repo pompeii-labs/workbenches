@@ -7,8 +7,8 @@ import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
 import tar from 'tar-stream';
-import { formatOutcomeBytes } from '../../outcomes/presentation.js';
-import type { TransferRules } from '../staging/rules.js';
+import { formatOutcomeBytes } from '../../../outcomes/presentation.js';
+import type { TransferRules } from '../../staging/rules.js';
 
 export interface ExtractLimits {
     /** Extraction stops once the archive holds more file bytes than this. */
@@ -18,8 +18,8 @@ export interface ExtractLimits {
 }
 
 /** Extracts gzip tar archives from a sandbox, refusing unsafe paths, links, and sizes. */
-export class E2BArchive {
-    constructor(private readonly rules: TransferRules) {}
+export class SandboxArchive {
+    constructor(readonly rules: TransferRules) {}
 
     /** Extracts `archive` into `destination` and returns the file bytes written. */
     async extract(

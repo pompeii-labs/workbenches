@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { E2BPathPlan } from '../../../../src/runtimes/e2b/paths.js';
+import { PathPlan } from '../../../../src/runtimes/remote/paths.js';
 import { MemoryAssetSource } from '../../../../src/runtimes/staging/memory/source.js';
 import { TransferRules } from '../../../../src/runtimes/staging/rules.js';
 import type { ResolvedWorkbench } from '../../../../src/types.js';
@@ -21,7 +21,7 @@ describe('memory source stat', () => {
             manifest: { runner: 'opencode', env: {} },
         } as unknown as ResolvedWorkbench;
         source.directory('/virtual/pkg');
-        const plan = new E2BPathPlan(
+        const plan = new PathPlan(
             {
                 workbench,
                 workspaceDirectory: '/virtual/ws',

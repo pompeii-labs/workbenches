@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ResolvedWorkbench } from '../src/types.js';
+import { workspaceEnvironment } from '../src/workbench/bindings.js';
 import { WorkbenchWorkspaces } from '../src/workbench/index.js';
 
 const temporaryDirectories: string[] = [];
@@ -66,9 +67,11 @@ describe('named workspace bindings', () => {
             { name: 'schemas', path: await realpath(schemas), access: 'read-only' },
         ]);
         expect(
-            workspaces.environment(
-                bindings,
-                (path) => `/mapped/${path.split('/').at(-1)}`
+            workspaceEnvironment(
+                bindings.map((binding) => ({
+                    ...binding,
+                    path: `/mapped/${binding.path.split('/').at(-1)}`,
+                }))
             )
         ).toEqual({
             WORKBENCH_WORKSPACE_API: '/mapped/api',

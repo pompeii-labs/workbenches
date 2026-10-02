@@ -17,6 +17,7 @@ import type {
     RuntimeCommandOptions,
     RuntimeCommandResult,
     RuntimeInfrastructureMetadata,
+    RuntimePlacement,
     RuntimePreparation,
     RuntimePrepareRequest,
     RuntimeProvider,
@@ -24,7 +25,11 @@ import type {
     RuntimeServiceBinding,
     RuntimeSessionOptions,
 } from './contracts.js';
-import { DaytonaRuntimeProvider } from './daytona.js';
+import {
+    DaytonaConnector,
+    type DaytonaRuntimeDependencies,
+    DaytonaRuntimeProvider,
+} from './daytona/index.js';
 import {
     type DockerRuntimeDependencies,
     DockerRuntimeProvider,
@@ -32,12 +37,21 @@ import {
 import { type E2BRuntimeDependencies, E2BRuntimeProvider } from './e2b/index.js';
 import { RuntimeError } from './error.js';
 import { type LocalRuntimeDependencies, LocalRuntimeProvider } from './local.js';
+import { DiskTransfer } from './remote/disk/transfer.js';
+import { RuntimeSecretStore } from './secrets.js';
 import { DiskAssetSource } from './staging/disk.js';
+import { TransferRules } from './staging/rules.js';
 
 export interface RuntimeDependencies extends Partial<LocalRuntimeDependencies> {
     docker?: Omit<DockerRuntimeDependencies, 'host'>;
     /** Anything left out is wired here: assets are read from the local disk. */
     e2b?: Partial<E2BRuntimeDependencies>;
+    /**
+     * Anything left out is wired here: files are read and staged through the
+     * local disk, the key comes from the environment or the saved runtime key,
+     * and clients send requests through the platform `fetch`.
+     */
+    daytona?: Partial<DaytonaRuntimeDependencies>;
 }
 
 export class RuntimeRegistry {
@@ -69,7 +83,22 @@ export class RuntimeRegistry {
                     local: disk,
                     ...dependencies.e2b,
                 }),
-                new DaytonaRuntimeProvider(),
+                new DaytonaRuntimeProvider({
+                    transfer: new DiskTransfer(
+                        disk,
+                        disk,
+                        new TransferRules('Daytona')
+                    ),
+                    assets: disk,
+                    keys: RuntimeSecretStore,
+                    connector: new DaytonaConnector(fetch),
+                    clock: {
+                        now: () => new Date(),
+                        sleep: (milliseconds) =>
+                            new Promise((resolve) => setTimeout(resolve, milliseconds)),
+                    },
+                    ...dependencies.daytona,
+                }),
             ],
             host
         );
@@ -86,9 +115,11 @@ export class RuntimeRegistry {
 
 class GuardedRuntimeProvider implements RuntimeProvider {
     readonly name: string;
+    readonly placement: RuntimePlacement;
 
     constructor(private readonly provider: RuntimeProvider) {
         this.name = provider.name;
+        this.placement = provider.placement;
     }
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
@@ -135,6 +166,10 @@ class GuardedRuntime implements PreparedRuntime {
 
     get nativeAuthentication(): 'persistent' | 'unavailable' {
         return this.runtime.nativeAuthentication;
+    }
+
+    get sandboxId(): string | undefined {
+        return this.runtime.sandboxId;
     }
 
     pathFor(hostPath: string): string {

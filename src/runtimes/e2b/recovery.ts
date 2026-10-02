@@ -5,15 +5,15 @@ import { outcomeStorageDirectory } from '../../outcomes/directories.js';
 import { OutcomeStorageLease, processIsAlive } from '../../outcomes/lease.js';
 import { OutcomeStore } from '../../outcomes/store.js';
 import { RunStore } from '../../runs/store.js';
+import { DiskOutcomeCollector } from '../remote/disk/collector.js';
+import { NativeStateCapture } from '../remote/disk/native.js';
+import { DiskAssetSnapshot } from '../remote/disk/snapshot.js';
 import { TransferRules } from '../staging/rules.js';
 import {
     parseE2BRecoveryRecord,
     type E2BRecoveryRecord as RecoveryRecord,
 } from './checkpoint.js';
-import { E2BOutcomeCollector } from './collector.js';
 import type { E2BClient, E2BSandbox } from './contracts.js';
-import { E2BNativeState } from './native.js';
-import { E2BAssetSnapshot } from './snapshot.js';
 
 export interface E2BRecoveryReview {
     run_id: string;
@@ -63,7 +63,7 @@ export class E2BOutcomeRecovery {
 
     async checkpoint(
         sandbox: E2BSandbox,
-        snapshots: E2BAssetSnapshot[],
+        snapshots: DiskAssetSnapshot[],
         baselines: Map<number, string>,
         maximumBytes: number
     ): Promise<void> {
@@ -193,11 +193,11 @@ export class E2BOutcomeRecovery {
                     // Recovery runs from the CLI with no provider to hand it rules.
                     const rules = new TransferRules('E2B');
                     const snapshots = record.snapshots.map((value) =>
-                        E2BAssetSnapshot.fromRecovery(value, this.directory, rules)
+                        DiskAssetSnapshot.fromRecovery(value, this.directory, rules)
                     );
                     const persisted = new Set(record.persistedState);
                     try {
-                        await new E2BNativeState(sandbox).capture(
+                        await new NativeStateCapture(sandbox, rules).capture(
                             snapshots,
                             record.maximumBytes,
                             persisted,
@@ -210,7 +210,7 @@ export class E2BOutcomeRecovery {
                         record.persistedState = [...persisted];
                         await this.write(record);
                     }
-                    const collected = await new E2BOutcomeCollector({
+                    const collected = await new DiskOutcomeCollector({
                         sandbox,
                         snapshots,
                         baselines: new Map(record.baselines),

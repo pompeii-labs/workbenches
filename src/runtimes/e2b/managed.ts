@@ -23,7 +23,7 @@ export class E2BManagedSandboxes {
         const client =
             dependencies.client ??
             (() => {
-                const key = RuntimeSecretStore.e2bKey(environment);
+                const key = RuntimeSecretStore.key('e2b', environment);
                 return key ? new E2BSdkClient(key) : null;
             })();
         return client ? new E2BManagedSandboxes(client, scope) : undefined;

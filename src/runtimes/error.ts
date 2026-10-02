@@ -4,8 +4,13 @@ export class RuntimeError extends Error {
     readonly runtime: string;
     readonly phase: RuntimePhase;
 
-    constructor(runtime: string, phase: RuntimePhase, message: string) {
-        super(message);
+    constructor(
+        runtime: string,
+        phase: RuntimePhase,
+        message: string,
+        options?: ErrorOptions
+    ) {
+        super(message, options);
         this.name = 'RuntimeError';
         this.runtime = runtime;
         this.phase = phase;

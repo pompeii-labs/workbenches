@@ -113,6 +113,12 @@ export interface PreparedRuntime {
     readonly environment: Record<string, string | undefined>;
     readonly workspaces: WorkbenchWorkspaceBinding[];
     readonly preparation?: RuntimePreparation;
+    /**
+     * The id of the remote sandbox backing this runtime, once one exists. A
+     * remote runtime reports it so a host can keep it and reconnect later. Local
+     * runtimes leave it out.
+     */
+    readonly sandboxId?: string | undefined;
     readonly nativeAuthentication: 'persistent' | 'unavailable';
     pathFor(hostPath: string): string;
     preflight(): Promise<PreflightResult>;
@@ -142,7 +148,14 @@ export interface PreparedRuntime {
     cleanup(): Promise<void>;
 }
 
+/**
+ * Where a provider runs a Workbench: on the host, in a container that mounts
+ * host directories, or in a sandbox the engine copies files into.
+ */
+export type RuntimePlacement = 'host' | 'container' | 'sandbox';
+
 export interface RuntimeProvider {
     readonly name: string;
+    readonly placement: RuntimePlacement;
     prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime>;
 }

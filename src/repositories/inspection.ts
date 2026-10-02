@@ -1,5 +1,6 @@
 import { OutcomeStore } from '../outcomes/index.js';
 import { RunStore } from '../runs/store.js';
+import { isRemoteRuntime } from '../workbench/runtimes.js';
 import { RepositoryChecks } from './checks.js';
 import {
     assertRepositoryBinding,
@@ -55,7 +56,7 @@ export class RepositoryInspection {
             ...(native ? { native_pull: native.pull } : {}),
             checkout,
             workspace:
-                run.runtime === 'docker' || run.runtime === 'e2b'
+                run.runtime === 'docker' || isRemoteRuntime(run.runtime)
                     ? '/workspace'
                     : checkout,
         };

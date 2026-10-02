@@ -6,6 +6,7 @@ export type {
     RuntimeCredentialBinding,
     RuntimeInfrastructureMetadata,
     RuntimePhase,
+    RuntimePlacement,
     RuntimePreparation,
     RuntimePrepareRequest,
     RuntimeProvider,
@@ -13,7 +14,25 @@ export type {
     RuntimeServiceBinding,
     RuntimeSessionOptions,
 } from './contracts.js';
-export { DaytonaRuntimeProvider } from './daytona.js';
+export {
+    DaytonaApi,
+    DaytonaApiError,
+    type DaytonaApiOptions,
+    type DaytonaClient,
+    type DaytonaClock,
+    DaytonaConnector,
+    type DaytonaCreateOptions,
+    type DaytonaFetch,
+    type DaytonaKeys,
+    type DaytonaResources,
+    type DaytonaRuntimeDependencies,
+    DaytonaRuntimeProvider,
+    type DaytonaSandbox,
+    type DaytonaSandboxInfo,
+    type DaytonaSandboxSummary,
+    daytonaResources,
+    defaultDaytonaApiUrl,
+} from './daytona/index.js';
 export {
     type DockerCommandResult,
     DockerManagedContainers,
@@ -23,7 +42,6 @@ export {
     type ManagedDockerContainer,
 } from './docker/index.js';
 export {
-    DiskTransfer,
     type E2BClient,
     type E2BCommand,
     type E2BCommandOptions,
@@ -47,6 +65,9 @@ export {
     LocalRuntimeProvider,
 } from './local.js';
 export { type RuntimeDependencies, RuntimeRegistry } from './registry.js';
+export { DiskTransfer } from './remote/disk/transfer.js';
+export type { RemoteCommand, RemoteCommandOptions } from './remote/process.js';
+export type { RemoteRunOptions, RemoteSandbox } from './remote/runtime.js';
 export {
     RuntimeSmoke,
     type RuntimeSmokeOptions,

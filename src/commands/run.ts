@@ -6,6 +6,7 @@ import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
 import { RuntimeRegistry, RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import { assertWorkbenchTuiSupported, launchWorkbenchTui } from '../tui.js';
+import { workspaceEnvironment } from '../workbench/bindings.js';
 import {
     selectedRuntime,
     WorkbenchEnvironment,
@@ -188,7 +189,7 @@ export const runCommand = defineCommand({
             const environment = {
                 ...process.env,
                 ...workbenchEnvironment.bind(resolved.workbench, overrides),
-                ...workbenchWorkspaces.environment(workspaces),
+                ...workspaceEnvironment(workspaces),
             };
             if (selectedRuntime(resolved.workbench).name === 'local') {
                 new WorkbenchPreflight({ environment }).check(resolved.workbench);
@@ -275,9 +276,13 @@ export const runCommand = defineCommand({
             }
 
             if (args.detach) {
-                // E2B preparation creates a billable sandbox. The dispatched
+                // Sandbox preparation creates a billable sandbox. The dispatched
                 // worker performs the same preflight before startup completes.
-                if (!repository && selectedRuntime(resolved.workbench).name !== 'e2b') {
+                if (
+                    !repository &&
+                    runtimes.resolve(selectedRuntime(resolved.workbench).name)
+                        .placement !== 'sandbox'
+                ) {
                     const smoke = await new RuntimeSmoke({
                         workbench: resolved.workbench,
                         allowUncheckedGpu: args['allow-unchecked-gpu'],

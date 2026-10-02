@@ -2175,7 +2175,7 @@ describe('CLI integration', () => {
             'utf8'
         );
         expect(manifest).toContain(
-            'runtimes:\n  local: {}\n  docker:\n    image: "alpine:3.22"\n  daytona:\n    class: linux\n'
+            'runtimes:\n  local: {}\n  docker:\n    image: "alpine:3.22"\n  daytona:\n    class: linux\n    image: "alpine:3.22"\n'
         );
         expect(manifest.startsWith('spec: 1\n')).toBe(true);
         expect(manifest).not.toContain('runtime: local');
@@ -2187,6 +2187,32 @@ describe('CLI integration', () => {
         expect(
             await readFile(join(repository, '.workbenches/plain/workbench.yml'), 'utf8')
         ).toContain('runtimes:\n  local: {}\n');
+    });
+
+    test('writes the image into a daytona entry on its own', async () => {
+        const repository = await temporaryDirectory('workbench-init-daytona-');
+        const initialized = await executeCli(
+            [
+                'init',
+                'core',
+                '--runtimes',
+                'daytona',
+                '--image',
+                'ghcr.io/example/core:1.0.0',
+            ],
+            {},
+            repository
+        );
+        expect(initialized.code).toBe(0);
+        const manifest = await readFile(
+            join(repository, '.workbenches/core/workbench.yml'),
+            'utf8'
+        );
+        expect(manifest).toContain(
+            'runtimes:\n  daytona:\n    class: linux\n    image: "ghcr.io/example/core:1.0.0"\n'
+        );
+        const validated = await executeCli(['validate', repository], {}, repository);
+        expect(validated.code).toBe(0);
     });
 
     test('rejects init runtimes that cannot produce a valid manifest', async () => {
@@ -2333,9 +2359,7 @@ describe('CLI integration', () => {
             environment
         );
         expect(defaulted.code).toBe(1);
-        expect(defaulted.stderr).toContain(
-            'The daytona runtime is not available in this engine yet'
-        );
+        expect(defaulted.stderr).toContain('The daytona runtime needs an image');
 
         const selected = await executeCli(
             ['run', 'multi', '--task', 'work', '--final', '--runtime', 'local'],

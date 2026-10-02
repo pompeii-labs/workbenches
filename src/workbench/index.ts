@@ -30,6 +30,7 @@ export { RunnerConfiguration } from './runner-configuration.js';
 export {
     declaredRuntimeNames,
     declaredRuntimes,
+    isRemoteRuntime,
     requirementsOf,
     runtimeProviderNames,
     selectedRuntime,

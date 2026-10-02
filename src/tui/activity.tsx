@@ -41,9 +41,10 @@ export function startupLabel(
         runner === 'opencode' ? 'OpenCode' : runner === 'pi' ? 'Pi' : runner;
     if (status === 'Starting') return `Starting ${harness}...`;
     if (resuming) {
-        return `Connecting to ${runtime === 'e2b' ? 'E2B' : runtime === 'docker' ? 'Docker' : harness} session...`;
+        return `Connecting to ${runtime === 'e2b' ? 'E2B' : runtime === 'daytona' ? 'Daytona' : runtime === 'docker' ? 'Docker' : harness} session...`;
     }
     if (runtime === 'e2b') return 'Starting E2B sandbox...';
+    if (runtime === 'daytona') return 'Starting Daytona sandbox...';
     if (runtime === 'docker') return 'Starting Docker container...';
     return 'Preparing local workspace...';
 }

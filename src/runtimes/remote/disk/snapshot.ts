@@ -7,31 +7,32 @@ import { createGzip } from 'node:zlib';
 
 import tar from 'tar-stream';
 
-import { nativeCredentialPaths } from '../../connections/index.js';
-import type { OutcomeSink } from '../../outcomes/collection.js';
-import type { OutcomeChangeset, OutcomeWorkspace } from '../../outcomes/contracts.js';
-import { formatOutcomeBytes } from '../../outcomes/presentation.js';
-import { WorkspaceSnapshot } from '../../outcomes/workspace.js';
-import { type SnapshotEntry, TransferPlan } from '../staging/plan.js';
-import { WorkspaceProtection } from '../staging/protection.js';
-import type { TransferRules } from '../staging/rules.js';
-import type { AssetSource } from '../staging/source.js';
-import type { StagedAsset } from '../staging/transfer.js';
-import { ArchiveWriter } from '../staging/writer.js';
-import { E2BArchive } from './archive.js';
-import type { E2BAssetBinding } from './paths.js';
-import { type E2BStateSource, E2BStateStore, selectedStateFiles } from './state.js';
+import { nativeCredentialPaths } from '../../../connections/index.js';
+import type { OutcomeSink } from '../../../outcomes/collection.js';
+import type {
+    OutcomeChangeset,
+    OutcomeWorkspace,
+} from '../../../outcomes/contracts.js';
+import { formatOutcomeBytes } from '../../../outcomes/presentation.js';
+import { WorkspaceSnapshot } from '../../../outcomes/workspace.js';
+import { type SnapshotEntry, TransferPlan } from '../../staging/plan.js';
+import { WorkspaceProtection } from '../../staging/protection.js';
+import type { TransferRules } from '../../staging/rules.js';
+import type { AssetSource } from '../../staging/source.js';
+import type { AssetBinding, StagedAsset } from '../../staging/transfer.js';
+import { ArchiveWriter } from '../../staging/writer.js';
+import { SandboxArchive } from './archive.js';
+import { StateSelection } from './selection.js';
+import { type StateSource, StateStore } from './state.js';
 
-export type E2BSnapshotEntry = SnapshotEntry;
-
-export interface E2BSnapshotOutcome {
+export interface SnapshotOutcome {
     readonly bytes: number;
     collect(store: OutcomeSink): Promise<OutcomeChangeset | undefined>;
     cleanup(): Promise<void>;
 }
 
-export interface E2BRecoverySnapshot {
-    binding: E2BAssetBinding;
+export interface RecoverySnapshot {
+    binding: AssetBinding;
     archive?: string;
     excludedPaths: string[];
     syncExcludedPaths: string[];
@@ -40,7 +41,7 @@ export interface E2BRecoverySnapshot {
     stateVersion?: string;
 }
 
-export interface E2BSnapshotSources {
+export interface SnapshotSources {
     /** Where workspace, package, and asset files are read from. */
     assets: AssetSource;
     /** Where staged engine-owned native state and credentials are read from. */
@@ -49,42 +50,42 @@ export interface E2BSnapshotSources {
     rules: TransferRules;
 }
 
-interface E2BSnapshotFields {
+interface SnapshotFields {
     rules: TransferRules;
-    binding: E2BAssetBinding;
+    binding: AssetBinding;
     archive: string;
-    entries: Map<string, E2BSnapshotEntry>;
+    entries: Map<string, SnapshotEntry>;
     excludedPaths: string[];
     syncExcludedPaths: string[];
     bytes: number;
     sourceIsDirectory: boolean;
     gitRevision: string | undefined;
     temporaryDirectory: string | undefined;
-    stateSource: E2BStateSource | undefined;
+    stateSource: StateSource | undefined;
 }
 
 /**
  * A host path copied into a transfer archive: it reads files through an
  * `AssetSource` and records what it sent so outcomes can be diffed against it.
  */
-export class E2BAssetSnapshot implements StagedAsset {
-    readonly binding: E2BAssetBinding;
+export class DiskAssetSnapshot implements StagedAsset {
+    readonly binding: AssetBinding;
     readonly archive: string;
-    readonly entries: Map<string, E2BSnapshotEntry>;
+    readonly entries: Map<string, SnapshotEntry>;
     readonly excludedPaths: string[];
     readonly syncExcludedPaths: string[];
     readonly bytes: number;
     readonly sourceIsDirectory: boolean;
     readonly gitRevision: string | undefined;
     private readonly rules: TransferRules;
-    private readonly archives: E2BArchive;
+    private readonly archives: SandboxArchive;
     private readonly protection = new WorkspaceProtection();
     private readonly temporaryDirectory: string | undefined;
-    private readonly stateSource: E2BStateSource | undefined;
+    private readonly stateSource: StateSource | undefined;
 
-    private constructor(fields: E2BSnapshotFields) {
+    private constructor(fields: SnapshotFields) {
         this.rules = fields.rules;
-        this.archives = new E2BArchive(fields.rules);
+        this.archives = new SandboxArchive(fields.rules);
         this.binding = fields.binding;
         this.archive = fields.archive;
         this.entries = fields.entries;
@@ -98,30 +99,30 @@ export class E2BAssetSnapshot implements StagedAsset {
     }
 
     static async create(
-        binding: E2BAssetBinding,
+        binding: AssetBinding,
         maximumBytes: number,
         persistentDirectory: string | undefined,
-        sources: E2BSnapshotSources
-    ): Promise<E2BAssetSnapshot> {
+        sources: SnapshotSources
+    ): Promise<DiskAssetSnapshot> {
         if (
             binding.kind === 'state' ||
             binding.kind === 'credentials' ||
             binding.kind === 'git'
         ) {
             // Engine-owned native state is always read from the local store.
-            return new E2BStateStore(
-                new E2BArchive(sources.rules),
+            return new StateStore(
+                new SandboxArchive(sources.rules),
                 binding.hostPath,
                 binding.kind === 'credentials' ? nativeCredentialPaths : undefined
             ).withSource((source) =>
-                E2BAssetSnapshot.createFrom(binding, maximumBytes, {
+                DiskAssetSnapshot.createFrom(binding, maximumBytes, {
                     source: sources.local,
                     rules: sources.rules,
                     stateSource: source,
                 })
             );
         }
-        return E2BAssetSnapshot.createFrom(binding, maximumBytes, {
+        return DiskAssetSnapshot.createFrom(binding, maximumBytes, {
             source: sources.assets,
             rules: sources.rules,
             ...(persistentDirectory ? { persistentDirectory } : {}),
@@ -129,19 +130,22 @@ export class E2BAssetSnapshot implements StagedAsset {
     }
 
     private static async createFrom(
-        binding: E2BAssetBinding,
+        binding: AssetBinding,
         maximumBytes: number,
         options: {
             source: AssetSource;
             rules: TransferRules;
-            stateSource?: E2BStateSource;
+            stateSource?: StateSource;
             persistentDirectory?: string;
         }
-    ): Promise<E2BAssetSnapshot> {
+    ): Promise<DiskAssetSnapshot> {
         const { source: assets, rules, stateSource } = options;
         const plan = new TransferPlan(assets, rules);
         const temporaryDirectory = await mkdtemp(
-            join(options.persistentDirectory ?? tmpdir(), 'workbench-e2b-')
+            join(
+                options.persistentDirectory ?? tmpdir(),
+                `workbench-${rules.provider.toLowerCase()}-`
+            )
         );
         const archive = join(temporaryDirectory, 'asset.tar.gz');
         const sourcePath = stateSource?.directory ?? binding.hostPath;
@@ -156,7 +160,11 @@ export class E2BAssetSnapshot implements StagedAsset {
             excludedPaths.push(...syncExcludedPaths);
             const paths = isDirectory
                 ? binding.kind === 'credentials'
-                    ? await selectedStateFiles(sourcePath, nativeCredentialPaths)
+                    ? await new StateSelection(
+                          sourcePath,
+                          nativeCredentialPaths,
+                          rules.provider
+                      ).existing()
                     : await plan.selectPaths(
                           { ...binding, hostPath: sourcePath },
                           excludedPaths,
@@ -205,7 +213,7 @@ export class E2BAssetSnapshot implements StagedAsset {
                         throw error;
                     }),
             ]);
-            return new E2BAssetSnapshot({
+            return new DiskAssetSnapshot({
                 rules,
                 binding,
                 archive,
@@ -229,14 +237,14 @@ export class E2BAssetSnapshot implements StagedAsset {
 
     async persistState(archive: string, maximumBytes: number): Promise<number> {
         if (!this.stateSource) throw new Error('Snapshot is not managed native state');
-        return new E2BStateStore(
+        return new StateStore(
             this.archives,
             this.binding.hostPath,
             this.binding.kind === 'credentials' ? nativeCredentialPaths : undefined
         ).install(archive, this.stateSource.version, maximumBytes);
     }
 
-    recoverySnapshot(directory: string): E2BRecoverySnapshot {
+    recoverySnapshot(directory: string): RecoverySnapshot {
         return {
             binding: this.binding,
             excludedPaths: this.excludedPaths,
@@ -251,11 +259,11 @@ export class E2BAssetSnapshot implements StagedAsset {
     }
 
     static fromRecovery(
-        record: E2BRecoverySnapshot,
+        record: RecoverySnapshot,
         directory: string,
         rules: TransferRules
-    ): E2BAssetSnapshot {
-        return new E2BAssetSnapshot({
+    ): DiskAssetSnapshot {
+        return new DiskAssetSnapshot({
             rules,
             binding: record.binding,
             archive: record.archive ? join(directory, record.archive) : '',
@@ -278,13 +286,15 @@ export class E2BAssetSnapshot implements StagedAsset {
         workspace: OutcomeWorkspace,
         maximumBytes = 512 * 1_024 * 1_024,
         reportedMaximumBytes = maximumBytes
-    ): Promise<E2BSnapshotOutcome> {
+    ): Promise<SnapshotOutcome> {
         if (!this.sourceIsDirectory) {
             throw new Error(
                 `${this.rules.provider} file assets cannot produce workspace outcomes`
             );
         }
-        const materialized = await mkdtemp(join(tmpdir(), 'workbench-e2b-outcome-'));
+        const materialized = await mkdtemp(
+            join(tmpdir(), `workbench-${this.rules.provider.toLowerCase()}-outcome-`)
+        );
         let baseline: WorkspaceSnapshot | undefined;
         try {
             await this.archives.extract(this.archive, materialized, {

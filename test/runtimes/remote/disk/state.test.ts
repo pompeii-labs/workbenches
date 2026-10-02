@@ -11,20 +11,20 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { nativeCredentialPaths } from '../../src/connections/index.js';
-import { E2BArchive } from '../../src/runtimes/e2b/archive.js';
-import { E2BAssetSnapshot } from '../../src/runtimes/e2b/snapshot.js';
-import { E2BStateStore } from '../../src/runtimes/e2b/state.js';
-import { DiskAssetSource } from '../../src/runtimes/staging/disk.js';
-import { TransferRules } from '../../src/runtimes/staging/rules.js';
+import { nativeCredentialPaths } from '../../../../src/connections/index.js';
+import { SandboxArchive } from '../../../../src/runtimes/remote/disk/archive.js';
+import { DiskAssetSnapshot } from '../../../../src/runtimes/remote/disk/snapshot.js';
+import { StateStore } from '../../../../src/runtimes/remote/disk/state.js';
+import { DiskAssetSource } from '../../../../src/runtimes/staging/disk.js';
+import { TransferRules } from '../../../../src/runtimes/staging/rules.js';
 
 const diskAssetSource = new DiskAssetSource();
 const rules = new TransferRules('E2B');
-const archives = new E2BArchive(rules);
+const archives = new SandboxArchive(rules);
 const sources = { assets: diskAssetSource, local: diskAssetSource, rules };
 
 const directories: string[] = [];
-const snapshots: E2BAssetSnapshot[] = [];
+const snapshots: DiskAssetSnapshot[] = [];
 afterEach(async () => {
     await Promise.all(snapshots.splice(0).map((snapshot) => snapshot.cleanup()));
     await Promise.all(
@@ -43,7 +43,7 @@ async function archive(content: string, noise?: string): Promise<string> {
     await mkdir(join(root, 'opencode'));
     await writeFile(join(root, 'opencode', 'auth.json'), content);
     if (noise) await writeFile(join(root, 'opencode', 'opencode.db'), noise);
-    const snapshot = await E2BAssetSnapshot.create(
+    const snapshot = await DiskAssetSnapshot.create(
         {
             hostPath: root,
             runtimePath: '/state',
@@ -64,7 +64,7 @@ describe('E2B managed native state', () => {
         const root = await directory();
         await mkdir(join(root, 'objects'));
         await writeFile(join(root, 'HEAD'), 'ref: refs/heads/initial\n');
-        const input = await E2BAssetSnapshot.create(
+        const input = await DiskAssetSnapshot.create(
             {
                 hostPath: root,
                 runtimePath: '/workspace/.git',
@@ -80,7 +80,7 @@ describe('E2B managed native state', () => {
         expect([...input.entries.keys()]).toEqual(['HEAD']);
         const remote = await directory();
         await writeFile(join(remote, 'HEAD'), 'ref: refs/heads/feature\n');
-        const result = await E2BAssetSnapshot.create(
+        const result = await DiskAssetSnapshot.create(
             {
                 hostPath: remote,
                 runtimePath: '/workspace/.git',
@@ -93,12 +93,12 @@ describe('E2B managed native state', () => {
             sources
         );
         snapshots.push(result);
-        const store = new E2BStateStore(archives, root);
+        const store = new StateStore(archives, root);
         await store.install(result.archive, (await store.source()).version, 1_024);
         expect(await readFile(join(root, 'HEAD'), 'utf8')).toBe(
             'ref: refs/heads/initial\n'
         );
-        const resumed = await E2BAssetSnapshot.create(
+        const resumed = await DiskAssetSnapshot.create(
             {
                 hostPath: root,
                 runtimePath: '/workspace/.git',
@@ -118,13 +118,13 @@ describe('E2B managed native state', () => {
     });
     test('stages only auth files and ignores concurrent session caches in legacy credential generations', async () => {
         const root = await directory();
-        const legacy = new E2BStateStore(archives, root);
+        const legacy = new StateStore(archives, root);
         await legacy.install(
             await archive('auth', 'old cache'),
             (await legacy.source()).version,
             1_024
         );
-        const store = new E2BStateStore(archives, root, nativeCredentialPaths);
+        const store = new StateStore(archives, root, nativeCredentialPaths);
         const baseline = await store.source();
         await writeFile(
             join(baseline.directory, 'opencode', 'opencode.db'),
@@ -144,7 +144,7 @@ describe('E2B managed native state', () => {
             ),
         ]);
         expect(await store.source()).toEqual(baseline);
-        const snapshot = await E2BAssetSnapshot.create(
+        const snapshot = await DiskAssetSnapshot.create(
             {
                 hostPath: root,
                 runtimePath: '/credentials',
@@ -162,7 +162,7 @@ describe('E2B managed native state', () => {
 
     test('persists auth alone while still rejecting conflicting credential refreshes', async () => {
         const root = await directory();
-        const store = new E2BStateStore(archives, root, nativeCredentialPaths);
+        const store = new StateStore(archives, root, nativeCredentialPaths);
         const baseline = await store.source();
         await store.install(
             await archive('first auth', 'cache'),
@@ -203,13 +203,13 @@ describe('E2B managed native state', () => {
         await writeFile(join(outside, 'auth.json'), 'outside');
         await symlink(outside, join(root, 'opencode'));
         await expect(
-            new E2BStateStore(archives, root, nativeCredentialPaths).source()
+            new StateStore(archives, root, nativeCredentialPaths).source()
         ).rejects.toThrow('non-regular file');
     });
 
     test('retries an already activated archive after interrupted progress journaling', async () => {
         const root = await directory();
-        const store = new E2BStateStore(archives, root);
+        const store = new StateStore(archives, root);
         const baseline = await store.source();
         const incoming = await archive('refreshed');
         await store.install(incoming, baseline.version, 1_024);
@@ -225,7 +225,7 @@ describe('E2B managed native state', () => {
         const root = await directory();
         await mkdir(join(root, 'opencode'));
         await writeFile(join(root, 'opencode', 'auth.json'), 'original');
-        const store = new E2BStateStore(archives, root);
+        const store = new StateStore(archives, root);
         const baseline = await store.source();
         expect(
             await store.install(await archive('refreshed'), baseline.version, 1_024)
@@ -241,7 +241,7 @@ describe('E2B managed native state', () => {
         expect(
             (await stat(join(source.directory, 'opencode', 'auth.json'))).mode & 0o777
         ).toBe(0o600);
-        const next = await E2BAssetSnapshot.create(
+        const next = await DiskAssetSnapshot.create(
             {
                 hostPath: root,
                 runtimePath: '/state',
@@ -260,7 +260,7 @@ describe('E2B managed native state', () => {
 
     test('detects concurrent updates and preserves the activated generation', async () => {
         const root = await directory();
-        const store = new E2BStateStore(archives, root);
+        const store = new StateStore(archives, root);
         const baseline = await store.source();
         await store.install(await archive('first'), baseline.version, 1_024);
         const activated = await store.source();
@@ -273,7 +273,7 @@ describe('E2B managed native state', () => {
     test('detects original input changed during a run before activating remote credentials', async () => {
         const root = await directory();
         await writeFile(join(root, 'auth.json'), 'before');
-        const store = new E2BStateStore(archives, root);
+        const store = new StateStore(archives, root);
         const baseline = await store.source();
         await writeFile(join(root, 'auth.json'), 'user changed');
         await expect(
@@ -285,7 +285,7 @@ describe('E2B managed native state', () => {
 
     test('bounds generations and refuses oversized or symlinked state', async () => {
         const root = await directory();
-        const store = new E2BStateStore(archives, root);
+        const store = new StateStore(archives, root);
         for (const content of ['first', 'second', 'third', 'fourth']) {
             await store.install(
                 await archive(content),
@@ -303,7 +303,7 @@ describe('E2B managed native state', () => {
         expect(await store.source()).toEqual(current);
         const malicious = await directory();
         await symlink(root, join(malicious, '.workbench-state'));
-        await expect(new E2BStateStore(archives, malicious).source()).rejects.toThrow(
+        await expect(new StateStore(archives, malicious).source()).rejects.toThrow(
             'real directories'
         );
     });

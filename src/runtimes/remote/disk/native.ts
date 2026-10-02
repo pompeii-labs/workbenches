@@ -1,25 +1,31 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { nativeCredentialPaths } from '../../connections/index.js';
-import { quote } from '../staging/shell.js';
-import type { E2BSandbox } from './contracts.js';
-import type { E2BAssetSnapshot } from './snapshot.js';
-import { E2BTransfer } from './transfer.js';
+import { nativeCredentialPaths } from '../../../connections/index.js';
+import type { TransferRules } from '../../staging/rules.js';
+import { quote } from '../../staging/shell.js';
+import type { TransferSandbox } from '../../staging/transfer.js';
+import { SandboxDownload } from './download.js';
+import type { DiskAssetSnapshot } from './snapshot.js';
 
-/** Copies native state and credentials out of one E2B sandbox into their host stores. */
-export class E2BNativeState {
-    constructor(private readonly sandbox: Pick<E2BSandbox, 'run' | 'download'>) {}
+/** Copies native state and credentials out of one remote sandbox into their host stores. */
+export class NativeStateCapture {
+    constructor(
+        private readonly sandbox: Pick<TransferSandbox, 'run' | 'download'>,
+        private readonly rules: TransferRules
+    ) {}
 
     async capture(
-        snapshots: E2BAssetSnapshot[],
+        snapshots: DiskAssetSnapshot[],
         maximumBytes: number,
         completed = new Set<number>(),
         checkpoint?: (completed: Set<number>) => Promise<void>
     ): Promise<void> {
         const sandbox = this.sandbox;
-        const transfer = new E2BTransfer(sandbox);
-        const directory = await mkdtemp(join(tmpdir(), 'workbench-e2b-state-'));
+        const transfer = new SandboxDownload(sandbox, this.rules);
+        const directory = await mkdtemp(
+            join(tmpdir(), `workbench-${this.rules.provider.toLowerCase()}-state-`)
+        );
         let transferred = 0;
         let materialized = 0;
         try {
@@ -40,7 +46,7 @@ export class E2BNativeState {
                 const result = await sandbox.run(selection);
                 if (result.code !== 0)
                     throw new Error(
-                        `Failed to collect E2B native state: ${result.stderr.trim()}`
+                        `Failed to collect ${this.rules.provider} native state: ${result.stderr.trim() || result.stdout.trim()}`
                     );
                 const archive = join(directory, `${index}.tar.gz`);
                 transferred += await transfer.download(remoteArchive, archive, {

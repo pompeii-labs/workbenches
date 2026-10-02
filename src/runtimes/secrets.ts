@@ -14,9 +14,13 @@ import {
 import { join } from 'node:path';
 import { workbenchHome } from '../storage.js';
 
+/** The sandbox providers that need a host-only API key. */
+export type RuntimeKeyProvider = 'e2b' | 'daytona';
+
 interface RuntimeSecretFile {
     version: 1;
     e2b?: { api_key: string };
+    daytona?: { api_key: string };
 }
 
 const filename = 'runtime.secrets.json';
@@ -24,33 +28,45 @@ const maximumBytes = 64 * 1024;
 
 /** Host-only sandbox provisioning credentials, never runner environment. */
 export class RuntimeSecretStore {
+    /** What each provider's key is called to a person and in the environment. */
+    static readonly providers = {
+        e2b: { label: 'E2B', variable: 'E2B_API_KEY' },
+        daytona: { label: 'Daytona', variable: 'DAYTONA_API_KEY' },
+    } as const;
+
     constructor(readonly home = workbenchHome()) {}
 
-    static e2bKey(
-        environment: Record<string, string | undefined> = process.env
+    /** The provider's key from `environment`, else the key saved in its Workbench home. */
+    static key(
+        provider: RuntimeKeyProvider,
+        environment: Record<string, string | undefined>
     ): string | undefined {
         return (
-            environment.E2B_API_KEY?.trim() ||
-            new RuntimeSecretStore(workbenchHome(environment)).e2bKey()
+            environment[RuntimeSecretStore.providers[provider].variable]?.trim() ||
+            new RuntimeSecretStore(workbenchHome(environment)).key(provider)
         );
     }
 
-    e2bKey(): string | undefined {
-        return this.read().e2b?.api_key;
+    /** The key saved for the provider, ignoring the environment. */
+    key(provider: RuntimeKeyProvider): string | undefined {
+        return this.read()[provider]?.api_key;
     }
 
-    saveE2B(key: string): void {
+    save(provider: RuntimeKeyProvider, key: string): void {
         const value = key.trim();
         if (!value || /[\r\n\0]/.test(value)) {
-            throw new Error('E2B API key must be a non-empty single line');
+            throw new Error(
+                `${RuntimeSecretStore.providers[provider].label} API key must be a non-empty single line`
+            );
         }
-        this.write({ ...this.read(), e2b: { api_key: value } });
+        this.write({ ...this.read(), [provider]: { api_key: value } });
     }
 
-    removeE2B(): void {
+    remove(provider: RuntimeKeyProvider): void {
         const current = this.read();
-        if (!current.e2b) return;
-        this.write({ version: 1 });
+        if (!current[provider]) return;
+        const { [provider]: _removed, ...remaining } = current;
+        this.write(remaining);
     }
 
     private read(): RuntimeSecretFile {
@@ -81,16 +97,18 @@ export class RuntimeSecretStore {
             if (
                 !isRecord(parsed) ||
                 parsed.version !== 1 ||
-                (parsed.e2b !== undefined &&
-                    (!isRecord(parsed.e2b) ||
-                        typeof parsed.e2b.api_key !== 'string' ||
-                        !parsed.e2b.api_key))
+                !validKey(parsed.e2b) ||
+                !validKey(parsed.daytona)
             ) {
                 throw new Error('The Workbench runtime secret store is invalid');
             }
-            return parsed.e2b === undefined
-                ? { version: 1 }
-                : { version: 1, e2b: { api_key: parsed.e2b.api_key as string } };
+            return {
+                version: 1,
+                ...(parsed.e2b ? { e2b: { api_key: keyOf(parsed.e2b) } } : {}),
+                ...(parsed.daytona
+                    ? { daytona: { api_key: keyOf(parsed.daytona) } }
+                    : {}),
+            };
         } finally {
             closeSync(descriptor);
         }
@@ -111,6 +129,18 @@ export class RuntimeSecretStore {
             rmSync(temporary, { force: true });
         }
     }
+}
+
+/** An absent entry is valid. A present one must hold a non-empty key. */
+function validKey(entry: unknown): boolean {
+    return (
+        entry === undefined ||
+        (isRecord(entry) && typeof entry.api_key === 'string' && entry.api_key !== '')
+    );
+}
+
+function keyOf(entry: unknown): string {
+    return (entry as { api_key: string }).api_key;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

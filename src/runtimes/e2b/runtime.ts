@@ -1,42 +1,24 @@
-import { dirname } from 'node:path';
-import type { OutcomeSink, RuntimeOutcomeCollection } from '../../outcomes/index.js';
-import type {
-    ResolvedWorkbench,
-    RunnerInvocation,
-    SpawnedRunner,
-    WorkbenchWorkspaceBinding,
-} from '../../types.js';
+import type { RunnerInvocation } from '../../types.js';
 import { type PreflightResult, WorkbenchPreflight } from '../../workbench/preflight.js';
-import type { RequirementsPreflight } from '../../workbench/requirements.js';
-import { WorkbenchWorkspaces } from '../../workbench/workspaces.js';
 import type {
-    PreparedRuntime,
-    RuntimeCommandOptions,
     RuntimeInfrastructureMetadata,
     RuntimePreparation,
-    RuntimePrepareRequest,
     RuntimeService,
     RuntimeServiceBinding,
-    RuntimeSessionOptions,
 } from '../contracts.js';
-import { RuntimeError } from '../error.js';
-import { quote } from '../staging/shell.js';
-import { remoteExclusions, workspaceTracking } from '../staging/tracking.js';
-import type { E2BClient, E2BCommand, E2BSandbox } from './contracts.js';
-import { prepareE2BDirectories } from './directories.js';
-import type { DiskTransfer } from './disk.js';
+import type { DiskAssetSnapshot } from '../remote/disk/snapshot.js';
+import type { DiskTransfer } from '../remote/disk/transfer.js';
+import { runLabels } from '../remote/labels.js';
+import { RemoteRuntime, type RemoteRuntimeOptions } from '../remote/runtime.js';
+import { type ArchiveUpload, AssetStage } from '../remote/stage.js';
+import { definedEnvironment, quote, shellCommand } from '../staging/shell.js';
+import type { E2BClient, E2BSandbox } from './contracts.js';
 import { e2bPricingSource, estimateE2BCost } from './infrastructure.js';
-import type { E2BPathPlan } from './paths.js';
 import { E2BOutcomeRecovery } from './recovery.js';
-import { e2bMetadata } from './sdk.js';
-import { definedEnvironment, gitExcludePattern, shellCommand } from './shell.js';
-import type { E2BAssetSnapshot } from './snapshot.js';
 import { terminalDimensions } from './terminal.js';
 
-interface E2BRuntimeOptions {
-    request: RuntimePrepareRequest;
+interface E2BRuntimeOptions extends RemoteRuntimeOptions {
     client: E2BClient;
-    paths: E2BPathPlan;
     /** Packs files into the sandbox and takes outcomes and native state back. */
     transfer: DiskTransfer;
     preparation: RuntimePreparation & {
@@ -45,70 +27,32 @@ interface E2BRuntimeOptions {
         immutableReference: string;
         action: 'built' | 'cache-hit';
     };
-    run: { id: string; scope: string };
-    requirements: RequirementsPreflight;
-    maximumTransferBytes: number;
-    leaseMilliseconds: number;
-    now(): Date;
     cleanupPreparation(): Promise<void>;
 }
 
-interface ActiveProcess {
-    command: Promise<E2BCommand>;
-    process: SpawnedRunner;
+/** Streams a snapshot's archive file into the sandbox without reading it into memory. */
+class E2BArchiveUpload implements ArchiveUpload<DiskAssetSnapshot> {
+    constructor(private readonly sandbox: Pick<E2BSandbox, 'upload'>) {}
+
+    upload(remotePath: string, snapshot: DiskAssetSnapshot): Promise<void> {
+        return this.sandbox.upload(remotePath, Bun.file(snapshot.archive).stream());
+    }
 }
 
-export class E2BRuntime implements PreparedRuntime {
+export class E2BRuntime extends RemoteRuntime<E2BSandbox, DiskAssetSnapshot> {
     readonly name = 'e2b';
     readonly nativeAuthentication: 'persistent' | 'unavailable';
-    readonly workbench: ResolvedWorkbench;
-    readonly workspaceDirectory: string;
-    readonly environment: Record<string, string | undefined>;
-    readonly workspaces: WorkbenchWorkspaceBinding[];
     readonly preparation: E2BRuntimeOptions['preparation'];
-    private readonly active = new Set<ActiveProcess>();
-    private readonly workspaceBindings = new WorkbenchWorkspaces();
-    private sandbox: E2BSandbox | undefined;
-    private snapshots: E2BAssetSnapshot[] = [];
-    private readonly snapshotBaselines = new Map<number, string>();
-    private ready = false;
-    private cleaned = false;
-    private outcomeCollection: Promise<RuntimeOutcomeCollection> | undefined;
-    private statePersistence: Promise<void> | undefined;
-    private readonly persistedState = new Set<number>();
+    protected declare readonly options: E2BRuntimeOptions;
     private recovery: E2BOutcomeRecovery | undefined;
     private outcomeFinalized = false;
-    private sandboxStartedAt: number | undefined;
-    private finalInfrastructure: RuntimeInfrastructureMetadata | undefined;
 
-    constructor(private readonly options: E2BRuntimeOptions) {
+    constructor(options: E2BRuntimeOptions) {
+        super(options);
         this.nativeAuthentication = options.request.credentials
             ? 'persistent'
             : 'unavailable';
         this.preparation = options.preparation;
-        this.workspaceDirectory = options.paths.pathFor(
-            options.request.workspaceDirectory
-        );
-        this.workspaces = options.request.assets.flatMap((asset) =>
-            asset.workspace
-                ? [
-                      {
-                          name: asset.workspace,
-                          path: options.paths.pathFor(asset.path),
-                          access: asset.access,
-                      },
-                  ]
-                : []
-        );
-        this.environment = {
-            ...options.paths.environment(),
-            ...this.workspaceBindings.environment(this.workspaces),
-        };
-        this.workbench = options.paths.remap(options.request.workbench);
-    }
-
-    pathFor(hostPath: string): string {
-        return this.options.paths.pathFor(hostPath);
     }
 
     async preflight(): Promise<PreflightResult> {
@@ -181,17 +125,6 @@ export class E2BRuntime implements PreparedRuntime {
         };
     }
 
-    async execute(
-        invocation: RunnerInvocation,
-        _options: RuntimeCommandOptions = {}
-    ): Promise<{ code: number; stdout: string; stderr: string }> {
-        const sandbox = this.requireReady();
-        return sandbox.run(shellCommand(invocation.command), {
-            cwd: invocation.cwd,
-            env: definedEnvironment(invocation.env),
-        });
-    }
-
     async interact(invocation: RunnerInvocation): Promise<number> {
         const sandbox = this.requireReady();
         const dimensions = terminalDimensions();
@@ -232,114 +165,6 @@ export class E2BRuntime implements PreparedRuntime {
         }
     }
 
-    launch(invocation: RunnerInvocation): SpawnedRunner {
-        return this.launchSession(invocation, { stdin: 'ignore' });
-    }
-
-    launchSession(
-        invocation: RunnerInvocation,
-        options: RuntimeSessionOptions
-    ): SpawnedRunner {
-        const sandbox = this.requireReady();
-        let stdoutController: ReadableStreamDefaultController<Uint8Array>;
-        let stderrController: ReadableStreamDefaultController<Uint8Array>;
-        const stdout = new ReadableStream<Uint8Array>({
-            start: (controller) => {
-                stdoutController = controller;
-            },
-        });
-        const stderr = new ReadableStream<Uint8Array>({
-            start: (controller) => {
-                stderrController = controller;
-            },
-        });
-        const encoder = new TextEncoder();
-        let streamedStdout = false;
-        let streamedStderr = false;
-        let stdoutOpen = true;
-        let stderrOpen = true;
-        const enqueueStdout = (data: string) => {
-            if (!stdoutOpen) return;
-            try {
-                stdoutController.enqueue(encoder.encode(data));
-            } catch {
-                stdoutOpen = false;
-            }
-        };
-        const enqueueStderr = (data: string) => {
-            if (!stderrOpen) return;
-            try {
-                stderrController.enqueue(encoder.encode(data));
-            } catch {
-                stderrOpen = false;
-            }
-        };
-        const command = sandbox.start(shellCommand(invocation.command), {
-            cwd: invocation.cwd,
-            env: definedEnvironment(invocation.env),
-            stdin: options.stdin === 'pipe',
-            onStdout: (data) => {
-                streamedStdout = true;
-                enqueueStdout(data);
-            },
-            onStderr: (data) => {
-                streamedStderr = true;
-                enqueueStderr(data);
-            },
-        });
-        let active: ActiveProcess;
-        const closeOutputs = () => {
-            if (stdoutOpen) {
-                stdoutOpen = false;
-                try {
-                    stdoutController.close();
-                } catch {}
-            }
-            if (stderrOpen) {
-                stderrOpen = false;
-                try {
-                    stderrController.close();
-                } catch {}
-            }
-        };
-        const exited = command
-            .then((handle) => handle.wait())
-            .then((result) => {
-                if (!streamedStdout && result.stdout) {
-                    enqueueStdout(result.stdout);
-                }
-                if (!streamedStderr && result.stderr) {
-                    enqueueStderr(result.stderr);
-                }
-                return result.code;
-            })
-            .finally(() => {
-                this.active.delete(active);
-                closeOutputs();
-            });
-        const process: SpawnedRunner = {
-            stdout,
-            stderr,
-            exited,
-            ...(options.stdin === 'pipe'
-                ? {
-                      stdin: {
-                          write: (value: string | Uint8Array) =>
-                              command.then((handle) => handle.sendStdin(value)),
-                          flush: () => Promise.resolve(),
-                          end: () => command.then((handle) => handle.closeStdin()),
-                      },
-                  }
-                : {}),
-            kill: () => {
-                void command.then((handle) => handle.kill()).catch(() => {});
-            },
-        };
-        active = { command, process };
-        this.active.add(active);
-        return process;
-    }
-
     launchService(
         buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
     ): RuntimeService {
@@ -358,110 +183,53 @@ export class E2BRuntime implements PreparedRuntime {
         };
     }
 
-    cancel(process: SpawnedRunner): void {
-        const active = [...this.active].find(
-            (candidate) => candidate.process === process
-        );
-        process.kill?.();
-        if (active) this.active.delete(active);
-    }
-
-    async infrastructure(): Promise<RuntimeInfrastructureMetadata> {
-        if (this.finalInfrastructure) return this.finalInfrastructure;
-        return this.measureInfrastructure();
-    }
-
-    async collectOutcome(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
-        if (!this.outcomeCollection) {
-            this.outcomeCollection = this.persistNativeState()
-                .then(() => this.collector().collect(store))
-                .catch((error) => {
-                    this.outcomeCollection = undefined;
-                    if (this.recovery)
-                        throw new Error(
-                            `${error instanceof Error ? error.message : String(error)}. Recover with: wb outcome ${this.options.run.id} --recover`,
-                            { cause: error }
-                        );
-                    throw error;
-                });
-        }
-        const outcome = await this.outcomeCollection;
-        return outcome;
-    }
-
-    async finalizeOutcome(): Promise<void> {
+    override async finalizeOutcome(): Promise<void> {
         this.outcomeFinalized = true;
         await this.recovery?.discard();
     }
 
-    snapshotRepository(store: OutcomeSink) {
-        return this.collector().collect(store);
+    protected override async checkpoint(completed: Set<number>): Promise<void> {
+        await this.recovery?.progress(completed);
     }
 
-    collectOutput(store: OutcomeSink) {
-        return this.collector().collectOutput(store);
+    protected override collectionFailure(error: unknown): unknown {
+        if (!this.recovery) return error;
+        return new Error(
+            `${error instanceof Error ? error.message : String(error)}. Recover with: wb outcome ${this.options.run.id} --recover`,
+            { cause: error }
+        );
     }
 
-    async cleanup(): Promise<void> {
-        if (this.cleaned) return;
-        this.cleaned = true;
-        for (const active of this.active) {
-            await active.command.then((command) => command.kill()).catch(() => {});
-        }
-        this.active.clear();
-        const failures: unknown[] = [];
-        await this.persistNativeState().catch((error) => {
-            failures.push(error);
-        });
-        if (this.sandbox) {
-            this.finalInfrastructure = await this.measureInfrastructure();
-        }
-        const retainRecovery = Boolean(this.recovery && !this.outcomeFinalized);
-        if (retainRecovery && this.sandbox) {
+    /**
+     * E2B keeps the sandbox, and the workspace archive that stages it, while an
+     * outcome that could not be collected is still recoverable. Otherwise it is
+     * killed.
+     */
+    protected async destroy(failures: unknown[]): Promise<void> {
+        if (this.retainRecovery() && this.sandbox) {
             await this.recovery
                 ?.retain(this.sandbox, this.persistedState)
                 .catch((error) => failures.push(error));
         } else {
             await this.sandbox?.kill().catch((error) => failures.push(error));
         }
-        const snapshotCleanup = await Promise.allSettled(
-            this.snapshots
-                .filter(
-                    (snapshot) =>
-                        !retainRecovery || snapshot.binding.kind !== 'workspace'
-                )
-                .map((snapshot) => snapshot.cleanup())
-        );
-        for (const result of snapshotCleanup) {
-            if (result.status === 'rejected') failures.push(result.reason);
-        }
-        await this.options.cleanupPreparation().catch((error) => failures.push(error));
-        if (failures[0]) throw failures[0];
     }
 
-    private persistNativeState(): Promise<void> {
-        if (!this.sandbox) return Promise.resolve();
-        if (!this.statePersistence) {
-            this.statePersistence = this.options.transfer
-                .captureNativeState({
-                    sandbox: this.sandbox,
-                    snapshots: this.snapshots,
-                    maximumBytes: this.options.maximumTransferBytes,
-                    completed: this.persistedState,
-                    checkpoint: (completed) =>
-                        this.recovery?.progress(completed) ?? Promise.resolve(),
-                })
-                .catch((error) => {
-                    this.statePersistence = undefined;
-                    throw error;
-                });
-        }
-        return this.statePersistence;
+    protected override releasable(snapshot: DiskAssetSnapshot): boolean {
+        return !this.retainRecovery() || snapshot.binding.kind !== 'workspace';
+    }
+
+    protected override finishCleanup(): Promise<void> {
+        return this.options.cleanupPreparation();
+    }
+
+    private retainRecovery(): boolean {
+        return Boolean(this.recovery && !this.outcomeFinalized);
     }
 
     private async ensureSandbox(): Promise<E2BSandbox> {
         if (this.sandbox) return this.sandbox;
-        const snapshots: E2BAssetSnapshot[] = [];
+        const snapshots: DiskAssetSnapshot[] = [];
         let transferred = 0;
         try {
             if (this.options.request.outcome?.home) {
@@ -485,7 +253,7 @@ export class E2BRuntime implements PreparedRuntime {
             }
             const sandbox = await this.options.client.createSandbox({
                 template: this.preparation.immutableReference,
-                metadata: e2bMetadata(this.options.run),
+                metadata: runLabels(this.options.run, 'E2B'),
                 timeoutMilliseconds: this.options.leaseMilliseconds,
             });
             this.sandbox = sandbox;
@@ -514,107 +282,19 @@ export class E2BRuntime implements PreparedRuntime {
 
     private async stageSnapshots(
         sandbox: E2BSandbox,
-        snapshots: E2BAssetSnapshot[]
+        snapshots: DiskAssetSnapshot[]
     ): Promise<void> {
-        const home = this.environment.HOME ?? '/tmp/workbench-home';
-        await prepareE2BDirectories(sandbox, [
-            home,
-            ...snapshots.map((snapshot) =>
-                snapshot.sourceIsDirectory
-                    ? snapshot.binding.runtimePath
-                    : dirname(snapshot.binding.runtimePath)
-            ),
-        ]);
-        for (const [index, snapshot] of snapshots.entries()) {
-            const remoteArchive = `/tmp/workbench-input-${index}.tar.gz`;
-            await sandbox.upload(remoteArchive, Bun.file(snapshot.archive).stream());
-            const target = snapshot.binding.runtimePath;
-            const command = snapshot.sourceIsDirectory
-                ? [
-                      `mkdir -p ${quote(target)}`,
-                      `tar -xzf ${quote(remoteArchive)} -C ${quote(target)}`,
-                      ...(snapshot.binding.kind === 'git'
-                          ? [
-                                `mkdir -p ${quote(`${target}/refs/heads`)} ${quote(`${target}/refs/tags`)} ${quote(`${target}/info`)}`,
-                            ]
-                          : []),
-                  ]
-                : [
-                      `mkdir -p ${quote(dirname(target))}`,
-                      `rm -f ${quote(target)}`,
-                      `tar -xzf ${quote(remoteArchive)} -C /tmp`,
-                      `mv /tmp/.workbench-file ${quote(target)}`,
-                  ];
-            if (
-                snapshot.binding.access === 'read-write' &&
-                snapshot.sourceIsDirectory &&
-                snapshot.binding.kind !== 'outcome' &&
-                snapshot.binding.kind !== 'git'
-            ) {
-                const tracking = workspaceTracking(snapshots, index);
-                command.push(
-                    `${tracking.git} init -q`,
-                    `${tracking.git} config user.email workbench@localhost`,
-                    `${tracking.git} config user.name Workbench`,
-                    `printf '%s\\n' ${[
-                        ...remoteExclusions,
-                        ...snapshot.syncExcludedPaths.map(gitExcludePattern),
-                    ]
-                        .map(quote)
-                        .join(' ')} >> ${quote(`${tracking.directory}/info/exclude`)}`,
-                    `${tracking.git} add -A`,
-                    `${tracking.git} commit -q --allow-empty --no-gpg-sign -m baseline`,
-                    `${tracking.git} rev-parse HEAD`
-                );
-            } else if (snapshot.binding.access === 'read-only') {
-                command.push(`chmod -R a-w ${quote(target)}`);
-            }
-            command.push(`rm -f ${quote(remoteArchive)}`);
-            const result = await sandbox.run(command.join(' && '));
-            requireSuccess(
-                result,
-                `Failed to stage E2B runtime asset: ${snapshot.binding.hostPath}`
-            );
-            if (
-                snapshot.binding.access === 'read-write' &&
-                snapshot.sourceIsDirectory &&
-                snapshot.binding.kind !== 'outcome' &&
-                snapshot.binding.kind !== 'git'
-            ) {
-                const baseline = result.stdout.trim().split(/\s+/).at(-1) ?? '';
-                if (!/^[a-f0-9]{40,64}$/.test(baseline)) {
-                    throw new Error(
-                        `Failed to record the E2B workspace baseline: ${snapshot.binding.hostPath}`
-                    );
-                }
-                this.snapshotBaselines.set(index, baseline);
-            }
+        const baselines = await new AssetStage(
+            sandbox,
+            new E2BArchiveUpload(sandbox),
+            this.options.rules
+        ).stage(snapshots, this.environment.HOME);
+        for (const [index, baseline] of baselines) {
+            this.snapshotBaselines.set(index, baseline);
         }
     }
 
-    private collector() {
-        return this.options.transfer.collector({
-            sandbox: this.requireReady(),
-            snapshots: this.snapshots,
-            baselines: this.snapshotBaselines,
-            maximumTransferBytes: this.options.maximumTransferBytes,
-        });
-    }
-
-    private async preflightAssets(sandbox: E2BSandbox): Promise<void> {
-        const paths = [
-            this.workbench.instructionsPath,
-            ...this.workbench.skills.map((skill) => skill.manifestPath),
-        ];
-        for (const path of paths) {
-            const result = await sandbox.run(`test -r ${quote(path)}`);
-            if (result.code !== 0) {
-                throw new Error(`Required runtime asset is unreadable: ${path}`);
-            }
-        }
-    }
-
-    private async measureInfrastructure(): Promise<RuntimeInfrastructureMetadata> {
+    protected async measureInfrastructure(): Promise<RuntimeInfrastructureMetadata> {
         const measuredAt = this.options.now().getTime();
         const fallbackStartedAt = this.sandboxStartedAt ?? measuredAt;
         const base = {
@@ -665,31 +345,4 @@ export class E2BRuntime implements PreparedRuntime {
         if (result.code !== 0) return null;
         return result.stdout.trim().split(/\r?\n/)[0] || null;
     }
-
-    private requireReady(): E2BSandbox {
-        this.assertAvailable('launch');
-        if (!this.ready || !this.sandbox) {
-            throw new Error('Runtime preflight must succeed before launch');
-        }
-        return this.sandbox;
-    }
-
-    private assertAvailable(phase: 'preflight' | 'launch'): void {
-        if (this.cleaned) {
-            throw new RuntimeError(
-                this.name,
-                phase,
-                'Runtime has already been cleaned up'
-            );
-        }
-    }
-}
-
-function requireSuccess(
-    result: { code: number; stdout: string; stderr: string },
-    message: string
-): void {
-    if (result.code === 0) return;
-    const detail = result.stderr.trim() || result.stdout.trim();
-    throw new Error(`${message}${detail ? `: ${detail}` : ''}`);
 }

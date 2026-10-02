@@ -7,10 +7,9 @@ import type { TransferRules } from '../staging/rules.js';
 import type { AssetSource } from '../staging/source.js';
 import type { AssetBinding } from '../staging/transfer.js';
 
-export type E2BAssetBinding = AssetBinding;
-
-export class E2BPathPlan {
-    readonly bindings: E2BAssetBinding[];
+/** Where each staged asset lands in a sandbox, and how host paths map to it. */
+export class PathPlan {
+    readonly bindings: AssetBinding[];
 
     constructor(
         private readonly request: RuntimePrepareRequest,
@@ -18,11 +17,11 @@ export class E2BPathPlan {
     ) {
         const workspace = resolve(request.workspaceDirectory);
         const packageDirectory = resolve(request.workbench.packageDirectory);
-        const unique = new Map<string, E2BAssetBinding>();
+        const unique = new Map<string, AssetBinding>();
         for (const asset of request.assets) {
             const hostPath = resolve(asset.path);
             const existing = unique.get(hostPath);
-            const binding: E2BAssetBinding = asset.git
+            const binding: AssetBinding = asset.git
                 ? {
                       hostPath,
                       runtimePath: '/workspace/.git',
@@ -83,9 +82,9 @@ export class E2BPathPlan {
             );
         }
         if (request.credentials) {
-            if (request.credentials.runtime !== 'e2b') {
+            if (request.credentials.runtime !== rules.provider.toLowerCase()) {
                 throw new Error(
-                    `E2B received credential storage for the ${request.credentials.runtime} runtime`
+                    `${rules.provider} received credential storage for the ${request.credentials.runtime} runtime`
                 );
             }
             if (request.credentials.runner !== request.workbench.manifest.runner) {
@@ -148,7 +147,7 @@ export class E2BPathPlan {
             }
             if (entry.kind === 'file' && binding.access === 'read-write') {
                 throw new Error(
-                    `E2B read-write runtime assets must be directories: ${binding.hostPath}`
+                    `${this.rules.provider} read-write runtime assets must be directories: ${binding.hostPath}`
                 );
             }
             if (binding.hostPath.includes('\n') || binding.hostPath.includes('\r')) {
@@ -163,7 +162,9 @@ export class E2BPathPlan {
             .filter((binding) => this.rules.contains(binding.hostPath, requested))
             .toSorted((left, right) => right.hostPath.length - left.hostPath.length)[0];
         if (!match) {
-            throw new Error(`Path is not staged in E2B runtime: ${hostPath}`);
+            throw new Error(
+                `Path is not staged in ${this.rules.provider} runtime: ${hostPath}`
+            );
         }
         const suffix = relative(match.hostPath, requested);
         return suffix
@@ -209,7 +210,7 @@ export class E2BPathPlan {
                 : {}),
             ...(this.request.outcome ? { WORKBENCH_OUTPUT_DIR: '/outbox' } : {}),
             ...Object.fromEntries(
-                E2BPathPlan.environmentNames(this.request.workbench).map((name) => [
+                this.environmentNames(this.request.workbench).map((name) => [
                     name,
                     this.request.environment[name],
                 ])
@@ -234,7 +235,13 @@ export class E2BPathPlan {
         };
     }
 
-    static environmentNames(workbench: ResolvedWorkbench): string[] {
+    /**
+     * The variables forwarded into the sandbox. The provider's own `<NAME>_API_KEY`
+     * and `<NAME>_API_URL` provisioning settings stay on the host.
+     */
+    private environmentNames(workbench: ResolvedWorkbench): string[] {
+        const prefix = this.rules.provider.toUpperCase();
+        const hostOnly = new Set([`${prefix}_API_KEY`, `${prefix}_API_URL`]);
         return [
             ...new Set([
                 ...Object.keys(workbench.manifest.env),
@@ -242,7 +249,7 @@ export class E2BPathPlan {
                     ActiveModelCatalog.current()
                 ).providerEnvironmentNames(workbench),
             ]),
-        ].filter((name) => name !== 'E2B_API_KEY');
+        ].filter((name) => !hostOnly.has(name));
     }
 
     private repositoryPathFor(workbench: ResolvedWorkbench): string {

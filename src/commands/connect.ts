@@ -13,7 +13,7 @@ import {
 } from '../connections/targets.js';
 import { ModelCatalog } from '../models/catalog.js';
 import { ModelRouter } from '../models/routing.js';
-import { RuntimeSecretStore } from '../runtimes/secrets.js';
+import { type RuntimeKeyProvider, RuntimeSecretStore } from '../runtimes/secrets.js';
 import { workbenchHome } from '../storage.js';
 import { selectedRuntime, WorkbenchResolver } from '../workbench/index.js';
 import { CliPresenter } from './presenter.js';
@@ -36,7 +36,7 @@ export const connectCommand = defineCommand({
         runtime: {
             type: 'string',
             description:
-                'Runtime: local, docker, or e2b (E2B alone connects its API key)',
+                'Runtime: local, docker, e2b, or daytona (e2b and daytona alone connect their API key)',
         },
         harness: {
             type: 'string',
@@ -52,7 +52,7 @@ export const connectCommand = defineCommand({
         },
         stdin: {
             type: 'boolean',
-            description: 'Read the E2B runtime key from standard input',
+            description: 'Read the E2B or Daytona runtime key from standard input',
             default: false,
         },
         status: {
@@ -69,8 +69,10 @@ export const connectCommand = defineCommand({
     async run({ args }) {
         const output = new CliPresenter();
         const home = workbenchHome();
-        const e2bRuntimeKey =
-            args.runtime?.trim().toLowerCase() === 'e2b' &&
+        const requested = args.runtime?.trim().toLowerCase();
+        const runtimeKey =
+            requested !== undefined &&
+            Object.hasOwn(RuntimeSecretStore.providers, requested) &&
             !(
                 args.workbench ||
                 args.dir ||
@@ -81,20 +83,20 @@ export const connectCommand = defineCommand({
         const modelTarget = Boolean(
             args.workbench ||
                 args.dir ||
-                (args.runtime && !e2bRuntimeKey) ||
+                (args.runtime && !runtimeKey) ||
                 args.harness ||
                 args.provider ||
                 args.method
         );
-        const runtimeProvider = e2bRuntimeKey
-            ? 'e2b'
+        const runtimeProvider = runtimeKey
+            ? requested
             : !modelTarget && process.stdin.isTTY && process.stderr.isTTY
               ? await chooseConnectionKind()
               : undefined;
         if (runtimeProvider || args.stdin || args.status || args.remove) {
             if (!runtimeProvider) {
                 throw new Error(
-                    '--stdin, --status, and --remove require --runtime e2b'
+                    '--stdin, --status, and --remove require --runtime e2b or --runtime daytona'
                 );
             }
             await connectRuntimeProvider(runtimeProvider, args, home, output);
@@ -166,6 +168,11 @@ async function chooseConnectionKind(): Promise<string | undefined> {
                 label: 'E2B runtime',
                 hint: 'Save a host-only sandbox API key once',
             },
+            {
+                value: 'daytona',
+                label: 'Daytona runtime',
+                hint: 'Save a host-only sandbox API key once',
+            },
         ],
     });
     if (typeof choice === 'symbol') throw new Error('Connection setup cancelled');
@@ -178,30 +185,33 @@ async function connectRuntimeProvider(
     home: string,
     output: CliPresenter
 ): Promise<void> {
-    if (provider.trim().toLowerCase() !== 'e2b') {
+    const name = provider.trim().toLowerCase();
+    if (!Object.hasOwn(RuntimeSecretStore.providers, name)) {
         throw new Error(`Unsupported runtime provider: ${provider}`);
     }
+    const keyProvider = name as RuntimeKeyProvider;
+    const { label, variable } = RuntimeSecretStore.providers[keyProvider];
     if (Number(args.stdin) + Number(args.status) + Number(args.remove) > 1) {
         throw new Error('--stdin, --status, and --remove cannot be combined');
     }
     const secrets = new RuntimeSecretStore(home);
     if (args.status) {
-        const saved = Boolean(secrets.e2bKey());
-        const override = Boolean(process.env.E2B_API_KEY?.trim());
+        const saved = Boolean(secrets.key(keyProvider));
+        const override = Boolean(process.env[variable]?.trim());
         output.message(
             saved
                 ? override
-                    ? 'E2B runtime key is saved; E2B_API_KEY currently overrides it'
-                    : 'E2B runtime key is saved'
+                    ? `${label} runtime key is saved; ${variable} currently overrides it`
+                    : `${label} runtime key is saved`
                 : override
-                  ? 'E2B runtime key is available from E2B_API_KEY'
-                  : 'No E2B runtime key is saved'
+                  ? `${label} runtime key is available from ${variable}`
+                  : `No ${label} runtime key is saved`
         );
         return;
     }
     if (args.remove) {
-        secrets.removeE2B();
-        output.message('Removed the saved E2B runtime key', 'success');
+        secrets.remove(keyProvider);
+        output.message(`Removed the saved ${label} runtime key`, 'success');
         return;
     }
     let key: string;
@@ -210,20 +220,21 @@ async function connectRuntimeProvider(
     } else {
         if (!process.stdin.isTTY || !process.stderr.isTTY) {
             throw new Error(
-                'Run wb connect --runtime e2b in a terminal, or pass --stdin'
+                `Run wb connect --runtime ${name} in a terminal, or pass --stdin`
             );
         }
         const entered = await password({
-            message: 'E2B API key',
-            validate: (value) => (value?.trim() ? undefined : 'Enter your E2B API key'),
+            message: `${label} API key`,
+            validate: (value) =>
+                value?.trim() ? undefined : `Enter your ${label} API key`,
         });
         if (typeof entered === 'symbol') {
             throw new Error('Connection setup cancelled');
         }
         key = entered;
     }
-    secrets.saveE2B(key);
-    output.message('E2B runtime key saved on this machine', 'success');
+    secrets.save(keyProvider, key);
+    output.message(`${label} runtime key saved on this machine`, 'success');
 }
 
 async function connectionTargetForWorkbench(
@@ -285,6 +296,7 @@ async function selectConnectionTarget(input: {
             local: 'this machine',
             docker: 'local container',
             e2b: 'cloud sandbox',
+            daytona: 'cloud sandbox',
         },
         flag: '--runtime',
     });

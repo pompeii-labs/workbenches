@@ -1,7 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { assertSafeOutcomePath } from '../../outcomes/validation.js';
-import type { E2BAssetBinding } from './paths.js';
-import type { E2BRecoverySnapshot } from './snapshot.js';
+import type { RecoverySnapshot } from '../remote/disk/snapshot.js';
+import type { AssetBinding } from '../staging/transfer.js';
 
 export interface E2BRecoveryRecord {
     version: 1;
@@ -10,7 +10,7 @@ export interface E2BRecoveryRecord {
     sandboxId: string;
     ownerPid: number;
     maximumBytes: number;
-    snapshots: E2BRecoverySnapshot[];
+    snapshots: RecoverySnapshot[];
     baselines: Array<[number, string]>;
     persistedState: number[];
 }
@@ -69,7 +69,7 @@ export function parseE2BRecoveryRecord(
     };
 }
 
-function parseSnapshot(value: unknown): E2BRecoverySnapshot {
+function parseSnapshot(value: unknown): RecoverySnapshot {
     const record = object(value);
     const raw = object(record.binding);
     const kind = oneOf(raw.kind, [
@@ -87,7 +87,7 @@ function parseSnapshot(value: unknown): E2BRecoverySnapshot {
         (kind !== 'workspace' || !/^[a-z][a-z0-9-]{0,63}$/.test(workspace))
     )
         throw new Error('Invalid E2B outcome recovery named workspace');
-    const binding: E2BAssetBinding = {
+    const binding: AssetBinding = {
         hostPath: absolutePath(raw.hostPath),
         runtimePath: absolutePath(raw.runtimePath),
         access: oneOf(raw.access, ['read-only', 'read-write'] as const),
@@ -160,7 +160,7 @@ function integer(value: unknown): number {
         throw new Error('Invalid E2B outcome recovery integer');
     return value;
 }
-function snapshotIndex(value: unknown, snapshots: E2BRecoverySnapshot[]): number {
+function snapshotIndex(value: unknown, snapshots: RecoverySnapshot[]): number {
     const index = integer(value);
     if (index >= snapshots.length)
         throw new Error('Invalid E2B outcome recovery snapshot index');

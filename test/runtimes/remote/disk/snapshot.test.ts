@@ -11,12 +11,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { OutcomeApplier, OutcomeStore } from '../src/outcomes/index.js';
-import { E2BArchive } from '../src/runtimes/e2b/archive.js';
-import type { E2BAssetBinding } from '../src/runtimes/e2b/paths.js';
-import { E2BAssetSnapshot } from '../src/runtimes/e2b/snapshot.js';
-import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
-import { TransferRules } from '../src/runtimes/staging/rules.js';
+import { OutcomeApplier, OutcomeStore } from '../../../../src/outcomes/index.js';
+import { SandboxArchive } from '../../../../src/runtimes/remote/disk/archive.js';
+import { DiskAssetSnapshot } from '../../../../src/runtimes/remote/disk/snapshot.js';
+import { DiskAssetSource } from '../../../../src/runtimes/staging/disk.js';
+import { TransferRules } from '../../../../src/runtimes/staging/rules.js';
+import type { AssetBinding } from '../../../../src/runtimes/staging/transfer.js';
 
 const diskAssetSource = new DiskAssetSource();
 const rules = new TransferRules('E2B');
@@ -41,13 +41,13 @@ describe('E2B workspace snapshots', () => {
             await writeFile(join(before, 'module'), 'file');
             await mkdir(join(after, 'module'));
             await writeFile(join(after, 'module', 'index.ts'), 'nested');
-            const baseline = await E2BAssetSnapshot.create(
+            const baseline = await DiskAssetSnapshot.create(
                 binding(local),
                 1024 * 1024,
                 undefined,
                 sources
             );
-            const output = await E2BAssetSnapshot.create(
+            const output = await DiskAssetSnapshot.create(
                 binding(remote, 'asset'),
                 1024 * 1024,
                 undefined,
@@ -103,7 +103,7 @@ describe('E2B workspace snapshots', () => {
             directory
         );
 
-        const snapshot = await E2BAssetSnapshot.create(
+        const snapshot = await DiskAssetSnapshot.create(
             binding(directory),
             1024 * 1024,
             undefined,
@@ -148,7 +148,7 @@ describe('E2B workspace snapshots', () => {
         // Untracked config must remain private, even when its contents look safe.
         await writeFile(join(directory, '.npmrc'), 'engine-strict=true\n');
         const remote = await temporaryDirectory();
-        const snapshot = await E2BAssetSnapshot.create(
+        const snapshot = await DiskAssetSnapshot.create(
             binding(directory),
             1024 * 1024,
             undefined,
@@ -157,7 +157,7 @@ describe('E2B workspace snapshots', () => {
         try {
             expect([...snapshot.entries.keys()]).toEqual([config]);
             expect(snapshot.excludedPaths).toEqual(['.npmrc']);
-            await new E2BArchive(rules).extract(snapshot.archive, remote, {
+            await new SandboxArchive(rules).extract(snapshot.archive, remote, {
                 maximumBytes: Number.POSITIVE_INFINITY,
                 reportedMaximumBytes: Number.POSITIVE_INFINITY,
             });
@@ -197,7 +197,7 @@ describe('E2B workspace snapshots', () => {
             await run(['git', 'init', '-q'], directory);
             await run(['git', 'add', '.npmrc'], directory);
             await expect(
-                E2BAssetSnapshot.create(
+                DiskAssetSnapshot.create(
                     binding(directory),
                     1024 * 1024,
                     undefined,
@@ -214,13 +214,13 @@ describe('E2B workspace snapshots', () => {
         await run(['git', 'init', '-q'], directory);
         await run(['git', 'add', '.npmrc'], directory);
         await expect(
-            E2BAssetSnapshot.create(binding(directory), 1024, undefined, sources)
+            DiskAssetSnapshot.create(binding(directory), 1024, undefined, sources)
         ).rejects.toThrow('Cannot safely transfer tracked project config .npmrc');
         await run(['git', 'rm', '-f', '.npmrc'], directory);
         await mkdir(join(directory, '.aws'));
         await writeFile(join(directory, '.aws', '.npmrc'), 'engine-strict=true\n');
         await run(['git', 'add', '.aws/.npmrc'], directory);
-        const snapshot = await E2BAssetSnapshot.create(
+        const snapshot = await DiskAssetSnapshot.create(
             binding(directory),
             1024,
             undefined,
@@ -242,7 +242,7 @@ describe('E2B workspace snapshots', () => {
         await run(['git', 'init', '-q'], directory);
         await run(['git', 'init', '-q'], nested);
 
-        const snapshot = await E2BAssetSnapshot.create(
+        const snapshot = await DiskAssetSnapshot.create(
             binding(directory),
             1024,
             undefined,
@@ -292,7 +292,7 @@ describe('E2B workspace snapshots', () => {
             directory
         );
 
-        const snapshot = await E2BAssetSnapshot.create(
+        const snapshot = await DiskAssetSnapshot.create(
             binding(directory),
             1024,
             undefined,
@@ -310,7 +310,7 @@ describe('E2B workspace snapshots', () => {
         const directory = await temporaryDirectory();
         await writeFile(join(directory, 'large.txt'), '123456789');
         await expect(
-            E2BAssetSnapshot.create(binding(directory), 8, undefined, sources)
+            DiskAssetSnapshot.create(binding(directory), 8, undefined, sources)
         ).rejects.toThrow('E2B transfer exceeds the 8 B safety limit');
     });
 
@@ -319,7 +319,7 @@ describe('E2B workspace snapshots', () => {
         await writeFile(join(directory, 'oversized.bin'), '');
         await truncate(join(directory, 'oversized.bin'), 16 * 1_024 * 1_024 * 1_024);
         await expect(
-            E2BAssetSnapshot.create(binding(directory), 1_024, undefined, sources)
+            DiskAssetSnapshot.create(binding(directory), 1_024, undefined, sources)
         ).rejects.toThrow('16 GiB');
     }, 2_000);
 
@@ -327,7 +327,7 @@ describe('E2B workspace snapshots', () => {
         const directory = await temporaryDirectory();
         await symlink('../outside', join(directory, 'escape'));
         await expect(
-            E2BAssetSnapshot.create(
+            DiskAssetSnapshot.create(
                 binding(directory, 'asset'),
                 1024,
                 undefined,
@@ -347,7 +347,7 @@ describe('E2B workspace snapshots', () => {
         await mkdir(remoteChild, { recursive: true });
         await writeFile(join(remote, 'visible.txt'), 'changed');
         await writeFile(join(remoteChild, 'instructions.md'), 'tampered');
-        const snapshot = await E2BAssetSnapshot.create(
+        const snapshot = await DiskAssetSnapshot.create(
             {
                 ...binding(directory),
                 excludedHostPaths: [child],
@@ -356,7 +356,7 @@ describe('E2B workspace snapshots', () => {
             undefined,
             sources
         );
-        const output = await E2BAssetSnapshot.create(
+        const output = await DiskAssetSnapshot.create(
             binding(remote, 'asset'),
             1024 * 1024,
             undefined,
@@ -385,13 +385,13 @@ describe('E2B workspace snapshots', () => {
         await writeFile(join(local, 'deleted.txt'), 'delete me');
         await writeFile(join(remote, 'edited.txt'), 'after');
         await writeFile(join(remote, 'added.txt'), 'new');
-        const baseline = await E2BAssetSnapshot.create(
+        const baseline = await DiskAssetSnapshot.create(
             binding(local),
             1024 * 1024,
             undefined,
             sources
         );
-        const output = await E2BAssetSnapshot.create(
+        const output = await DiskAssetSnapshot.create(
             binding(remote, 'asset'),
             1024 * 1024,
             undefined,
@@ -418,13 +418,13 @@ describe('E2B workspace snapshots', () => {
         await writeFile(join(local, 'deleted.txt'), 'delete me');
         await writeFile(join(remote, 'edited.txt'), 'after');
         await writeFile(join(remote, 'added.txt'), 'new');
-        const baseline = await E2BAssetSnapshot.create(
+        const baseline = await DiskAssetSnapshot.create(
             binding(local),
             1024 * 1024,
             undefined,
             sources
         );
-        const output = await E2BAssetSnapshot.create(
+        const output = await DiskAssetSnapshot.create(
             binding(remote, 'asset'),
             1024 * 1024,
             undefined,
@@ -466,13 +466,13 @@ describe('E2B workspace snapshots', () => {
         const remote = await temporaryDirectory();
         await writeFile(join(local, 'unchanged.txt'), 'baseline');
         await writeFile(join(remote, 'large.txt'), '123456789');
-        const baseline = await E2BAssetSnapshot.create(
+        const baseline = await DiskAssetSnapshot.create(
             binding(local),
             1024,
             undefined,
             sources
         );
-        const output = await E2BAssetSnapshot.create(
+        const output = await DiskAssetSnapshot.create(
             binding(remote, 'asset'),
             1024,
             undefined,
@@ -499,7 +499,7 @@ describe('E2B workspace snapshots', () => {
         const remote = await temporaryDirectory();
         await writeFile(join(local, 'conflict.txt'), 'baseline');
         await writeFile(join(local, 'safe.txt'), 'baseline');
-        const baseline = await E2BAssetSnapshot.create(
+        const baseline = await DiskAssetSnapshot.create(
             binding(local),
             1024 * 1024,
             undefined,
@@ -508,7 +508,7 @@ describe('E2B workspace snapshots', () => {
         await writeFile(join(local, 'conflict.txt'), 'host edit');
         await writeFile(join(remote, 'conflict.txt'), 'remote edit');
         await writeFile(join(remote, 'safe.txt'), 'remote safe edit');
-        const output = await E2BAssetSnapshot.create(
+        const output = await DiskAssetSnapshot.create(
             binding(remote, 'asset'),
             1024 * 1024,
             undefined,
@@ -537,13 +537,13 @@ describe('E2B workspace snapshots', () => {
         await writeFile(join(local, 'nested', 'value.txt'), 'baseline');
         await writeFile(join(remote, 'nested', 'value.txt'), 'remote edit');
         await writeFile(join(outside, 'value.txt'), 'outside');
-        const baseline = await E2BAssetSnapshot.create(
+        const baseline = await DiskAssetSnapshot.create(
             binding(local),
             1024 * 1024,
             undefined,
             sources
         );
-        const output = await E2BAssetSnapshot.create(
+        const output = await DiskAssetSnapshot.create(
             binding(remote, 'asset'),
             1024 * 1024,
             undefined,
@@ -564,7 +564,7 @@ describe('E2B workspace snapshots', () => {
 });
 
 async function applyPending(
-    snapshot: E2BAssetSnapshot,
+    snapshot: DiskAssetSnapshot,
     archive: string,
     deletions: string[]
 ): Promise<void> {
@@ -600,8 +600,8 @@ async function applyPending(
 
 function binding(
     hostPath: string,
-    kind: E2BAssetBinding['kind'] = 'workspace'
-): E2BAssetBinding {
+    kind: AssetBinding['kind'] = 'workspace'
+): AssetBinding {
     return {
         hostPath,
         runtimePath: '/workspace',

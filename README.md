@@ -24,7 +24,7 @@ Workbench packages that knowledge once, together with the skills, tools, runtime
 
 Both sides run the same agent (OpenCode) on the same model (`openai/gpt-5.6-terra`); the only difference is the Workbench. Identical requests and starting projects, five attempts per task, graded by running the result. Cost per working result includes failed attempts. Tasks, methodology, and how to reproduce: [workbenchmarks](https://github.com/pompeii-labs/workbenchmarks).
 
-A Workbench can run in your current directory, inside Docker, in an E2B sandbox, or against an isolated GitHub checkout. The package belongs to its author, and the user brings their own model and runtime credentials. Runs execute through the selected harness, not a hosted Workbench agent service. The CLI downloads and caches model-routing metadata; first use requires an internet connection, and subsequent commands can use cached metadata if that service is unavailable.
+A Workbench can run in your current directory, inside Docker, in an E2B or Daytona sandbox, or against an isolated GitHub checkout. The package belongs to its author, and the user brings their own model and runtime credentials. Runs execute through the selected harness, not a hosted Workbench agent service. The CLI downloads and caches model-routing metadata; first use requires an internet connection, and subsequent commands can use cached metadata if that service is unavailable.
 
 > Workbench is currently a public alpha implementing the draft-0 specification. Package and execution contracts may still change before 1.0.
 
@@ -81,7 +81,7 @@ Runtime credentials are configured separately. For example, save an E2B API key 
 wb connect --runtime e2b
 ```
 
-An inherited `E2B_API_KEY` still overrides the saved value for a single process.
+An inherited `E2B_API_KEY` still overrides the saved value for a single process. Daytona works the same way with `wb connect --runtime daytona` and `DAYTONA_API_KEY`.
 
 ### Other package sources
 
@@ -171,7 +171,7 @@ The format can package:
 - remote MCP integrations
 - environment variable requirements without secret values
 - named workspaces for multi-repository work
-- a local, Docker, or E2B runtime and image
+- a local, Docker, E2B, or Daytona runtime and image
 
 Workbench is not a model, agent harness, task planner, or hosted orchestration service. It is the portable expert environment those systems can execute.
 
@@ -190,7 +190,7 @@ wb run project-core \
 
 Repository access uses `GH_TOKEN`, then `GITHUB_TOKEN`, or your existing `gh auth login`. Workbench resolves the exact starting commit and prepares the checkout in managed session storage; it does not upload or synchronize your current directory.
 
-For Docker and E2B repository runs, the engine supplies `git` and `gh` even when the Workbench image does not. The agent uses the normal Git and GitHub CLI rather than a custom PR tool, and the engine does not silently publish work when a run ends.
+For Docker, E2B, and Daytona repository runs, the engine supplies `git` and `gh` even when the Workbench image does not. The agent uses the normal Git and GitHub CLI rather than a custom PR tool, and the engine does not silently publish work when a run ends.
 
 ## Use Workbenches as subagents
 
@@ -244,7 +244,7 @@ wb outcome wbo_... --export ./result
 wb outcome wbo_... --apply
 ```
 
-Local and Docker edits already live in mounted host directories. E2B changes remain pending until you explicitly apply them. Inspecting or exporting an outcome does not require another model turn or a live sandbox.
+Local and Docker edits already live in mounted host directories. E2B and Daytona changes remain pending until you explicitly apply them. Inspecting or exporting an outcome does not require another model turn or a live sandbox.
 
 See [Returned results](docs/OUTCOMES.md) for the complete contract.
 
@@ -253,7 +253,7 @@ See [Returned results](docs/OUTCOMES.md) for the complete contract.
 | Surface | Reference engine support |
 | --- | --- |
 | Harnesses | OpenCode and Pi |
-| Runtimes | Local, Docker, and E2B |
+| Runtimes | Local, Docker, E2B, and Daytona |
 | Interaction | Terminal UI, one-shot, detached, and resumable sessions |
 | Inputs | Text and supported image attachments |
 | Results | Changesets, artifacts, and links |
@@ -276,6 +276,10 @@ Docker Workbenches run in their declared image. The package is read-only, the wo
 E2B Workbenches use a reusable template built from the declared image and a fresh sandbox for each execution. Only declared assets are staged; secret-bearing files, dependency trees, and Git metadata are excluded from workspace upload. Remote changes return as pending outcomes instead of silently synchronizing back to the host.
 
 The E2B control key remains on the host. Harness credentials are staged only for the selected harness and synchronized back during orderly cleanup. Treat the sandbox provider and image as part of the credential trust boundary.
+
+### Daytona
+
+Daytona Workbenches get a fresh Daytona sandbox created from the declared image for each execution, using the same staging rules and pending outcomes as E2B. The `linux` class is supported; there is no interactive terminal or sandbox recovery yet. The Daytona key stays on the host, and model credentials come from your environment.
 
 ## Command overview
 
