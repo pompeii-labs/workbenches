@@ -7,6 +7,7 @@ import {
     type RunnerAuthenticationStatus,
 } from '../connections/index.js';
 import {
+    ActiveModelCatalog,
     connectCommand,
     type ModelRoute,
     ModelRouter,
@@ -282,7 +283,7 @@ export class WorkbenchInspection {
 
     private static declaredRoutes(workbench: ResolvedWorkbench): ModelRoute[] {
         try {
-            return new ModelRouter().routes(workbench);
+            return new ModelRouter(ActiveModelCatalog.current()).routes(workbench);
         } catch {
             const declared = workbench.manifest.model;
             return (declared.routes ?? []).map((route) => ({

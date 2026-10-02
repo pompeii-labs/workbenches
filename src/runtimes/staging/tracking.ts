@@ -1,5 +1,9 @@
 import { quote } from './shell.js';
-import type { E2BAssetSnapshot } from './snapshot.js';
+
+/** What workspace tracking needs to know about a staged asset. */
+interface TrackedAsset {
+    binding: { runtimePath: string; kind: string };
+}
 
 export const remoteExclusions = [
     '.env',
@@ -25,11 +29,11 @@ export const remoteExclusions = [
 
 /** Keep collection's writable index separate from a staged read-only repository. */
 export function workspaceTracking(
-    snapshots: E2BAssetSnapshot[],
+    snapshots: readonly TrackedAsset[],
     index: number
 ): { git: string; directory: string } {
     const root = snapshots[index]?.binding.runtimePath;
-    if (!root) throw new Error('E2B workspace snapshot is unavailable');
+    if (!root) throw new Error('Workspace snapshot is unavailable');
     const staged = snapshots.some(
         (snapshot) =>
             snapshot.binding.kind === 'git' &&

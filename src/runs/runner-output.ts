@@ -1,4 +1,4 @@
-import { ModelCatalog, ModelRouter } from '../models/index.js';
+import { ActiveModelCatalog, ModelRouter } from '../models/index.js';
 import type { RunnerEventNormalizer, RunnerSummary } from '../runners/runner.js';
 import type { ResolvedWorkbench, SpawnedRunner } from '../types.js';
 import type { RunEvents } from './events.js';
@@ -54,7 +54,7 @@ export class RunnerOutput {
         environment: Record<string, string | undefined>
     ): string {
         let result = source;
-        const catalog = ModelCatalog.active();
+        const catalog = ActiveModelCatalog.active();
         const names = new Set([
             ...Object.keys(workbench.manifest.env),
             ...Object.keys(environment).filter(RunnerOutput.isCredentialName),

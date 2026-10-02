@@ -1,5 +1,5 @@
 import { createWriteStream as writeStream } from 'node:fs';
-import { lstat, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -8,14 +8,16 @@ import { createGzip } from 'node:zlib';
 import tar from 'tar-stream';
 
 import { nativeCredentialPaths } from '../../connections/index.js';
+import type { OutcomeSink } from '../../outcomes/collection.js';
 import type { OutcomeChangeset, OutcomeWorkspace } from '../../outcomes/contracts.js';
 import { formatOutcomeBytes } from '../../outcomes/presentation.js';
-import type { OutcomeStore } from '../../outcomes/store.js';
 import { WorkspaceSnapshot } from '../../outcomes/workspace.js';
 import { type SnapshotEntry, TransferPlan } from '../staging/plan.js';
 import { WorkspaceProtection } from '../staging/protection.js';
 import type { TransferRules } from '../staging/rules.js';
 import type { AssetSource } from '../staging/source.js';
+import type { StagedAsset } from '../staging/transfer.js';
+import { ArchiveWriter } from '../staging/writer.js';
 import { E2BArchive } from './archive.js';
 import type { E2BAssetBinding } from './paths.js';
 import { type E2BStateSource, E2BStateStore, selectedStateFiles } from './state.js';
@@ -24,7 +26,7 @@ export type E2BSnapshotEntry = SnapshotEntry;
 
 export interface E2BSnapshotOutcome {
     readonly bytes: number;
-    collect(store: OutcomeStore): Promise<OutcomeChangeset | undefined>;
+    collect(store: OutcomeSink): Promise<OutcomeChangeset | undefined>;
     cleanup(): Promise<void>;
 }
 
@@ -65,7 +67,7 @@ interface E2BSnapshotFields {
  * A host path copied into a transfer archive: it reads files through an
  * `AssetSource` and records what it sent so outcomes can be diffed against it.
  */
-export class E2BAssetSnapshot {
+export class E2BAssetSnapshot implements StagedAsset {
     readonly binding: E2BAssetBinding;
     readonly archive: string;
     readonly entries: Map<string, E2BSnapshotEntry>;
@@ -182,7 +184,8 @@ export class E2BAssetSnapshot {
                     `${rules.provider} transfer exceeds the ${formatOutcomeBytes(maximumBytes)} safety limit: ${binding.hostPath} is ${formatOutcomeBytes(bytes)}`
                 );
             }
-            await plan.digestEntries(sourcePath, entries, isDirectory);
+            // A source that streams is digested while packing, one read per file.
+            await plan.digestEntries(sourcePath, entries, isDirectory, true);
             const pack = tar.pack();
             const writing = pipeline(
                 pack,
@@ -192,8 +195,11 @@ export class E2BAssetSnapshot {
             // Fail the pipeline and the fill together so neither is left hanging.
             await Promise.all([
                 writing,
-                plan
-                    .fillArchive(pack, sourcePath, entries, isDirectory)
+                new ArchiveWriter(rules)
+                    .write(
+                        pack,
+                        plan.archiveRecords(sourcePath, entries, isDirectory, true)
+                    )
                     .catch((error) => {
                         pack.destroy(error as Error);
                         throw error;
@@ -328,6 +334,10 @@ export class E2BAssetSnapshot {
             await rm(materialized, { recursive: true, force: true });
             throw error;
         }
+    }
+
+    async archiveBytes(): Promise<Uint8Array> {
+        return new Uint8Array(await readFile(this.archive));
     }
 
     cleanup(): Promise<void> {

@@ -28,7 +28,7 @@ import {
     validateSymlinkTarget,
 } from './fingerprints.js';
 import type { OutcomeStore } from './store.js';
-import { validateFilesystemSymlink } from './symlinks.js';
+import { FilesystemSymlinks } from './symlink/filesystem.js';
 import { OutcomeTransition } from './transitions.js';
 import { assertSafeOutcomePath, parseRunOutcome } from './validation.js';
 
@@ -72,10 +72,10 @@ export class OutcomeApplier {
         for (const changeset of outcome.changesets) {
             const root = resolveWorkspace(changeset.workspace, targets);
             await validateRoot(root);
+            const symlinks = new FilesystemSymlinks(root);
             for (const entry of changeset.entries) {
                 if (entry.after?.kind === 'symlink')
-                    await validateFilesystemSymlink(
-                        root,
+                    await symlinks.validate(
                         entry.path,
                         entry.after.target,
                         changeset.entries

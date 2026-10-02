@@ -1,15 +1,20 @@
 import type { RunnerConnectionSelection } from '../connections/store.js';
-import type { ResolvedWorkbench } from '../types.js';
-import {
-    ModelCatalog,
-    type ModelCatalogModel,
-    type ModelCatalogProvider,
-    type ModelCatalogSnapshot,
-} from './catalog.js';
+import type { WorkbenchManifest, WorkbenchModelPolicy } from '../types.js';
 import { modelLabel } from './label.js';
+import type {
+    ModelCatalogModel,
+    ModelCatalogProvider,
+    ModelCatalogSnapshot,
+} from './snapshot.js';
 
 export type ModelCatalogData = ModelCatalogSnapshot;
 export type { ModelCatalogModel, ModelCatalogProvider };
+
+/** The parts of a resolved Workbench that routing reads. */
+export interface RoutedWorkbench {
+    manifest: Pick<WorkbenchManifest, 'name' | 'runner' | 'model' | 'env'>;
+    runnerConfigPath?: string;
+}
 
 export interface ModelRoute {
     provider: string;
@@ -36,8 +41,24 @@ export interface ResolvedRunnerConfiguration {
     catalogVersion?: string;
 }
 
+export interface RouteConfigurationOptions {
+    /** The manifest's `model` block. */
+    model: WorkbenchModelPolicy;
+    /**
+     * Names of the environment variables the host can supply, never their
+     * values. A route is usable when one of its provider's variables is named.
+     */
+    environmentNames: Iterable<string>;
+    /** The route to use. Without it, the first usable route in manifest order. */
+    provider?: string;
+    /** The Workbench name, used in messages. */
+    name?: string;
+    /** Packaged runner configuration. Models the catalog does not know require it. */
+    runnerConfigPath?: string;
+}
+
 export interface ResolveModelRouteOptions {
-    workbench: ResolvedWorkbench;
+    workbench: RoutedWorkbench;
     authenticatedProviders?: Iterable<string>;
     authenticatedRoutes?: Iterable<AuthenticatedModelRoute>;
     preferredConnection?: RunnerConnectionSelection;
@@ -45,9 +66,10 @@ export interface ResolveModelRouteOptions {
 }
 
 export class ModelRouter {
-    constructor(readonly catalog: ModelCatalogSnapshot = ModelCatalog.current()) {}
+    /** Routes against `catalog`, the snapshot the caller loaded or was given. */
+    constructor(readonly catalog: ModelCatalogSnapshot) {}
 
-    routes(workbench: ResolvedWorkbench): ModelRoute[] {
+    routes(workbench: RoutedWorkbench): ModelRoute[] {
         const declared = workbench.manifest.model;
         const knownModel = Boolean(this.catalog.models[declared.id]);
         if (!knownModel) {
@@ -131,7 +153,66 @@ export class ModelRouter {
         };
     }
 
-    providerEnvironmentNames(workbench: ResolvedWorkbench): string[] {
+    /**
+     * Builds the OpenCode runner configuration for a chosen provider route, the
+     * same configuration `wb run --connection <provider>` resolves. It reads only
+     * its arguments and this router's catalog. It does not inspect the machine or
+     * any stored connection, so a host states which credentials it holds by
+     * naming their environment variables.
+     */
+    configureOpenCode(options: RouteConfigurationOptions): ResolvedRunnerConfiguration {
+        const workbench: RoutedWorkbench = {
+            manifest: {
+                name: options.name ?? options.model.id,
+                runner: 'opencode',
+                model: options.model,
+                env: {},
+            },
+            ...(options.runnerConfigPath
+                ? { runnerConfigPath: options.runnerConfigPath }
+                : {}),
+        };
+        const routes = this.routes(workbench);
+        const available = new Set(options.environmentNames);
+        const ready = (provider: string): boolean => {
+            const names = this.catalog.providers[provider]?.env;
+            // A provider the catalog does not list is configured by packaged runner config.
+            return names === undefined || names.some((name) => available.has(name));
+        };
+        const route = options.provider
+            ? routes.find((candidate) => candidate.provider === options.provider)
+            : routes.find((candidate) => ready(candidate.provider));
+        if (!route) {
+            throw new Error(
+                options.provider
+                    ? `${options.model.id} has no route through ${options.provider}. Its routes are ${routes.map((candidate) => candidate.provider).join(', ')}.`
+                    : `No route for ${options.model.id} has credentials in the named environment.`
+            );
+        }
+        if (!ready(route.provider)) {
+            const names = this.catalog.providers[route.provider]?.env ?? [];
+            throw new Error(
+                `The ${route.provider} route needs one of these environment variables: ${names.join(', ')}.`
+            );
+        }
+        return this.resolve({
+            workbench,
+            authenticatedRoutes: [
+                {
+                    provider: route.provider,
+                    nativeProvider: route.provider,
+                    nativeModel: route.model,
+                },
+            ],
+            preferredConnection: {
+                provider: route.provider,
+                nativeProvider: route.provider,
+            },
+            requireAuthentication: true,
+        });
+    }
+
+    providerEnvironmentNames(workbench: RoutedWorkbench): string[] {
         return [
             ...new Set(
                 this.routes(workbench).flatMap(
@@ -142,7 +223,7 @@ export class ModelRouter {
     }
 
     environmentForRoute(
-        workbench: ResolvedWorkbench,
+        workbench: RoutedWorkbench,
         configuration: ResolvedRunnerConfiguration,
         environment: Record<string, string | undefined>
     ): Record<string, string | undefined> {

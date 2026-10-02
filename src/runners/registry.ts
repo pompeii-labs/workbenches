@@ -1,3 +1,4 @@
+import { ActiveModelCatalog } from '../models/index.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { RunnerContextStaging } from './context/stage.js';
 import { DiskRunnerFiles } from './files/disk.js';
@@ -35,9 +36,13 @@ export class RunnerRegistry {
     static standard(): RunnerRegistry {
         const files = new DiskRunnerFiles();
         const context = new RunnerContextStaging(files);
+        const catalog = ActiveModelCatalog.current();
         return new RunnerRegistry([
-            new OpenCodeRunner({ skills: new OpenCodeSkillStaging(files, context) }),
-            new PiRunner(new PiConfigStaging(files, context)),
+            new OpenCodeRunner({
+                skills: new OpenCodeSkillStaging(files, context),
+                catalog,
+            }),
+            new PiRunner(new PiConfigStaging(files, context), catalog),
         ]);
     }
 

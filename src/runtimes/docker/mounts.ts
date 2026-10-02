@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-import { ModelRouter } from '../../models/index.js';
+import { ActiveModelCatalog, ModelRouter } from '../../models/index.js';
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RuntimePrepareRequest } from '../contracts.js';
 import type { DockerHostSocket } from './contracts.js';
@@ -176,7 +176,9 @@ export class DockerMountPlan {
         return [
             ...new Set([
                 ...Object.keys(workbench.manifest.env),
-                ...new ModelRouter().providerEnvironmentNames(workbench),
+                ...new ModelRouter(
+                    ActiveModelCatalog.current()
+                ).providerEnvironmentNames(workbench),
             ]),
         ];
     }

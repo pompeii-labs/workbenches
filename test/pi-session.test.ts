@@ -8,6 +8,7 @@ import { DiskRunnerFiles } from '../src/runners/files/disk.js';
 import { PiConfigStaging } from '../src/runners/pi/config.js';
 import { PiSessionAdapter } from '../src/runners/pi/session.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { modelCatalogFixture } from './model-catalog-fixture.js';
 import {
     type RunnerConformanceScenario,
     runnerAdapterContract,
@@ -75,7 +76,7 @@ describe('Pi RPC session adapter', () => {
                 WORKBENCH_OUTPUT_DIR: '/current-attempt/outbox',
                 OPENAI_API_KEY: 'must-not-enter-resume-context',
             },
-            configuration: new ModelRouter().resolve({ workbench }),
+            configuration: new ModelRouter(modelCatalogFixture).resolve({ workbench }),
             session: {
                 id: 'wb_resumetest123456789012',
                 directory: '/private/workbench/session/native',
@@ -119,7 +120,7 @@ describe('Pi RPC session adapter', () => {
             workbench,
             workspaceDirectory: root,
             environment: {},
-            configuration: new ModelRouter().resolve({ workbench }),
+            configuration: new ModelRouter(modelCatalogFixture).resolve({ workbench }),
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
@@ -175,7 +176,7 @@ describe('Pi RPC session adapter', () => {
             workbench,
             workspaceDirectory: root,
             environment: {},
-            configuration: new ModelRouter().resolve({ workbench }),
+            configuration: new ModelRouter(modelCatalogFixture).resolve({ workbench }),
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
@@ -202,7 +203,7 @@ describe('Pi RPC session adapter', () => {
             workbench,
             workspaceDirectory: root,
             environment: {},
-            configuration: new ModelRouter().resolve({ workbench }),
+            configuration: new ModelRouter(modelCatalogFixture).resolve({ workbench }),
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',
@@ -228,7 +229,7 @@ describe('Pi RPC session adapter', () => {
             workbench,
             workspaceDirectory: root,
             environment: {},
-            configuration: new ModelRouter().resolve({ workbench }),
+            configuration: new ModelRouter(modelCatalogFixture).resolve({ workbench }),
             host: {
                 emit: async () => {},
                 requestPermission: async () => 'reject',

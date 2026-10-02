@@ -3,41 +3,16 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { WORKBENCH_USER_AGENT } from '../user-agent.js';
+import {
+    ActiveModelCatalog,
+    type ModelCatalogSnapshot,
+    parseModelCatalogSnapshot,
+} from './snapshot.js';
 
 const metadataOrigin = 'https://metadata.workbenches.dev';
 const latestCatalogUrl = `${metadataOrigin}/models/v1/latest.json`;
 const defaultMaximumAge = 6 * 60 * 60 * 1_000;
 const maximumCatalogSize = 2 * 1024 * 1024;
-
-export interface ModelCatalogProvider {
-    env: string[];
-}
-
-export interface ModelCatalogModel {
-    routes: Record<string, string>;
-}
-
-export type ModelCatalogAuthenticationMethod = 'api' | 'oauth' | 'native';
-
-export interface ModelCatalogHarnessProviderRoute {
-    native_provider: string;
-    auth: ModelCatalogAuthenticationMethod[];
-}
-
-export interface ModelCatalogHarnessVersion {
-    providers: Record<string, ModelCatalogHarnessProviderRoute[]>;
-}
-
-export interface ModelCatalogHarness {
-    versions: Record<string, ModelCatalogHarnessVersion>;
-}
-
-export interface ModelCatalogSnapshot {
-    version: string;
-    models: Record<string, ModelCatalogModel>;
-    providers: Record<string, ModelCatalogProvider>;
-    harnesses?: Record<string, ModelCatalogHarness>;
-}
 
 export interface ModelCatalogResult {
     catalog: ModelCatalogSnapshot;
@@ -50,9 +25,14 @@ export type ModelCatalogFetch = (
     init?: RequestInit
 ) => Promise<Response>;
 
-export class ModelCatalog {
-    static #active: ModelCatalogSnapshot | undefined;
-
+/**
+ * The catalog cached under the Workbench home directory and refreshed from the
+ * published metadata. It extends the snapshot state in `snapshot.ts`, so
+ * `current`, `active`, and `activate` are the same process-wide snapshot. Only
+ * the CLI reads the cache. A host that embeds the engine supplies a snapshot
+ * itself and never imports this module.
+ */
+export class ModelCatalog extends ActiveModelCatalog {
     readonly #fetch: ModelCatalogFetch;
     readonly #home: string;
     readonly #maximumAge: number;
@@ -62,26 +42,10 @@ export class ModelCatalog {
         fetch?: ModelCatalogFetch;
         maximumAge?: number;
     }) {
+        super();
         this.#home = options.home;
         this.#fetch = options.fetch ?? fetch;
         this.#maximumAge = options.maximumAge ?? defaultMaximumAge;
-    }
-
-    static current(): ModelCatalogSnapshot {
-        if (!ModelCatalog.#active) {
-            throw new Error(
-                'Model metadata has not been loaded. Run the command again while connected to the internet.'
-            );
-        }
-        return ModelCatalog.#active;
-    }
-
-    static active(): ModelCatalogSnapshot | undefined {
-        return ModelCatalog.#active;
-    }
-
-    static activate(snapshot: ModelCatalogSnapshot): void {
-        ModelCatalog.#active = parseSnapshot(snapshot);
     }
 
     async loadCached(): Promise<ModelCatalogResult> {
@@ -91,7 +55,7 @@ export class ModelCatalog {
                 'Model metadata is not cached. Run the command again while connected to the internet.'
             );
         }
-        ModelCatalog.#active = cached.catalog;
+        ActiveModelCatalog.activate(cached.catalog);
         return {
             catalog: cached.catalog,
             source: 'cache',
@@ -101,7 +65,7 @@ export class ModelCatalog {
 
     async refresh(now = Date.now()): Promise<ModelCatalogResult> {
         const cached = await this.#readCache();
-        if (cached) ModelCatalog.#active = cached.catalog;
+        if (cached) ActiveModelCatalog.activate(cached.catalog);
         if (cached && now - cached.state.checkedAt < this.#maximumAge) {
             return {
                 catalog: cached.catalog,
@@ -130,7 +94,9 @@ export class ModelCatalog {
             }
 
             const source = await this.#fetchArtifact(manifest);
-            const catalog = parseSnapshot(JSON.parse(new TextDecoder().decode(source)));
+            const catalog = parseModelCatalogSnapshot(
+                JSON.parse(new TextDecoder().decode(source))
+            );
             if (catalog.version !== manifest.version) {
                 throw new Error('Model metadata version does not match its manifest');
             }
@@ -138,7 +104,7 @@ export class ModelCatalog {
                 checkedAt: now,
                 sha256: manifest.sha256,
             });
-            ModelCatalog.#active = catalog;
+            ActiveModelCatalog.activate(catalog);
             return { catalog, source: 'remote', refreshed: true };
         } catch (error) {
             if (cached) {
@@ -201,7 +167,9 @@ export class ModelCatalog {
                 await readFile(artifactPath(this.#home, manifest))
             );
             verifyArtifact(source, manifest);
-            const catalog = parseSnapshot(JSON.parse(new TextDecoder().decode(source)));
+            const catalog = parseModelCatalogSnapshot(
+                JSON.parse(new TextDecoder().decode(source))
+            );
             if (catalog.version !== manifest.version) return undefined;
             return { catalog, manifest, state };
         } catch {
@@ -253,95 +221,6 @@ function parseManifest(value: unknown): ModelCatalogManifest {
         sha256: value.sha256,
         size: value.size,
     };
-}
-
-function parseSnapshot(value: unknown): ModelCatalogSnapshot {
-    if (!isRecord(value) || typeof value.version !== 'string') {
-        throw new Error('Invalid model catalog');
-    }
-    if (!isRecord(value.models) || !isRecord(value.providers)) {
-        throw new Error('Invalid model catalog');
-    }
-    const models: Record<string, ModelCatalogModel> = {};
-    for (const [id, model] of Object.entries(value.models)) {
-        if (!isRecord(model) || !isRecord(model.routes)) {
-            throw new Error('Invalid model catalog');
-        }
-        const routes: Record<string, string> = {};
-        for (const [provider, nativeModel] of Object.entries(model.routes)) {
-            if (typeof nativeModel !== 'string') {
-                throw new Error('Invalid model catalog');
-            }
-            routes[provider] = nativeModel;
-        }
-        models[id] = { routes };
-    }
-    const providers: Record<string, ModelCatalogProvider> = {};
-    for (const [id, provider] of Object.entries(value.providers)) {
-        if (
-            !isRecord(provider) ||
-            !Array.isArray(provider.env) ||
-            !provider.env.every((name) => typeof name === 'string')
-        ) {
-            throw new Error('Invalid model catalog');
-        }
-        providers[id] = { env: [...provider.env] };
-    }
-    const harnesses = parseHarnesses(value.harnesses);
-    return {
-        version: value.version,
-        models,
-        providers,
-        ...(harnesses ? { harnesses } : {}),
-    };
-}
-
-function parseHarnesses(
-    value: unknown
-): Record<string, ModelCatalogHarness> | undefined {
-    if (value === undefined) return undefined;
-    if (!isRecord(value)) throw new Error('Invalid model catalog');
-    const harnesses: Record<string, ModelCatalogHarness> = {};
-    for (const [harnessId, harness] of Object.entries(value)) {
-        if (!isRecord(harness) || !isRecord(harness.versions)) {
-            throw new Error('Invalid model catalog');
-        }
-        const versions: Record<string, ModelCatalogHarnessVersion> = {};
-        for (const [versionId, version] of Object.entries(harness.versions)) {
-            if (!isRecord(version) || !isRecord(version.providers)) {
-                throw new Error('Invalid model catalog');
-            }
-            const providers: Record<string, ModelCatalogHarnessProviderRoute[]> = {};
-            for (const [providerId, routes] of Object.entries(version.providers)) {
-                if (!Array.isArray(routes)) throw new Error('Invalid model catalog');
-                providers[providerId] = routes.map((route) => {
-                    if (
-                        !isRecord(route) ||
-                        typeof route.native_provider !== 'string' ||
-                        !route.native_provider.trim() ||
-                        !Array.isArray(route.auth) ||
-                        route.auth.length === 0 ||
-                        !route.auth.every(isAuthenticationMethod)
-                    ) {
-                        throw new Error('Invalid model catalog');
-                    }
-                    return {
-                        native_provider: route.native_provider,
-                        auth: [...route.auth],
-                    };
-                });
-            }
-            versions[versionId] = { providers };
-        }
-        harnesses[harnessId] = { versions };
-    }
-    return harnesses;
-}
-
-function isAuthenticationMethod(
-    value: unknown
-): value is ModelCatalogAuthenticationMethod {
-    return value === 'api' || value === 'oauth' || value === 'native';
 }
 
 function parseState(value: unknown): ModelCatalogState {

@@ -2,9 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { quote } from '../../src/runtimes/e2b/shell.js';
 import type { E2BAssetSnapshot } from '../../src/runtimes/e2b/snapshot.js';
-import { workspaceTracking } from '../../src/runtimes/e2b/tracking.js';
+import { quote } from '../../src/runtimes/staging/shell.js';
+import { workspaceTracking } from '../../src/runtimes/staging/tracking.js';
 import { checkoutFixture, temporary } from './fixture.js';
 
 describe('E2B repository collection index', () => {

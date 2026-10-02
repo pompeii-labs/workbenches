@@ -1,8 +1,5 @@
-import {
-    HostOutcomeCapture,
-    type OutcomeStore,
-    type RuntimeOutcomeCollection,
-} from '../outcomes/index.js';
+import type { OutcomeSink, RuntimeOutcomeCollection } from '../outcomes/collection.js';
+import { HostOutcomeCapture } from '../outcomes/runtime.js';
 import type { RunnerInvocation, SpawnedRunner } from '../types.js';
 import type { HostDescriber } from '../workbench/host.js';
 import { type PreflightResult, WorkbenchPreflight } from '../workbench/preflight.js';
@@ -250,12 +247,12 @@ export class LocalRuntime implements PreparedRuntime {
     }
 
     async collectOutcome(
-        store: OutcomeStore
+        store: OutcomeSink
     ): Promise<RuntimeOutcomeCollection | undefined> {
         return this.outcome?.collect(store);
     }
 
-    async snapshotRepository(store: OutcomeStore) {
+    async snapshotRepository(store: OutcomeSink) {
         return this.outcome?.snapshot(store);
     }
 
@@ -264,7 +261,7 @@ export class LocalRuntime implements PreparedRuntime {
         await this.outcome?.cleanup();
     }
 
-    collectOutput(store: OutcomeStore) {
+    collectOutput(store: OutcomeSink) {
         return this.outcome?.collectOutput(store) ?? Promise.resolve(undefined);
     }
 

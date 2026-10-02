@@ -15,7 +15,7 @@ import type {
     RunOutcome,
 } from './contracts.js';
 import { assertArtifactPaths, safeArtifactPath } from './paths.js';
-import { validateOutcomeSymlinks } from './symlinks.js';
+import { validateOutcomeSymlinks } from './symlink/rules.js';
 
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const identifierPattern = /^[a-z][a-z0-9_]{2,127}$/;

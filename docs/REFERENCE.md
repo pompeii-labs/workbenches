@@ -1147,6 +1147,81 @@ notice.
 Both `workbench` and `wb` are package binary names. Commits use Conventional
 Commits and are checked by the repository's `commit-msg` hook and CI.
 
+### Embedding engine modules
+
+The reference engine is also a set of modules a host can import. The package
+`exports` map names them by subpath, and the root export is unchanged:
+
+| Subpath | Contents |
+| --- | --- |
+| `./manifest`, `./requirements`, `./runtimes/selection`, `./types` | Manifest parsing, requirement checks, runtime selection, and shared types |
+| `./events` | The normalized run event protocol |
+| `./models` | Model routing over a catalog snapshot, with `ModelRouter.configureOpenCode` for a chosen provider route |
+| `./outcomes` | Outcome contracts and validation, the `OutcomeSink` interface, `DeclaredOutput`, and `MemoryOutcomeSink` |
+| `./outcomes/disk` | The disk outcome store, with quotas and leases, and applying changes to a workspace |
+| `./runners/opencode/runner` | `OpenCodeRunner` and `PreparedOpenCodeRunner` |
+| `./runners/opencode/skills`, `./runners/context` | `OpenCodeSkillStaging`, which stages skills and native config, and `RunnerContextStaging`, which stages context files |
+| `./runners/opencode/*` | The OpenCode adapter, session driver, server client, event translation, and invocation builder |
+| `./runners/files`, `./runners/files/disk`, `./runners/files/memory` | The `RunnerFiles` interface and its disk and in-memory implementations |
+| `./runtimes`, `./runtimes/contracts` | The runtime registry and the provider contract |
+| `./runtimes/e2b`, `./runtimes/e2b/contracts` | The E2B provider with its client interface, and `DiskTransfer` |
+| `./runtimes/staging` | The `AssetSource` and `RemoteTransfer` interfaces, `TransferRules`, `MemoryAssetSource`, `MemoryTransfer`, and byte-array tar and diff helpers |
+| `./runtimes/assets`, `./runtimes/assets/disk` | The `AssetSource` interface and `DiskAssetSource` |
+
+Storage and credentials are injected, and the portable modules import none. A
+host builds `OpenCodeSkillStaging` and `RunnerContextStaging` over its
+`RunnerFiles` and passes the staging to `OpenCodeRunner` as `skills`, with the
+model catalog snapshot as `catalog`. The E2B provider reads package and
+workspace files through an `AssetSource` (`assets`) and takes engine-owned
+native state from a second one (`local`). It stages and collects through
+temporary files itself and takes no transfer dependency. `RemoteTransfer` is the
+interface for a host's own remote provider: it packs files and collects changes
+over the `AssetSource` and `TransferRules` the host constructs it with.
+`MemoryTransfer` and `DiskTransfer` implement it. Collected content goes to an
+`OutcomeSink` the caller passes to `collectOutcome`. The CLI passes the disk for
+all of these. A host passes stores of its own, or the in-memory ones.
+
+Every subpath in the `exports` map is portable except the root and the
+disk-backed ones: `./outcomes/disk`, `./runners/files/disk`,
+`./runtimes/assets/disk`, `./runtimes/e2b`, and `./runtimes`. A test bundles
+each portable subpath with `Bun.build` and fails if the output imports `fs`,
+`os`, `zlib`, `stream`, `child_process`, or any built-in module outside this
+list, with or without the `node:` prefix. A host must provide `node:path`,
+`node:crypto`, `node:util`, `node:buffer`, and `node:events`. Today the portable
+subpaths import only `node:path` and `node:util`, and the rest of what they need
+is global: web `crypto`, `fetch`, and the Compression Streams API. The test
+checks imports in the bundle. It does not run the bundles in another runtime.
+It also checks that each disk-backed subpath does import a filesystem, process,
+or compression module, so the list stays accurate. The disk implementations
+live in those separate subpaths that the CLI wires in, and a portable module
+never imports one, statically or dynamically.
+
+#### In-memory transfer
+
+`MemoryTransfer` packs each asset into a gzip tar in memory and reads the
+changes a run made as tar entries, so nothing touches a disk. The changeset matches the disk transfer's
+entries, statistics, and base digest for the same tree. Its review diff is
+rendered in TypeScript without `git`: it reads like `git diff`, omits `index`
+lines, and reports a binary change as "Binary files differ" rather than a
+patch. Symbolic link modes are not compared, since they carry no meaning.
+Runner-owned native state, such as a session database, is the host's to keep, so
+`MemoryTransfer` does not copy it out, and it does not stage native credential
+storage.
+
+#### Model routing without globals
+
+`ModelRouter` and the runners take the catalog snapshot through their
+constructors and read nothing else. `ModelRouter.configureOpenCode` builds the
+OpenCode runner configuration for a chosen provider route, the same one
+`--connection <provider>` resolves, from the router's snapshot, the manifest's
+`model` block, and the names of the environment variables the host can supply.
+The CLI composes its registries from `ActiveModelCatalog.activate(snapshot)`,
+which sets a process-wide snapshot. The `./models` subpath exports that class as
+`ActiveModelCatalog`. `ModelCatalog` is the CLI's cached subclass and is
+exported from the package root only. The Docker and E2B providers, `ConnectionInspector`, and
+workbench inspection read that snapshot, so a host that uses them activates one
+first. The catalog cache on disk stays in the CLI.
+
 ## Project policies
 
 - Use [GitHub Issues](https://github.com/pompeii-labs/workbenches/issues) for

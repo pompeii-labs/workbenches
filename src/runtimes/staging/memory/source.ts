@@ -1,34 +1,47 @@
-import { gunzipSync } from 'node:zlib';
-import tar from 'tar-stream';
+import { posix } from 'node:path';
 
-import type { AssetSource, AssetStat } from '../../../src/runtimes/staging/source.js';
+import type { AssetSource, AssetStat } from '../source.js';
+
+const maximumLinkHops = 40;
 
 type MemoryEntry =
     | { kind: 'file'; content: Uint8Array; mode: number }
     | { kind: 'directory'; mode: number }
     | { kind: 'symlink'; link: string; mode: number };
 
-/** An asset source with no disk behind it. Paths are absolute and virtual. */
+/**
+ * An `AssetSource` over files held in memory, for tests and for hosts that have
+ * no filesystem. Paths are absolute and virtual: the source never consults a
+ * disk, and a workspace or package directory is whatever paths you add. It has
+ * no Git awareness, so workspaces are staged by walking their files.
+ */
 export class MemoryAssetSource implements AssetSource {
     private readonly entries = new Map<string, MemoryEntry>();
+    /** The paths read so far, in order. */
     readonly reads: string[] = [];
 
-    file(path: string, content: string, mode = 0o644): this {
+    /** Adds a file and the directories above it. */
+    file(path: string, content: string | Uint8Array, mode = 0o644): this {
         this.directories(path);
         this.entries.set(path, {
             kind: 'file',
-            content: new TextEncoder().encode(content),
+            content:
+                typeof content === 'string'
+                    ? new TextEncoder().encode(content)
+                    : content,
             mode,
         });
         return this;
     }
 
+    /** Adds a symbolic link and the directories above it. */
     link(path: string, target: string): this {
         this.directories(path);
         this.entries.set(path, { kind: 'symlink', link: target, mode: 0o777 });
         return this;
     }
 
+    /** Adds an empty directory and the directories above it. */
     directory(path: string): this {
         this.directories(`${path}/x`);
         return this;
@@ -44,15 +57,22 @@ export class MemoryAssetSource implements AssetSource {
         }
     }
 
-    async stat(path: string) {
+    async stat(path: string): Promise<AssetStat | undefined> {
+        // Follow a chain of final links. A cycle describes nothing, as ELOOP would.
+        let current = path;
+        for (let hops = 0; hops <= maximumLinkHops; hops++) {
+            const entry = this.entries.get(current);
+            if (entry?.kind !== 'symlink') return this.describe(current);
+            current = posix.resolve(posix.dirname(current), entry.link);
+        }
+        return undefined;
+    }
+
+    async lstat(path: string): Promise<AssetStat | undefined> {
         return this.describe(path);
     }
 
-    async lstat(path: string) {
-        return this.describe(path);
-    }
-
-    async list(path: string) {
+    async list(path: string): Promise<string[]> {
         const prefix = `${path.replace(/\/$/, '')}/`;
         return [...this.entries.keys()]
             .filter(
@@ -62,13 +82,13 @@ export class MemoryAssetSource implements AssetSource {
             .map((key) => key.slice(prefix.length));
     }
 
-    async readLink(path: string) {
+    async readLink(path: string): Promise<string> {
         const entry = this.entries.get(path);
         if (entry?.kind !== 'symlink') throw new Error(`Not a link: ${path}`);
         return entry.link;
     }
 
-    async read(path: string) {
+    async read(path: string): Promise<Uint8Array> {
         this.reads.push(path);
         const entry = this.entries.get(path);
         if (entry?.kind !== 'file') throw new Error(`Not a file: ${path}`);
@@ -84,30 +104,4 @@ export class MemoryAssetSource implements AssetSource {
             mode: entry.mode,
         };
     }
-}
-
-/** Lists the regular files and links in a gzip tar, with file text. */
-export async function readArchive(
-    bytes: Uint8Array
-): Promise<Record<string, string | { link: string }>> {
-    const extract = tar.extract();
-    const result: Record<string, string | { link: string }> = {};
-    extract.on('entry', (header, stream, next) => {
-        const chunks: Buffer[] = [];
-        stream.on('data', (chunk: Buffer) => chunks.push(chunk));
-        stream.on('end', () => {
-            result[header.name] =
-                header.type === 'symlink'
-                    ? { link: header.linkname ?? '' }
-                    : Buffer.concat(chunks).toString('utf8');
-            next();
-        });
-    });
-    const finished = new Promise<void>((resolve, reject) => {
-        extract.on('finish', resolve);
-        extract.on('error', reject);
-    });
-    extract.end(gunzipSync(bytes));
-    await finished;
-    return result;
 }

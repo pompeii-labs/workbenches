@@ -1,4 +1,5 @@
 import {
+    ActiveModelCatalog,
     type AuthenticatedModelRoute,
     connectCommand,
     type ModelRoute,
@@ -48,7 +49,7 @@ export class ConnectionInspector {
     readonly #runner: PreparedRunner;
     readonly #reference: string;
     readonly #store: ConnectionStore | undefined;
-    readonly #router = new ModelRouter();
+    readonly #router = new ModelRouter(ActiveModelCatalog.current());
 
     constructor(options: ConnectionInspectorOptions) {
         this.#workbench = options.workbench;

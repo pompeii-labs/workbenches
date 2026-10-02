@@ -10,6 +10,7 @@ import { RuntimeError } from '../error.js';
 import { RuntimeSecretStore } from '../secrets.js';
 import { TransferRules } from '../staging/rules.js';
 import type { E2BRuntimeDependencies } from './contracts.js';
+import { DiskTransfer } from './disk.js';
 import { E2BPathPlan } from './paths.js';
 import { E2BRuntime } from './runtime.js';
 import { E2BSdkClient } from './sdk.js';
@@ -24,8 +25,15 @@ export class E2BRuntimeProvider implements RuntimeProvider {
 
     /** A sandbox provides its own machine, so no host is described. */
     private readonly requirements = new RequirementsPreflight();
+    private readonly transfer: DiskTransfer;
 
-    constructor(private readonly dependencies: E2BRuntimeDependencies) {}
+    constructor(private readonly dependencies: E2BRuntimeDependencies) {
+        this.transfer = new DiskTransfer(
+            dependencies.assets,
+            dependencies.local,
+            this.rules
+        );
+    }
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
         try {
@@ -64,9 +72,7 @@ export class E2BRuntimeProvider implements RuntimeProvider {
             request,
             client,
             paths,
-            assets,
-            rules: this.rules,
-            local: this.dependencies.local,
+            transfer: this.transfer,
             preparation: template.preparation,
             requirements: this.requirements,
             run,
