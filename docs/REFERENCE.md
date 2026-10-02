@@ -1164,7 +1164,8 @@ The reference engine is also a set of modules a host can import. The package
 | `./runners/opencode/*` | The OpenCode adapter, session driver, server client, event translation, and invocation builder |
 | `./runners/files`, `./runners/files/disk`, `./runners/files/memory` | The `RunnerFiles` interface and its disk and in-memory implementations |
 | `./runtimes`, `./runtimes/contracts` | The runtime registry and the provider contract |
-| `./runtimes/e2b`, `./runtimes/e2b/contracts` | The E2B provider with its client interface, and `DiskTransfer` |
+| `./runtimes/e2b`, `./runtimes/e2b/contracts` | The E2B provider with its client interface |
+| `./runtimes/remote/disk` | `DiskTransfer`, the `RemoteTransfer` that stages through temporary files, for any remote provider |
 | `./runtimes/staging` | The `AssetSource` and `RemoteTransfer` interfaces, `TransferRules`, `MemoryAssetSource`, `MemoryTransfer`, and byte-array tar and diff helpers |
 | `./runtimes/assets`, `./runtimes/assets/disk` | The `AssetSource` interface and `DiskAssetSource` |
 
@@ -1183,7 +1184,8 @@ all of these. A host passes stores of its own, or the in-memory ones.
 
 Every subpath in the `exports` map is portable except the root and the
 disk-backed ones: `./outcomes/disk`, `./runners/files/disk`,
-`./runtimes/assets/disk`, `./runtimes/e2b`, and `./runtimes`. A test bundles
+`./runtimes/assets/disk`, `./runtimes/remote/disk`, `./runtimes/e2b`, and
+`./runtimes`. A test bundles
 each portable subpath with `Bun.build` and fails if the output imports `fs`,
 `os`, `zlib`, `stream`, `child_process`, or any built-in module outside this
 list, with or without the `node:` prefix. A host must provide `node:path`,

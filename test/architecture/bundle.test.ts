@@ -22,6 +22,7 @@ const diskBacked = [
     './runners/files/disk',
     './runtimes',
     './runtimes/e2b',
+    './runtimes/remote/disk',
     './runtimes/assets/disk',
 ];
 

@@ -1,5 +1,5 @@
-import type { TransferRules } from '../staging/rules.js';
-import type { AssetSource } from '../staging/source.js';
+import type { TransferRules } from '../../staging/rules.js';
+import type { AssetSource } from '../../staging/source.js';
 import type {
     AssetBinding,
     CollectorOptions,
@@ -7,10 +7,10 @@ import type {
     PackOptions,
     RemoteTransfer,
     StagedAsset,
-} from '../staging/transfer.js';
-import { E2BOutcomeCollector } from './collector.js';
-import { E2BNativeState } from './native.js';
-import { E2BAssetSnapshot } from './snapshot.js';
+} from '../../staging/transfer.js';
+import { DiskOutcomeCollector } from './collector.js';
+import { NativeStateCapture } from './native.js';
+import { DiskAssetSnapshot } from './snapshot.js';
 
 export interface DiskPackOptions extends PackOptions {
     /** A directory that outlives the run, to keep the archive in for recovery. */
@@ -36,8 +36,8 @@ export class DiskTransfer implements RemoteTransfer {
         binding: AssetBinding,
         maximumBytes: number,
         options: DiskPackOptions = {}
-    ): Promise<E2BAssetSnapshot> {
-        return E2BAssetSnapshot.create(
+    ): Promise<DiskAssetSnapshot> {
+        return DiskAssetSnapshot.create(
             binding,
             maximumBytes,
             options.persistentDirectory,
@@ -45,8 +45,8 @@ export class DiskTransfer implements RemoteTransfer {
         );
     }
 
-    collector(options: CollectorOptions): E2BOutcomeCollector {
-        return new E2BOutcomeCollector({
+    collector(options: CollectorOptions): DiskOutcomeCollector {
+        return new DiskOutcomeCollector({
             ...options,
             snapshots: this.disk(options.snapshots),
             rules: this.rules,
@@ -54,7 +54,7 @@ export class DiskTransfer implements RemoteTransfer {
     }
 
     captureNativeState(options: NativeStateOptions): Promise<void> {
-        return new E2BNativeState(options.sandbox).capture(
+        return new NativeStateCapture(options.sandbox, this.rules).capture(
             this.disk(options.snapshots),
             options.maximumBytes,
             options.completed,
@@ -62,9 +62,9 @@ export class DiskTransfer implements RemoteTransfer {
         );
     }
 
-    private disk(snapshots: StagedAsset[]): E2BAssetSnapshot[] {
+    private disk(snapshots: StagedAsset[]): DiskAssetSnapshot[] {
         return snapshots.map((snapshot) => {
-            if (!(snapshot instanceof E2BAssetSnapshot)) {
+            if (!(snapshot instanceof DiskAssetSnapshot)) {
                 throw new Error('The disk transfer collects only assets it packed');
             }
             return snapshot;

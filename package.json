@@ -59,6 +59,7 @@
         "./runtimes/contracts": "./src/runtimes/contracts.ts",
         "./runtimes/e2b": "./src/runtimes/e2b/index.ts",
         "./runtimes/e2b/contracts": "./src/runtimes/e2b/contracts.ts",
+        "./runtimes/remote/disk": "./src/runtimes/remote/disk/transfer.ts",
         "./runtimes/assets": "./src/runtimes/staging/source.ts",
         "./runtimes/assets/disk": "./src/runtimes/staging/disk.ts",
         "./runtimes/staging": "./src/runtimes/staging/index.ts",

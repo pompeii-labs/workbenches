@@ -17,6 +17,7 @@ import type {
     RuntimeCommandOptions,
     RuntimeCommandResult,
     RuntimeInfrastructureMetadata,
+    RuntimePlacement,
     RuntimePreparation,
     RuntimePrepareRequest,
     RuntimeProvider,
@@ -86,9 +87,11 @@ export class RuntimeRegistry {
 
 class GuardedRuntimeProvider implements RuntimeProvider {
     readonly name: string;
+    readonly placement: RuntimePlacement;
 
     constructor(private readonly provider: RuntimeProvider) {
         this.name = provider.name;
+        this.placement = provider.placement;
     }
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {

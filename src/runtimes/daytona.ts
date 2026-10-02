@@ -7,6 +7,7 @@ import { RuntimeError } from './error.js';
  */
 export class DaytonaRuntimeProvider implements RuntimeProvider {
     readonly name = 'daytona';
+    readonly placement = 'sandbox' as const;
 
     async prepare(): Promise<PreparedRuntime> {
         throw new RuntimeError(

@@ -1,11 +1,11 @@
 import type { OutcomeSink, RuntimeOutcomeCollection } from '../outcomes/collection.js';
 import { HostOutcomeCapture } from '../outcomes/runtime.js';
 import type { RunnerInvocation, SpawnedRunner } from '../types.js';
+import { workspaceEnvironment } from '../workbench/bindings.js';
 import type { HostDescriber } from '../workbench/host.js';
 import { type PreflightResult, WorkbenchPreflight } from '../workbench/preflight.js';
 import { RequirementsPreflight } from '../workbench/requirements.js';
 import { selectedRuntime } from '../workbench/runtimes.js';
-import { WorkbenchWorkspaces } from '../workbench/workspaces.js';
 import type {
     PreparedRuntime,
     RuntimeCommandResult,
@@ -47,6 +47,7 @@ type ResolvedLocalDependencies = Required<Omit<LocalRuntimeDependencies, 'host'>
 
 export class LocalRuntimeProvider implements RuntimeProvider {
     readonly name = 'local';
+    readonly placement = 'host' as const;
     private readonly dependencies: ResolvedLocalDependencies;
     private readonly requirements: RequirementsPreflight;
 
@@ -103,7 +104,6 @@ export class LocalRuntime implements PreparedRuntime {
     readonly preparation = { kind: 'host' as const };
     private ready = false;
     private cleaned = false;
-    private readonly workspaceBindings = new WorkbenchWorkspaces();
     private readonly requiresGitHubCli;
     private readonly allowUncheckedGpu: boolean;
 
@@ -136,7 +136,7 @@ export class LocalRuntime implements PreparedRuntime {
                       WORKBENCH_REPOSITORY_REVISION: request.repository.revision,
                   }
                 : {}),
-            ...this.workspaceBindings.environment(this.workspaces),
+            ...workspaceEnvironment(this.workspaces),
             ...(request.outcome
                 ? { WORKBENCH_OUTPUT_DIR: request.outcome.directory }
                 : {}),

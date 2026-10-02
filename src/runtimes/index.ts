@@ -6,6 +6,7 @@ export type {
     RuntimeCredentialBinding,
     RuntimeInfrastructureMetadata,
     RuntimePhase,
+    RuntimePlacement,
     RuntimePreparation,
     RuntimePrepareRequest,
     RuntimeProvider,
@@ -23,7 +24,6 @@ export {
     type ManagedDockerContainer,
 } from './docker/index.js';
 export {
-    DiskTransfer,
     type E2BClient,
     type E2BCommand,
     type E2BCommandOptions,
@@ -47,6 +47,7 @@ export {
     LocalRuntimeProvider,
 } from './local.js';
 export { type RuntimeDependencies, RuntimeRegistry } from './registry.js';
+export { DiskTransfer } from './remote/disk/transfer.js';
 export {
     RuntimeSmoke,
     type RuntimeSmokeOptions,

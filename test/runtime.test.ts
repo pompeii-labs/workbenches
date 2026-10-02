@@ -52,7 +52,7 @@ describe('local runtime provider contract', () => {
             };
         };
         const runtime = await new RuntimeRegistry([
-            { name: 'local', prepare: async () => native },
+            { name: 'local', placement: 'host', prepare: async () => native },
         ])
             .resolve('local')
             .prepare(request);
@@ -270,7 +270,11 @@ describe('runtime provider registry', () => {
         expect(
             () =>
                 new RuntimeRegistry([
-                    { name: ' ', prepare: async () => Promise.reject() },
+                    {
+                        name: ' ',
+                        placement: 'host',
+                        prepare: async () => Promise.reject(),
+                    },
                 ])
         ).toThrow('Runtime provider name must not be empty');
 

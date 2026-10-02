@@ -20,6 +20,7 @@ import { DockerRuntime } from './runtime.js';
 
 export class DockerRuntimeProvider implements RuntimeProvider {
     readonly name = 'docker';
+    readonly placement = 'container' as const;
     private readonly findExecutable: (name: string) => string | null;
 
     private readonly requirements: RequirementsPreflight;

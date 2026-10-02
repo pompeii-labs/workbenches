@@ -209,6 +209,7 @@ export {
     type RuntimeDependencies,
     RuntimeError,
     type RuntimeInfrastructureMetadata,
+    type RuntimePlacement,
     type RuntimePreparation,
     type RuntimePrepareRequest,
     type RuntimeProvider,

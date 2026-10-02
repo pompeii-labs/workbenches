@@ -8,9 +8,9 @@ import type {
     E2BSandbox,
     E2BSandboxInfo,
 } from '../../../src/runtimes/e2b/contracts.js';
-import { E2BPathPlan } from '../../../src/runtimes/e2b/paths.js';
 import { E2BRuntimeProvider } from '../../../src/runtimes/e2b/provider.js';
-import { E2BAssetSnapshot } from '../../../src/runtimes/e2b/snapshot.js';
+import { DiskAssetSnapshot } from '../../../src/runtimes/remote/disk/snapshot.js';
+import { PathPlan } from '../../../src/runtimes/remote/paths.js';
 import { DiskAssetSource } from '../../../src/runtimes/staging/disk.js';
 import { MemoryAssetSource } from '../../../src/runtimes/staging/memory/source.js';
 import { TransferRules } from '../../../src/runtimes/staging/rules.js';
@@ -48,7 +48,7 @@ describe('asset sources', () => {
             .file('/virtual/ws/node_modules/dep/index.js', 'x')
             .file('/virtual/ws/.ssh/id_rsa', 'key')
             .link('/virtual/ws/alias', 'src/app.ts');
-        const snapshot = await E2BAssetSnapshot.create(
+        const snapshot = await DiskAssetSnapshot.create(
             binding('/virtual/ws'),
             1024 * 1024,
             undefined,
@@ -84,7 +84,7 @@ describe('asset sources', () => {
             .file(`${root}/src/app.ts`, 'export {}')
             .file(`${root}/.env`, 'SECRET=1');
         const read = async (source: AssetSource) => {
-            const snapshot = await E2BAssetSnapshot.create(
+            const snapshot = await DiskAssetSnapshot.create(
                 binding(root),
                 1024 * 1024,
                 undefined,
@@ -110,7 +110,7 @@ describe('asset sources', () => {
             'x'.repeat(64)
         );
         await expect(
-            E2BAssetSnapshot.create(binding('/virtual/ws'), 8, undefined, {
+            DiskAssetSnapshot.create(binding('/virtual/ws'), 8, undefined, {
                 assets: source,
                 local: diskAssetSource,
                 rules,
@@ -128,7 +128,7 @@ describe('asset sources', () => {
             skills: [],
             manifest: { runner: 'opencode', env: {} },
         } as unknown as ResolvedWorkbench;
-        const plan = new E2BPathPlan(
+        const plan = new PathPlan(
             {
                 workbench,
                 workspaceDirectory: '/virtual/ws',

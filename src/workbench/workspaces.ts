@@ -83,20 +83,6 @@ export class WorkbenchWorkspaces {
         return bindings;
     }
 
-    environment(
-        bindings: WorkbenchWorkspaceBinding[],
-        pathFor: (path: string) => string = (path) => path
-    ): Record<string, string> {
-        return Object.fromEntries(
-            bindings.map((binding) => [
-                `WORKBENCH_WORKSPACE_${binding.name
-                    .toUpperCase()
-                    .replaceAll('-', '_')}`,
-                pathFor(binding.path),
-            ])
-        );
-    }
-
     async validate(
         workbench: ResolvedWorkbench,
         bindings: WorkbenchWorkspaceBinding[]

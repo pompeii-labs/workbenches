@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import tar from 'tar-stream';
 
-import { E2BAssetSnapshot } from '../../../src/runtimes/e2b/snapshot.js';
+import { DiskAssetSnapshot } from '../../../src/runtimes/remote/disk/snapshot.js';
 import { DiskAssetSource } from '../../../src/runtimes/staging/disk.js';
 import { MemoryAssetSnapshot } from '../../../src/runtimes/staging/memory/snapshot.js';
 import { MemoryAssetSource } from '../../../src/runtimes/staging/memory/source.js';
@@ -68,7 +68,7 @@ describe('streamed transfer', () => {
                 return diskAssetSource.stream(path);
             },
         };
-        const disk = await E2BAssetSnapshot.create(
+        const disk = await DiskAssetSnapshot.create(
             binding(root),
             1024 * 1024,
             undefined,
@@ -121,7 +121,7 @@ describe('streamed transfer', () => {
             stream: () => new Blob(['short']).stream(),
         };
         await expect(
-            E2BAssetSnapshot.create(binding(root), 1024 * 1024, undefined, {
+            DiskAssetSnapshot.create(binding(root), 1024 * 1024, undefined, {
                 assets: lying,
                 local: diskAssetSource,
                 rules,

@@ -12,10 +12,10 @@ import type {
     SpawnedRunner,
     WorkbenchWorkspaceBinding,
 } from '../../types.js';
+import { workspaceEnvironment } from '../../workbench/bindings.js';
 import { type PreflightResult, WorkbenchPreflight } from '../../workbench/preflight.js';
 import type { RequirementsPreflight } from '../../workbench/requirements.js';
 import { requirementsOf } from '../../workbench/runtimes.js';
-import { WorkbenchWorkspaces } from '../../workbench/workspaces.js';
 import type {
     PreparedRuntime,
     RuntimeCommandOptions,
@@ -60,7 +60,6 @@ export class DockerRuntime implements PreparedRuntime {
     private readonly active = new Map<string, SpawnedRunner>();
     private readonly pendingRemovals = new Set<Promise<void>>();
     private readonly cleanupErrors: unknown[] = [];
-    private readonly workspaceBindings = new WorkbenchWorkspaces();
     private ready = false;
     private cleaned = false;
 
@@ -84,7 +83,7 @@ export class DockerRuntime implements PreparedRuntime {
         this.environment = {
             ...options.mounts.containerEnvironment(),
             ...options.credentials?.environment(),
-            ...this.workspaceBindings.environment(this.workspaces),
+            ...workspaceEnvironment(this.workspaces),
             ...(options.request.outcome
                 ? {
                       WORKBENCH_OUTPUT_DIR: options.mounts.pathFor(

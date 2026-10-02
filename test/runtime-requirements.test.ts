@@ -495,6 +495,7 @@ describe('smoke runtime selection', () => {
     function recorder(name: string, calls: string[]): RuntimeProvider {
         return {
             name,
+            placement: 'host',
             async prepare(request) {
                 calls.push(`${name}:${request.workbench.selectedRuntime ?? 'default'}`);
                 throw new Error(`${name} prepared`);

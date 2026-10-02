@@ -142,7 +142,14 @@ export interface PreparedRuntime {
     cleanup(): Promise<void>;
 }
 
+/**
+ * Where a provider runs a Workbench: on the host, in a container that mounts
+ * host directories, or in a sandbox the engine copies files into.
+ */
+export type RuntimePlacement = 'host' | 'container' | 'sandbox';
+
 export interface RuntimeProvider {
     readonly name: string;
+    readonly placement: RuntimePlacement;
     prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime>;
 }

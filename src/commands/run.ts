@@ -6,6 +6,7 @@ import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
 import { RuntimeRegistry, RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import { assertWorkbenchTuiSupported, launchWorkbenchTui } from '../tui.js';
+import { workspaceEnvironment } from '../workbench/bindings.js';
 import {
     selectedRuntime,
     WorkbenchEnvironment,
@@ -188,7 +189,7 @@ export const runCommand = defineCommand({
             const environment = {
                 ...process.env,
                 ...workbenchEnvironment.bind(resolved.workbench, overrides),
-                ...workbenchWorkspaces.environment(workspaces),
+                ...workspaceEnvironment(workspaces),
             };
             if (selectedRuntime(resolved.workbench).name === 'local') {
                 new WorkbenchPreflight({ environment }).check(resolved.workbench);

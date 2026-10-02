@@ -16,11 +16,11 @@ import type {
     E2BSandboxInfo,
     E2BTemplateSource,
 } from '../src/runtimes/e2b/contracts.js';
-import { e2bIdentityCommand } from '../src/runtimes/e2b/directories.js';
 import { E2BManagedSandboxes } from '../src/runtimes/e2b/managed.js';
 import { E2BRuntimeProvider } from '../src/runtimes/e2b/provider.js';
-import { E2BAssetSnapshot } from '../src/runtimes/e2b/snapshot.js';
 import { RuntimeRegistry } from '../src/runtimes/index.js';
+import { identityCommand } from '../src/runtimes/remote/directories.js';
+import { DiskAssetSnapshot } from '../src/runtimes/remote/disk/snapshot.js';
 import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
 import { TransferRules } from '../src/runtimes/staging/rules.js';
 import type { ResolvedWorkbench } from '../src/types.js';
@@ -490,7 +490,7 @@ describe('E2B runtime provider', () => {
                 artifacts: [{ path: 'report.txt', name: 'Report' }],
             })
         );
-        const remoteSnapshot = await E2BAssetSnapshot.create(
+        const remoteSnapshot = await DiskAssetSnapshot.create(
             {
                 hostPath: remoteOutput,
                 runtimePath: '/outbox',
@@ -529,7 +529,7 @@ describe('E2B runtime provider', () => {
                 join(remoteOutput, 'report.txt'),
                 'remote artifact revised'
             );
-            const revision = await E2BAssetSnapshot.create(
+            const revision = await DiskAssetSnapshot.create(
                 remoteSnapshot.binding,
                 1024 * 1024,
                 undefined,
@@ -800,7 +800,7 @@ class FakeSandbox implements E2BSandbox {
         options: E2BRunOptions = {}
     ): Promise<{ code: number; stdout: string; stderr: string }> {
         this.runs.push({ command, options });
-        if (command === e2bIdentityCommand) return result(0, this.runtimeIdentity);
+        if (command === identityCommand) return result(0, this.runtimeIdentity);
         if (command === 'tar --help 2>&1') {
             return result(0, 'Usage: tar [OPTION...]\n      --null');
         }

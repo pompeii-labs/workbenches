@@ -1,17 +1,10 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { WorkbenchPreflight } from '../../workbench/preflight.js';
-import { RequirementsPreflight } from '../../workbench/requirements.js';
-import type {
-    PreparedRuntime,
-    RuntimePrepareRequest,
-    RuntimeProvider,
-} from '../contracts.js';
+import type { PreparedRuntime, RuntimePrepareRequest } from '../contracts.js';
 import { RuntimeError } from '../error.js';
+import { DiskTransfer } from '../remote/disk/transfer.js';
+import { RemoteProvider } from '../remote/provider.js';
 import { RuntimeSecretStore } from '../secrets.js';
 import { TransferRules } from '../staging/rules.js';
 import type { E2BRuntimeDependencies } from './contracts.js';
-import { DiskTransfer } from './disk.js';
-import { E2BPathPlan } from './paths.js';
 import { E2BRuntime } from './runtime.js';
 import { E2BSdkClient } from './sdk.js';
 import { E2BTemplateManager } from './templates.js';
@@ -19,34 +12,22 @@ import { E2BTemplateManager } from './templates.js';
 const defaultMaximumTransferBytes = 512 * 1_024 * 1_024;
 const defaultLeaseMilliseconds = 60 * 60 * 1_000;
 
-export class E2BRuntimeProvider implements RuntimeProvider {
+export class E2BRuntimeProvider extends RemoteProvider {
     readonly name = 'e2b';
-    private readonly rules = new TransferRules('E2B');
-
-    /** A sandbox provides its own machine, so no host is described. */
-    private readonly requirements = new RequirementsPreflight();
     private readonly transfer: DiskTransfer;
 
     constructor(private readonly dependencies: E2BRuntimeDependencies) {
+        const rules = new TransferRules('E2B');
+        super(rules, dependencies.assets);
         this.transfer = new DiskTransfer(
             dependencies.assets,
             dependencies.local,
-            this.rules
+            rules
         );
     }
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
-        try {
-            this.requirements.check(request.workbench);
-        } catch (error) {
-            throw RuntimeError.from(this.name, 'prepare', error);
-        }
-        const assets = this.dependencies.assets;
-        const paths = new E2BPathPlan(request, this.rules);
-        await paths.verify(assets);
-        new WorkbenchPreflight({
-            environment: paths.environment(),
-        }).checkConfiguration(paths.remap(request.workbench));
+        const paths = await this.bind(request);
         const client =
             this.dependencies.client ??
             (() => {
@@ -61,21 +42,15 @@ export class E2BRuntimeProvider implements RuntimeProvider {
             );
         }
         const template = await new E2BTemplateManager(client).prepare(request);
-        const run = request.run ?? {
-            id: `wb_${randomBytes(16).toString('hex')}`,
-            scope: createHash('sha256')
-                .update(request.workspaceDirectory)
-                .digest('hex')
-                .slice(0, 24),
-        };
         return new E2BRuntime({
             request,
             client,
             paths,
+            rules: this.rules,
             transfer: this.transfer,
             preparation: template.preparation,
             requirements: this.requirements,
-            run,
+            run: await this.run(request),
             maximumTransferBytes:
                 this.dependencies.maxTransferBytes ?? defaultMaximumTransferBytes,
             leaseMilliseconds:

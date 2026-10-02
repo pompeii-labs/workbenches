@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { E2BAssetSnapshot } from '../../src/runtimes/e2b/snapshot.js';
+import type { DiskAssetSnapshot } from '../../src/runtimes/remote/disk/snapshot.js';
 import { quote } from '../../src/runtimes/staging/shell.js';
 import { workspaceTracking } from '../../src/runtimes/staging/tracking.js';
 import { checkoutFixture, temporary } from './fixture.js';
@@ -20,7 +20,7 @@ describe('E2B repository collection index', () => {
                     access: 'read-write',
                 },
             },
-        ] as E2BAssetSnapshot[];
+        ] as DiskAssetSnapshot[];
         const tracking = workspaceTracking(snapshots, 0);
         expect(tracking.directory).toBe('/tmp/workbench-index-0.git');
         const privateDirectory = join(await temporary(), 'tracking.git');

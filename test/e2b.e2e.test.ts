@@ -16,13 +16,14 @@ import {
     type WorkbenchEvent,
 } from '../src/runs/index.js';
 import type { PreparedRuntime } from '../src/runtimes/contracts.js';
-import { E2BArchive } from '../src/runtimes/e2b/archive.js';
 import type { E2BPty, E2BSandbox } from '../src/runtimes/e2b/contracts.js';
 import { E2BManagedSandboxes } from '../src/runtimes/e2b/managed.js';
 import { E2BRuntimeProvider } from '../src/runtimes/e2b/provider.js';
 import { E2BOutcomeRecovery } from '../src/runtimes/e2b/recovery.js';
-import { E2BSdkClient, e2bMetadata } from '../src/runtimes/e2b/sdk.js';
-import { E2BStateStore } from '../src/runtimes/e2b/state.js';
+import { E2BSdkClient } from '../src/runtimes/e2b/sdk.js';
+import { SandboxArchive } from '../src/runtimes/remote/disk/archive.js';
+import { StateStore } from '../src/runtimes/remote/disk/state.js';
+import { runLabels } from '../src/runtimes/remote/labels.js';
 import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
 import { TransferRules } from '../src/runtimes/staging/rules.js';
 import { SessionRetention } from '../src/sessions/index.js';
@@ -31,7 +32,7 @@ import { seedModelCatalogFixture } from './model-catalog-fixture.js';
 
 const diskAssetSource = new DiskAssetSource();
 const disk = { assets: diskAssetSource, local: diskAssetSource };
-const archives = new E2BArchive(new TransferRules('E2B'));
+const archives = new SandboxArchive(new TransferRules('E2B'));
 const enabled = process.env.WORKBENCH_E2B_E2E === '1';
 const sessionEnabled = process.env.WORKBENCH_E2B_SESSION_E2E === '1';
 const projectDirectory = resolve(import.meta.dir, '..');
@@ -82,7 +83,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             );
             const sandbox = await client.createSandbox({
                 template: prepared.immutableReference,
-                metadata: e2bMetadata(run),
+                metadata: runLabels(run, 'E2B'),
                 timeoutMilliseconds: 60_000,
             });
             try {
@@ -360,7 +361,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             const orphanRunId = RunStore.createId();
             const orphan = await client.createSandbox({
                 template: runtime.preparation?.immutableReference ?? '',
-                metadata: e2bMetadata({ id: orphanRunId, scope: run.scope }),
+                metadata: runLabels({ id: orphanRunId, scope: run.scope }, 'E2B'),
                 timeoutMilliseconds: 10_000,
             });
             try {
@@ -528,12 +529,8 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             expect(
                 await readFile(
                     join(
-                        (
-                            await new E2BStateStore(
-                                archives,
-                                credentials.directory
-                            ).source()
-                        ).directory,
+                        (await new StateStore(archives, credentials.directory).source())
+                            .directory,
                         'opencode',
                         'auth.json'
                     ),
@@ -590,7 +587,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             await expectManagedSandboxGone(client, scope, secondRun.id);
             await expectManagedSandboxGone(client, scope, thirdRun.id);
             const current = (
-                await new E2BStateStore(archives, credentials.directory).source()
+                await new StateStore(archives, credentials.directory).source()
             ).directory;
             expect(await readFile(join(current, 'opencode', 'auth.json'), 'utf8')).toBe(
                 '{"fixture":"persistent"}\n'
@@ -622,7 +619,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             );
             const sandbox = await client.createSandbox({
                 template: prepared.immutableReference,
-                metadata: e2bMetadata(run),
+                metadata: runLabels(run, 'E2B'),
                 timeoutMilliseconds: 60_000,
             });
             const decoder = new TextDecoder();
@@ -669,7 +666,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             );
             const sandbox = await client.createSandbox({
                 template: prepared.immutableReference,
-                metadata: e2bMetadata(run),
+                metadata: runLabels(run, 'E2B'),
                 timeoutMilliseconds: 60_000,
             });
             const decoder = new TextDecoder();
@@ -759,7 +756,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             );
             const sandbox = await client.createSandbox({
                 template: prepared.immutableReference,
-                metadata: e2bMetadata({ id: runId, scope }),
+                metadata: runLabels({ id: runId, scope }, 'E2B'),
                 timeoutMilliseconds: 60_000,
             });
             try {
@@ -800,7 +797,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             );
             const sandbox = await client.createSandbox({
                 template: prepared.immutableReference,
-                metadata: e2bMetadata(run),
+                metadata: runLabels(run, 'E2B'),
                 timeoutMilliseconds: 10_000,
             });
             try {
@@ -894,7 +891,7 @@ describe.skipIf(!sessionEnabled)('E2B interactive sessions end to end', () => {
             await first.close();
             activeSessions.delete(first);
             await expectManagedSandboxGone(client, scope, runId);
-            const savedNativeState = await new E2BStateStore(
+            const savedNativeState = await new StateStore(
                 archives,
                 nativeDirectory
             ).source();
