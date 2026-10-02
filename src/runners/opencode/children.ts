@@ -1,5 +1,6 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
 import { OpenCodeEventAdapter } from './events.js';
+import { record, string } from './json.js';
 import type { OpenCodeServer } from './server.js';
 
 export class OpenCodeChildren {
@@ -77,14 +78,4 @@ export class OpenCodeChildren {
                 };
             });
     }
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : undefined;
-}
-
-function string(value: unknown): string | undefined {
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
 }

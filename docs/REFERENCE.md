@@ -1228,6 +1228,7 @@ The reference engine is also a set of modules a host can import. The package
 | `./runners/opencode/runner` | `OpenCodeRunner` and `PreparedOpenCodeRunner` |
 | `./runners/opencode/skills`, `./runners/context` | `OpenCodeSkillStaging`, which stages skills and native config, and `RunnerContextStaging`, which stages context files |
 | `./runners/opencode/*` | The OpenCode adapter, session driver, server client, event translation, and invocation builder |
+| `./runners/opencode/progress` | `OpenCodeProgress`, the value a session's `progress()` returns and `restoreProgress` takes |
 | `./runners/files`, `./runners/files/disk`, `./runners/files/memory` | The `RunnerFiles` interface and its disk and in-memory implementations |
 | `./runtimes`, `./runtimes/contracts` | The runtime registry and the provider contract |
 | `./runtimes/daytona` | The Daytona provider, its client interfaces, and `DaytonaApi`, a `fetch`-based client |
@@ -1312,6 +1313,41 @@ Only Daytona has `adopt`. E2B keeps its own outcome-recovery state and template
 lifecycle, so reconnecting there is not offered yet. The CLI does not call
 `adopt`: `wb attach` observes stored events and does not reconnect to a live
 sandbox.
+
+A session that lost its event stream, or restarted, calls `resumeTurn`:
+
+```ts
+await session.resumeTurn(); // the OpenCode session driver
+```
+
+It subscribes to events again and reads the session's transcript, so text, tool
+activity, and usage produced while disconnected are emitted and in order, then
+it follows the turn until it completes. It covers the turn's steering inputs
+and their answers. A prompt that is still waiting settles normally. A call made
+while another is running returns that call's promise, and closing the session
+ends a running catch-up with an error. The event protocol is unchanged.
+
+Dedupe state lives in the session. `session.progress()` returns an
+`OpenCodeProgress`, importable from `./runners/opencode/progress`, as plain
+JSON: the session and the turn it belongs to, the characters emitted per native
+text part, and the tool calls and usage steps reported. A host saves it as the
+turn runs, and calls `restoreProgress(saved)` on the session started after a
+restart, before `resumeTurn()`, so only what the host has not seen is emitted.
+`restoreProgress` rejects progress saved for another session or another turn.
+Without it a new session replays the whole turn.
+
+The host must keep the latest value it received, whole, and must not edit,
+merge, or trim it: a missing id makes the session emit that tool call or usage
+step again, and a larger count skips text the host never saw. Delivery is
+exactly once only if the host stores the progress atomically with the events it
+stored. A value older than the events stored makes the session emit some of
+them again; one newer skips events the host never stored. Text is counted after
+the host's `emit` resolves, so an event whose `emit` failed is sent again.
+Text counts are UTF-16 code units, the unit of a JavaScript string length. A
+transcript that rewrites text already emitted, rather than extending it, is not
+sent again: only text past the count is emitted. A catch-up that fails leaves
+the session failed so a later one can retry, and what it already emitted is not
+emitted again.
 
 #### Model routing without globals
 

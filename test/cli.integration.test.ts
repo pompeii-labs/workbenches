@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test';
 import {
     chmod,
     mkdir,
@@ -36,6 +36,8 @@ afterEach(async () => {
 });
 
 describe('CLI integration', () => {
+    setDefaultTimeout(20_000);
+
     test('live add edits feed new CLI runs while a resumed session keeps its package after removal and deletion', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('cli-pinned-home-');
@@ -223,7 +225,7 @@ describe('CLI integration', () => {
                 'utf8'
             ).catch(() => undefined)
         ).toBeUndefined();
-    }, 20_000);
+    });
 
     test('headless authoring fails verification for an invalid candidate', async () => {
         const root = await temporaryDirectory('headless-invalid-');
@@ -389,7 +391,7 @@ describe('CLI integration', () => {
         );
         expect(final.code).toBe(0);
         expect(JSON.parse(final.stdout).run_id).toBe(next.run_id);
-    }, 20_000);
+    });
 
     test('keeps wait replies and cursors on an exact linked run', async () => {
         const home = await temporaryDirectory('wait-run-');
@@ -1497,7 +1499,7 @@ describe('CLI integration', () => {
         expect(new Set(events.map((event) => event.run_id))).toEqual(
             new Set([sessionId])
         );
-    }, 20_000);
+    });
 
     test('queues a detached continuation onto the active native session', async () => {
         const fixture = await createFixture();
@@ -1535,7 +1537,7 @@ describe('CLI integration', () => {
             run_id: sessionId,
             type: 'run.completed',
         });
-    }, 20_000);
+    });
 
     test('continues a completed session as a new linked native run', async () => {
         const fixture = await createFixture({
@@ -1604,7 +1606,7 @@ describe('CLI integration', () => {
             execution: 'session',
             status: 'completed',
         });
-    }, 20_000);
+    });
 
     test('serializes concurrent continuations onto one native run', async () => {
         const fixture = await createFixture();
@@ -1649,7 +1651,7 @@ describe('CLI integration', () => {
             2
         );
         expect(new Set(events.map((event) => event.run_id)).size).toBe(1);
-    }, 20_000);
+    });
 
     test('requires a session ID to stop an active run and records a terminal event', async () => {
         const fixture = await createFixture();
