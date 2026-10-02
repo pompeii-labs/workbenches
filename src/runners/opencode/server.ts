@@ -198,7 +198,10 @@ export class OpenCodeServer {
         const headers = new Headers(init.headers);
         headers.set('Authorization', `Basic ${btoa(`opencode:${this.password}`)}`);
         if (init.body) headers.set('Content-Type', 'application/json');
-        return this.options.fetch(input, {
+        // Call with an undefined `this`: some runtimes reject Web platform
+        // functions invoked as methods of another object.
+        const fetcher = this.options.fetch;
+        return fetcher(input, {
             ...init,
             headers,
             signal: init.signal ?? this.abort.signal,

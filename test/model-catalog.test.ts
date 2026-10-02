@@ -135,6 +135,28 @@ describe('model metadata cache', () => {
             'Model metadata is not cached'
         );
     });
+
+    test('calls an injected fetch with an undefined this', async () => {
+        // Some runtimes throw "Illegal invocation" when a Web platform function
+        // runs with a `this` other than undefined. Node and Bun do not, so this
+        // fetch enforces it the way those runtimes do.
+        const calls: string[] = [];
+        const strict = function (this: unknown, input: string | URL | Request) {
+            if (this !== undefined) throw new TypeError('Illegal invocation');
+            calls.push(String(input));
+            return Promise.resolve(Response.json({}));
+        } as typeof fetch;
+        const catalog = new ModelCatalog({
+            home: await temporaryHome(),
+            fetch: strict,
+        });
+        // The stub answers with an invalid manifest, so refresh rejects. It must
+        // reject because of that, not because of the call itself.
+        const error = await catalog.refresh().catch((caught: Error) => caught);
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).not.toContain('Illegal invocation');
+        expect(calls).toHaveLength(1);
+    });
 });
 
 function catalogSource(version: string): Uint8Array {
