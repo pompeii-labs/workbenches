@@ -32,21 +32,28 @@ export interface OpenCodeServerOptions {
     fetch: OpenCodeFetch;
     password: () => string;
     startupTimeoutMs: number;
+    /** Aborted when the server closes. A host or test may keep it to observe the server. */
+    abort?: AbortController;
 }
 
 export class OpenCodeServer {
-    private readonly abort = new AbortController();
+    private readonly abort: AbortController;
     private readonly options: OpenCodeServerOptions;
     private child: SpawnedOpenCodeServer | undefined;
     private url: string | undefined;
     private password: string | undefined;
-    private eventLoop: Promise<void> | undefined;
+    /** Every event stream's loop, so closing waits for the replaced ones too. */
+    private readonly eventLoops = new Set<Promise<void>>();
+    private subscription: AbortController | undefined;
+    /** Ends `subscription` when the server closes. */
+    private closeSubscription: (() => void) | undefined;
     private stdoutLoop: Promise<void> | undefined;
     private stderrLoop: Promise<string> | undefined;
     private closed = false;
 
     constructor(options: OpenCodeServerOptions) {
         this.options = options;
+        this.abort = options.abort ?? new AbortController();
     }
 
     async start(
@@ -89,23 +96,55 @@ export class OpenCodeServer {
         }
     }
 
+    /**
+     * Opens the event stream. Subscribing again replaces the stream: the old one
+     * is closed first and its end is not reported as a failure, which is how a
+     * client reconnects after losing the stream.
+     */
     async subscribe(
         consume: (value: unknown) => Promise<void>,
         onFailure: (error: Error) => void
     ): Promise<void> {
+        // An already aborted signal never fires its listener, so refuse here.
+        if (this.closed || this.abort.signal.aborted) {
+            throw new Error('OpenCode server is closed');
+        }
+        this.subscription?.abort();
+        // The server's listener for the replaced subscription is no longer needed.
+        if (this.closeSubscription) {
+            this.abort.signal.removeEventListener('abort', this.closeSubscription);
+        }
+        const subscription = new AbortController();
+        this.subscription = subscription;
+        const closeWithServer = () => subscription.abort();
+        this.closeSubscription = closeWithServer;
+        this.abort.signal.addEventListener('abort', closeWithServer, { once: true });
         const response = await this.authFetch(this.endpoint('/event'), {
-            signal: this.abort.signal,
+            signal: subscription.signal,
         });
+        if (this.closed) {
+            subscription.abort();
+            throw new Error('OpenCode server is closed');
+        }
         if (!response.ok || !response.body) {
             throw new Error(
                 `OpenCode event stream failed with HTTP ${response.status}`
             );
         }
-        this.eventLoop = consumeSse(response.body, consume).catch((error) => {
-            if (!this.closed && !isAbortError(error)) {
-                onFailure(new Error('OpenCode event stream failed', { cause: error }));
-            }
-        });
+        const loop: Promise<void> = consumeSse(response.body, consume)
+            .catch((error) => {
+                if (
+                    !this.closed &&
+                    !isAbortError(error) &&
+                    this.subscription === subscription
+                ) {
+                    onFailure(
+                        new Error('OpenCode event stream failed', { cause: error })
+                    );
+                }
+            })
+            .finally(() => this.eventLoops.delete(loop));
+        this.eventLoops.add(loop);
     }
 
     async request(path: string, init: RequestInit): Promise<Response> {
@@ -179,7 +218,7 @@ export class OpenCodeServer {
         this.abort.abort();
         this.child?.kill();
         await Promise.allSettled([
-            this.eventLoop,
+            ...this.eventLoops,
             this.stdoutLoop,
             this.stderrLoop,
             this.child?.exited,

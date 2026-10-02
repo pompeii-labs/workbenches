@@ -1,4 +1,5 @@
 import type { RunnerQuestionPrompt, RunnerQuestionResponse } from '../session.js';
+import { record, string } from './json.js';
 
 export class OpenCodeQuestion {
     fromNative(value: unknown): RunnerQuestionPrompt[] {
@@ -38,13 +39,13 @@ export class OpenCodeQuestion {
     }
 
     private prompt(value: unknown): RunnerQuestionPrompt {
-        const question = object(value);
+        const question = record(value);
         const prompt = string(question?.question);
         if (!question || !prompt || !Array.isArray(question.options)) {
             throw new Error('OpenCode emitted an invalid question prompt');
         }
         const options = question.options.map((entry) => {
-            const option = object(entry);
+            const option = record(entry);
             const label = string(option?.label);
             if (!option || !label) {
                 throw new Error('OpenCode emitted an invalid question option');
@@ -61,14 +62,4 @@ export class OpenCodeQuestion {
             custom: question.custom !== false,
         };
     }
-}
-
-function object(value: unknown): Record<string, unknown> | undefined {
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : undefined;
-}
-
-function string(value: unknown): string | undefined {
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
 }

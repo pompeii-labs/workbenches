@@ -99,11 +99,22 @@ export type RunnerQuestionResponse =
     | { outcome: 'answered'; answers: string[][] }
     | { outcome: 'rejected' };
 
+export interface RunnerResumeOptions {
+    /** The input message that began the turn to resume. */
+    inputMessageId?: string;
+}
+
 export interface RunnerSession {
     readonly id: string | undefined;
     prompt(input: RunnerInput): Promise<RunnerTurnResult>;
     steer?(input: RunnerInput): Promise<RunnerInputDelivery>;
     followUp?(input: RunnerInput): Promise<void>;
+    /**
+     * Picks a turn back up after the event stream was lost or the engine
+     * restarted, emitting what was produced in the meantime once and in order.
+     * Only runners that can read a session's history implement it.
+     */
+    resumeTurn?(options?: RunnerResumeOptions): Promise<RunnerTurnResult>;
     cancelTurn(): Promise<void>;
     close(): Promise<void>;
 }

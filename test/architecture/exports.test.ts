@@ -15,6 +15,10 @@ import { MemoryRunnerFiles } from '@pompeii-labs/workbench/runners/files/memory'
 import { OpenCodeSessionAdapter } from '@pompeii-labs/workbench/runners/opencode/adapter';
 import { OpenCodeEventAdapter } from '@pompeii-labs/workbench/runners/opencode/events';
 import {
+    type OpenCodeProgress,
+    TurnProgress,
+} from '@pompeii-labs/workbench/runners/opencode/progress';
+import {
     OpenCodeRunner,
     PreparedOpenCodeRunner,
 } from '@pompeii-labs/workbench/runners/opencode/runner';
@@ -58,6 +62,7 @@ describe('package exports', () => {
         expect(typeof OpenCodeEventAdapter).toBe('function');
         expect(typeof OpenCodeServer).toBe('function');
         expect(typeof OpenCodeServerSession).toBe('function');
+        expect(typeof TurnProgress).toBe('function');
         expect(typeof OpenCodeSkillStaging).toBe('function');
         expect(typeof RuntimeRegistry.standard).toBe('function');
         expect(typeof E2BRuntimeProvider).toBe('function');
@@ -88,8 +93,16 @@ describe('package exports', () => {
             new MemoryAssetSource(),
             new TransferRules('Remote')
         );
-        const values = [sink, transfer];
-        expect(values).toHaveLength(2);
+        // A host names the progress it saves and restores.
+        const progress: OpenCodeProgress = {
+            sessionId: 'ses_1',
+            text: {},
+            startedTools: [],
+            completedTools: [],
+            finishedSteps: [],
+        };
+        const values = [sink, transfer, progress];
+        expect(values).toHaveLength(3);
     });
 
     test('builds the Daytona provider from injected dependencies alone', () => {

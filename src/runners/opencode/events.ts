@@ -1,10 +1,17 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
 import { describeTool } from '../tool.js';
+import { record, string } from './json.js';
 
 export interface OpenCodeAdapterResult {
     events: WorkbenchEventDraft[];
     finalText?: string;
     turnCompleted: boolean;
+}
+
+export interface OpenCodeAdapterProgress {
+    startedTools: string[];
+    completedTools: string[];
+    finishedSteps: string[];
 }
 
 export class OpenCodeEventAdapter {
@@ -16,6 +23,33 @@ export class OpenCodeEventAdapter {
     private sessionId: string | undefined;
     private completionReason: string | undefined;
     private failureMessage: string | undefined;
+
+    /** The tool calls and usage steps reported so far, by native id. */
+    progress(): OpenCodeAdapterProgress {
+        return {
+            startedTools: [...this.startedTools],
+            completedTools: [...this.completedTools],
+            finishedSteps: [...this.finishedSteps],
+        };
+    }
+
+    /** Makes the reported ids exactly those of an earlier `progress()`. */
+    restore(state: OpenCodeAdapterProgress): void {
+        this.startedTools.clear();
+        this.completedTools.clear();
+        this.finishedSteps.clear();
+        for (const id of state.startedTools) this.startedTools.add(id);
+        for (const id of state.completedTools) this.completedTools.add(id);
+        for (const id of state.finishedSteps) this.finishedSteps.add(id);
+    }
+
+    /** Forgets what the previous turn's events said, so the next summary is its own. */
+    startTurn(): void {
+        this.turnCompleted = false;
+        this.finalText = '';
+        this.completionReason = undefined;
+        this.failureMessage = undefined;
+    }
 
     consume(value: unknown): OpenCodeAdapterResult {
         const event = record(value);
@@ -177,16 +211,6 @@ function safeRunnerError(event: Record<string, unknown>): string | undefined {
     const status = number(data?.statusCode);
     const normalized = message.replace(/\s+/g, ' ').trim().slice(0, 500);
     return status === undefined ? normalized : `HTTP ${status}: ${normalized}`;
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : undefined;
-}
-
-function string(value: unknown): string | undefined {
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function number(value: unknown): number | undefined {

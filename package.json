@@ -51,6 +51,7 @@
         "./runners/opencode/runner": "./src/runners/opencode/runner.ts",
         "./runners/opencode/session": "./src/runners/opencode/session.ts",
         "./runners/opencode/server": "./src/runners/opencode/server.ts",
+        "./runners/opencode/progress": "./src/runners/opencode/progress.ts",
         "./runners/opencode/events": "./src/runners/opencode/events.ts",
         "./runners/opencode/invocation": "./src/runners/opencode/invocation.ts",
         "./runners/opencode/skills": "./src/runners/opencode/skills.ts",

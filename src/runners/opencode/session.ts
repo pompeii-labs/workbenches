@@ -4,28 +4,26 @@ import { runtimeContext } from '../context/runtime.js';
 import type {
     RunnerInput,
     RunnerInputDelivery,
-    RunnerPermissionDecision,
-    RunnerQuestionPrompt,
+    RunnerResumeOptions,
     RunnerSession,
     RunnerSessionStartOptions,
     RunnerTurnResult,
 } from '../session.js';
 import { normalizeRunnerInput } from '../session.js';
+import { OpenCodeAuthentication } from './authentication.js';
 import { OpenCodeChildren } from './children.js';
 import { openCodeParts } from './input.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
-import { isOutboxPermission } from './outbox.js';
-import { OpenCodeQuestion } from './question.js';
+import { record, string } from './json.js';
+import { type OpenCodeProgress, TurnProgress } from './progress.js';
+import { TurnRecovery } from './recovery.js';
+import { OpenCodeInputRequests } from './requests.js';
+import { OpenCodeEventRouter } from './router.js';
 import type { OpenCodeFetch, OpenCodeServerLauncher } from './server.js';
 import { OpenCodeServer } from './server.js';
-import { deferred, withTimeout } from './timing.js';
+import { OpenCodeSessionState } from './state.js';
+import { withTimeout } from './timing.js';
 import { type ActiveTurn, createActiveTurn, OpenCodeMessageIds } from './turn.js';
-
-interface AlwaysPermission {
-    sessionId: string;
-    action: string;
-    resources: Set<string>;
-}
 
 export interface OpenCodeServerSessionOptions extends RunnerSessionStartOptions {
     context?: RunnerContext;
@@ -42,22 +40,16 @@ export interface OpenCodeServerSessionOptions extends RunnerSessionStartOptions 
 export class OpenCodeServerSession implements RunnerSession {
     private readonly options: OpenCodeServerSessionOptions;
     private runtimeReminder: string | undefined;
-    private readonly closing = deferred<void>();
+    private readonly state = new OpenCodeSessionState();
     private readonly server: OpenCodeServer;
-    private readonly streamedTextParts = new Set<string>();
-    private readonly assistantTextParts = new Set<string>();
-    private readonly alwaysPermissions: AlwaysPermission[] = [];
-    private readonly questions = new OpenCodeQuestion();
+    private readonly emitted: TurnProgress;
     private readonly messageIds = new OpenCodeMessageIds();
-    private readonly children: OpenCodeChildren;
-    private requests: Promise<void> = Promise.resolve();
-    private nativeSessionId: string | undefined;
-    private active: ActiveTurn | undefined;
-    private closed = false;
-    private failure: Error | undefined;
+    private readonly router: OpenCodeEventRouter;
+    private readonly recovery: TurnRecovery;
 
     constructor(options: OpenCodeServerSessionOptions) {
         this.options = options;
+        this.emitted = new TurnProgress(options.host);
         // Put refreshed attempt facts beside the first resumed user input.
         this.runtimeReminder =
             options.context && options.session?.nativeSessionId
@@ -74,11 +66,31 @@ export class OpenCodeServerSession implements RunnerSession {
             password: options.password,
             startupTimeoutMs: options.startupTimeoutMs,
         });
-        this.children = new OpenCodeChildren(this.server, () => this.nativeSessionId);
+        const children = new OpenCodeChildren(this.server, () => this.state.sessionId);
+        this.router = new OpenCodeEventRouter(
+            this.server,
+            options.host,
+            this.state,
+            children,
+            new OpenCodeInputRequests(
+                this.server,
+                options.host,
+                children,
+                options.environment,
+                this.state
+            ),
+            this.emitted
+        );
+        this.recovery = new TurnRecovery(
+            this.server,
+            this.state,
+            this.router,
+            this.emitted
+        );
     }
 
     get id(): string | undefined {
-        return this.nativeSessionId;
+        return this.state.sessionId;
     }
 
     async start(): Promise<void> {
@@ -98,12 +110,14 @@ export class OpenCodeServerSession implements RunnerSession {
                     binding,
                     this.options.context
                 ),
-            (error) => this.fail(error)
+            (error) => this.state.fail(error)
         );
 
         if (this.options.authentication)
             await withTimeout(
-                this.authenticate(this.options.authentication),
+                new OpenCodeAuthentication(this.server, this.options.host).complete(
+                    this.options.authentication
+                ),
                 'OpenCode authentication did not complete in time',
                 this.options.authenticationTimeoutMs
             );
@@ -118,70 +132,8 @@ export class OpenCodeServerSession implements RunnerSession {
         const sessionId = this.options.session?.nativeSessionId
             ? await this.resume(this.options.session.nativeSessionId)
             : await this.create();
-        this.nativeSessionId = sessionId;
-        await this.subscribe();
-    }
-
-    private async authenticate(
-        authentication: NonNullable<OpenCodeServerSessionOptions['authentication']>
-    ): Promise<void> {
-        if (authentication.authenticationMethod !== 'oauth') {
-            throw new Error(
-                `OpenCode ${authentication.authenticationMethod ?? 'native'} authentication cannot be completed during a Workbench run yet`
-            );
-        }
-        const methods = record(await this.server.authenticationMethods());
-        const available = methods?.[authentication.nativeProvider];
-        if (!Array.isArray(available)) {
-            throw new Error(
-                `OpenCode did not expose authentication methods for ${authentication.nativeProvider}`
-            );
-        }
-        const method = available.findIndex((value) => {
-            const candidate = record(value);
-            return (
-                candidate?.type === 'oauth' &&
-                (!authentication.nativeMethod ||
-                    candidate.label === authentication.nativeMethod)
-            );
-        });
-        if (method < 0) {
-            throw new Error(
-                authentication.nativeMethod
-                    ? `OpenCode did not expose the configured authentication method: ${authentication.nativeMethod}`
-                    : `OpenCode did not expose a compatible OAuth method for ${authentication.nativeProvider}`
-            );
-        }
-        const authorization = record(
-            await this.server.authorizeProvider(authentication.nativeProvider, method)
-        );
-        const url = string(authorization?.url);
-        const instructions = string(authorization?.instructions);
-        if (!url || authorization?.method !== 'auto') {
-            throw new Error(
-                `OpenCode did not expose a supported headless authentication flow for ${authentication.nativeProvider}`
-            );
-        }
-        await this.options.host.emit({
-            type: 'authentication.requested',
-            data: {
-                provider: authentication.provider,
-                native_provider: authentication.nativeProvider,
-                url,
-                ...(instructions ? { instructions } : {}),
-            },
-        });
-        await this.server.completeProviderAuthorization(
-            authentication.nativeProvider,
-            method
-        );
-        await this.options.host.emit({
-            type: 'authentication.completed',
-            data: {
-                provider: authentication.provider,
-                native_provider: authentication.nativeProvider,
-            },
-        });
+        this.state.sessionId = sessionId;
+        await this.router.subscribe();
     }
 
     private async create(): Promise<string> {
@@ -210,13 +162,16 @@ export class OpenCodeServerSession implements RunnerSession {
     }
 
     async prompt(input: RunnerInput): Promise<RunnerTurnResult> {
-        if (this.closed) throw new Error('runner session is closed');
-        if (this.failure) throw this.failure;
-        if (this.active) throw new Error('runner session is already processing a turn');
-        const sessionId = this.requireSessionId();
+        const state = this.state;
+        state.assertOpen();
+        if (state.failure) throw state.failure;
+        if (state.active)
+            throw new Error('runner session is already processing a turn');
+        const sessionId = state.requireSessionId();
         const messageId = this.messageIds.next();
         const turn = createActiveTurn(messageId);
-        this.active = turn;
+        this.emitted.begin(messageId);
+        state.begin(turn);
         const model = parseModel(this.options.configuration.model);
         const normalized = normalizeRunnerInput(input);
         try {
@@ -233,37 +188,32 @@ export class OpenCodeServerSession implements RunnerSession {
             );
             this.runtimeReminder = undefined;
         } catch (error) {
-            this.failActive(asError(error));
+            state.failTurn(asError(error));
         }
-        return turn.promise.finally(() => {
-            if (this.active === turn) this.active = undefined;
-        });
+        return turn.promise.finally(() => state.release(turn));
     }
 
     async steer(input: RunnerInput): Promise<RunnerInputDelivery> {
-        if (this.closed) throw new Error('runner session is closed');
-        if (this.failure) throw this.failure;
-        if (!this.active) {
-            throw new Error('runner session is not processing a turn');
-        }
+        const state = this.state;
+        state.assertOpen();
+        if (state.failure) throw state.failure;
+        const active = state.active;
+        if (!active) throw new Error('runner session is not processing a turn');
         const normalized = normalizeRunnerInput(input);
         const messageId = this.messageIds.next();
-        const delivery = deferred<void>();
-        void delivery.promise.catch(() => {});
-        this.active.inputMessageIds.add(messageId);
-        this.active.steeringDeliveries.set(messageId, delivery);
-        this.active.steeringOrder.push(messageId);
-        void this.dispatchSteering(this.active, messageId, normalized);
-        return { delivered: delivery.promise };
+        active.inputMessageIds.add(messageId);
+        const delivered = active.steering.add(messageId);
+        void this.dispatchSteering(active, messageId, normalized);
+        return { delivered };
     }
 
     async cancelTurn(): Promise<void> {
-        const active = this.active;
-        if (!active || this.closed) return;
+        const active = this.state.active;
+        if (!active || this.state.closed) return;
         active.cancelRequested = true;
         try {
             await this.server.request(
-                `/session/${encodeURIComponent(this.requireSessionId())}/abort`,
+                `/session/${encodeURIComponent(this.state.requireSessionId())}/abort`,
                 { method: 'POST' }
             );
             await active.promise;
@@ -273,334 +223,63 @@ export class OpenCodeServerSession implements RunnerSession {
         }
     }
 
+    /**
+     * Picks a turn back up after this client lost its event stream, or after the
+     * engine restarted, without sending anything to the model. It subscribes to
+     * events again and reads the session's transcript, so output text, tool
+     * activity, and usage produced while disconnected are emitted and then it
+     * follows the turn live until it completes. The returned promise settles like
+     * the original `prompt` would have.
+     *
+     * The turn is the one a `prompt` is still waiting on, which the catch-up then
+     * settles, or else the latest one this session started, or the one that began
+     * at `inputMessageId`, or the one the restored progress names, or, on a
+     * session that has none of these, the latest user message in the transcript.
+     * It covers the turn's steering inputs and their answers. Output text is
+     * emitted only past what this session already emitted; a fresh session has
+     * emitted nothing, so it replays the whole turn, and events carry
+     * `message_id`, `part_id`, and `offset` so a consumer that kept what it saw
+     * can skip the overlap.
+     *
+     * A call made while another is running returns that call's promise. A
+     * catch-up that fails leaves the session failed, so a later one can retry,
+     * and what it already emitted is not emitted again. Text that arrives at the
+     * moment of reconnection is reported at most once, but a repeated delta that
+     * matches the transcript's tail can be mistaken for one the transcript
+     * already holds. Closing the session while a catch-up runs ends it with an
+     * error and starts nothing.
+     */
+    resumeTurn(options: RunnerResumeOptions = {}): Promise<RunnerTurnResult> {
+        return this.recovery.resume(options);
+    }
+
     async close(): Promise<void> {
-        if (this.closed) return;
-        this.closed = true;
-        this.closing.resolve(undefined);
-        this.finishActive('cancelled');
+        if (this.state.closed) return;
+        this.state.closed = true;
+        this.state.finish('cancelled');
         await this.server.close();
         await this.options.cleanup();
     }
 
-    private async subscribe(): Promise<void> {
-        await this.server.subscribe(
-            async (value) => this.consumeEvent(value),
-            (error) => this.fail(error)
+    /**
+     * What this session has emitted, to save while a turn runs and hand to
+     * `restoreProgress` on the session started after a restart. See
+     * `OpenCodeProgress` for what a host must keep and must not edit.
+     */
+    progress(): OpenCodeProgress {
+        return this.emitted.snapshot(this.state.requireSessionId());
+    }
+
+    /**
+     * Loads progress saved by `progress()`. Call it before `resumeTurn`. It
+     * rejects progress saved for another session or another turn.
+     */
+    restoreProgress(progress: OpenCodeProgress): void {
+        this.emitted.restore(
+            progress,
+            this.state.requireSessionId(),
+            this.state.last?.inputMessageId
         );
-    }
-
-    private async consumeEvent(value: unknown): Promise<void> {
-        const event = record(value);
-        const type = string(event?.type);
-        const properties = record(event?.properties);
-        if (!type || !properties) return;
-
-        if (type === 'session.created' || type === 'session.updated') {
-            await this.children.observe(record(properties.info));
-            return;
-        }
-
-        if (type === 'permission.asked' || type === 'question.asked') {
-            // An unanswered prompt must not block usage from other native branches.
-            const active = this.active;
-            this.requests = this.requests
-                .then(async () => {
-                    if (this.closed || !active || this.active !== active) return;
-                    if (type === 'permission.asked')
-                        await this.answerPermission(properties);
-                    else await this.answerQuestion(properties);
-                })
-                .catch((error) => {
-                    if (this.closed || this.active !== active) return;
-                    this.fail(
-                        error instanceof Error
-                            ? error
-                            : new Error('OpenCode input request failed')
-                    );
-                });
-            return;
-        }
-        if (type === 'question.replied' || type === 'question.rejected') return;
-
-        const sessionId = string(properties.sessionID);
-        if (!sessionId) return;
-        if (sessionId !== this.nativeSessionId) {
-            if (this.active && (await this.children.owns(sessionId))) {
-                const drafts = this.children.consume(type, properties, sessionId);
-                for (const draft of drafts) await this.options.host.emit(draft);
-            }
-            return;
-        }
-        if (type === 'message.updated') {
-            const info = record(properties.info);
-            const messageId = string(info?.id);
-            const parentId = string(info?.parentID);
-            if (
-                this.active &&
-                messageId &&
-                parentId &&
-                info?.role === 'assistant' &&
-                this.active.inputMessageIds.has(parentId)
-            ) {
-                if (!this.active.assistantOutputIds.has(messageId)) {
-                    this.active.assistantOutputIds.set(messageId, createOutputId());
-                }
-                const delivery = this.active.steeringDeliveries.get(parentId);
-                if (delivery) {
-                    this.deliverSteeringThrough(this.active, parentId);
-                }
-                this.active.seenActivity = true;
-            }
-            return;
-        }
-        if (!this.active) return;
-        if (type === 'session.error') {
-            const errorName = string(record(properties.error)?.name);
-            if (this.active.cancelRequested && errorName === 'MessageAbortedError') {
-                return;
-            }
-            this.failActive(new Error('OpenCode session failed'));
-            return;
-        }
-        if (type === 'session.status') {
-            const status = string(record(properties.status)?.type);
-            if (
-                status === 'idle' &&
-                (this.active.seenActivity || this.active.cancelRequested)
-            ) {
-                this.finishActive(
-                    this.active.cancelRequested
-                        ? 'cancelled'
-                        : this.active.adapter.summary().completionReason
-                );
-            }
-            return;
-        }
-        if (type === 'session.idle') {
-            // OpenCode emits this legacy event in addition to session.status=idle.
-            // Treating both as completion lets a delayed duplicate from a cancelled
-            // turn finish the next turn. The status event is the canonical boundary.
-            return;
-        }
-        if (type === 'message.part.delta') {
-            const partId = string(properties.partID);
-            const outputId = this.assistantOutputId(properties.messageID);
-            if (!outputId || !partId || !this.assistantTextParts.has(partId)) {
-                return;
-            }
-            if (properties.field !== 'text') return;
-            const delta = string(properties.delta);
-            if (!delta) return;
-            this.active.seenActivity = true;
-            this.streamedTextParts.add(partId);
-            await this.options.host.emit({
-                type: 'output.text',
-                data: { id: outputId, text: delta },
-            });
-            return;
-        }
-        if (type !== 'message.part.updated') {
-            await this.options.host.emit({
-                type: 'runner.event',
-                data: { native_type: type },
-            });
-            return;
-        }
-        const part = record(properties.part);
-        const partType = string(part?.type);
-        if (!part || !partType) return;
-        const outputId = this.assistantOutputId(part.messageID);
-        if (!outputId) return;
-        this.active.seenActivity = true;
-        if (partType === 'text') {
-            const partId = string(part.id);
-            if (partId) this.assistantTextParts.add(partId);
-            const text = string(part.text);
-            if (text && (!partId || !this.streamedTextParts.has(partId))) {
-                await this.options.host.emit({
-                    type: 'output.text',
-                    data: { id: outputId, text },
-                });
-            }
-            return;
-        }
-        const nativeType = partType.replaceAll('-', '_');
-        const result = this.active.adapter.consume({
-            type: nativeType === 'tool' ? 'tool_use' : nativeType,
-            sessionID: sessionId,
-            part,
-        });
-        for (const draft of result.events) {
-            if (draft.type !== 'turn.completed') {
-                await this.options.host.emit(draft);
-            }
-        }
-    }
-
-    private async answerPermission(properties: Record<string, unknown>) {
-        const active = this.active;
-        const id = string(properties.id);
-        const action = string(properties.permission);
-        const sessionId = string(properties.sessionID);
-        if (
-            !active ||
-            !id ||
-            !action ||
-            !sessionId ||
-            !(await this.children.owns(sessionId)) ||
-            this.active !== active ||
-            active.settled
-        )
-            return;
-        const resources = stringArray(properties.patterns);
-        if (
-            isOutboxPermission(
-                action,
-                resources,
-                this.options.environment.WORKBENCH_OUTPUT_DIR
-            )
-        ) {
-            await this.replyPermission(id, 'allow_once');
-            return;
-        }
-        if (this.isAlwaysAllowed(sessionId, action, resources)) return;
-        const always = stringArray(properties.always);
-        const decision = await Promise.race([
-            this.options.host.requestPermission({
-                id,
-                action,
-                resources,
-                message: permissionMessage(action, resources),
-                allowAlways: always.length > 0,
-            }),
-            this.closing.promise.then(() => undefined),
-            active.promise.then(
-                () => undefined,
-                () => undefined
-            ),
-        ]);
-        if (!decision || this.closed) return;
-        const replied = await this.replyPermission(id, decision);
-        if (replied && decision === 'allow_always') {
-            this.alwaysPermissions.push({
-                sessionId,
-                action,
-                resources: new Set(always.length > 0 ? always : resources),
-            });
-        }
-    }
-
-    private async answerQuestion(properties: Record<string, unknown>) {
-        const active = this.active;
-        const id = string(properties.id);
-        const sessionId = string(properties.sessionID);
-        if (
-            !active ||
-            !id ||
-            !sessionId ||
-            !(await this.children.owns(sessionId)) ||
-            this.active !== active ||
-            active.settled
-        )
-            return;
-        let questions: RunnerQuestionPrompt[];
-        try {
-            questions = this.questions.fromNative(properties.questions);
-        } catch (error) {
-            await this.server
-                .replyQuestion(`/question/${encodeURIComponent(id)}/reject`)
-                .catch(() => false);
-            throw error;
-        }
-        const response = await Promise.race([
-            this.options.host.requestQuestion({ id, questions }),
-            this.closing.promise.then(() => undefined),
-            active.promise.then(
-                () => undefined,
-                () => undefined
-            ),
-        ]);
-        if (!response || this.closed) return;
-        if (response.outcome === 'rejected') {
-            await this.server.replyQuestion(
-                `/question/${encodeURIComponent(id)}/reject`
-            );
-            return;
-        }
-        let answers: string[][];
-        try {
-            answers = this.questions.answers(questions, response);
-        } catch (error) {
-            await this.server
-                .replyQuestion(`/question/${encodeURIComponent(id)}/reject`)
-                .catch(() => false);
-            throw error;
-        }
-        await this.server.replyQuestion(`/question/${encodeURIComponent(id)}/reply`, {
-            answers,
-        });
-    }
-
-    private async replyPermission(
-        id: string,
-        decision: RunnerPermissionDecision
-    ): Promise<boolean> {
-        return this.server.replyPermission(
-            `/permission/${encodeURIComponent(id)}/reply`,
-            { reply: permissionReply(decision) }
-        );
-    }
-
-    private isAlwaysAllowed(
-        sessionId: string,
-        action: string,
-        resources: string[]
-    ): boolean {
-        if (resources.length === 0) return false;
-        return this.alwaysPermissions.some(
-            (permission) =>
-                permission.sessionId === sessionId &&
-                permission.action === action &&
-                resources.every((resource) => permission.resources.has(resource))
-        );
-    }
-
-    private finishActive(reason = 'completed') {
-        const active = this.active;
-        if (!active || active.settled) return;
-        this.rejectUndeliveredSteering(
-            active,
-            new Error('OpenCode completed before consuming steering input')
-        );
-        active.settled = true;
-        active.resolve({ reason });
-    }
-
-    private failActive(error: Error) {
-        const active = this.active;
-        if (!active || active.settled) return;
-        this.rejectUndeliveredSteering(active, error);
-        active.settled = true;
-        active.reject(error);
-    }
-
-    private rejectUndeliveredSteering(active: ActiveTurn, error: Error): void {
-        for (const delivery of active.steeringDeliveries.values()) {
-            delivery.reject(error);
-        }
-        active.steeringDeliveries.clear();
-        active.steeringOrder.length = 0;
-    }
-
-    private deliverSteeringThrough(active: ActiveTurn, messageId: string): void {
-        const boundary = active.steeringOrder.indexOf(messageId);
-        if (boundary === -1) return;
-        const delivered = active.steeringOrder.splice(0, boundary + 1);
-        for (const deliveredId of delivered) {
-            const delivery = active.steeringDeliveries.get(deliveredId);
-            active.steeringDeliveries.delete(deliveredId);
-            delivery?.resolve(undefined);
-        }
     }
 
     private async dispatchSteering(
@@ -608,10 +287,10 @@ export class OpenCodeServerSession implements RunnerSession {
         messageId: string,
         input: ReturnType<typeof normalizeRunnerInput>
     ): Promise<void> {
-        if (this.active !== active || active.settled) return;
+        if (this.state.active !== active || active.settled) return;
         try {
             await this.server.request(
-                `/session/${encodeURIComponent(this.requireSessionId())}/prompt_async`,
+                `/session/${encodeURIComponent(this.state.requireSessionId())}/prompt_async`,
                 {
                     method: 'POST',
                     body: JSON.stringify({
@@ -623,48 +302,12 @@ export class OpenCodeServerSession implements RunnerSession {
             );
         } catch (error) {
             active.inputMessageIds.delete(messageId);
-            active.steeringOrder = active.steeringOrder.filter(
-                (pendingId) => pendingId !== messageId
-            );
-            const delivery = active.steeringDeliveries.get(messageId);
-            active.steeringDeliveries.delete(messageId);
-            delivery?.reject(asError(error));
+            active.steering.drop(messageId, asError(error));
         }
     }
-
-    private fail(error: Error) {
-        this.failure ??= error;
-        this.failActive(this.failure);
-    }
-
-    private requireSessionId(): string {
-        if (!this.nativeSessionId) throw new Error('OpenCode session is not ready');
-        return this.nativeSessionId;
-    }
-
-    private assistantOutputId(value: unknown): string | undefined {
-        const messageId = string(value);
-        return messageId ? this.active?.assistantOutputIds.get(messageId) : undefined;
-    }
 }
 
-function createOutputId(): string {
-    return `output_${crypto.randomUUID()}`;
-}
-
-function permissionReply(decision: RunnerPermissionDecision) {
-    if (decision === 'allow_once') return 'once';
-    if (decision === 'allow_always') return 'always';
-    return 'reject';
-}
-
-function permissionMessage(action: string, resources: string[]) {
-    const label = action.replaceAll('_', ' ');
-    return resources.length
-        ? `Allow ${label} for ${resources.join(', ')}?`
-        : `Allow ${label}?`;
-}
-
+/** Splits `provider/model` into the ids OpenCode's prompt API takes. */
 function parseModel(model: string) {
     const separator = model.indexOf('/');
     if (separator < 1 || separator === model.length - 1) {
@@ -674,22 +317,6 @@ function parseModel(model: string) {
         providerID: model.slice(0, separator),
         modelID: model.slice(separator + 1),
     };
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : undefined;
-}
-
-function string(value: unknown): string | undefined {
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function stringArray(value: unknown): string[] {
-    return Array.isArray(value)
-        ? value.filter((item): item is string => typeof item === 'string')
-        : [];
 }
 
 function asError(error: unknown): Error {
