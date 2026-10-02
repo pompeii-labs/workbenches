@@ -30,6 +30,12 @@ import { RuntimeRegistry } from '@pompeii-labs/workbench/runtimes';
 import type { AssetSource } from '@pompeii-labs/workbench/runtimes/assets';
 import { DiskAssetSource } from '@pompeii-labs/workbench/runtimes/assets/disk';
 import type { PreparedRuntime } from '@pompeii-labs/workbench/runtimes/contracts';
+import {
+    DaytonaApi,
+    type DaytonaClient,
+    DaytonaConnector,
+    DaytonaRuntimeProvider,
+} from '@pompeii-labs/workbench/runtimes/daytona';
 import { E2BRuntimeProvider, E2BSdkClient } from '@pompeii-labs/workbench/runtimes/e2b';
 import type { E2BClient } from '@pompeii-labs/workbench/runtimes/e2b/contracts';
 import { DiskTransfer } from '@pompeii-labs/workbench/runtimes/remote/disk';
@@ -56,6 +62,8 @@ describe('package exports', () => {
         expect(typeof RuntimeRegistry.standard).toBe('function');
         expect(typeof E2BRuntimeProvider).toBe('function');
         expect(typeof E2BSdkClient).toBe('function');
+        expect(typeof DaytonaRuntimeProvider).toBe('function');
+        expect(typeof DaytonaApi).toBe('function');
         expect(typeof DiskRunnerFiles).toBe('function');
         expect(typeof DiskAssetSource).toBe('function');
     });
@@ -82,6 +90,20 @@ describe('package exports', () => {
         );
         const values = [sink, transfer];
         expect(values).toHaveLength(2);
+    });
+
+    test('builds the Daytona provider from injected dependencies alone', () => {
+        const source = new MemoryAssetSource();
+        const provider = new DaytonaRuntimeProvider({
+            transfer: new MemoryTransfer(source, new TransferRules('Daytona')),
+            assets: source,
+            keys: { key: () => 'fixture-key' },
+            connector: new DaytonaConnector(fetch),
+            clock: { now: () => new Date(), sleep: async () => {} },
+        });
+        const client: DaytonaClient | undefined = undefined;
+        expect(provider.name).toBe('daytona');
+        expect(client).toBeUndefined();
     });
 
     test('types the injected interfaces from their subpaths', () => {

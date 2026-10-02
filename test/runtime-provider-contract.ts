@@ -16,6 +16,8 @@ export function runtimeProviderContract(options: {
     request:
         | RuntimePrepareRequest
         | (() => RuntimePrepareRequest | Promise<RuntimePrepareRequest>);
+    /** Rewrites the fixture manifest for a provider that needs a spec 1 entry. */
+    manifest?: (base: Record<string, unknown>) => Record<string, unknown>;
 }) {
     test('reconstructs a session-owned package after source deletion with a fake transport', async () => {
         const root = await mkdtemp(join(tmpdir(), 'runtime-pin-'));
@@ -33,22 +35,24 @@ export function runtimeProviderContract(options: {
             );
             await writeFile(
                 join(source, 'workbench.yml'),
-                Bun.YAML.stringify({
-                    spec: 0,
-                    version: '0.1.0',
-                    name: 'pinned-core',
-                    runner: 'opencode',
-                    model: { id: 'openai/gpt-5.6-terra' },
-                    instructions: './instructions.md',
-                    skills: [],
-                    tools: [],
-                    mcps: [],
-                    env: {},
-                    runtime: candidate.name,
-                    ...(candidate.name === 'local'
-                        ? {}
-                        : { image: 'ghcr.io/example/core:1.0.0' }),
-                })
+                Bun.YAML.stringify(
+                    (options.manifest ?? ((base) => base))({
+                        spec: 0,
+                        version: '0.1.0',
+                        name: 'pinned-core',
+                        runner: 'opencode',
+                        model: { id: 'openai/gpt-5.6-terra' },
+                        instructions: './instructions.md',
+                        skills: [],
+                        tools: [],
+                        mcps: [],
+                        env: {},
+                        runtime: candidate.name,
+                        ...(candidate.name === 'local'
+                            ? {}
+                            : { image: 'ghcr.io/example/core:1.0.0' }),
+                    })
+                )
             );
             const run = await new RunDispatcher(home).prepare({
                 resolved: {
@@ -87,7 +91,9 @@ export function runtimeProviderContract(options: {
                     runtime.workbench.instructionsPath
                 );
                 expect(runtime.workbench.manifest.name).toBe('pinned-core');
-                expect(runtime.workbench.manifest.runtime).toBe(candidate.name);
+                if (!options.manifest) {
+                    expect(runtime.workbench.manifest.runtime).toBe(candidate.name);
+                }
                 await runtime.preflight();
             } finally {
                 await runtime.cleanup();

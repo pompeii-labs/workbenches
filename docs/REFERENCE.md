@@ -54,8 +54,8 @@ A Workbench can declare:
 - Environment-variable requirements without embedded secret values
 - Explicit named workspace requirements for multi-repository work
 - Environment requirements (OS, architecture, CPU, memory, disk, GPU)
-- The runtimes it supports (local, Docker, E2B) and, where a runtime needs one,
-  an image
+- The runtimes it supports (local, Docker, E2B, Daytona) and, where a runtime
+  needs one, an image
 
 The manifest is intentionally small:
 
@@ -108,10 +108,11 @@ This repository contains `workbench`, also available as `wb`: the TypeScript
 reference engine and command-line client for the standard.
 
 The project is in public pre-alpha development. The draft-0 format, OpenCode and
-Pi adapters, and local, Docker, and E2B runtimes for one-shot, detached, and
-interactive execution are implemented. The format is not yet stable. Other
-runners and remote runtime providers are not yet supported by the reference
-engine.
+Pi adapters, and local, Docker, E2B, and Daytona runtimes for one-shot and
+detached execution are implemented, with interactive execution on local, Docker,
+and E2B. Daytona has no interactive terminal yet. The format is not yet stable.
+Other runners and remote runtime providers are not yet supported by the
+reference engine.
 
 ### Install the current prerelease
 
@@ -168,7 +169,8 @@ declared runtime of the candidate the final smoke checks, and
 
 Scaffold a package with `wb init`. `--runtimes` takes a comma-separated list and
 writes the `runtimes` map in that order. It defaults to `local`. The `docker` and
-`e2b` runtimes need `--image`, and `daytona` is written with `class: linux`:
+`e2b` runtimes need `--image`, and `daytona` is written with `class: linux` and
+the `--image` value when one is given:
 
 ```sh
 wb init migrations --runtimes local,docker --image ghcr.io/example/migrations:0.1.0
@@ -385,7 +387,7 @@ boundary:
 ```sh
 wb connect
 # Model provider → runtime → harness → provider → authentication method
-# Or E2B runtime → masked API-key prompt
+# Or E2B or Daytona runtime → masked API-key prompt
 wb run project-core --task "Review this migration"
 ```
 
@@ -413,6 +415,20 @@ that could enter shell history. Remove the saved key with
 `wb connect --runtime e2b --remove`. The key is stored in
 `~/.workbench/runtime.secrets.json` with mode `0600`, separately from model
 credentials. An inherited `E2B_API_KEY` overrides the saved key for one process.
+
+Daytona works the same way and keeps its own key in the same file:
+
+```sh
+wb connect --runtime daytona
+wb connect --runtime daytona --status
+wb connect --runtime daytona --stdin
+wb connect --runtime daytona --remove
+```
+
+An inherited `DAYTONA_API_KEY` overrides the saved Daytona key for one process.
+Set `DAYTONA_API_URL` to use a Daytona API endpoint other than the public one.
+The key is never printed, is never passed to the sandbox, and is not accepted as
+a command-line value. Saving it creates no sandbox and incurs no Daytona usage.
 
 Passing a Workbench reference narrows the provider choices to routes allowed by
 that package; it still performs no runtime work.
@@ -527,8 +543,9 @@ runtimes:
 ```
 
 The providers are `local`, `docker`, `e2b`, and `daytona`. `daytona`
-takes a `class` of `linux`, `windows`, `gpu`, or `macos`. The reference engine
-validates and displays it but cannot run it yet.
+takes a `class` of `linux`, `windows`, `gpu`, or `macos`, and an optional
+`image`. The reference engine runs the `linux` class, and creates the sandbox
+from the daytona entry's image.
 
 `run`, `smoke`, `build`, and `create` accept `--runtime <name>`. Without it the
 first declared runtime is used. Naming a runtime the Workbench does not declare
@@ -554,6 +571,9 @@ checked against the selected runtime before anything is prepared or launched:
   unchecked.
 - Daytona needs its class to match `os`: `linux` needs `linux`, `macos` needs
   `macos`, `windows` needs `windows`, and `gpu` needs `linux` with `gpu: true`.
+  The engine runs only the `linux` class and refuses `gpu: true`. It applies
+  `cpu`, `memory_gb`, and `disk_gb` as the sandbox's resources, and `smoke`
+  reports `arch` as unchecked.
 
 ### Run in Docker
 
@@ -759,12 +779,52 @@ the original checkpoint and provider filesystem to survive. Already-collected
 outcomes can be inspected, exported, and explicitly applied without a live
 sandbox or E2B key.
 
+### Run in Daytona
+
+A Daytona Workbench declares the `linux` class and a published image on its
+daytona entry:
+
+```yaml
+runtimes:
+  daytona:
+    class: linux
+    image: ghcr.io/example/project-workbench:0.4.0
+```
+
+```sh
+wb connect --runtime daytona
+wb smoke project-core --runtime daytona
+wb run project-core --runtime daytona --task "Review this migration"
+```
+
+The engine creates a fresh Daytona sandbox from the image for each execution and
+deletes it at cleanup. Daytona builds or pulls the image, so a Workbench-local
+Dockerfile build is refused; publish the image instead. The image must include
+the selected runner, every declared tool, `git`, and GNU `tar` with `--null`
+support. For repository runs the engine installs `git` and `gh` in the sandbox
+when they are missing, which needs a root user or passwordless `sudo`.
+
+Staging, exclusions, pending outcomes, and the default 512 MiB transfer limits
+match E2B: `/workspace`, `/workspaces/<name>`, and `/workbench` hold isolated
+copies, and remote changes return as pending outcomes that only
+`wb outcome <id> --apply` applies. `cpu`, `memory_gb`, and `disk_gb` requirements
+become the sandbox's resources. The sandbox has a 60 minute lifetime: the engine
+sets Daytona's wall-clock TTL, which destroys the sandbox that long after
+creation in any state, even if the CLI process dies. It carries the labels
+`dev.workbenches.managed`, `dev.workbenches.run`, and `dev.workbenches.scope`.
+
+Daytona currently has no interactive terminal, no pause or recovery, and no cost
+estimate. Model credentials come from the environment or `--env-file`, because
+there is no native credential store for interactive login. See the
+[Daytona provider contract](EXECUTION.md#reference-daytona-provider) for the
+full list of limits.
+
 ### Returned results
 
 Each durable execution collects changesets, artifacts, and links into an
 immutable outcome before disposable runtime cleanup. Local and Docker changes
-are already present in mounted host directories. E2B changes remain pending
-until you accept them explicitly:
+are already present in mounted host directories. E2B and Daytona changes remain
+pending until you accept them explicitly:
 
 ```sh
 wb outcome wb_...
@@ -776,7 +836,7 @@ wb outcome wbo_... --apply
 Apply checks the producing run's workspace bindings and original fingerprints
 before changing any file. Conflicts leave host files untouched. Export creates
 a self-contained bundle and refuses an existing destination. Neither action
-requires another model turn, harness login, or E2B key.
+requires another model turn, harness login, or runtime key.
 
 A Workbench can write reports, screenshots, images, or other files beneath
 `WORKBENCH_OUTPUT_DIR` with its harness's existing tools. An optional top-level
@@ -1125,6 +1185,12 @@ cross-sandbox credential persistence, and sandbox destruction.
 verifies native session resume. It requires a supported model-provider key and
 makes model-provider requests.
 
+`test:daytona` requires `DAYTONA_API_KEY`. It creates a sandbox from
+`debian:bookworm-slim`, runs a command, transfers a file in both directions,
+follows a background command, requests a preview URL, deletes the sandbox, and
+confirms by listing the run's label that nothing is left. It uses Daytona usage
+and is skipped unless both `DAYTONA_E2E=1` and the key are set.
+
 `test:outcomes:harnesses` exercises OpenCode and Pi through the public CLI on
 Local, Docker, and E2B. It requires `OPENROUTER_API_KEY`, a running Docker daemon,
 and `E2B_API_KEY`. It makes real model-provider requests and verifies tool-created
@@ -1164,6 +1230,7 @@ The reference engine is also a set of modules a host can import. The package
 | `./runners/opencode/*` | The OpenCode adapter, session driver, server client, event translation, and invocation builder |
 | `./runners/files`, `./runners/files/disk`, `./runners/files/memory` | The `RunnerFiles` interface and its disk and in-memory implementations |
 | `./runtimes`, `./runtimes/contracts` | The runtime registry and the provider contract |
+| `./runtimes/daytona` | The Daytona provider, its client interfaces, and `DaytonaApi`, a `fetch`-based client |
 | `./runtimes/e2b`, `./runtimes/e2b/contracts` | The E2B provider with its client interface |
 | `./runtimes/remote/disk` | `DiskTransfer`, the `RemoteTransfer` that stages through temporary files, for any remote provider |
 | `./runtimes/staging` | The `AssetSource` and `RemoteTransfer` interfaces, `TransferRules`, `MemoryAssetSource`, `MemoryTransfer`, and byte-array tar and diff helpers |
@@ -1175,12 +1242,20 @@ host builds `OpenCodeSkillStaging` and `RunnerContextStaging` over its
 model catalog snapshot as `catalog`. The E2B provider reads package and
 workspace files through an `AssetSource` (`assets`) and takes engine-owned
 native state from a second one (`local`). It stages and collects through
-temporary files itself and takes no transfer dependency. `RemoteTransfer` is the
-interface for a host's own remote provider: it packs files and collects changes
-over the `AssetSource` and `TransferRules` the host constructs it with.
-`MemoryTransfer` and `DiskTransfer` implement it. Collected content goes to an
-`OutcomeSink` the caller passes to `collectOutcome`. The CLI passes the disk for
-all of these. A host passes stores of its own, or the in-memory ones.
+temporary files itself and takes no transfer dependency. The Daytona provider
+takes everything it touches through its constructor: a `RemoteTransfer`
+(`transfer`) that packs files and collects changes, an `AssetSource` (`assets`),
+a `keys` object that answers `key('daytona', environment)`, a `connector`
+whose `open(key, apiUrl)` returns the `DaytonaClient` for a request's key, and a
+`clock` that reads the time and waits between retries. `RuntimeRegistry` supplies
+the system clock.
+`DaytonaConnector` is the reference connector, built over the `fetch` a host
+supplies; a host with its own client passes a connector that returns it.
+`MemoryTransfer` and `DiskTransfer` implement `RemoteTransfer` over the
+`AssetSource` and `TransferRules` the host constructs them with. Collected
+content goes to an `OutcomeSink` the caller passes to `collectOutcome`. The CLI
+passes the disk for all of these. A host passes stores of its own, or the
+in-memory ones.
 
 Every subpath in the `exports` map is portable except the root and the
 disk-backed ones: `./outcomes/disk`, `./runners/files/disk`,
@@ -1191,7 +1266,8 @@ each portable subpath with `Bun.build` and fails if the output imports `fs`,
 list, with or without the `node:` prefix. A host must provide `node:path`,
 `node:crypto`, `node:util`, `node:buffer`, and `node:events`. Today the portable
 subpaths import only `node:path` and `node:util`, and the rest of what they need
-is global: web `crypto`, `fetch`, and the Compression Streams API. The test
+is global: web `crypto`, `fetch`, and the Compression Streams API. `./runtimes/daytona`
+also imports `node:crypto`. The test
 checks imports in the bundle. It does not run the bundles in another runtime.
 It also checks that each disk-backed subpath does import a filesystem, process,
 or compression module, so the list stays accurate. The disk implementations
@@ -1220,7 +1296,7 @@ OpenCode runner configuration for a chosen provider route, the same one
 The CLI composes its registries from `ActiveModelCatalog.activate(snapshot)`,
 which sets a process-wide snapshot. The `./models` subpath exports that class as
 `ActiveModelCatalog`. `ModelCatalog` is the CLI's cached subclass and is
-exported from the package root only. The Docker and E2B providers, `ConnectionInspector`, and
+exported from the package root only. The Docker, E2B, and Daytona providers, `ConnectionInspector`, and
 workbench inspection read that snapshot, so a host that uses them activates one
 first. The catalog cache on disk stays in the CLI.
 

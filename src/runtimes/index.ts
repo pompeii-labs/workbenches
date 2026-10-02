@@ -14,7 +14,25 @@ export type {
     RuntimeServiceBinding,
     RuntimeSessionOptions,
 } from './contracts.js';
-export { DaytonaRuntimeProvider } from './daytona.js';
+export {
+    DaytonaApi,
+    DaytonaApiError,
+    type DaytonaApiOptions,
+    type DaytonaClient,
+    type DaytonaClock,
+    DaytonaConnector,
+    type DaytonaCreateOptions,
+    type DaytonaFetch,
+    type DaytonaKeys,
+    type DaytonaResources,
+    type DaytonaRuntimeDependencies,
+    DaytonaRuntimeProvider,
+    type DaytonaSandbox,
+    type DaytonaSandboxInfo,
+    type DaytonaSandboxSummary,
+    daytonaResources,
+    defaultDaytonaApiUrl,
+} from './daytona/index.js';
 export {
     type DockerCommandResult,
     DockerManagedContainers,
@@ -48,6 +66,8 @@ export {
 } from './local.js';
 export { type RuntimeDependencies, RuntimeRegistry } from './registry.js';
 export { DiskTransfer } from './remote/disk/transfer.js';
+export type { RemoteCommand, RemoteCommandOptions } from './remote/process.js';
+export type { RemoteRunOptions, RemoteSandbox } from './remote/runtime.js';
 export {
     RuntimeSmoke,
     type RuntimeSmokeOptions,

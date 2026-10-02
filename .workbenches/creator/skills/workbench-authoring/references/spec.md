@@ -412,12 +412,14 @@ may be written `local: {}` or with no value (`local:`).
 | `local`   | none, written `{}`                      | implemented by the reference engine               |
 | `docker`  | `image` (required), `docker` (optional) | implemented by the reference engine               |
 | `e2b`     | `image` (required)                      | implemented by the reference engine               |
-| `daytona` | `class` (required), `image` (optional)  | reserved, not implemented by the reference engine |
+| `daytona` | `class` (required), `image` (optional)  | implemented by the reference engine, `linux` only |
 
 The Daytona `class` is one of `linux`, `windows`, `gpu`, or `macos`. The
-reference engine accepts and displays a `daytona` entry, and fails to prepare it
-with a message that the runtime is not available in this engine yet. An unknown
-provider name is an error and must not silently fall back to the host.
+reference engine accepts and displays every class. It prepares the `linux`
+class in a sandbox created from the entry's `image`, fails to prepare it when
+the entry declares none, and fails to prepare the other classes with a message
+that the class is not available yet. An unknown provider name is an error and
+must not silently fall back to the host.
 
 `image` is a string naming a published image, or a build object with a
 package-relative `build` Dockerfile and a package-relative `context` that

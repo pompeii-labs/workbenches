@@ -279,6 +279,28 @@ describe('daytona requirements', () => {
         ).toThrow('the gpu class provides linux but the Workbench requires windows');
     });
 
+    test('applies cpu, memory, and disk as sandbox resources and cannot check arch', () => {
+        expect(
+            check(
+                daytona('linux', {
+                    arch: ['x64'],
+                    cpu: 4,
+                    memory_gb: 7.5,
+                    disk_gb: 20,
+                }),
+                'daytona'
+            )
+        ).toEqual({
+            checked: ['class linux provides linux'],
+            applied: [
+                'cpu allocation 4',
+                'memory allocation 8 GiB',
+                'disk allocation 20 GiB',
+            ],
+            unchecked: ['arch is not checked on the daytona runtime'],
+        });
+    });
+
     test('a gpu requirement needs the gpu class', () => {
         expect(() => check(daytona('linux', { gpu: true }), 'daytona')).toThrow(
             'requirements.gpu is true but the linux class has no GPU'
@@ -477,7 +499,7 @@ describe('providers apply requirements before preparing', () => {
         ).rejects.toThrow('GPU requirements are not supported on the e2b runtime');
     });
 
-    test('the daytona runtime is registered but not available', async () => {
+    test('the daytona runtime is registered and needs an image before it contacts anything', async () => {
         const target = workbench({ runtimes: { daytona: { class: 'linux' } } });
         await expect(
             RuntimeRegistry.standard()
@@ -486,7 +508,7 @@ describe('providers apply requirements before preparing', () => {
         ).rejects.toMatchObject({
             runtime: 'daytona',
             phase: 'prepare',
-            message: 'The daytona runtime is not available in this engine yet',
+            message: expect.stringContaining('The daytona runtime needs an image'),
         });
     });
 });

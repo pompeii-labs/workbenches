@@ -39,14 +39,19 @@ import {
     RemoteProcess,
 } from './process.js';
 
+/** How a sandbox runs a command to completion. */
+export interface RemoteRunOptions {
+    cwd?: string;
+    env?: Record<string, string>;
+    /** Run with root privileges. Used only to provision staging directories. */
+    user?: 'root';
+}
+
 /** What a prepared remote runtime needs from the sandbox it drives. */
 export interface RemoteSandbox extends TransferSandbox {
     readonly id: string;
     /** Runs a shell command to completion. */
-    run(
-        command: string,
-        options?: { cwd?: string; env?: Record<string, string>; user?: 'root' }
-    ): Promise<RuntimeCommandResult>;
+    run(command: string, options?: RemoteRunOptions): Promise<RuntimeCommandResult>;
     /** Starts a shell command and streams its output. */
     start(command: string, options?: RemoteCommandOptions): Promise<RemoteCommand>;
 }

@@ -12,6 +12,7 @@ import {
 } from '../sessions/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import {
+    isRemoteRuntime,
     type ResolvedWorkbenchReference,
     selectedRuntime,
     withRuntime,
@@ -269,7 +270,9 @@ export class RunDispatcher {
         while (Date.now() - started < startupTimeout) {
             const run = await this.store.read(id);
             startupTimeout =
-                run.repository || run.runtime === 'docker' || run.runtime === 'e2b'
+                run.repository ||
+                run.runtime === 'docker' ||
+                isRemoteRuntime(run.runtime)
                     ? 5 * 60_000
                     : 15_000;
             if (RunStore.isTerminal(run.status)) {

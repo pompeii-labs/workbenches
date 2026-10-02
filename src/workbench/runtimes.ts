@@ -11,6 +11,16 @@ export const runtimeProviderNames = ['local', 'docker', 'e2b', 'daytona'] as con
 
 export type RuntimeProviderName = (typeof runtimeProviderNames)[number];
 
+/**
+ * True for providers that run a Workbench in a sandbox the engine copies files
+ * into. This is the lookup for code that has only a runtime name and no
+ * provider; code that resolves a provider asks its `placement` instead, and a
+ * registry test keeps the two in agreement.
+ */
+export function isRemoteRuntime(name: string | undefined): boolean {
+    return name === 'e2b' || name === 'daytona';
+}
+
 /** The machine classes the daytona provider offers. */
 export const daytonaClasses = ['linux', 'windows', 'gpu', 'macos'] as const;
 

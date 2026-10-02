@@ -276,9 +276,13 @@ export const runCommand = defineCommand({
             }
 
             if (args.detach) {
-                // E2B preparation creates a billable sandbox. The dispatched
+                // Sandbox preparation creates a billable sandbox. The dispatched
                 // worker performs the same preflight before startup completes.
-                if (!repository && selectedRuntime(resolved.workbench).name !== 'e2b') {
+                if (
+                    !repository &&
+                    runtimes.resolve(selectedRuntime(resolved.workbench).name)
+                        .placement !== 'sandbox'
+                ) {
                     const smoke = await new RuntimeSmoke({
                         workbench: resolved.workbench,
                         allowUncheckedGpu: args['allow-unchecked-gpu'],

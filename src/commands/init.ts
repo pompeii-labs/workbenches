@@ -38,7 +38,7 @@ export const initCommand = defineCommand({
         },
         image: {
             type: 'string',
-            description: 'Image for the docker and e2b runtimes',
+            description: 'Image for the docker, e2b, and daytona runtimes',
         },
     },
     async run({ args }) {
@@ -123,14 +123,22 @@ function runtimeLines(value: string, image: string | undefined): string[] {
             `--image is required for the ${needsImage.join(' and ')} runtime`
         );
     }
-    if (image && needsImage.length === 0) {
-        throw new Error('--image applies only to the docker and e2b runtimes');
+    if (image && needsImage.length === 0 && !names.includes('daytona')) {
+        throw new Error(
+            '--image applies only to the docker, e2b, and daytona runtimes'
+        );
     }
     return [
         'runtimes:',
         ...names.flatMap((name) => {
             if (name === 'local') return ['  local: {}'];
-            if (name === 'daytona') return ['  daytona:', '    class: linux'];
+            if (name === 'daytona') {
+                return [
+                    '  daytona:',
+                    '    class: linux',
+                    ...(image ? [`    image: ${JSON.stringify(image)}`] : []),
+                ];
+            }
             return [`  ${name}:`, `    image: ${JSON.stringify(image)}`];
         }),
     ];

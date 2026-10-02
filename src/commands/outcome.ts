@@ -149,7 +149,7 @@ async function recoverOutcome(
 }
 
 function e2bRecoveryClient(): E2BSdkClient {
-    const key = RuntimeSecretStore.e2bKey();
+    const key = RuntimeSecretStore.key('e2b', process.env);
     if (!key)
         throw new Error(
             'E2B_API_KEY is required to manage the original outcome sandbox. Run wb connect --runtime e2b once, or set E2B_API_KEY.'

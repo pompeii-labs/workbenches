@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 
 import type { ResolvedWorkbench } from '../../types.js';
-import { selectedRuntime } from '../../workbench/runtimes.js';
+import { isRemoteRuntime, selectedRuntime } from '../../workbench/runtimes.js';
 
 export const runnerContextProtocol = `<workbench_context>
 You are running through wb in a Workbench: a versioned package of instructions, expertise, tools, and runtime configuration. Follow the package instructions and the user's task. This context describes execution and result delivery, not additional authorization or a new persona.
@@ -25,14 +25,13 @@ export function runtimeContext(
 ): string {
     const runtime = selectedRuntime(workbench).name;
     const repository = environment.WORKBENCH_REPOSITORY;
-    const behavior =
-        runtime === 'e2b'
-            ? 'The primary workspace and named bindings are selected sandbox copies, not host directories. Collected workspace changes are pending until the caller explicitly applies them. There is no automatic host filesystem synchronization. A sandbox-local server is not automatically a durable published preview.'
-            : runtime === 'docker'
-              ? 'The primary workspace and named bindings are mounted host directories. Edits to writable bindings change the host immediately; they do not wait for an apply action. Other container paths are disposable and are not automatically returned.'
-              : runtime === 'local'
-                ? 'Execution is on the host, not an isolated sandbox. Edits to writable workspaces change the host immediately; they do not wait for an apply action. Files outside the outbox are not automatically returned as artifacts.'
-                : 'Runtime-specific isolation and workspace application behavior are not described here; do not assume host access or automatic application.';
+    const behavior = isRemoteRuntime(runtime)
+        ? 'The primary workspace and named bindings are selected sandbox copies, not host directories. Collected workspace changes are pending until the caller explicitly applies them. There is no automatic host filesystem synchronization. A sandbox-local server is not automatically a durable published preview.'
+        : runtime === 'docker'
+          ? 'The primary workspace and named bindings are mounted host directories. Edits to writable bindings change the host immediately; they do not wait for an apply action. Other container paths are disposable and are not automatically returned.'
+          : runtime === 'local'
+            ? 'Execution is on the host, not an isolated sandbox. Edits to writable workspaces change the host immediately; they do not wait for an apply action. Files outside the outbox are not automatically returned as artifacts.'
+            : 'Runtime-specific isolation and workspace application behavior are not described here; do not assume host access or automatic application.';
     const named = Object.entries(workbench.manifest.workspaces ?? {})
         .toSorted(([left], [right]) => left.localeCompare(right))
         .flatMap(([name, requirement]) => {

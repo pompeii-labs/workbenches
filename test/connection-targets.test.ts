@@ -11,7 +11,7 @@ import { modelCatalogFixture } from './model-catalog-fixture.js';
 
 describe('runner connection targets', () => {
     test('enumerates engine runtimes and harnesses independently of saved Workbenches', () => {
-        expect(connectionRuntimes).toEqual(['local', 'docker', 'e2b']);
+        expect(connectionRuntimes).toEqual(['local', 'docker', 'e2b', 'daytona']);
         expect(connectionHarnesses).toEqual(['opencode', 'pi']);
         expect(
             connectionProviders('pi', modelCatalogFixture).map(({ id }) => id)

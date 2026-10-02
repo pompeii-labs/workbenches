@@ -31,7 +31,7 @@ export class E2BRuntimeProvider extends RemoteProvider {
         const client =
             this.dependencies.client ??
             (() => {
-                const key = RuntimeSecretStore.e2bKey(request.environment);
+                const key = RuntimeSecretStore.key('e2b', request.environment);
                 return key ? new E2BSdkClient(key) : null;
             })();
         if (!client) {

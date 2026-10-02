@@ -247,7 +247,8 @@ can be fixed before model tokens are spent.
 When a Workbench has compatible credentials through more than one provider,
 use `wb connect` to choose the default connection for a runner and runtime.
 For E2B sandbox provisioning, `wb connect --runtime e2b` saves a separate
-host-only API key. An inherited `E2B_API_KEY` overrides it.
+host-only API key. An inherited `E2B_API_KEY` overrides it. Daytona works the
+same way with `wb connect --runtime daytona` and `DAYTONA_API_KEY`.
 `wb connect <name>` uses that Workbench as the authentication environment, but
 the resulting default is reusable by every compatible Workbench on the same
 runner and runtime. A run may use `--connection <provider>` to select another
@@ -366,7 +367,9 @@ The repository is in public alpha development. The current reference engine
 supports the draft-0 manifest plus OpenCode and Pi runners. Local, Docker, and
 E2B execution support one-shot, detached, and experimental interactive sessions,
 including native context resume. Docker and E2B support image preparation and
-runtime smoke checks. OpenCode and Pi have different native capabilities, which
+runtime smoke checks. Daytona runs one-shot and detached sessions in a fresh
+sandbox from the declared image, without an interactive terminal or sandbox
+recovery yet. OpenCode and Pi have different native capabilities, which
 must be reported honestly rather than hidden behind a fallback. Other runners
 and runtimes remain part of the standard's extensible design.
 
