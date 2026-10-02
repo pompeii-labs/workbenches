@@ -46,11 +46,25 @@ export class StagingDirectories {
                 ancestors.add(path);
             }
         }
+        const symlinkGuards = [...ancestors].map((path) => `test ! -L ${quote(path)}`);
+        // Try as the sandbox user first. Targets under writable parents such as /tmp,
+        // or directories the image pre-created, need no root access.
+        const asUser = await this.sandbox.run(
+            [
+                ...symlinkGuards,
+                ...targets.map((path) => `mkdir -p ${quote(path)}`),
+                ...targets.map(
+                    (path) => `test -d ${quote(path)} && test -O ${quote(path)}`
+                ),
+                ...targets.map((path) => `chmod 700 ${quote(path)}`),
+            ].join(' && ')
+        );
+        if (asUser.code === 0) return;
         // Only directory provisioning uses root. Extraction and harness processes
         // keep the image's default user and cannot select this setup option.
         const provisioned = await this.sandbox.run(
             [
-                ...[...ancestors].map((path) => `test ! -L ${quote(path)}`),
+                ...symlinkGuards,
                 ...targets.flatMap((path) => [
                     `mkdir -p ${quote(path)}`,
                     `chown ${quote(owner)} ${quote(path)}`,
@@ -59,10 +73,29 @@ export class StagingDirectories {
             ].join(' && '),
             { user: 'root' }
         );
+        if (
+            provisioned.code !== 0 &&
+            /root access is required/i.test(provisioned.stderr + provisioned.stdout)
+        ) {
+            throw new Error(
+                `Failed to provision ${provider} staging directory ${await this.unowned(targets)}: the sandbox image must run as root, allow sudo, or pre-create that directory owned by the sandbox user`
+            );
+        }
         this.require(
             provisioned,
             `Failed to provision ${provider} staging directories`
         );
+    }
+
+    /** The first target the sandbox user does not own, or the first target. */
+    private async unowned(targets: string[]): Promise<string> {
+        for (const target of targets) {
+            const check = await this.sandbox.run(
+                `test -d ${quote(target)} && test -O ${quote(target)}`
+            );
+            if (check.code !== 0) return target;
+        }
+        return targets[0] as string;
     }
 
     private require(result: RuntimeCommandResult, message: string): void {
