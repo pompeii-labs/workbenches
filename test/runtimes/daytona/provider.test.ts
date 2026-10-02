@@ -247,6 +247,15 @@ describe('DaytonaRuntimeProvider', () => {
         ).rejects.toThrow('Daytona received credential storage for the e2b runtime');
     });
 
+    test('requires a sandbox id to reconnect', async () => {
+        await expect(
+            daytonaProvider({ client: new FakeClient() }).adopt(
+                request(await fixture()),
+                '  '
+            )
+        ).rejects.toThrow('A sandbox id is required');
+    });
+
     test('wb smoke prepares, checks, and deletes the sandbox', async () => {
         const resolved = await fixture();
         const client = new FakeClient();

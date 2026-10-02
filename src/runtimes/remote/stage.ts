@@ -100,6 +100,30 @@ export class AssetStage<S extends StagedAsset> {
         return baselines;
     }
 
+    /**
+     * Recovers each tracked workspace's Git baseline from a sandbox that already
+     * holds the staged files: staging committed it first, so the root commit is
+     * it. Keys are snapshot indexes.
+     */
+    async recover(assets: S[]): Promise<Map<number, string>> {
+        const baselines = new Map<number, string>();
+        for (const [index, asset] of assets.entries()) {
+            if (!this.tracked(asset)) continue;
+            const tracking = workspaceTracking(assets, index);
+            const result = await this.sandbox.run(
+                `${tracking.git} rev-list --max-parents=0 HEAD`
+            );
+            const baseline = result.stdout.trim().split(/\s+/).at(-1) ?? '';
+            if (result.code !== 0 || !/^[a-f0-9]{40,64}$/.test(baseline)) {
+                throw new Error(
+                    `Cannot find the workspace baseline in the ${this.rules.provider} sandbox: ${asset.binding.hostPath}`
+                );
+            }
+            baselines.set(index, baseline);
+        }
+        return baselines;
+    }
+
     private tracked(asset: StagedAsset): boolean {
         return (
             asset.binding.access === 'read-write' &&

@@ -568,4 +568,117 @@ describe('DaytonaRuntime', () => {
         }
         expect(client.deleted).toEqual(['sandbox-fixture']);
     });
+
+    describe('reconnection', () => {
+        /** Prepares a runtime, stages it, and returns the request and sandbox id. */
+        async function staged(client: FakeClient) {
+            const prepared = request(await fixture());
+            const first = await daytonaProvider({ client }).prepare(prepared);
+            await first.preflight();
+            const sandboxId = first.sandboxId as string;
+            return { prepared, sandboxId };
+        }
+
+        test('binds to the running sandbox without creating or uploading', async () => {
+            const client = new FakeClient();
+            const { prepared, sandboxId } = await staged(client);
+            const uploads = client.sandbox.uploads.size;
+            const runtime = await daytonaProvider({ client }).adopt(
+                prepared,
+                sandboxId
+            );
+            try {
+                const result = await runtime.preflight();
+                expect(runtime.sandboxId).toBe('sandbox-fixture');
+                expect(result.runner.name).toBe('opencode');
+                expect(client.createOptions).toHaveLength(1);
+                expect(client.sandbox.uploads.size).toBe(uploads);
+                expect(
+                    client.sandbox.runs.some((call) =>
+                        call.command.includes('rev-list')
+                    )
+                ).toBeTrue();
+            } finally {
+                await runtime.cleanup();
+            }
+            expect(client.deleted).toEqual(['sandbox-fixture']);
+        });
+
+        test('collects changes against the baseline recovered from the sandbox', async () => {
+            const client = new FakeClient();
+            const { prepared, sandboxId } = await staged(client);
+            const runtime = await daytonaProvider({ client }).adopt(
+                prepared,
+                sandboxId
+            );
+            try {
+                await runtime.preflight();
+                const home = track(
+                    await mkdtemp(join(tmpdir(), 'workbench-daytona-adopt-'))
+                );
+                const store = new OutcomeStore(home);
+                const collected = await runtime.snapshotRepository?.(store);
+                expect(collected).toMatchObject({ application_state: 'pending' });
+                await store.close();
+            } finally {
+                await runtime.cleanup();
+            }
+        });
+
+        test('fails when the sandbox no longer exists and deletes nothing', async () => {
+            const client = new FakeClient();
+            const { prepared, sandboxId } = await staged(client);
+            client.missing = true;
+            const runtime = await daytonaProvider({ client }).adopt(
+                prepared,
+                sandboxId
+            );
+            await expect(runtime.preflight()).rejects.toThrow(
+                'Daytona sandbox does not exist: sandbox-fixture'
+            );
+            await runtime.cleanup();
+            expect(client.deleted).toEqual([]);
+        });
+
+        test('fails when the sandbox is not running and deletes nothing', async () => {
+            const client = new FakeClient();
+            const { prepared, sandboxId } = await staged(client);
+            client.sandbox.state = 'stopped';
+            const runtime = await daytonaProvider({ client }).adopt(
+                prepared,
+                sandboxId
+            );
+            await expect(runtime.preflight()).rejects.toThrow(
+                'Daytona sandbox sandbox-fixture is stopped, not running'
+            );
+            await runtime.cleanup();
+            expect(client.deleted).toEqual([]);
+        });
+
+        test('fails when a workspace baseline cannot be recovered', async () => {
+            const client = new FakeClient();
+            const { prepared, sandboxId } = await staged(client);
+            client.sandbox.baselineFailure = true;
+            const runtime = await daytonaProvider({ client }).adopt(
+                prepared,
+                sandboxId
+            );
+            await expect(runtime.preflight()).rejects.toThrow(
+                'Cannot find the workspace baseline in the Daytona sandbox'
+            );
+            await runtime.cleanup();
+            expect(client.deleted).toEqual([]);
+        });
+
+        test('reports no sandbox id before one exists', async () => {
+            const runtime = await daytonaProvider({
+                client: new FakeClient(),
+            }).prepare(request(await fixture()));
+            try {
+                expect(runtime.sandboxId).toBeUndefined();
+            } finally {
+                await runtime.cleanup();
+            }
+        });
+    });
 });

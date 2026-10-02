@@ -9,6 +9,7 @@ import type {
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
 import { runLabels } from '../remote/labels.js';
+import { RemoteProcess } from '../remote/process.js';
 import { RemoteRuntime, type RemoteRuntimeOptions } from '../remote/runtime.js';
 import { type ArchiveUpload, AssetStage } from '../remote/stage.js';
 import { needsRepositoryTools } from '../repository-tools.js';
@@ -20,6 +21,7 @@ import type {
     DaytonaSandbox,
 } from './contracts.js';
 import { PreviewUrl } from './preview.js';
+import { ServiceLauncher } from './service.js';
 import { SandboxSetup } from './setup.js';
 
 /** The port a runner's server binds to inside the sandbox. */
@@ -32,6 +34,12 @@ export interface DaytonaRuntimeOptions extends RemoteRuntimeOptions {
     client: DaytonaClient;
     image: string;
     clock: DaytonaClock;
+    /**
+     * Bind to a sandbox an earlier run created instead of creating one. Nothing
+     * is uploaded. The assets the request names are read again to record what
+     * was staged, so they must be unchanged since then.
+     */
+    existing?: { sandboxId: string };
 }
 
 /** Sandbox resources for a Workbench's requirements. Daytona allocates whole units. */
@@ -60,7 +68,8 @@ class DaytonaArchiveUpload implements ArchiveUpload<StagedAsset> {
 
 /**
  * A Daytona sandbox created from the manifest image. The runner runs inside it
- * and the engine drives it from outside. Each execution gets a fresh sandbox.
+ * and the engine drives it from outside. Each execution gets a fresh sandbox,
+ * unless the runtime was bound to an existing one with `existing`.
  */
 export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
     readonly name = 'daytona';
@@ -78,6 +87,14 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
             reference: options.image,
             immutableReference: options.image,
         };
+    }
+
+    /**
+     * The Daytona sandbox id, once the sandbox exists. It is what `adopt`
+     * takes to reconnect, so it stays here and not on the shared base.
+     */
+    get sandboxId(): string | undefined {
+        return this.sandbox?.id;
     }
 
     async preflight(): Promise<PreflightResult> {
@@ -117,9 +134,10 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
     launchService(
         buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
     ): RuntimeService {
-        const process = this.launch(
-            buildInvocation({ hostname: '0.0.0.0', port: servicePort })
-        );
+        const invocation = buildInvocation({ hostname: '0.0.0.0', port: servicePort });
+        const process = this.options.existing
+            ? this.attachOrLaunch(invocation)
+            : this.launch(invocation);
         return {
             process,
             resolveUrl: async (reportedUrl) => {
@@ -170,6 +188,21 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
     }
 
     /**
+     * For a reconnected sandbox: when the runner's server is already listening,
+     * report its address as a fresh server would and leave it running. Otherwise
+     * start the server as usual. The server's password is the caller's to keep,
+     * since this process never sees the one it was started with.
+     */
+    private attachOrLaunch(invocation: RunnerInvocation) {
+        return this.track(
+            new RemoteProcess(
+                new ServiceLauncher(this.requireReady(), invocation, servicePort),
+                false
+            )
+        );
+    }
+
+    /**
      * Deletes sandbox `id`, waiting longer between each of a few attempts. The
      * error after the last attempt names the sandbox.
      */
@@ -197,16 +230,19 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
     private async ensureSandbox(): Promise<DaytonaSandbox> {
         if (this.sandbox) return this.sandbox;
         const snapshots: StagedAsset[] = [];
+        const existing = this.options.existing;
         let transferred = 0;
         try {
             for (const binding of this.options.paths.bindings) {
                 const snapshot = await this.options.transfer.pack(
                     binding,
-                    this.options.maximumTransferBytes - transferred
+                    this.options.maximumTransferBytes - transferred,
+                    { upload: !existing }
                 );
                 transferred += snapshot.bytes;
                 snapshots.push(snapshot);
             }
+            if (existing) return await this.attach(existing.sandboxId, snapshots);
             const sandbox = await this.options.client.createSandbox({
                 image: this.options.image,
                 labels: runLabels(this.options.run, 'Daytona'),
@@ -235,7 +271,8 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
             }
             return sandbox;
         } catch (error) {
-            const created = this.sandbox?.id;
+            // A sandbox this runtime did not create is not its to delete.
+            const created = this.sandbox && !existing ? this.sandbox.id : undefined;
             this.sandbox = undefined;
             this.sandboxStartedAt = undefined;
             await Promise.allSettled(snapshots.map((snapshot) => snapshot.cleanup()));
@@ -253,6 +290,45 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
             }
             throw error;
         }
+    }
+
+    /**
+     * Binds to a sandbox that is already running. It checks the sandbox exists
+     * and is started, then recovers each workspace's Git baseline from the
+     * sandbox itself.
+     */
+    private async attach(
+        sandboxId: string,
+        snapshots: StagedAsset[]
+    ): Promise<DaytonaSandbox> {
+        const sandbox = await this.options.client.getSandbox(sandboxId);
+        if (!sandbox) {
+            throw new RuntimeError(
+                this.name,
+                'prepare',
+                `Daytona sandbox does not exist: ${sandboxId}`
+            );
+        }
+        if (sandbox.state !== undefined && sandbox.state !== 'started') {
+            throw new RuntimeError(
+                this.name,
+                'prepare',
+                `Daytona sandbox ${sandboxId} is ${sandbox.state}, not running`
+            );
+        }
+        this.sandbox = sandbox;
+        this.snapshots = snapshots;
+        const created = (await sandbox.info().catch(() => undefined))?.createdAt;
+        this.sandboxStartedAt = (created ?? this.options.now()).getTime();
+        const baselines = await new AssetStage(
+            sandbox,
+            new DaytonaArchiveUpload(sandbox),
+            this.options.rules
+        ).recover(snapshots);
+        for (const [index, baseline] of baselines) {
+            this.snapshotBaselines.set(index, baseline);
+        }
+        return sandbox;
     }
 
     protected async measureInfrastructure(): Promise<RuntimeInfrastructureMetadata> {

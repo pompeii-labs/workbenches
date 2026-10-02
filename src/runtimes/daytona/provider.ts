@@ -26,6 +26,36 @@ export class DaytonaRuntimeProvider extends RemoteProvider {
 
     /** Creates a sandbox from the manifest image and stages the request's assets into it. */
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
+        return this.create(request);
+    }
+
+    /**
+     * Reconnects to a sandbox that an earlier `prepare` created, for example
+     * after the process that created it restarted. Nothing is uploaded: the
+     * runtime verifies the sandbox exists and is running, recovers each
+     * workspace's Git baseline from it, and then launches, collects outcomes, and
+     * cleans up as a prepared runtime does. `launchService` attaches to a runner
+     * server that is still listening in the sandbox rather than starting another.
+     *
+     * `request` must describe the same assets as the original, and the files
+     * they name must be unchanged since then, because the runtime reads them
+     * again to know what was staged. Read the sandbox id from `sandboxId` on the
+     * original runtime after its `preflight`, and keep it.
+     */
+    async adopt(
+        request: RuntimePrepareRequest,
+        sandboxId: string
+    ): Promise<PreparedRuntime> {
+        if (!sandboxId.trim()) {
+            throw new RuntimeError(this.name, 'prepare', 'A sandbox id is required');
+        }
+        return this.create(request, { sandboxId });
+    }
+
+    private async create(
+        request: RuntimePrepareRequest,
+        existing?: { sandboxId: string }
+    ): Promise<PreparedRuntime> {
         const image = this.image(request);
         const paths = await this.bind(request);
         const client = this.open(request);
@@ -36,6 +66,7 @@ export class DaytonaRuntimeProvider extends RemoteProvider {
             rules: this.rules,
             transfer: this.dependencies.transfer,
             requirements: this.requirements,
+            ...(existing ? { existing } : {}),
             image,
             run: await this.run(request),
             maximumTransferBytes:

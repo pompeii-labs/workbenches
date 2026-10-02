@@ -168,6 +168,10 @@ class GuardedRuntime implements PreparedRuntime {
         return this.runtime.nativeAuthentication;
     }
 
+    get sandboxId(): string | undefined {
+        return this.runtime.sandboxId;
+    }
+
     pathFor(hostPath: string): string {
         try {
             return this.runtime.pathFor(hostPath);

@@ -113,6 +113,12 @@ export interface PreparedRuntime {
     readonly environment: Record<string, string | undefined>;
     readonly workspaces: WorkbenchWorkspaceBinding[];
     readonly preparation?: RuntimePreparation;
+    /**
+     * The id of the remote sandbox backing this runtime, once one exists. A
+     * remote runtime reports it so a host can keep it and reconnect later. Local
+     * runtimes leave it out.
+     */
+    readonly sandboxId?: string | undefined;
     readonly nativeAuthentication: 'persistent' | 'unavailable';
     pathFor(hostPath: string): string;
     preflight(): Promise<PreflightResult>;

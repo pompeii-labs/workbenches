@@ -1286,6 +1286,33 @@ Runner-owned native state, such as a session database, is the host's to keep, so
 `MemoryTransfer` does not copy it out, and it does not stage native credential
 storage.
 
+#### Reconnecting after a restart
+
+A remote sandbox outlives the process that created it. Read `sandboxId` from the
+runtime after `preflight`, and keep it with the native session id and the runner
+server's password. After a restart, `adopt` binds a new runtime to the running
+sandbox without uploading anything:
+
+```ts
+const runtime = await provider.adopt(request, sandboxId);
+await runtime.preflight();
+```
+
+`request` must describe the same assets as the original, and the files they name
+must be unchanged, because the runtime reads them again to record what was
+staged and recovers each workspace's Git baseline from the sandbox. `preflight`
+fails when the sandbox does not exist or is not running, and never deletes a
+sandbox it did not create. `launchService` then attaches to the runner server
+still listening in the sandbox and leaves it running, or starts one if nothing is
+listening. Start the session with the same password and the original native
+session id so it resumes the native session. `cleanup` deletes the sandbox, as
+for a prepared runtime.
+
+Only Daytona has `adopt`. E2B keeps its own outcome-recovery state and template
+lifecycle, so reconnecting there is not offered yet. The CLI does not call
+`adopt`: `wb attach` observes stored events and does not reconnect to a live
+sandbox.
+
 #### Model routing without globals
 
 `ModelRouter` and the runners take the catalog snapshot through their
