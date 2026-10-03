@@ -86,6 +86,7 @@
                 "tool.started",
                 "tool.completed",
                 "file.changed",
+                "plan.updated",
                 "input.requested",
                 "input.accepted",
                 "input.queued",
@@ -306,6 +307,40 @@
                         "properties": {
                             "id": { "type": "string", "minLength": 1 },
                             "text": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "plan.updated" } } },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["items", "completed", "total"],
+                        "properties": {
+                            "items": {
+                                "type": "array",
+                                "maxItems": 50,
+                                "items": {
+                                    "type": "object",
+                                    "required": ["text", "status"],
+                                    "properties": {
+                                        "text": { "type": "string", "minLength": 1 },
+                                        "status": {
+                                            "enum": [
+                                                "pending",
+                                                "in_progress",
+                                                "completed",
+                                                "cancelled"
+                                            ]
+                                        }
+                                    }
+                                }
+                            },
+                            "completed": { "type": "integer", "minimum": 0 },
+                            "total": { "type": "integer", "minimum": 0 }
                         }
                     }
                 }
