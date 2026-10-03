@@ -15,6 +15,7 @@ export const WORKBENCH_EVENT_TYPES = [
     'tool.started',
     'tool.completed',
     'file.changed',
+    'plan.updated',
     'input.requested',
     'input.accepted',
     'input.queued',
