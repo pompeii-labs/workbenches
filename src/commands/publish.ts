@@ -8,7 +8,6 @@ import {
 import { WorkbenchResolver } from '../workbench/index.js';
 import { orgArgument, rejectPublisherFlag } from './org-option.js';
 import { CliPresenter } from './presenter.js';
-import { presentPushed } from './push.js';
 
 export const publishCommand = defineCommand({
     meta: {
@@ -56,16 +55,8 @@ export const publishCommand = defineCommand({
             }
             const { workbench } = await new WorkbenchResolver().resolve(args.source);
             const account = await publisher.account(args.org);
-            const pushed = await publisher.push(account, workbench, {
+            submission = await publisher.submitPackage(account, workbench, {
                 progress: (message) => output.progress(message),
-            });
-            presentPushed(output, pushed);
-            output.progress(
-                `Submitting ${pushed.reference.publisher}/${pushed.reference.workbench}@${pushed.version}`
-            );
-            submission = await publisher.submit(account, {
-                id: pushed.versionId,
-                digest: pushed.digest,
             });
         }
 
