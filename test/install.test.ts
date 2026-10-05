@@ -72,12 +72,16 @@ describe('release installer', () => {
         );
     });
 
-    test('discovers the most recently published release including prereleases and pins both downloads', async () => {
+    test('discovers the newest stable release over a newer prerelease and pins both downloads', async () => {
         const fixture = await releaseFixture();
         const installation = await temporaryDirectory('workbench-install-latest-');
         const discovery = await discoveryFixture([
             release('v9.0.0', '2026-09-21T10:00:00Z'),
             { ...release('v10.0.0', null), draft: true },
+            {
+                ...release('v10.1.0-rc.1', '2026-09-25T10:00:00Z'),
+                prerelease: true,
+            },
             {
                 ...release('v0.1.0-alpha.8', '2026-09-24T10:00:00Z'),
                 prerelease: true,
@@ -86,6 +90,7 @@ describe('release installer', () => {
                     { tag_name: 'v999.0.0', published_at: '2099-01-01T00:00:00Z' },
                 ],
             },
+            release('v1.0.0', '2026-09-26T10:00:00Z'),
         ]);
         const result = await runInstaller('', installation, [], {
             ...discovery.environment,
@@ -95,10 +100,45 @@ describe('release installer', () => {
         expect(result.code).toBe(0);
         expect(await discovery.urls()).toEqual([
             'https://api.github.com/repos/pompeii-labs/workbenches/releases?per_page=100',
-            `https://github.com/pompeii-labs/workbenches/releases/download/v0.1.0-alpha.8/${fixture.archive}`,
-            'https://github.com/pompeii-labs/workbenches/releases/download/v0.1.0-alpha.8/checksums.txt',
+            `https://github.com/pompeii-labs/workbenches/releases/download/v9.0.0/${fixture.archive}`,
+            'https://github.com/pompeii-labs/workbenches/releases/download/v9.0.0/checksums.txt',
         ]);
         expect(await readlink(join(installation, 'wb'))).toBe('workbench');
+    });
+
+    test('orders stable releases by version, not publication time', async () => {
+        const discovery = await discoveryFixture([
+            release('v1.10.0', '2026-09-01T10:00:00Z'),
+            release('v1.9.0', '2026-09-20T10:00:00Z'),
+            release('v1.2.0', '2026-09-24T10:00:00Z'),
+        ]);
+        await runInstaller('', '', [], discovery.environment);
+        expect(await discovery.urls()).toEqual([
+            'https://api.github.com/repos/pompeii-labs/workbenches/releases?per_page=100',
+            `https://github.com/pompeii-labs/workbenches/releases/download/v1.10.0/${resolveReleaseTarget().name}.tar.gz`,
+        ]);
+    });
+
+    test('a prerelease can still be pinned with --version', async () => {
+        const discovery = await discoveryFixture([
+            release('v1.0.0', '2026-09-24T10:00:00Z'),
+        ]);
+        await runInstaller('', '', ['--version', '1.1.0-rc.1'], discovery.environment);
+        expect(await discovery.urls()).toEqual([
+            `https://github.com/pompeii-labs/workbenches/releases/download/v1.1.0-rc.1/${resolveReleaseTarget().name}.tar.gz`,
+        ]);
+    });
+
+    test('rejects metadata with only prereleases', async () => {
+        const discovery = await discoveryFixture([
+            { ...release('v1.0.0-rc.1', '2026-09-24T10:00:00Z'), prerelease: true },
+        ]);
+        const result = await runInstaller('', '', [], discovery.environment);
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(
+            'latest release metadata is missing or invalid'
+        );
+        expect(await discovery.urls()).toHaveLength(1);
     });
 
     test('explicit latest and a custom repository discover through that repository', async () => {
@@ -271,7 +311,7 @@ async function runInstaller(
 }
 
 function release(tag: string, published: string | null) {
-    return { tag_name: tag, draft: false, published_at: published };
+    return { tag_name: tag, draft: false, prerelease: false, published_at: published };
 }
 
 async function discoveryFixture(metadata: unknown) {

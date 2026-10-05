@@ -117,13 +117,18 @@ function runtimeLines(value: string, image: string | undefined): string[] {
     if (new Set(names).size !== names.length) {
         throw new Error('--runtimes must not repeat a runtime');
     }
-    const needsImage = names.filter((name) => name === 'docker' || name === 'e2b');
+    const needsImage = names.filter(
+        (name) => name === 'docker' || name === 'e2b' || name === 'daytona'
+    );
     if (needsImage.length > 0 && !image) {
+        const list = new Intl.ListFormat('en', { type: 'conjunction' }).format(
+            needsImage
+        );
         throw new Error(
-            `--image is required for the ${needsImage.join(' and ')} runtime`
+            `--image is required for the ${list} ${needsImage.length === 1 ? 'runtime' : 'runtimes'}`
         );
     }
-    if (image && needsImage.length === 0 && !names.includes('daytona')) {
+    if (image && needsImage.length === 0) {
         throw new Error(
             '--image applies only to the docker, e2b, and daytona runtimes'
         );
@@ -136,7 +141,7 @@ function runtimeLines(value: string, image: string | undefined): string[] {
                 return [
                     '  daytona:',
                     '    class: linux',
-                    ...(image ? [`    image: ${JSON.stringify(image)}`] : []),
+                    `    image: ${JSON.stringify(image)}`,
                 ];
             }
             return [`  ${name}:`, `    image: ${JSON.stringify(image)}`];

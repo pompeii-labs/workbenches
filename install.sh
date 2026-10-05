@@ -21,8 +21,9 @@ usage() {
         '  WORKBENCH_REPOSITORY      GitHub owner/repository' \
         '  WORKBENCH_DOWNLOAD_ROOT   HTTPS release mirror root' \
         '' \
-        'latest selects the most recently published release, including prereleases,' \
-        'among the 100 newest GitHub release records, not the highest version.'
+        'latest selects the newest stable release by version among the 100 newest' \
+        'GitHub release records. Prereleases are skipped; --version pins any version,' \
+        'prereleases included.'
 }
 
 fail() {
@@ -107,7 +108,32 @@ latest_tag() {
             }
             bad()
         }
-        function value(depth,    c, key, result, seen, tag, date, draft, count) {
+        function numeric(s) { return s ~ /^[0-9]+$/ }
+        function idcmp(a, b) {
+            if (numeric(a) && numeric(b)) {
+                if (length(a) != length(b)) return length(a) > length(b) ? 1 : -1
+                return (a "") > (b "") ? 1 : (a "") < (b "") ? -1 : 0
+            }
+            if (numeric(a)) return -1
+            if (numeric(b)) return 1
+            return (a "") > (b "") ? 1 : (a "") < (b "") ? -1 : 0
+        }
+        # Semantic version precedence of two tags: 1, 0, or -1.
+        function semcmp(x, y,    xp, yp, xa, ya, i, n, m, c) {
+            sub(/^v/, "", x); sub(/^v/, "", y)
+            sub(/\+.*/, "", x); sub(/\+.*/, "", y)
+            if (index(x, "-")) { xp = substr(x, index(x, "-") + 1); x = substr(x, 1, index(x, "-") - 1) }
+            if (index(y, "-")) { yp = substr(y, index(y, "-") + 1); y = substr(y, 1, index(y, "-") - 1) }
+            split(x, xa, "."); split(y, ya, ".")
+            for (i = 1; i <= 3; i++) { c = idcmp(xa[i], ya[i]); if (c) return c }
+            if (xp == "" && yp == "") return 0
+            if (xp == "") return 1
+            if (yp == "") return -1
+            n = split(xp, xa, "."); m = split(yp, ya, ".")
+            for (i = 1; i <= n && i <= m; i++) { c = idcmp(xa[i], ya[i]); if (c) return c }
+            return n > m ? 1 : n < m ? -1 : 0
+        }
+        function value(depth,    c, key, result, seen, tag, date, draft, prerelease, count) {
             if (depth > 100) bad()
             space()
             c = substr(json, pos, 1)
@@ -124,7 +150,7 @@ latest_tag() {
                         result = value(depth + 1)
                         if (depth == 1 && kind != "object") bad()
                         if (depth == 2 && c == "{") {
-                            if (key == "tag_name" || key == "published_at" || key == "draft") {
+                            if (key == "tag_name" || key == "published_at" || key == "draft" || key == "prerelease") {
                                 if (index(seen, "|" key "|")) bad()
                                 seen = seen "|" key "|"; count++
                                 if (key == "tag_name") {
@@ -133,6 +159,9 @@ latest_tag() {
                                 } else if (key == "draft") {
                                     if (kind != "boolean") bad()
                                     draft = result
+                                } else if (key == "prerelease") {
+                                    if (kind != "boolean") bad()
+                                    prerelease = result
                                 } else {
                                     if (kind != "string" && kind != "null") bad()
                                     date = result
@@ -146,10 +175,13 @@ latest_tag() {
                 }
                 if (substr(json, pos++, 1) != (c == "{" ? "}" : "]")) bad()
                 if (depth == 2 && c == "{") {
-                    if (count != 3) bad()
+                    if (count != 4) bad()
                     if (draft == "false") {
                         if (date !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) bad()
-                        if (date > newest) { newest = date; selected = tag }
+                        if (prerelease == "false") {
+                            if (tag !~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/) bad()
+                            if (selected == "" || semcmp(tag, selected) > 0) selected = tag
+                        }
                     }
                 }
                 kind = c == "{" ? "object" : "array"
@@ -169,7 +201,7 @@ latest_tag() {
             if (substr(json, pos, 1) != "[") bad()
             value(1); space()
             if (pos <= length(json)) bad()
-            if (selected !~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/) bad()
+            if (selected == "") bad()
             print selected
         }
     ' || fail 'latest release metadata is missing or invalid; specify --version'
