@@ -4,33 +4,28 @@
 
 # Workbench
 
-[![CI](https://github.com/pompeii-labs/workbenches/actions/workflows/ci.yml/badge.svg)](https://github.com/pompeii-labs/workbenches/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/pompeii-labs/workbenches?include_prereleases)](https://github.com/pompeii-labs/workbenches/releases)
+[![CI](https://github.com/pompeii-labs/workbenches/actions/workflows/ci.yml/badge.svg)](https://github.com/pompeii-labs/workbenches/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/pompeii-labs/workbenches)](https://github.com/pompeii-labs/workbenches/releases)
 
 **Package expert AI environments and run them anywhere.**
 
-Models are generalists. Projects are not. Every time a general-purpose agent enters an unfamiliar codebase, it spends time and tokens rebuilding context the maintainers already have: architecture, conventions, tooling, and operating procedures.
+A Workbench is a versioned, executable expert environment: the instructions, skills, tools, runtime, harness, and model configuration a project's maintainers use, packaged once. Every compatible run starts prepared instead of rebuilding that context from scratch.
 
-Workbench packages that knowledge once, together with the skills, tools, runtime, harness, and model configuration needed to use it. Every compatible run starts prepared instead of paying the same knowledge ramp-up cost again.
+## Install the skills
 
-**Same model, same spend: 36 working results with Workbenches, 20 without.**
+The first step is to give your coding agent the Workbench skills. Your agent then installs and drives `wb` for you.
 
-| Tab | Plain | Workbench |
-| --- | --- | --- |
-| Ship a Godot game | 5 of 10, $0.45 each | **9 of 10, $0.19 each** |
-| Build on Lux | 5 of 10, $0.80 each | **9 of 10, $0.47 each** |
-| Zero-downtime migration | 4 of 10, $0.61 each | **8 of 10, $0.32 each** |
-| Make it fast | 6 of 10, $0.31 each | **10 of 10, $0.22 each** |
+```sh
+npx skills add pompeii-labs/workbenches
+```
 
-Both sides run the same agent (OpenCode) on the same model (`openai/gpt-5.6-terra`); the only difference is the Workbench. Identical requests and starting projects, five attempts per task, graded by running the result. Cost per working result includes failed attempts. Tasks, methodology, and how to reproduce: [workbenchmarks](https://github.com/pompeii-labs/workbenchmarks).
+This installs four skills:
 
-A Workbench can run in your current directory, inside Docker, in an E2B or Daytona sandbox, or against an isolated GitHub checkout. The package belongs to its author, and the user brings their own model and runtime credentials. Runs execute through the selected harness, not a hosted Workbench agent service. The CLI downloads and caches model-routing metadata; first use requires an internet connection, and subsequent commands can use cached metadata if that service is unavailable.
+- `wb-cli`: install `wb`, connect credentials, and run, resume, and supervise Workbenches
+- `wb-subagents`: delegate bounded, checkable work to a Workbench and collect the result
+- `wb-authoring`: author, review, and trial a spec 1 Workbench package, gate first
+- `wb-publishing`: push a Workbench to your organization and submit it for public review
 
-> Workbench is currently a public alpha implementing the draft-0 specification. Package and execution contracts may still change before 1.0.
-
-## Quick start
-
-### Install
+## Or install the CLI directly
 
 Native binaries are available for macOS and Linux on arm64 and x64.
 
@@ -38,12 +33,36 @@ Native binaries are available for macOS and Linux on arm64 and x64.
 curl -fsSL https://workbenches.dev/install.sh | sh
 ```
 
-The installer verifies the release checksum and creates `workbench` and `wb` commands in `~/.local/bin` by default. It does not invoke `sudo` or edit your shell startup files.
+The installer verifies the release checksum and creates `workbench` and `wb` commands in `$XDG_BIN_HOME` when it is set, else `~/.local/bin`. It does not invoke `sudo` or edit your shell startup files. The default is the newest stable release; `--version` pins any version, prereleases included, for example `curl -fsSL https://workbenches.dev/install.sh | sh -s -- --version 1.0.0`. Flags passed through a pipe need `sh -s -- --bin-dir DIR`.
 
 ```sh
 wb --version
 wb update --check
 ```
+
+## Why Workbenches
+
+Models are generalists. Projects are not. Every time a general-purpose agent enters an unfamiliar codebase, it spends time and tokens rebuilding architecture, conventions, tooling, and operating procedures the maintainers already know. A Workbench packages that knowledge once.
+
+**Same model, same spend: 36 working results with Workbenches, 20 without.**
+
+| Task area | OpenCode alone | OpenCode + Workbench |
+| --- | --- | --- |
+| Ship a Godot game | 5 of 10, $0.45 each | **9 of 10, $0.19 each** |
+| Build on Lux | 5 of 10, $0.80 each | **9 of 10, $0.47 each** |
+| Zero-downtime migration | 4 of 10, $0.61 each | **8 of 10, $0.32 each** |
+| Make it fast | 6 of 10, $0.31 each | **10 of 10, $0.22 each** |
+| All 8 tasks | 20 of 40, $10.59 total, $0.53 each | **36 of 40, $10.64 total, $0.30 each** |
+
+Both sides run the same agent (OpenCode 1.18) on the same model (`openai/gpt-5.6-terra`); the only difference is the Workbench. Eight tasks, two per row, five attempts per task and side, identical requests and starting projects, graded by scripts that run the result. Cost per working result includes failed attempts. Lux is our own database. Plain OpenCode was cheaper per working result on two of the eight tasks. Tasks, every failure, caveats, and how to reproduce: [workbenchmarks](https://github.com/pompeii-labs/workbenchmarks/blob/main/METHODOLOGY.md).
+
+A Workbench can run in your current directory, inside Docker, in an E2B or Daytona sandbox, or against an isolated GitHub checkout. The package belongs to its author, and the user brings their own model and runtime credentials. Runs execute through the selected harness, not a hosted Workbench agent service. The CLI downloads and caches model-routing metadata; first use requires an internet connection, and subsequent commands can use cached metadata if that service is unavailable.
+
+Spec 1 is the Workbench standard; spec 0 is frozen legacy that engines still read. The spec 1 manifest, the `run`/`resume`/`attach --json` event stream, the `wait --json` result, `send`/`answer --json` receipts, detached `run`/`resume --json` receipts, `smoke --json`, exit codes, `install.sh`, and `wb update` are covered by the 1.0 [stability promise](docs/REFERENCE.md#stability). Everything else may change in minor versions.
+
+The CLI reports anonymous save and run counts, but only for registry Workbenches published by an organization you do not hold a login for. Packages from your own organizations, local paths, GitHub sources, and private versions are never reported. A one-time notice appears before the first report. Set `DO_NOT_TRACK=1` to disable reporting entirely.
+
+## Quick start
 
 ### Save and inspect your first Workbench
 
@@ -63,7 +82,7 @@ wb connect creator
 wb smoke creator
 ```
 
-Choose an authentication method for the creator's model provider. Workbench uses the package's harness, model, and runtime rather than asking you to configure a different environment. `smoke` checks that the runtime, harness, authentication, and declared tools are ready without spending model tokens.
+Choose an authentication method for the creator's model provider. Workbench uses the package's harness, model, and runtime rather than asking you to configure a different environment. `smoke` checks that the runtime, harness, authentication, and declared tools are ready. It makes no model request, but on E2B and Daytona it creates a billable sandbox.
 
 From the project directory you want the agent to inspect, run:
 
@@ -131,7 +150,7 @@ A Workbench is a small, versioned package owned by a project or expert:
 Its manifest selects the harness, model policy, runtime, instructions, skills, tools, integrations, and environment requirements for the work:
 
 ```yaml
-spec: 0
+spec: 1
 version: 0.1.0
 
 name: core
@@ -142,15 +161,7 @@ model:
   id: openai/gpt-5.6-sol
 
 instructions: ./instructions.md
-runtime: local
-```
 
-The Workbench engine reads this manifest; the underlying harness does not. The engine validates the package, prepares the runtime, checks its requirements, and translates the portable configuration into the harness's native interface.
-
-A `spec: 1` Workbench states what its environment must satisfy and lists every runtime it supports, in place of spec 0's single `runtime`. The first runtime is the default, and `wb run --runtime docker` picks another:
-
-```yaml
-spec: 1
 requirements:
   os: [linux, macos]
   cpu: 4
@@ -161,6 +172,10 @@ runtimes:
   docker:
     image: ghcr.io/example/core:0.1.0
 ```
+
+The Workbench engine reads this manifest; the underlying harness does not. The engine validates the package, prepares the runtime, checks its requirements, and translates the portable configuration into the harness's native interface.
+
+A spec 1 Workbench states what its environment must satisfy in `requirements` and lists every runtime it supports in `runtimes`. The first runtime is the default, and `wb run --runtime docker` picks another. Spec 0, with its single `runtime` field, is frozen legacy that engines still read.
 
 The format can package:
 
@@ -175,7 +190,7 @@ The format can package:
 
 Workbench is not a model, agent harness, task planner, or hosted orchestration service. It is the portable expert environment those systems can execute.
 
-Read the [draft-0 specification](SPEC.md) for the complete manifest.
+Read the [specification](SPEC.md) for the complete manifest. The run event protocol keeps `protocol: 0` and its schema at `schemas/events/v0`. It is versioned separately from the manifest spec number, and changing it would break existing clients.
 
 ## Run against a GitHub repository
 
@@ -190,7 +205,7 @@ wb run project-core \
 
 Repository access uses `GH_TOKEN`, then `GITHUB_TOKEN`, or your existing `gh auth login`. Workbench resolves the exact starting commit and prepares the checkout in managed session storage; it does not upload or synchronize your current directory.
 
-For Docker, E2B, and Daytona repository runs, the engine supplies `git` and `gh` even when the Workbench image does not. The agent uses the normal Git and GitHub CLI rather than a custom PR tool, and the engine does not silently publish work when a run ends.
+For Docker, E2B, and Daytona repository runs, the engine supplies `git` and `gh` even when the Workbench image does not (on Daytona, an image without `git` and `gh` needs a root user or passwordless `sudo`). The agent uses the normal Git and GitHub CLI rather than a custom PR tool, and the engine does not silently publish work when a run ends.
 
 ## Use Workbenches as subagents
 
@@ -206,11 +221,13 @@ wb wait wb_... --run --after 42 --timeout 120 --json
 
 Each command returns correlated session and run IDs. Sequence cursors belong to one run, so wait on the `run_id` and `after_sequence` returned by the command you just issued.
 
-The repository includes a ready-to-use [Workbench subagents skill](docs/skills/workbench-subagents/SKILL.md) for coding agents that support skills. Install it globally to delegate through `wb` from any project:
+The `wb-subagents` skill, in [`skills/wb-subagents`](skills/wb-subagents/SKILL.md), teaches a coding agent to delegate through `wb` from any project. Install it alone, globally, with:
 
 ```sh
-npx skills add pompeii-labs/workbenches --skill workbench-subagents -g
+npx skills add pompeii-labs/workbenches --skill wb-subagents -g
 ```
+
+The other skills are `wb-cli`, `wb-authoring`, and `wb-publishing`; `npx skills add pompeii-labs/workbenches` installs all four.
 
 ## Create a Workbench
 
@@ -250,14 +267,14 @@ See [Returned results](docs/OUTCOMES.md) for the complete contract.
 
 ## Supported today
 
-| Surface | Reference engine support |
-| --- | --- |
-| Harnesses | OpenCode and Pi |
-| Runtimes | Local, Docker, E2B, and Daytona |
-| Interaction | Terminal UI, one-shot, detached, and resumable sessions |
-| Inputs | Text and supported image attachments |
-| Results | Changesets, artifacts, and links |
-| Repository work | Isolated GitHub checkout with native `git` and `gh` |
+| Surface         | Reference engine support                                |
+| --------------- | ------------------------------------------------------- |
+| Harnesses       | OpenCode and Pi                                         |
+| Runtimes        | Local, Docker, E2B, and Daytona                         |
+| Interaction     | Terminal UI, one-shot, detached, and resumable sessions |
+| Inputs          | Text and supported image attachments                    |
+| Results         | Changesets, artifacts, and links                        |
+| Repository work | Isolated GitHub checkout with native `git` and `gh`     |
 
 OpenCode supports native permissions, questions, steering, and resume. Pi supports streaming, image input, steering at its next legal model boundary, follow-up input, cancellation, tool events, and resume. Workbench preserves the capabilities each harness actually exposes rather than inventing a common protocol they cannot honor.
 
@@ -279,7 +296,7 @@ The E2B control key remains on the host. Harness credentials are staged only for
 
 ### Daytona
 
-Daytona Workbenches get a fresh Daytona sandbox created from the declared image for each execution, using the same staging rules and pending outcomes as E2B. The `linux` class is supported; there is no interactive terminal or sandbox recovery yet. The Daytona key stays on the host, and model credentials come from your environment.
+Daytona Workbenches get a fresh Daytona sandbox created from the entry's published `image` for each execution (`runtimes.daytona` requires `class`; `image` is optional in the schema, but the reference engine cannot prepare an entry without a published `image`, and there is no fallback to another runtime's image), using the same staging rules and pending outcomes as E2B. The `linux` class is supported; there is no interactive terminal or sandbox recovery yet. Pi Workbenches cannot run on Daytona yet. The Daytona key stays on the host, and model credentials come from your environment.
 
 ## Command overview
 
@@ -288,7 +305,7 @@ wb                         # show command help
 wb list                    # list saved Workbenches
 wb view project-core       # inspect configuration and readiness
 wb validate project-core   # validate a package
-wb smoke project-core      # preflight without model work
+wb smoke project-core      # preflight, no model request
 wb run project-core        # open an interactive session
 wb ps                      # list active and resumable sessions
 wb resume wb_...           # reopen a session
