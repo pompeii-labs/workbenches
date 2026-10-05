@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workbench Authoring"
+  short_description: "Build an expert Workbench that proves its work"
+  default_prompt: "Use $wb-authoring to build a Workbench for this class of work, gate first."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workbench CLI"
+  short_description: "Install, connect, and troubleshoot wb"
+  default_prompt: "Use $wb-cli to install wb, connect providers, and fix this Workbench preflight error."

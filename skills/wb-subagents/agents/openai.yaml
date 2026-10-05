@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workbench Subagents"
+  short_description: "Delegate bounded work to an expert Workbench"
+  default_prompt: "Use $wb-subagents to delegate this bounded task to a Workbench and verify the result."
