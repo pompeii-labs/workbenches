@@ -149,6 +149,14 @@ describe('Workbench event renderers', () => {
                 message: 'Permission denied',
             }),
             event(4, 'file.changed', { path: 'schema.sql', operation: 'edit' }),
+            event(4, 'plan.updated', {
+                items: [
+                    { text: 'Write the migration', status: 'completed' },
+                    { text: 'Run the schema tests', status: 'in_progress' },
+                ],
+                completed: 1,
+                total: 2,
+            }),
             event(5, 'input.requested', { message: 'Approve migration?' }),
             event(6, 'question.requested', {
                 id: 'question-1',
@@ -171,6 +179,7 @@ describe('Workbench event renderers', () => {
         expect(stdout).toContain('✗ Shell command');
         expect(stdout).toContain('Permission denied');
         expect(stdout).toContain('~ edit schema.sql');
+        expect(stdout).toContain('# Plan 1/2 · Run the schema tests');
         expect(stdout).toContain('? Input required · Approve migration?');
         expect(stdout).toContain('? Question · Which environment?');
         expect(stdout).toContain('✓ Answer received');

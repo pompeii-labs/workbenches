@@ -1,5 +1,5 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
-import { describeTool } from '../tool.js';
+import { describeTool, planFromTodos } from '../tool.js';
 import { record, string } from './json.js';
 
 export interface OpenCodeAdapterResult {
@@ -138,6 +138,8 @@ export class OpenCodeEventAdapter {
             });
             const changed = changedFile(name, description.target);
             if (changed) events.push({ type: 'file.changed', data: changed });
+            const plan = status === 'completed' ? planEvent(name, state) : undefined;
+            if (plan) events.push(plan);
         }
         return this.result(events);
     }
@@ -190,6 +192,26 @@ export class OpenCodeEventAdapter {
             turnCompleted: this.turnCompleted,
         };
     }
+}
+
+/** The agent's todo list after a todo tool call, as a portable plan. */
+function planEvent(
+    name: string,
+    state: Record<string, unknown> | undefined
+): WorkbenchEventDraft | undefined {
+    if (!['todowrite', 'todo_write'].includes(name.trim().toLowerCase())) {
+        return undefined;
+    }
+    const items = planFromTodos(record(state?.input));
+    if (!items) return undefined;
+    return {
+        type: 'plan.updated',
+        data: {
+            items,
+            completed: items.filter((item) => item.status === 'completed').length,
+            total: items.filter((item) => item.status !== 'cancelled').length,
+        },
+    };
 }
 
 function safeToolFailure(state: Record<string, unknown> | undefined) {

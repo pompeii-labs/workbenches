@@ -187,6 +187,19 @@ class HumanEventRenderer implements EventRenderer {
             );
             return;
         }
+        if (event.type === 'plan.updated') {
+            this.endAnswer();
+            const list = record(event.data)?.items;
+            const items: unknown[] = Array.isArray(list) ? list : [];
+            const current = items.find(
+                (item) => record(item)?.status === 'in_progress'
+            );
+            const label = current ? text(record(current), 'text') : '';
+            this.stdout(
+                `  ${colors.cyan('#')} ${colors.dim(`Plan ${number(event.data, 'completed') ?? 0}/${number(event.data, 'total') ?? items.length}${label ? ` · ${label}` : ''}`)}\n`
+            );
+            return;
+        }
         if (event.type === 'usage.updated') {
             for (const [key, value] of Object.entries(record(event.data) ?? {})) {
                 if (typeof value === 'number') {

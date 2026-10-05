@@ -129,6 +129,45 @@ function queryTitle(action: string, query: string | undefined): string {
     return query ? `${action} "${query}"` : action;
 }
 
+export type PlanItemStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+
+export interface PlanItem {
+    text: string;
+    status: PlanItemStatus;
+}
+
+const PLAN_STATUSES = new Set<string>([
+    'pending',
+    'in_progress',
+    'completed',
+    'cancelled',
+]);
+const MAX_PLAN_ITEMS = 50;
+
+/**
+ * The agent's own plan from a todo tool's input, or undefined when the input
+ * carries no list. Item text is model-authored, like `output.text`; it is
+ * sanitized and truncated, and unknown statuses read as pending.
+ */
+export function planFromTodos(
+    input: Record<string, unknown> | undefined
+): PlanItem[] | undefined {
+    if (!Array.isArray(input?.todos)) return undefined;
+    const items: PlanItem[] = [];
+    for (const todo of input.todos.slice(0, MAX_PLAN_ITEMS)) {
+        if (!todo || typeof todo !== 'object') continue;
+        const entry = todo as Record<string, unknown>;
+        const text = value(entry, 'content') ?? value(entry, 'text');
+        if (!text) continue;
+        const status = typeof entry.status === 'string' ? entry.status : '';
+        items.push({
+            text,
+            status: PLAN_STATUSES.has(status) ? (status as PlanItemStatus) : 'pending',
+        });
+    }
+    return items;
+}
+
 function value(
     record: Record<string, unknown> | undefined,
     key: string

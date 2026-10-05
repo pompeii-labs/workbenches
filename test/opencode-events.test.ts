@@ -131,6 +131,90 @@ describe('OpenCode event adapter', () => {
         expect(serialized).not.toContain('unsafe runner title');
     });
 
+    test('reports the agent plan once when a todo tool call completes', () => {
+        const adapter = new OpenCodeEventAdapter();
+        const todo = (status: string) => ({
+            type: 'tool_use',
+            part: {
+                tool: 'todowrite',
+                callID: 'call_todo',
+                state: {
+                    status,
+                    input: {
+                        todos: [
+                            {
+                                id: '1',
+                                content: 'Enlarge the map',
+                                status: 'completed',
+                                priority: 'high',
+                            },
+                            {
+                                id: '2',
+                                content: 'Extend playtest\u001b[31m for pickups',
+                                status: 'in_progress',
+                            },
+                            { id: '3', content: 'Add XP', status: 'pending' },
+                            { id: '4', content: 'Old idea', status: 'cancelled' },
+                            { id: '5', content: 'Unknown status', status: 'blocked' },
+                            { id: '6', content: '   ', status: 'pending' },
+                        ],
+                    },
+                    output: 'PRIVATE_TOOL_OUTPUT',
+                },
+            },
+        });
+
+        expect(
+            adapter.consume(todo('running')).events.map((event) => event.type)
+        ).toEqual(['tool.started']);
+        const completed = adapter.consume(todo('completed')).events;
+        expect(completed.map((event) => event.type)).toEqual([
+            'tool.completed',
+            'plan.updated',
+        ]);
+        expect(completed[1]).toEqual({
+            type: 'plan.updated',
+            data: {
+                items: [
+                    { text: 'Enlarge the map', status: 'completed' },
+                    { text: 'Extend playtest for pickups', status: 'in_progress' },
+                    { text: 'Add XP', status: 'pending' },
+                    { text: 'Old idea', status: 'cancelled' },
+                    { text: 'Unknown status', status: 'pending' },
+                ],
+                completed: 1,
+                total: 4,
+            },
+        });
+        expect(JSON.stringify(completed)).not.toContain('PRIVATE_TOOL_OUTPUT');
+        expect(adapter.consume(todo('completed')).events).toEqual([]);
+    });
+
+    test('reports no plan for a failed todo call or one without a list', () => {
+        const adapter = new OpenCodeEventAdapter();
+        const failed = adapter.consume({
+            type: 'tool_use',
+            part: {
+                tool: 'todowrite',
+                callID: 'call_failed',
+                state: {
+                    status: 'error',
+                    input: { todos: [{ content: 'x', status: 'pending' }] },
+                },
+            },
+        });
+        const empty = adapter.consume({
+            type: 'tool_use',
+            part: {
+                tool: 'todowrite',
+                callID: 'call_empty',
+                state: { status: 'completed', input: {} },
+            },
+        });
+        expect(failed.events.map((event) => event.type)).not.toContain('plan.updated');
+        expect(empty.events.map((event) => event.type)).not.toContain('plan.updated');
+    });
+
     test('does not expose shell commands or unknown native payloads', () => {
         const adapter = new OpenCodeEventAdapter();
         const tool = adapter.consume({

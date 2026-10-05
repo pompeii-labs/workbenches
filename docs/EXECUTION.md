@@ -728,6 +728,7 @@ turn.started      turn.completed
 output.text
 tool.started      tool.completed
 file.changed
+plan.updated
 input.requested   input.accepted
 input.queued      input.delivered      input.rejected
 question.requested    question.answered    question.rejected
@@ -749,6 +750,16 @@ may also provide a safe display title, target, short description, duration, and
 normalized failure. These fields let clients show concrete activity such as a
 file read or search without persisting arbitrary commands, file contents, or
 tool output in the portable event log.
+
+`plan.updated` carries the agent's own plan whenever the runner reports it, such
+as after an OpenCode todo tool call. Each event holds the whole list, never a
+diff: `items` (up to 50, each with `text` and a `status` of `pending`,
+`in_progress`, `completed`, or `cancelled`), plus `completed` and `total`
+counts, where `total` excludes cancelled items. Item text is model-authored,
+like `output.text`, and is sanitized and truncated the same way as tool titles.
+The plan can grow as the agent discovers work, so clients that draw progress
+from it should expect the total to change. Runners without a native plan emit
+no plan events.
 
 OpenCode descendant sessions contribute their own usage deltas and tool activity
 to the owning run as native events arrive. Child activity includes
