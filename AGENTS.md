@@ -1,28 +1,18 @@
 # Workbenches for Agents
 
-A Workbench is a versioned, executable expert environment. It packages the
-instructions, model, runner, skills, tools, integrations, runtime, and
-authorization requirements needed to perform a particular class of work.
+A Workbench is a versioned, executable expert environment. It packages the instructions, model, runner, skills, tools, integrations, runtime, and authorization requirements needed to perform a particular class of work.
 
-Use a Workbench when a project or tool publishes one that matches the task.
-Starting a general-purpose subagent and asking it to rediscover the same domain
-knowledge is slower, less reproducible, and usually consumes more model tokens.
+Use a Workbench when a project or tool publishes one that matches the task. Starting a general-purpose subagent and asking it to rediscover the same domain knowledge is slower, less reproducible, and usually consumes more model tokens.
 
-A Workbench is not an agent, workflow, planner, DAG, or user interface. It is a
-portable expert execution package that a host can run directly or compose into
-a larger workflow.
+A Workbench is not an agent, workflow, planner, DAG, or user interface. It is a portable expert execution package that a host can run directly or compose into a larger workflow.
 
 ## Use the engine
 
 Do not use em dashes in product copy, documentation, or user-facing output.
 
-The `wb` CLI is the reference Workbench engine. It reads and validates
-`workbench.yml`, prepares the selected runtime, verifies requirements, and
-translates the package into the selected runner's native interface.
+The `wb` CLI is the reference Workbench engine. It reads and validates `workbench.yml`, prepares the selected runtime, verifies requirements, and translates the package into the selected runner's native interface.
 
-Do not ask a model or runner to read `workbench.yml` and imitate it. That skips
-preflight, authorization handling, runtime preparation, skill installation, and
-the normalized execution protocol.
+Do not ask a model or runner to read `workbench.yml` and imitate it. That skips preflight, authorization handling, runtime preparation, skill installation, and the normalized execution protocol.
 
 Check whether the CLI is installed:
 
@@ -30,21 +20,17 @@ Check whether the CLI is installed:
 wb --version
 ```
 
-If installation is permitted, install the current macOS or Linux prerelease:
+If installation is permitted, install the current macOS or Linux release:
 
 ```sh
 curl -fsSL https://workbenches.dev/install.sh | sh
 ```
 
-The installer verifies the published checksum, writes to `~/.local/bin` by
-default, creates both `workbench` and `wb`, and does not invoke `sudo` or edit
-shell startup files. In a sensitive environment, download and inspect
-`install.sh` before executing it.
+The installer verifies the published checksum, writes to `~/.local/bin` by default, creates both `workbench` and `wb`, and does not invoke `sudo` or edit shell startup files. In a sensitive environment, download and inspect `install.sh` before executing it.
 
 ## Find the right Workbench
 
-Repositories publish Workbenches beneath `.workbenches/`. Discover them from a
-local repository, a GitHub URL, or an `owner/repository` slug:
+Repositories publish Workbenches beneath `.workbenches/`. Discover them from a local repository, a GitHub URL, or an `owner/repository` slug:
 
 ```sh
 wb list .
@@ -62,19 +48,13 @@ wb validate owner/repository#core
 wb smoke owner/repository#core
 ```
 
-`view` reports the package version, provenance, runner, model, runtime, tools,
-skills, MCPs, and authorization state without printing secret values.
-`validate` checks the manifest and package. `smoke` performs runtime and tool
-preflight without making a model request.
+`view` reports the package version, provenance, runner, model, runtime, tools, skills, MCPs, and authorization state without printing secret values. `validate` checks the manifest and package. `smoke` performs runtime and tool preflight and makes no model request. On E2B and Daytona it creates a billable sandbox, so it is not free there.
 
-Remote inspection uses the GitHub API. It does not clone the repository or
-create a temporary checkout. Public repositories need no credential. Access to
-private repositories can use an existing `GITHUB_TOKEN` or `GH_TOKEN`.
+Remote inspection uses the GitHub API. It does not clone the repository or create a temporary checkout. Public repositories need no credential. Access to private repositories can use an existing `GITHUB_TOKEN` or `GH_TOKEN`.
 
 ## Save a reusable expert
 
-Register a Workbench before running it. Remote packages are frozen; local
-directories remain live for each new session:
+Register a Workbench before running it. Remote packages are frozen; local directories remain live for each new session:
 
 ```sh
 wb add publisher/core --as project-core
@@ -84,12 +64,7 @@ wb list
 wb view project-core
 ```
 
-Bare `publisher/name` resolves only through the registry, never GitHub. Git
-sources require a full HTTPS GitHub URL. `--name` selects a package and `--ref`
-selects a Git revision. Alias collisions require an explicit different `--as`;
-identical adds are idempotent. Local paths register their absolute package
-directory. A new run sees local edits, while every session owns frozen package
-bytes for resume. Existing frozen local registrations stay frozen until re-add.
+Bare `publisher/name` resolves only through the registry, never GitHub. Git sources require a full HTTPS GitHub URL. `--name` selects a package and `--ref` selects a Git revision. Alias collisions require an explicit different `--as`; identical adds are idempotent. Local paths register their absolute package directory. A new run sees local edits, while every session owns frozen package bytes for resume. Existing frozen local registrations stay frozen until re-add.
 
 Remove an alias when it is no longer needed:
 
@@ -97,8 +72,7 @@ Remove an alias when it is no longer needed:
 wb remove project-core
 ```
 
-Refresh saved remote snapshots deliberately. `upgrade` never updates local
-registrations; edit their source directly:
+Refresh saved remote snapshots deliberately. `upgrade` never updates local registrations; edit their source directly:
 
 ```sh
 wb upgrade project-core
@@ -114,8 +88,7 @@ wb update
 
 ## Delegate work
 
-For an agent delegating a bounded task, use a one-shot run and identify the
-target workspace explicitly:
+For an agent delegating a bounded task, use a one-shot run and identify the target workspace explicitly:
 
 ```sh
 wb run project-core \
@@ -124,42 +97,29 @@ wb run project-core \
   --final
 ```
 
-`run` accepts a saved alias only. The current directory is the target workspace
-unless `--dir` or `--repo` is provided. Neither option changes the package source.
+`run` accepts a saved alias only. The current directory is the target workspace unless `--dir` or `--repo` is provided. Neither option changes the package source.
 
-If `wb view` reports named workspace requirements, bind them explicitly with a
-repeatable `--workspace NAME=PATH` argument. Never guess sibling repository
-paths. The engine exposes each resolved location to the runner as
-`WORKBENCH_WORKSPACE_<NAME>` and rejects missing required bindings before model
-execution.
+If `wb view` reports named workspace requirements, bind them explicitly with a repeatable `--workspace NAME=PATH` argument. Never guess sibling repository paths. The engine exposes each resolved location to the runner as `WORKBENCH_WORKSPACE_<NAME>` and rejects missing required bindings before model execution.
 
 Choose the output contract based on the caller:
 
-- Default output is a human-readable, colorized activity stream with rendered
-  terminal Markdown.
-- `--final` prints only the final assistant response and is usually the simplest
-  delegation boundary for another agent.
-- `--json` emits normalized Workbench events as NDJSON for programs that need
-  tool lifecycle, file changes, usage, permissions, or terminal status.
-- `--dry-run` resolves, preflights, and translates the request without launching
-  the runner.
+- Default output is a human-readable, colorized activity stream with rendered terminal Markdown.
+- `--final` prints only the final assistant response and is usually the simplest delegation boundary for another agent.
+- `--json` emits normalized Workbench events as NDJSON for programs that need tool lifecycle, file changes, usage, permissions, or terminal status.
+- `--dry-run` resolves, preflights, and translates the request without launching the runner.
 
-Do not parse the human renderer when `--json` provides a stable machine-facing
-stream. The JSON stream contains Workbench events, not raw runner or model
-provider payloads.
+Do not parse the human renderer when `--json` provides a stable machine-facing stream. The JSON stream contains Workbench events, not raw runner or model provider payloads.
 
 ## Run in the background
 
-Every execution belongs to one stable Workbench session. Long-running work can
-continue without keeping the caller attached:
+Every execution belongs to one stable Workbench session. Long-running work can continue without keeping the caller attached:
 
 ```sh
 wb run project-core --dir /path/to/project \
   --task "Review every migration" --detach
 ```
 
-The command prints a session ID such as `wb_...`. Use it to observe or stop the
-active run inside that session:
+The command prints a session ID such as `wb_...`. Use it to observe or stop the active run inside that session:
 
 ```sh
 wb attach wb_...
@@ -169,17 +129,11 @@ wb ps --all
 wb kill wb_...
 ```
 
-`wb attach` observes or replays the session's latest run without starting new
-model work. `wb resume` starts a new run from saved native context when that
-session is resumable. Without an ID, `wb attach` selects the latest session and
-`wb kill` selects the latest active session. `wb ps` shows active and resumable
-sessions; `wb ps --all` also includes terminal one-shot history. Runs persist
-their normalized events for replay.
+`wb attach` observes or replays the session's latest run without starting new model work. `wb resume` starts a new run from saved native context when that session is resumable. Without an ID, `wb attach` selects the latest session. `wb kill` requires a session ID. `wb ps` shows active and resumable sessions; `wb ps --all` also includes terminal one-shot history. Runs persist their normalized events for replay.
 
 ## Leave interactive work to the human
 
-For headless supervision, use the session control commands instead of parsing
-an activity stream:
+For headless supervision, use the session control commands instead of parsing an activity stream:
 
 ```sh
 wb run project-core --task "Review the migration" --detach --json
@@ -190,107 +144,43 @@ wb send wb_... --task-file followup.txt --queue --json
 wb answer wb_... request_id allow --json
 ```
 
-`send` delivers only while idle, or starts a fresh continuation of a completed
-resumable session. An active turn rejects ordinary sends. `--steer` requires an
-active turn; `--queue` explicitly requests a FIFO follow-up. Input can come from
-text, `--task-file`, or explicit `--stdin`. Receipts contain an input ID and an
-`after_sequence` cursor for a subsequent `wait --after`.
+`send` delivers only while idle, or starts a fresh continuation of a completed resumable session. An active turn rejects ordinary sends. `--steer` requires an active turn; `--queue` explicitly requests a FIFO follow-up. Input can come from text, `--task-file`, or explicit `--stdin`. Receipts contain an input ID and an `after_sequence` cursor for a subsequent `wait --after`.
 
-Use a receipt's `run_id` with `wait --run --after` to keep its cursor on that
-execution. Session IDs select the latest run; linked run IDs select the exact
-run. `--run` also pins the first run, whose ID is shared with the session.
+Use a receipt's `run_id` with `wait --run --after` to keep its cursor on that execution. Session IDs select the latest run; linked run IDs select the exact run. `--run` also pins the first run, whose ID is shared with the session.
 
-`wait` is read-only and prints one result with a turn's final response, usage,
-outcome ID, and pending input requests. It returns the first completed turn after
-the cursor, even when a queued follow-up starts immediately. `turn_completed`
-means that turn replied, not that execution or runtime cleanup finished. Repeat
-with `--after` set to the returned `sequence` to advance to the next boundary or
-terminal result. Without a cursor, observation starts at the beginning of that
-run. Headless authoring waits for execution and package verification instead of
-intermediate creator turns. Exit codes are 0 for idle/turn_completed/completed,
-1 for failure, 130 for cancellation or interruption, 2 for input needed, and
-124 for timeout. Interrupting or timing out a wait does not cancel execution.
-Terminal executions and currently pending requests remain observable. `usage`
-is a delta strictly after `--after` through the returned sequence; `usage_total`
-is the cumulative run total at that sequence. Always advance the cursor before
-summing another wait's delta. Repeating the same cursor repeats its interval.
+`wait` is read-only and prints one result with a turn's final response, usage, outcome ID, and pending input requests. It returns the first completed turn after the cursor, even when a queued follow-up starts immediately. `turn_completed` means that turn replied, not that execution or runtime cleanup finished. Repeat with `--after` set to the returned `sequence` to advance to the next boundary or terminal result. Without a cursor, observation starts at the beginning of that run. Headless authoring waits for execution and package verification instead of intermediate creator turns. Exit codes are 0 for idle/turn_completed/completed, 1 for failure, 130 for cancellation or interruption, 2 for input needed, and 124 for timeout. Interrupting or timing out a wait does not cancel execution. Terminal executions and currently pending requests remain observable. `usage` is a delta strictly after `--after` through the returned sequence; `usage_total` is the cumulative run total at that sequence. Always advance the cursor before summing another wait's delta. Repeating the same cursor repeats its interval.
 
-Only answer reported requests. `allow` grants permission once and `deny`
-rejects it. `allow_always` must be explicitly offered by the runner. A question
-accepts an offered label or free text when permitted; multiple questions use
-JSON string arrays, such as `[["First option"],["Second option"]]`, supplied as
-text, `--response-file`, or `--stdin`. `answer --reject` dismisses a question.
-Authentication requests report the runner's URL and instructions; never send
-credentials through `answer`. `ps --json` includes `needs_input` and pending
-request metadata.
+Only answer reported requests. `allow` grants permission once and `deny` rejects it. `allow_always` must be explicitly offered by the runner. A question accepts an offered label or free text when permitted; multiple questions use JSON string arrays, such as `[["First option"],["Second option"]]`, supplied as text, `--response-file`, or `--stdin`. `answer --reject` dismisses a question. Authentication requests report the runner's URL and instructions; never send credentials through `answer`. `ps --json` includes `needs_input` and pending request metadata.
 
-Running `wb run <name>` without a task opens the experimental terminal
-client. Bare `wb` displays command help. Agents should normally use an explicit
-one-shot task, `--final`, or
-`--json`; the interactive interface is intended for a human who wants a
-multi-turn session and explicit permission prompts.
+Running `wb run <name>` without a task opens the experimental terminal client. Bare `wb` displays command help. Agents should normally use an explicit one-shot task, `--final`, or `--json`; the interactive interface is intended for a human who wants a multi-turn session and explicit permission prompts.
 
 ## Authorization and safety
 
-Workbench manifests declare environment variable names, never their values.
-Provide required values through inherited environment, `--env-file`, or
-repeatable `--env NAME=value` flags. An unset required value fails preflight.
-An optional MCP whose environment is unavailable is disabled for that run.
-Prefer `--env-file` or inherited environment for secrets because command-line
-values may be retained in shell history.
+Workbench manifests declare environment variable names, never their values. Provide required values through inherited environment, `--env-file`, or repeatable `--env NAME=value` flags. An unset required value fails preflight. An optional MCP whose environment is unavailable is disabled for that run. Prefer `--env-file` or inherited environment for secrets because command-line values may be retained in shell history.
 
-Never write credentials into `workbench.yml`, task text, saved package metadata,
-or command output. Do not bypass a failed preflight by invoking the runner
-directly. Report the missing runner, tool, runtime, or environment binding so it
-can be fixed before model tokens are spent.
+Never write credentials into `workbench.yml`, task text, saved package metadata, or command output. Do not bypass a failed preflight by invoking the runner directly. Report the missing runner, tool, runtime, or environment binding so it can be fixed before model tokens are spent.
 
-When a Workbench has compatible credentials through more than one provider,
-use `wb connect` to choose the default connection for a runner and runtime.
-For E2B sandbox provisioning, `wb connect --runtime e2b` saves a separate
-host-only API key. An inherited `E2B_API_KEY` overrides it. Daytona works the
-same way with `wb connect --runtime daytona` and `DAYTONA_API_KEY`.
-`wb connect <name>` uses that Workbench as the authentication environment, but
-the resulting default is reusable by every compatible Workbench on the same
-runner and runtime. A run may use `--connection <provider>` to select another
-already-authenticated allowed route. Neither form changes the Workbench's locked
-runner or model or copies runner credentials into the package.
+When a Workbench has compatible credentials through more than one provider, use `wb connect` to choose the default connection for a runner and runtime. For E2B sandbox provisioning, `wb connect --runtime e2b` saves a separate host-only API key. An inherited `E2B_API_KEY` overrides it. Daytona works the same way with `wb connect --runtime daytona` and `DAYTONA_API_KEY`. `wb connect <name>` uses that Workbench as the authentication environment, but the resulting default is reusable by every compatible Workbench on the same runner and runtime. A run may use `--connection <provider>` to select another already-authenticated allowed route. Neither form changes the Workbench's locked runner or model or copies runner credentials into the package.
 
-Workbench can open authentication only through a runner's documented
-command-line operation. Never inject a login command or simulated user input
-into an interactive runner conversation. OpenCode exposes a command-line login
-flow. The current Pi adapter can select credentials already available to Pi,
-but Pi does not expose a command-line login operation. Configure Pi separately
-for local runs. Docker Pi Workbenches must declare and receive provider
-credentials through `--env-file` or `--env`.
+Workbench can open authentication only through a runner's documented command-line operation. Never inject a login command or simulated user input into an interactive runner conversation. OpenCode exposes a command-line login flow. The current Pi adapter can select credentials already available to Pi, but Pi does not expose a command-line login operation. Configure Pi separately for local runs. Docker Pi Workbenches must declare and receive provider credentials through `--env-file` or `--env`.
 
-A Workbench run has the same ability to inspect or change the target workspace
-that its selected runner and runtime provide. Treat it as code execution, review
-the package and requested task, and respect the user's authorization boundaries.
+A Workbench run has the same ability to inspect or change the target workspace that its selected runner and runtime provide. Treat it as code execution, review the package and requested task, and respect the user's authorization boundaries.
 
-A `docker.engine.mode: host` declaration is a request for effective
-administrative access to the host Docker daemon. Never infer authorization from
-the Docker CLI being installed or a socket being present. A human or trusted
-host must opt in for that invocation with `--allow-host-docker` after reviewing
-the Workbench and task.
+A `docker.engine.mode: host` declaration is a request for effective administrative access to the host Docker daemon. Never infer authorization from the Docker CLI being installed or a socket being present. A human or trusted host must opt in for that invocation with `--allow-host-docker` after reviewing the Workbench and task.
 
 ## Workbench or generic subagent?
 
 Prefer a Workbench when:
 
 - The relevant project or platform publishes one for the task.
-- Correct work depends on maintainer conventions, specialized tools, skills, or
-  integrations.
+- Correct work depends on maintainer conventions, specialized tools, skills, or integrations.
 - The task benefits from a tested model and runner combination.
 - Deterministic preflight and a reproducible environment matter.
 - The caller needs normalized events across different runners.
 
-Prefer a generic subagent when no relevant Workbench exists and the work is a
-general, independent task that does not require packaged expertise or runtime
-requirements.
+Prefer a generic subagent when no relevant Workbench exists and the work is a general, independent task that does not require packaged expertise or runtime requirements.
 
-A Workbench can itself be the execution unit delegated by an orchestrator. The
-orchestrator still owns task decomposition, dependencies, retries, review, and
-presentation; the Workbench owns expert preparation and execution.
+A Workbench can itself be the execution unit delegated by an orchestrator. The orchestrator still owns task decomposition, dependencies, retries, review, and presentation; the Workbench owns expert preparation and execution.
 
 ## Author a repository Workbench
 
@@ -302,27 +192,22 @@ wb init migrations --runner opencode \
   --model openai/gpt-5.6-terra
 ```
 
-Edit the generated manifest and instructions, add focused skills when useful,
-then verify the package:
+Edit the generated manifest and instructions, add focused skills when useful, then verify the package:
 
 ```sh
 wb validate .#core
 wb smoke .#core
 ```
 
-Keep Workbenches focused on expert preparation. Do not encode product workflows,
-approval graphs, or user-interface behavior into the package.
+Keep Workbenches focused on expert preparation. Do not encode product workflows, approval graphs, or user-interface behavior into the package.
 
-For a Docker Workbench, either keep a portable Dockerfile inside the package or
-publish a prebuilt image. Build the image under any local name and let the CLI
-export it, reuse existing registry blobs, and upload missing blobs in bounded
-chunks:
+For a Docker Workbench, either keep a portable Dockerfile inside the package or publish a prebuilt image. Build the image under any local name and let the CLI export it, reuse existing registry blobs, and upload missing blobs in bounded chunks:
 
 ```sh
 wb login
 docker build -t project-core-local .
 wb image push project-core-local \
-  --publisher example \
+  --org example \
   --as project-core \
   --tag 0.4.0
 ```
@@ -330,18 +215,31 @@ wb image push project-core-local \
 The corresponding manifest declaration is:
 
 ```yaml
-runtime: docker
-image: images.workbenches.dev/example/project-core:0.4.0
+spec: 1
+runtimes:
+  docker:
+    image: images.workbenches.dev/example/project-core:0.4.0
 ```
 
-Use `wb image login` when a standard OCI client needs explicit registry
-credentials. Direct client pushes are subject to the registry edge's
-per-request body limit, so use `wb image push` for images with large layers.
-Prefer a versioned tag and do not silently replace the image behind a published
-Workbench version.
+Use `wb image login [--org <slug>] [--client <executable>]` when a standard OCI client needs explicit registry credentials. `--client` names the OCI client (default `docker`). Direct client pushes are subject to the registry edge's per-request body limit, so use `wb image push` for images with large layers. Prefer a versioned tag and do not silently replace the image behind a published Workbench version.
 
-For substantial authoring, editing, or improvement work, use the official
-creator through the same headless `create` command:
+## Publish to the registry
+
+Registry commands act as one connected organization at a time:
+
+```sh
+wb login --org example     # browser approval; connects one organization
+wb whoami                  # default organization and key expiry
+wb org list                # connected organizations
+wb org use example         # change the default organization
+wb push .#core             # store example/core@<version>, internal
+wb publish example/core    # submit the latest stored version for public review
+wb unpublish example/core  # make a public workbench internal again
+```
+
+`wb push` stores an immutable internal version, visible only to the organization's members and keys; each push needs a higher manifest version. `wb publish` submits the latest stored version, or a local package directly, for public review and is the only act that can make a workbench public. A public workbench takes new versions only through `wb publish`; the registry refuses `wb push` to it. `wb unpublish` makes it internal again. Pass `--org <slug>` to use a connected organization other than the default.
+
+For substantial authoring, editing, or improvement work, use the official creator through the same headless `create` command:
 
 ```sh
 wb create core --dir /path/to/repository \
@@ -351,33 +249,12 @@ wb wait wb_... --timeout 120 --json
 wb create --from wb_... --feedback "Check failure cleanup" --detach --json
 ```
 
-Supply one brief through `--task`, `--task-file`, or `--stdin`; `--from` can
-infer improvements from evidence without one. Bare `create` remains interactive.
-Detached JSON reports session/run/operation IDs. A later `wait` reports verified
-package paths and changed files in `authoring`, not merely the creator's final
-text. Engine-owned validation, package scope, version advancement, and runtime
-smoke must pass before authoring is completed. A native run may be completed
-while authoring verification is running or failed; `run_state` distinguishes
-that case. Answer reported permissions explicitly, then wait again. Saved
-snapshots are immutable: author or improve a local source package.
+Supply one brief through `--task`, `--task-file`, or `--stdin`; `--from` can infer improvements from evidence without one. Bare `create` remains interactive. Detached JSON reports session/run/operation IDs. A later `wait` reports verified package paths and changed files in `authoring`, not merely the creator's final text. Engine-owned validation, package scope, version advancement, and runtime smoke must pass before authoring is completed. A native run may be completed while authoring verification is running or failed; `run_state` distinguishes that case. Answer reported permissions explicitly, then wait again. Saved snapshots are immutable: author or improve a local source package.
 
 ## Current reference-engine support
 
-The repository is in public alpha development. The current reference engine
-supports the draft-0 manifest plus OpenCode and Pi runners. Local, Docker, and
-E2B execution support one-shot, detached, and experimental interactive sessions,
-including native context resume. Docker and E2B support image preparation and
-runtime smoke checks. Daytona runs one-shot and detached sessions in a fresh
-sandbox from the declared image, without an interactive terminal or sandbox
-recovery yet. OpenCode and Pi have different native capabilities, which
-must be reported honestly rather than hidden behind a fallback. Other runners
-and runtimes remain part of the standard's extensible design.
+The current reference engine supports spec 0 and spec 1 manifests (spec 1 is the standard; spec 0 is frozen legacy) plus OpenCode and Pi runners. Local, Docker, and E2B execution support one-shot, detached, and experimental interactive sessions, including native context resume. Docker and E2B support image preparation and runtime smoke checks. Daytona runs one-shot and detached sessions in a fresh sandbox from the declared image, without an interactive terminal or sandbox recovery yet. OpenCode only; Pi cannot run on Daytona yet. OpenCode and Pi have different native capabilities, which must be reported honestly rather than hidden behind a fallback. Other runners and runtimes remain part of the standard's extensible design.
 
-The Workbench author locks its runner, model policy, provider routes, and native
-runner configuration. Consumers connect credentials once per runner/runtime
-trust boundary with `wb connect`. A `--connection` run override can select only
-an authenticated route allowed by the manifest. Never place credential values in
-a manifest, saved run, dry-run output, or normalized event.
+The Workbench author locks its runner, model policy, provider routes, and native runner configuration. Consumers connect credentials once per runner/runtime trust boundary with `wb connect`. A `--connection` run override can select only an authenticated route allowed by the manifest. Never place credential values in a manifest, saved run, dry-run output, or normalized event.
 
-For normative package semantics, read `SPEC.md`. For the normalized run and
-event contract, read `docs/EXECUTION.md`.
+For normative package semantics, read `SPEC.md`. For the normalized run and event contract, read `docs/EXECUTION.md`.

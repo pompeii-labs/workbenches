@@ -32,13 +32,21 @@ What wins when sources conflict. Always include: the user's stated scope beats e
 
 Rules that hold on every run, each stated once.
 
-> Playable first: the core loop works before any polish. Never fake an acknowledgment to make a capture pass, and never drop a failing capture from the manifest. Look before you judge. A claim about how the result looks cites a screenshot you opened.
+> - Playable first: the core loop works before any polish.
+> - Never fake an acknowledgment to make a capture pass, and never drop a failing capture from the manifest.
+> - Look before you judge. A claim about how the result looks cites a screenshot you opened.
 
 ### Field rules
 
 The highest-value section, and the one generic advice can never write. Each rule is a failure that happened, stated as the fix. Group by area.
 
-> Never `pkill -f` a server: the pattern matches your own shell and kills it. Use the stop command the serve tool printed. Wait on conditions, never fixed frame counts or sleeps. Every command runs from the workspace root with relative paths. Never use `..`; the permission checker resolves it against the root and ends the run. Never wrap a user-triggered call in a silent `try?`: a failed request then looks exactly like a dead button. Follow the official reference implementation for auth session refresh; never call `refreshSession` from app code. Test every auth or storage change starting from state the previous build left behind, not only from a fresh session. Measure latency from the input event to the rendered change, never from an internal variable.
+> - Never `pkill -f` a server: the pattern matches your own shell and kills it. Use the stop command the serve tool printed.
+> - Wait on conditions, never fixed frame counts or sleeps.
+> - Every command runs from the workspace root with relative paths. Never use `..`; the permission checker resolves it against the root and ends the run.
+> - Never wrap a user-triggered call in a silent `try?`: a failed request then looks exactly like a dead button.
+> - Follow the official reference implementation for auth session refresh; never call `refreshSession` from app code.
+> - Test every auth or storage change starting from state the previous build left behind, not only from a fresh session.
+> - Measure latency from the input event to the rendered change, never from an internal variable.
 
 Field rules name the canonical way and forbid the specific anti-pattern. The costliest failures come from a model hand-rolling something a reference implementation already solves, from tests that only cover fresh state, and from acceptance measured somewhere the user never looks.
 
@@ -48,7 +56,10 @@ Add a field rule every time a trial transcript shows the model losing time or qu
 
 A checklist a reviewer can tick from evidence, not a mood.
 
-> The gate exits 0 on the final run. Every planned state has a capture you opened. Data survives a relaunch. Delete exists wherever create does.
+> - The gate exits 0 on the final run.
+> - Every planned state has a capture you opened.
+> - Data survives a relaunch.
+> - Delete exists wherever create does.
 
 ### Report
 
