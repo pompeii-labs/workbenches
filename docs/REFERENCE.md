@@ -889,6 +889,31 @@ when the previous one is closed. `--detach` returns the stable session ID while
 that continuation runs in the background. Killing cooperatively terminates the
 active run without deleting the session or its resumable context.
 
+`wb status` shows live progress for every active run on the machine, plus runs
+that finished in the last 10 minutes: a plan bar from the agent's todo list
+(`plan.updated`), a step bar of tool calls on the current todo against a typical
+todo, elapsed time, and cost. A run waiting on input shows that first, with its
+`wb answer` command. The step bar's "typical" is the run's own median once three
+todos have finished, otherwise the median over the Workbench's finished runs.
+Past typical it turns orange and keeps counting, which also shows a todo list
+the agent stopped updating.
+
+```sh
+wb status              # one line per run
+wb status --line       # one line for a status bar
+wb status --json       # run summaries for other tools
+```
+
+`--line` suits any status bar that runs a command, such as Claude Code:
+
+```json
+{ "statusLine": { "type": "command", "command": "wb status --line", "refreshInterval": 1 } }
+```
+
+Status folds each run's event log incrementally into a private
+`status-cache.json` in the run directory, so frequent polling reads only new
+events.
+
 Headless callers can supervise the same engine without keeping a client attached:
 
 ```sh

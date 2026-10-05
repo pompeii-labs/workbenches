@@ -291,6 +291,7 @@ wb validate project-core   # validate a package
 wb smoke project-core      # preflight without model work
 wb run project-core        # open an interactive session
 wb ps                      # list active and resumable sessions
+wb status                  # live progress of active and recent runs
 wb resume wb_...           # reopen a session
 wb outcome wbo_...         # inspect returned results
 wb upgrade                 # update saved Workbench packages
