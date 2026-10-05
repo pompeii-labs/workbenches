@@ -6,7 +6,7 @@ import { Workbench } from '../src/workbench/index.js';
 
 const root = process.cwd();
 const creator = join(root, '.workbenches', 'creator');
-const references = join(creator, 'skills', 'workbench-authoring', 'references');
+const references = join(creator, 'skills', 'wb-authoring', 'references');
 
 describe('published Workbench creator', () => {
     test('resolves as a valid package', async () => {
