@@ -100,8 +100,6 @@ export const addCommand = defineCommand({
                     registry: catalogRegistry,
                     kind: 'save',
                 });
-            const notice = await new RegistryTelemetry({ home }).claimNotice();
-            if (notice) output.message(notice, 'warning', 'stderr');
             return;
         }
 

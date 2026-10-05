@@ -1,6 +1,11 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join, resolve } from 'node:path';
+
 import { defineCommand } from 'citty';
 
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
+import { CatalogSnapshots } from '../catalog/snapshots.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import { SmokeReport } from '../runtimes/smokereport.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
@@ -8,6 +13,7 @@ import { workbenchHome } from '../storage.js';
 import type { ResolvedWorkbench } from '../types.js';
 import {
     selectedRuntime,
+    Workbench,
     WorkbenchEnvironment,
     WorkbenchResolver,
     WorkbenchSource,
@@ -74,7 +80,6 @@ export const smokeCommand = defineCommand({
         });
         const home = workbenchHome();
         const smoke = new SmokeRun({
-            reference: args.source,
             ...(args.runtime ? { runtime: args.runtime } : {}),
             allowHostDocker: args['allow-host-docker'],
             allowUncheckedGpu: args['allow-unchecked-gpu'],
@@ -91,7 +96,9 @@ export const smokeCommand = defineCommand({
             const resolved = await new WorkbenchResolver().resolve(args.source, {
                 home,
             });
-            await smoke.check(resolved.workbench, resolved.workspaceDirectory);
+            await smoke.check(args.source, resolved.workbench, {
+                workspaceDirectory: resolved.workspaceDirectory,
+            });
         } else {
             const source = new WorkbenchSource();
             const reference = source.parse(args.source);
@@ -102,7 +109,17 @@ export const smokeCommand = defineCommand({
                     : await source.discover(local.directory);
                 if (selected.length === 0)
                     throw new Error('No matching Workbenches found');
-                for (const candidate of selected) await smoke.check(candidate);
+                for (const candidate of selected) {
+                    const inRepository =
+                        !reference.selector &&
+                        resolve(candidate.packageDirectory) !== local.directory;
+                    await smoke.check(
+                        inRepository
+                            ? `${args.source}#${basename(candidate.packageDirectory)}`
+                            : args.source,
+                        candidate
+                    );
+                }
             } else {
                 const github = new GitHubWorkbenchSource();
                 const workbenches = await github.fetchAll(
@@ -111,8 +128,24 @@ export const smokeCommand = defineCommand({
                 );
                 if (workbenches.length === 0)
                     throw new Error('No matching Workbenches found');
-                for (const workbench of workbenches) {
-                    await smoke.check(github.resolve(workbench));
+                // Smoke reads skills and instructions from disk, so the remote
+                // packages are materialized into a scratch directory first.
+                const scratch = await mkdtemp(join(tmpdir(), 'wb-smoke-'));
+                try {
+                    const snapshots = new CatalogSnapshots(scratch);
+                    for (const workbench of workbenches) {
+                        const { packagePath } = await snapshots.materialize(
+                            workbench.selector,
+                            workbench.files
+                        );
+                        const candidate = await Workbench.load(packagePath);
+                        await smoke.check(
+                            `${reference.source}#${workbench.selector}`,
+                            candidate
+                        );
+                    }
+                } finally {
+                    await rm(scratch, { recursive: true, force: true });
                 }
             }
         }
@@ -121,7 +154,6 @@ export const smokeCommand = defineCommand({
 });
 
 interface SmokeSettings {
-    reference: string;
     runtime?: string;
     allowHostDocker: boolean;
     allowUncheckedGpu: boolean;
@@ -144,22 +176,29 @@ class SmokeRun {
 
     constructor(private readonly settings: SmokeSettings) {}
 
-    async check(candidate: ResolvedWorkbench, workspaceDirectory?: string) {
+    /** `reference` is the pasteable selector used in connect commands. */
+    async check(
+        reference: string,
+        candidate: ResolvedWorkbench,
+        options: { workspaceDirectory?: string | undefined } = {}
+    ) {
+        const { workspaceDirectory } = options;
         const report = this.settings.json
-            ? await this.report(candidate, workspaceDirectory)
-            : await this.print(candidate, workspaceDirectory);
+            ? await this.report(reference, candidate, workspaceDirectory)
+            : await this.print(reference, candidate, workspaceDirectory);
         if (report.exitCode === 1 || this.exitCode === 0) {
             this.exitCode = report.exitCode;
         }
     }
 
     private async report(
+        reference: string,
         candidate: ResolvedWorkbench,
         workspaceDirectory?: string
     ): Promise<SmokeReport> {
         let report: SmokeReport;
         try {
-            const workbench = await this.run(candidate, workspaceDirectory);
+            const workbench = await this.run(reference, candidate, workspaceDirectory);
             report = SmokeReport.completed(workbench.workbench, workbench.result);
         } catch (error) {
             report = SmokeReport.failed(candidate, error);
@@ -169,12 +208,17 @@ class SmokeRun {
     }
 
     private async print(
+        reference: string,
         candidate: ResolvedWorkbench,
         workspaceDirectory?: string
     ): Promise<SmokeReport> {
         const output = new CliPresenter();
         output.progress(`Checking ${candidate.manifest.name}`);
-        const { workbench, result } = await this.run(candidate, workspaceDirectory);
+        const { workbench, result } = await this.run(
+            reference,
+            candidate,
+            workspaceDirectory
+        );
         const report = SmokeReport.completed(workbench, result);
         const name = workbench.manifest.name;
         const disabled = result.disabledMcps.length
@@ -224,7 +268,11 @@ class SmokeRun {
         return report;
     }
 
-    private async run(candidate: ResolvedWorkbench, workspaceDirectory?: string) {
+    private async run(
+        reference: string,
+        candidate: ResolvedWorkbench,
+        workspaceDirectory?: string
+    ) {
         const { settings } = this;
         const workbench = withRuntime(candidate, settings.runtime);
         const workspaces = await this.workspaces.bind({
@@ -243,7 +291,7 @@ class SmokeRun {
             workspaces,
             allowHostDocker: settings.allowHostDocker,
             allowUncheckedGpu: settings.allowUncheckedGpu,
-            reference: settings.reference,
+            reference,
             home: settings.home,
         }).check();
         return { workbench, result };

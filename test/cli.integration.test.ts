@@ -2004,6 +2004,8 @@ describe('CLI integration', () => {
         expect(added.stdout).toContain(
             `saved\tfixture-saved\t${fixture.packageDirectory}`
         );
+        expect(added.stderr).not.toContain('anonymous');
+        expect(await stat(join(home, 'preferences.json')).catch(() => null)).toBeNull();
 
         const currentAdd = await executeCli(
             ['add', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
@@ -2229,6 +2231,31 @@ describe('CLI integration', () => {
         expect(missingImage.code).toBe(1);
         expect(missingImage.stderr).toContain(
             '--image is required for the docker runtime'
+        );
+        const missingDaytonaImage = await executeCli(
+            ['init', 'core', '--runtimes', 'local,daytona'],
+            {},
+            repository
+        );
+        expect(missingDaytonaImage.code).toBe(1);
+        expect(missingDaytonaImage.stderr).toContain(
+            '--image is required for the daytona runtime'
+        );
+        const missingTwo = await executeCli(
+            ['init', 'core', '--runtimes', 'docker,e2b'],
+            {},
+            repository
+        );
+        expect(missingTwo.stderr).toContain(
+            '--image is required for the docker and e2b runtimes'
+        );
+        const missingThree = await executeCli(
+            ['init', 'core', '--runtimes', 'docker,e2b,daytona'],
+            {},
+            repository
+        );
+        expect(missingThree.stderr).toContain(
+            '--image is required for the docker, e2b, and daytona runtimes'
         );
         const unknown = await executeCli(
             ['init', 'core', '--runtimes', 'kubernetes'],
@@ -2564,6 +2591,39 @@ describe('CLI exit 3 for missing credentials', () => {
             .map((line) => JSON.parse(line).workbench)
             .toSorted();
         expect(names).toEqual(['fixture-core', 'fixture-second']);
+    });
+
+    test('smoke connect_command keeps the package selector for a repository source', async () => {
+        const fixture = await createFixture();
+        const second = join(fixture.root, '.workbenches', 'second');
+        await cp(fixture.packageDirectory, second, { recursive: true });
+        const manifest = join(second, 'workbench.yml');
+        await writeFile(
+            manifest,
+            (await readFile(manifest, 'utf8')).replace(
+                'name: fixture-core',
+                'name: fixture-second'
+            )
+        );
+        const home = await temporaryDirectory('smoke-connect-selector-');
+        const bin = await fakeBin();
+        const smoked = await executeCli(
+            ['smoke', fixture.root, '--json'],
+            withoutProviderKeys({
+                PATH: `${bin}:${process.env.PATH}`,
+                WORKBENCH_HOME: home,
+            })
+        );
+        expect(smoked.code).toBe(3);
+        const commands = smoked.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line).authentication.connect_command)
+            .toSorted();
+        expect(commands).toEqual([
+            `wb connect ${fixture.root}#core`,
+            `wb connect ${fixture.root}#second`,
+        ]);
     });
 
     test('smoke exits 3 when a sandbox runtime has no API key', async () => {

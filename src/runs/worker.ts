@@ -159,7 +159,6 @@ export class RunWorker {
         registry: CatalogRegistryReference,
         idempotencyKey: string
     ): Promise<void> {
-        if (!(await this.telemetry.enabled())) return;
         await this.telemetry.report({
             registry,
             kind: 'run',

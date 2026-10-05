@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -69,26 +69,45 @@ describe.skipIf(!binary)('compiled release startup', () => {
 
     test('does not automatically load repository dotenv files', async () => {
         const directory = await fixture();
-        await writeFile(join(directory, '.env'), 'WB_TELEMETRY_DISABLED=1\n');
+        await writeFile(
+            join(directory, '.env'),
+            `WORKBENCH_HOME=${join(directory, 'dotenv-home')}\n`
+        );
 
-        const result = await execute(directory, ['telemetry', 'status']);
-        expect(result.code).toBe(0);
-        expect(result.stdout.trim()).toBe('anonymous run reporting: on');
-        expect(result.stderr).toBe('');
+        await addLocalWorkbench(directory);
+        expect(await exists(join(directory, 'engine'))).toBeTrue();
+        expect(await exists(join(directory, 'dotenv-home'))).toBeFalse();
     });
 
     test('continues to honor explicitly inherited environment', async () => {
         const directory = await fixture();
-        await writeFile(join(directory, '.env'), 'WB_TELEMETRY_DISABLED=0\n');
+        await writeFile(
+            join(directory, '.env'),
+            `WORKBENCH_HOME=${join(directory, 'dotenv-home')}\n`
+        );
 
-        const result = await execute(directory, ['telemetry', 'status'], {
-            WB_TELEMETRY_DISABLED: '1',
+        await addLocalWorkbench(directory, {
+            WORKBENCH_HOME: join(directory, 'inherited-home'),
         });
-        expect(result.code).toBe(0);
-        expect(result.stdout.trim()).toBe('anonymous run reporting: off');
-        expect(result.stderr).toBe('');
+        expect(await exists(join(directory, 'inherited-home'))).toBeTrue();
+        expect(await exists(join(directory, 'dotenv-home'))).toBeFalse();
+        expect(await exists(join(directory, 'engine'))).toBeFalse();
     });
 });
+
+async function addLocalWorkbench(
+    directory: string,
+    environment: Record<string, string> = {}
+): Promise<void> {
+    const created = await execute(directory, ['init', 'core'], environment);
+    expect(created.code).toBe(0);
+    const added = await execute(directory, ['add', './.workbenches/core'], environment);
+    expect(added.code).toBe(0);
+}
+
+async function exists(path: string): Promise<boolean> {
+    return (await stat(path).catch(() => null)) !== null;
+}
 
 async function fixture(): Promise<string> {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-binary-'));
