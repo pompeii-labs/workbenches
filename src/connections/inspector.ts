@@ -10,6 +10,7 @@ import { piRouteCandidates } from '../runners/pi/providers.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import type { PreparedRuntime } from '../runtimes/contracts.js';
 import type { ResolvedWorkbench } from '../types.js';
+import { AuthenticationRequiredError } from './error.js';
 import { ConnectionStore, type RunnerConnectionSelection } from './store.js';
 import { connectionProviderCapabilities } from './targets.js';
 
@@ -118,7 +119,7 @@ export class ConnectionInspector {
             ? requestedConnection(authenticatedRoutes, options.connection)
             : undefined;
         if (options.connection && !requested) {
-            throw new Error(
+            throw new AuthenticationRequiredError(
                 `Connection ${options.connection} is not authenticated for ${canonicalModel(this.#workbench)} with ${this.#workbench.manifest.runner} in the ${this.#runtime.name} runtime. Run ${connectCommand(this.#reference)}.`
             );
         }
@@ -164,7 +165,7 @@ export class ConnectionInspector {
             ...(connection ? { connection } : {}),
         });
         if (status.ready && status.configuration) return status.configuration;
-        throw new Error(
+        throw new AuthenticationRequiredError(
             `No authenticated route is available for ${canonicalModel(this.#workbench)}. Run ${status.connectCommand}.`
         );
     }

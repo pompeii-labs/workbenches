@@ -1,5 +1,6 @@
 import { defineCommand } from 'citty';
 
+import { AuthenticationRequiredError } from '../connections/error.js';
 import { createEventRenderer } from '../rendering/index.js';
 import { parseRepository, RepositoryDeliveryStore } from '../repositories/index.js';
 import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
@@ -234,6 +235,7 @@ export const runCommand = defineCommand({
                 const output = new CliPresenter();
                 let translation = '';
                 let failure: string | undefined;
+                let authentication: AuthenticationRequiredError | undefined;
                 const code = await WorkbenchRun.execute(
                     {
                         workbenchPath: resolved.workbench.packageDirectory,
@@ -252,6 +254,9 @@ export const runCommand = defineCommand({
                         onEvent: (event) => {
                             if (event.type !== 'run.failed') return;
                             failure = string(object(event.data)?.message);
+                            authentication = AuthenticationRequiredError.fromFailure(
+                                event.data
+                            );
                         },
                     },
                     {
@@ -262,6 +267,7 @@ export const runCommand = defineCommand({
                     }
                 );
                 if (code !== 0) {
+                    if (authentication) throw authentication;
                     throw new Error(failure ?? 'Workbench dry run failed');
                 }
                 if (!translation.trim()) {
@@ -296,7 +302,7 @@ export const runCommand = defineCommand({
                         ...(args.connection ? { connection: args.connection } : {}),
                     }).check();
                     if (!smoke.authentication.ready) {
-                        throw new Error(
+                        throw new AuthenticationRequiredError(
                             `No authenticated route is available for ${smoke.authentication.model}. Run ${smoke.authentication.connectCommand}.`
                         );
                     }
@@ -360,7 +366,9 @@ export const runCommand = defineCommand({
                     process.exitCode = 130;
                     return;
                 }
-                if (followed.terminalStatus === 'failed') process.exitCode = 1;
+                if (followed.terminalStatus === 'failed') {
+                    process.exitCode = followed.failureExitCode ?? 1;
+                }
                 if (followed.terminalStatus === 'cancelled') process.exitCode = 130;
                 if (
                     (await new RepositoryDeliveryStore(home).read(stored.id))?.state ===

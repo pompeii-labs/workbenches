@@ -1,3 +1,4 @@
+import { AuthenticationRequiredError } from '../connections/error.js';
 import type { RuntimePhase } from './contracts.js';
 
 export class RuntimeError extends Error {
@@ -16,7 +17,12 @@ export class RuntimeError extends Error {
         this.phase = phase;
     }
 
-    static from(runtime: string, phase: RuntimePhase, error: unknown): RuntimeError {
+    static from(
+        runtime: string,
+        phase: RuntimePhase,
+        error: unknown
+    ): RuntimeError | AuthenticationRequiredError {
+        if (error instanceof AuthenticationRequiredError) return error;
         if (
             error instanceof RuntimeError &&
             error.runtime === runtime &&

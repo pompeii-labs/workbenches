@@ -1,3 +1,4 @@
+import { AuthenticationRequiredError } from '../connections/error.js';
 import type { RunnerConnectionSelection } from '../connections/store.js';
 import type { WorkbenchManifest, WorkbenchModelPolicy } from '../types.js';
 import { modelLabel } from './label.js';
@@ -131,7 +132,7 @@ export class ModelRouter {
             routes.find((route) => authenticated.has(route.provider)) ??
             (options.requireAuthentication ? undefined : routes[0]);
         if (!selected) {
-            throw new Error(
+            throw new AuthenticationRequiredError(
                 `No authenticated route is available for ${modelLabel(options.workbench.manifest.model)}. Run ${connectCommand(options.workbench.manifest.name)}.`
             );
         }

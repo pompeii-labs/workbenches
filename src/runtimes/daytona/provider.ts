@@ -1,3 +1,4 @@
+import { AuthenticationRequiredError } from '../../connections/error.js';
 import { requirementsOf, selectedRuntime } from '../../workbench/runtimes.js';
 import type { PreparedRuntime, RuntimePrepareRequest } from '../contracts.js';
 import { RuntimeError } from '../error.js';
@@ -82,9 +83,7 @@ export class DaytonaRuntimeProvider extends RemoteProvider {
     private open(request: RuntimePrepareRequest): DaytonaClient {
         const key = this.dependencies.keys.key('daytona', request.environment);
         if (!key?.trim()) {
-            throw new RuntimeError(
-                this.name,
-                'prepare',
+            throw new AuthenticationRequiredError(
                 'DAYTONA_API_KEY is required for the Daytona runtime. Run wb connect --runtime daytona once, or set DAYTONA_API_KEY.'
             );
         }
