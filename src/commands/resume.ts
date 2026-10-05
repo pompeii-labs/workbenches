@@ -168,7 +168,7 @@ export const resumeCommand = defineCommand({
             return;
         }
         if (followed.terminalStatus === 'failed') {
-            process.exitCode = 1;
+            process.exitCode = followed.failureExitCode ?? 1;
         } else if (followed.terminalStatus === 'cancelled') {
             process.exitCode = 130;
         } else if (!followed.reachedBoundary) {

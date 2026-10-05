@@ -1,5 +1,5 @@
+import { AuthenticationRequiredError } from '../../connections/error.js';
 import type { PreparedRuntime, RuntimePrepareRequest } from '../contracts.js';
-import { RuntimeError } from '../error.js';
 import { DiskTransfer } from '../remote/disk/transfer.js';
 import { RemoteProvider } from '../remote/provider.js';
 import { RuntimeSecretStore } from '../secrets.js';
@@ -35,9 +35,7 @@ export class E2BRuntimeProvider extends RemoteProvider {
                 return key ? new E2BSdkClient(key) : null;
             })();
         if (!client) {
-            throw new RuntimeError(
-                this.name,
-                'prepare',
+            throw new AuthenticationRequiredError(
                 'E2B_API_KEY is required for the E2B runtime. Run wb connect --runtime e2b once, or set E2B_API_KEY.'
             );
         }

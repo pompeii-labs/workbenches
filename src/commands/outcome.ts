@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 
 import { defineCommand } from 'citty';
 
+import { AuthenticationRequiredError } from '../connections/error.js';
 import {
     OutcomeApplier,
     OutcomeExporter,
@@ -151,7 +152,7 @@ async function recoverOutcome(
 function e2bRecoveryClient(): E2BSdkClient {
     const key = RuntimeSecretStore.key('e2b', process.env);
     if (!key)
-        throw new Error(
+        throw new AuthenticationRequiredError(
             'E2B_API_KEY is required to manage the original outcome sandbox. Run wb connect --runtime e2b once, or set E2B_API_KEY.'
         );
     return new E2BSdkClient(key);

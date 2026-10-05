@@ -1,4 +1,5 @@
 import type { CatalogRegistryReference } from '../catalog/index.js';
+import { AuthenticationRequiredError } from '../connections/error.js';
 import type { NormalizedRunnerInput } from '../runners/session.js';
 import { normalizeRunnerInput } from '../runners/session.js';
 import { SessionStore } from '../sessions/index.js';
@@ -189,7 +190,7 @@ export class InteractiveRunWorker {
             return this.exitCode;
         } catch (error) {
             await this.fail(error);
-            return 1;
+            return this.exitCode;
         } finally {
             await launchReport;
             options.signal?.removeEventListener('abort', abort);
@@ -588,7 +589,8 @@ export class InteractiveRunWorker {
     private async fail(error: unknown): Promise<void> {
         if (this.terminal) return;
         this.terminal = true;
-        this.exitCode = 1;
+        this.exitCode =
+            error instanceof AuthenticationRequiredError ? error.exitCode : 1;
         this.receiveAbort.abort();
         this.nativeRequests.rejectAll();
         await this.rejectQueued('run_failed').catch(() => {});
@@ -597,7 +599,7 @@ export class InteractiveRunWorker {
         await this.store
             .update(this.runId, {
                 status: 'failed',
-                exit_code: 1,
+                exit_code: this.exitCode,
                 finished_at: new Date().toISOString(),
             })
             .catch(() => {});
@@ -620,7 +622,10 @@ export class InteractiveRunWorker {
             initialSequence: last?.sequence ?? 0,
             onEvent: (event) => this.store.appendEvent(this.runId, event),
         });
-        await emitter.emit('run.failed', { message: errorMessage(error) });
+        await emitter.emit('run.failed', {
+            message: errorMessage(error),
+            ...AuthenticationRequiredError.failure(error),
+        });
     }
 
     private requireSession(): InteractiveRunSession {

@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { RunnerCredentialStore } from '../connections/credentials.js';
+import { AuthenticationRequiredError } from '../connections/error.js';
 import { ConnectionInspector } from '../connections/inspector.js';
 import {
     ConnectionStore,
@@ -328,7 +329,7 @@ export class ExecutionPreparation {
             return { configuration: status.configuration };
         if (preferred && matchesRequestedConnection(preferred, connection)) {
             if (!this.options.allowAuthentication) {
-                throw new Error(
+                throw new AuthenticationRequiredError(
                     `Authentication is required for ${preferred.provider}. Start this Workbench interactively once to finish ${preferred.nativeProvider} sign-in.`
                 );
             }
@@ -347,11 +348,11 @@ export class ExecutionPreparation {
             status?.connectCommand ??
             `wb connect ${this.options.reference ?? workbench.manifest.name}`;
         if (connection) {
-            throw new Error(
+            throw new AuthenticationRequiredError(
                 `Connection ${connection} is not authenticated for ${model} with ${workbench.manifest.runner} in the ${runtime.name} runtime. Run ${connect}.`
             );
         }
-        throw new Error(
+        throw new AuthenticationRequiredError(
             `No authenticated route is available for ${model}. Run ${connect}.`
         );
     }

@@ -2,6 +2,7 @@ import { basename, join } from 'node:path';
 
 import { WorkbenchPackage } from '../catalog/index.js';
 import { CatalogSnapshots } from '../catalog/snapshots.js';
+import { AuthenticationRequiredError } from '../connections/error.js';
 import { modelLabel } from '../models/index.js';
 import { RepositoryGitHub, RepositoryWorkspace } from '../repositories/index.js';
 import { RunnerRegistry } from '../runners/index.js';
@@ -281,6 +282,8 @@ export class RunDispatcher {
                 const message = events
                     .toReversed()
                     .find((event) => event.type === 'run.failed')?.data;
+                const authentication = AuthenticationRequiredError.fromFailure(message);
+                if (authentication) throw authentication;
                 throw new Error(
                     typeof message === 'object' &&
                         message !== null &&

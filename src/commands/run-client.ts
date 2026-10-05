@@ -1,3 +1,4 @@
+import { AuthenticationRequiredError } from '../connections/error.js';
 import type { RunHandle, WorkbenchEvent } from '../runs/index.js';
 
 export interface FollowRunOptions {
@@ -10,6 +11,8 @@ export interface FollowRunResult {
     interrupted: boolean;
     reachedBoundary: boolean;
     terminalStatus?: 'completed' | 'failed' | 'cancelled';
+    /** The process exit code when the run failed: 3 for missing authentication, else 1. */
+    failureExitCode?: number;
 }
 
 export class CliRunClient {
@@ -22,6 +25,7 @@ export class CliRunClient {
         let interrupted = false;
         let reachedBoundary = false;
         let terminalStatus: FollowRunResult['terminalStatus'];
+        let failureExitCode: number | undefined;
         const interrupt = () => {
             interrupted = true;
             controller.abort();
@@ -36,6 +40,11 @@ export class CliRunClient {
             })) {
                 if (!options.include || options.include(event)) render(event);
                 terminalStatus = terminalStatusFrom(event) ?? terminalStatus;
+                if (event.type === 'run.failed') {
+                    failureExitCode = AuthenticationRequiredError.exitCodeFor(
+                        event.data
+                    );
+                }
                 if (options.until?.(event)) {
                     reachedBoundary = true;
                     break;
@@ -48,6 +57,7 @@ export class CliRunClient {
             interrupted,
             reachedBoundary,
             ...(terminalStatus ? { terminalStatus } : {}),
+            ...(failureExitCode === undefined ? {} : { failureExitCode }),
         };
     }
 
