@@ -10,7 +10,7 @@ const creatorDirectory = join(root, '.workbenches', 'creator');
 const referencesDirectory = join(
     creatorDirectory,
     'skills',
-    'workbench-authoring',
+    'wb-authoring',
     'references'
 );
 
@@ -26,23 +26,21 @@ describe('creator Workbench', () => {
 
         expect(workbench.manifest).toEqual({
             spec: 1,
-            version: '0.1.9',
+            version: '0.2.0',
             name: 'workbench-creator',
             description:
                 'Design, author, review, and test repository-owned Workbenches.',
             runner: 'opencode',
             model: { id: 'openai/gpt-5.6-sol' },
             instructions: './instructions.md',
-            skills: ['./skills/workbench-authoring'],
+            skills: ['./skills/wb-authoring'],
             tools: ['wb'],
             mcps: [],
             env: {},
             requirements: { gpu: false },
             runtimes: { local: {} },
         });
-        expect(workbench.skills.map((skill) => skill.name)).toEqual([
-            'workbench-authoring',
-        ]);
+        expect(workbench.skills.map((skill) => skill.name)).toEqual(['wb-authoring']);
     });
 
     test('keeps the candidate reference snapshot pinned to its version', async () => {
