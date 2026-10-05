@@ -49,24 +49,11 @@ export class RegistryPublisher {
         workbench: ResolvedWorkbench,
         options: { slug?: string; progress?: (message: string) => void } = {}
     ): Promise<RegistryPushedVersion> {
-        const slug = options.slug ?? workbench.manifest.name;
-        if (!slugPattern.test(slug)) {
-            throw new Error(`Workbench name is not a valid registry slug: ${slug}`);
-        }
-        options.progress?.(`Preparing ${account.slug}/${slug}`);
-        const files = await new WorkbenchPackage(workbench).files();
-        const total = files.reduce((bytes, file) => bytes + file.bytes.byteLength, 0);
-        if (files.length > 256) {
-            throw new Error('Workbench package exceeds 256 files');
-        }
-        if (total > 10 * 1024 * 1024) {
-            throw new Error('Workbench package exceeds 10485760 bytes');
-        }
-        const oversized = files.find((file) => file.bytes.byteLength > 2 * 1024 * 1024);
-        if (oversized) {
-            throw new Error(`Workbench package file is too large: ${oversized.path}`);
-        }
-        const digest = WorkbenchPackage.digest(files);
+        const { slug, files, digest } = await RegistryPublisher.pack(
+            account,
+            workbench,
+            options
+        );
         options.progress?.(`Pushing ${account.slug}/${slug}`);
         const response = await this.accounts.client.request<{
             workbench?: {
@@ -83,14 +70,7 @@ export class RegistryPublisher {
             body: {
                 organization_id: account.organizationId,
                 slug,
-                package: {
-                    format: 1,
-                    files: files.map((file) => ({
-                        path: file.path,
-                        content: Buffer.from(file.bytes).toString('base64'),
-                        executable: file.executable,
-                    })),
-                },
+                package: files,
             },
         });
         const stored = response.workbench;
@@ -140,6 +120,39 @@ export class RegistryPublisher {
         account: RegistryAccount,
         version: { id: string; digest: string }
     ): Promise<RegistrySubmission> {
+        return this.submission(account, { version_id: version.id }, version.digest);
+    }
+
+    /**
+     * Submits a local package for public review without storing it first.
+     * A public workbench takes new versions only this way: the registry
+     * refuses to push to it.
+     */
+    async submitPackage(
+        account: RegistryAccount,
+        workbench: ResolvedWorkbench,
+        options: { slug?: string; progress?: (message: string) => void } = {}
+    ): Promise<RegistrySubmission> {
+        const { slug, files, digest } = await RegistryPublisher.pack(
+            account,
+            workbench,
+            options
+        );
+        options.progress?.(
+            `Submitting ${account.slug}/${slug}@${workbench.manifest.version}`
+        );
+        return this.submission(
+            account,
+            { organization_id: account.organizationId, slug, package: files },
+            digest
+        );
+    }
+
+    private async submission(
+        account: RegistryAccount,
+        body: Record<string, unknown>,
+        digest: string
+    ): Promise<RegistrySubmission> {
         const response = await this.accounts.client.request<{
             submissions?: Array<{
                 id: string;
@@ -155,11 +168,11 @@ export class RegistryPublisher {
             method: 'POST',
             token: account.token,
             timeout: 60_000,
-            body: { version_id: version.id },
+            body,
         });
         const submitted = response.submissions?.[0];
         if (!submitted) throw new Error('The registry returned no submission');
-        if (RegistryPublisher.prefixed(submitted.digest) !== version.digest) {
+        if (RegistryPublisher.prefixed(submitted.digest) !== digest) {
             throw new Error('The registry returned a different package digest');
         }
         return {
@@ -170,7 +183,7 @@ export class RegistryPublisher {
                 workbench: submitted.slug,
             },
             version: submitted.version,
-            digest: version.digest,
+            digest,
             dashboardUrl: submitted.dashboard_url,
             latestApprovedVersion: submitted.latest_approved_version ?? null,
         };
@@ -187,6 +200,43 @@ export class RegistryPublisher {
         if (response.unpublished !== true) {
             throw new Error('The registry did not confirm the unpublish');
         }
+    }
+
+    /** Validates and encodes a package for the registry's wire format. */
+    private static async pack(
+        account: RegistryAccount,
+        workbench: ResolvedWorkbench,
+        options: { slug?: string; progress?: (message: string) => void }
+    ) {
+        const slug = options.slug ?? workbench.manifest.name;
+        if (!slugPattern.test(slug)) {
+            throw new Error(`Workbench name is not a valid registry slug: ${slug}`);
+        }
+        options.progress?.(`Preparing ${account.slug}/${slug}`);
+        const files = await new WorkbenchPackage(workbench).files();
+        const total = files.reduce((bytes, file) => bytes + file.bytes.byteLength, 0);
+        if (files.length > 256) {
+            throw new Error('Workbench package exceeds 256 files');
+        }
+        if (total > 10 * 1024 * 1024) {
+            throw new Error('Workbench package exceeds 10485760 bytes');
+        }
+        const oversized = files.find((file) => file.bytes.byteLength > 2 * 1024 * 1024);
+        if (oversized) {
+            throw new Error(`Workbench package file is too large: ${oversized.path}`);
+        }
+        return {
+            slug,
+            digest: WorkbenchPackage.digest(files),
+            files: {
+                format: 1,
+                files: files.map((file) => ({
+                    path: file.path,
+                    content: Buffer.from(file.bytes).toString('base64'),
+                    executable: file.executable,
+                })),
+            },
+        };
     }
 
     private static prefixed(digest: string): string {

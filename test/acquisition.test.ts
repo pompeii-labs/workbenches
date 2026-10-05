@@ -672,7 +672,7 @@ describe('push, publish, and unpublish', () => {
         }
     });
 
-    test('publish with a local source pushes, then submits the pushed version', async () => {
+    test('publish with a local source submits the package directly', async () => {
         const { root, home, path } = await fixture('repo-engineer');
         const registry = await lifecycleRegistry(path);
         try {
@@ -685,15 +685,26 @@ describe('push, publish, and unpublish', () => {
                 root
             );
             expect(result.code).toBe(0);
-            const [pushLine, submitLine] = result.stdout.trim().split('\n');
-            expect(pushLine).toContain('push\tsecond/repo-engineer\t0.1.0');
-            expect(submitLine).toContain('submitted\tsecond/repo-engineer\t0.1.0');
+            expect(result.stdout.trim()).toContain(
+                'submitted\tsecond/repo-engineer\t0.1.0'
+            );
+            // No push first: a public workbench refuses pushes, so its new
+            // versions can only arrive as a package submission.
             expect(registry.requests.map((request) => request.path)).toEqual([
-                '/v1/versions',
                 '/v1/submissions',
             ]);
-            expect(registry.requests[1]?.body).toEqual({ version_id: 'version-id' });
-            expect(registry.requests[1]?.authorization).toBe('Bearer wb_second');
+            const body = registry.requests[0]?.body as {
+                organization_id: string;
+                slug: string;
+                package: { format: number; files: unknown[] };
+                version_id?: string;
+            };
+            expect(body.organization_id).toBe('second-id');
+            expect(body.slug).toBe('repo-engineer');
+            expect(body.package.format).toBe(1);
+            expect(body.package.files.length).toBeGreaterThan(0);
+            expect(body.version_id).toBeUndefined();
+            expect(registry.requests[0]?.authorization).toBe('Bearer wb_second');
 
             const versioned = await cli(
                 home,
@@ -702,17 +713,12 @@ describe('push, publish, and unpublish', () => {
             );
             expect(versioned.code).toBe(1);
             expect(versioned.stderr).toContain('--version applies to a registry');
-            expect(registry.requests).toHaveLength(2);
+            expect(registry.requests).toHaveLength(1);
 
             registry.versionConflict = 'Version 0.1.0 must be greater';
             const stale = await cli(home, ['publish', '.#core', ...api], root);
             expect(stale.code).toBe(1);
             expect(stale.stderr).toContain('Version 0.1.0 must be greater');
-            expect(registry.requests.map((request) => request.path)).toEqual([
-                '/v1/versions',
-                '/v1/submissions',
-                '/v1/versions',
-            ]);
         } finally {
             registry.server.stop(true);
         }
@@ -830,6 +836,12 @@ async function lifecycleRegistry(packagePath: string) {
                 });
             }
             if (pathname === '/v1/submissions') {
+                if (state.versionConflict) {
+                    return Response.json(
+                        { error: { message: state.versionConflict } },
+                        { status: 409 }
+                    );
+                }
                 const key = request.headers.get('authorization') ?? '';
                 return Response.json({
                     submissions: [
