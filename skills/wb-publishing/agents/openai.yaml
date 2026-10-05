@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workbench Publishing"
+  short_description: "Publish Workbenches and runtime images"
+  default_prompt: "Use $wb-publishing to publish this Workbench to the registry."
