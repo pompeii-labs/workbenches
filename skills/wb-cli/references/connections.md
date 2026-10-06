@@ -38,14 +38,14 @@ Runner credential stores, one per runtime:
 
 Where the credential comes from, in order:
 
-1. `--stdin`: an API key on standard input. The only unattended way to give a new key. Never put a key in argv.
+1. `--stdin`: an API key on standard input, the bare value only (not a `NAME=value` line). The only unattended way to give a new key. Never put a key in argv.
 2. An API key the person's own local runner already has for that provider. A terminal asks `Use your local <Provider> API key in <runtime>? [Y/n]`; unattended, it is copied only with `--yes`. Only that provider's entry is copied.
 3. A subscription or native sign-in: a fresh `opencode auth login` runs on the host against a private temporary directory. It needs a person at a terminal. An existing subscription sign-in is never copied, even with `--yes`: providers rotate its refresh token, so a copy could sign out the original. Pi has no command-line sign-in, so a Pi subscription cannot be connected for another runtime; use an API-key method.
 4. A masked API-key prompt in a terminal.
 
-The last line is `Ready: <Provider> for <Runner> in <runtime>` after the runner itself listed the credential, or `Saved: ...` for `e2b`, where checking would create a billable sandbox and the first run confirms it. Anything else exits 3 with the missing piece and the command that fixes it. Piped output is `ready`, `saved`, `removed`, or `absent`, then runtime, runner, and provider, tab separated.
+The last line is `Ready: <Provider> for <Runner> in <runtime>` after the runner itself listed the credential, or `Saved: ...` for `e2b`, where checking would create a billable sandbox and the first run confirms it. Anything else exits 3 with the missing piece and the command that fixes it, and leaves the previous default in place; the default is saved only on success. Readiness respects the method: a provider variable never makes a subscription ready. Piped output is `ready`, `saved`, `removed`, or `absent`, then runtime, runner, and provider, tab separated.
 
-`wb connect --runtime e2b --harness opencode --provider openrouter --remove` removes that provider's entry from that store and keeps the others (`docker` needs the Workbench reference). Plain `wb connect --runtime e2b --remove` still removes the saved E2B key.
+`wb connect --runtime e2b --harness opencode --provider openrouter --remove` removes that provider's entry from that store, keeps the others, and drops the saved default if it pointed at that provider (`docker` needs the Workbench reference). Plain `wb connect --runtime e2b --remove` still removes the saved E2B key.
 
 An environment variable for the provider, or `--env-file`, wins over a stored entry and works for one run without connecting. Pi is the exception: as Pi documents, an entry in its `auth.json` wins over the provider variable.
 

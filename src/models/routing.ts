@@ -273,9 +273,12 @@ export class ModelRouter {
     }
 }
 
-/** The command that connects `reference`, naming any runtime other than local. */
+/**
+ * The command that connects `reference`. It names the runtime whenever it is
+ * known, because `wb connect <ref>` alone picks the first declared runtime.
+ */
 export function connectCommand(reference: string, runtime?: string): string {
-    return `wb connect ${shellWord(reference)}${runtime && runtime !== 'local' ? ` --runtime ${shellWord(runtime)}` : ''}`;
+    return `wb connect ${shellWord(reference)}${runtime ? ` --runtime ${shellWord(runtime)}` : ''}`;
 }
 
 /** What to do when no route is authenticated: connect once, or bring a key for one run. */

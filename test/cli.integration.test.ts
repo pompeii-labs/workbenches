@@ -794,8 +794,26 @@ describe('CLI integration', () => {
         expect(result.stderr).not.toContain('Path is not staged');
     });
 
-    test('keeps the E2B preference and exits 3 until a credential is stored', async () => {
+    test('exits 3 without a credential and keeps the previous E2B default', async () => {
         const home = await temporaryDirectory('workbench-connect-config-');
+        const previous = {
+            version: 4,
+            connections: [
+                {
+                    runner: 'opencode',
+                    runtime: 'e2b',
+                    provider: 'openrouter',
+                    native_provider: 'openrouter',
+                    authentication_method: 'native',
+                    method: 'native',
+                    updated_at: '2026-01-01T00:00:00.000Z',
+                },
+            ],
+        };
+        await writeFile(
+            join(home, 'connections.json'),
+            `${JSON.stringify(previous, null, 2)}\n`
+        );
         const result = await executeCli(
             [
                 'connect',
@@ -825,25 +843,12 @@ describe('CLI integration', () => {
         expect(result.stderr).toContain('--env-file');
         expect(result.stderr).not.toContain('Configured');
         const homeEntries = await readdir(home);
-        expect(homeEntries).toContain('connections.json');
         expect(homeEntries).not.toContain('runs');
         expect(homeEntries).not.toContain('runtime-credentials');
+        // The failed connect changed nothing: the earlier OpenRouter default stays.
         expect(
             JSON.parse(await readFile(join(home, 'connections.json'), 'utf8'))
-        ).toMatchObject({
-            version: 4,
-            connections: [
-                {
-                    runner: 'opencode',
-                    runtime: 'e2b',
-                    provider: 'openai',
-                    native_provider: 'openai',
-                    authentication_method: 'oauth',
-                    method: 'chatgpt',
-                    native_method: 'ChatGPT Pro/Plus (headless)',
-                },
-            ],
-        });
+        ).toEqual(previous);
     });
 
     test('preflights declared tools before spawning the runner', async () => {
@@ -862,7 +867,7 @@ describe('CLI integration', () => {
         await expect(stat(record)).rejects.toThrow();
     });
 
-    test('saves the local Pi preference and reports the missing harness instead of success', async () => {
+    test('reports a missing local Pi instead of success and saves no default', async () => {
         const fixture = await createFixture({ runner: 'pi' });
         const bin = await fakeBin();
         const home = await temporaryDirectory('workbench-connect-pi-');
@@ -884,12 +889,8 @@ describe('CLI integration', () => {
 
         expect(result.code).toBe(1);
         expect(result.stdout).toBe('');
-        expect(result.stderr).toContain('pi');
-        expect(
-            JSON.parse(await readFile(join(home, 'connections.json'), 'utf8'))
-        ).toMatchObject({
-            connections: [{ runner: 'pi', runtime: 'local', provider: 'openai' }],
-        });
+        expect(result.stderr).toBe('error: Executable not found in $PATH: "pi"\n');
+        expect(await readdir(home)).not.toContain('connections.json');
     });
 
     test('writes a piped model key into the E2B store without printing it or creating a sandbox', async () => {
@@ -1025,8 +1026,10 @@ describe('CLI integration', () => {
             ],
             { ...environment, OPENAI_API_KEY: '' }
         );
-        expect(subscription.code).toBe(AuthenticationRequiredError.exitCode);
-        expect(subscription.stderr).toContain('in a terminal with OpenCode installed');
+        expect(subscription.code).toBe(1);
+        expect(subscription.stderr).toContain(
+            '--yes copies a local API key, but ChatGPT subscription (headless) always signs in fresh'
+        );
         const native = await executeCli(
             [
                 'connect',
@@ -1101,7 +1104,7 @@ describe('CLI integration', () => {
         );
         expect(piped.code).toBe(1);
         expect(piped.stderr).toContain(
-            'Daytona reads provider keys only from the environment'
+            'Daytona has no runner credential store; provider keys reach it only from the environment'
         );
         expect(await readdir(home)).not.toContain('runtime-credentials');
     });
@@ -2903,8 +2906,8 @@ describe('CLI exit 3 for missing credentials', () => {
             .map((line) => JSON.parse(line).authentication.connect_command)
             .toSorted();
         expect(commands).toEqual([
-            `wb connect ${fixture.root}#core`,
-            `wb connect ${fixture.root}#second`,
+            `wb connect ${fixture.root}#core --runtime local`,
+            `wb connect ${fixture.root}#second --runtime local`,
         ]);
     });
 

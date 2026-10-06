@@ -45,7 +45,8 @@ export class ConnectionCheck {
                     workspaceDirectory: this.options.workspaceDirectory,
                     environment: this.options.environment,
                     assets: [
-                        { path: this.options.workspaceDirectory, access: 'read-write' },
+                        // Connection work never changes the workspace.
+                        { path: this.options.workspaceDirectory, access: 'read-only' },
                         { path: workbench.packageDirectory, access: 'read-only' },
                         ...runner.assets,
                     ],

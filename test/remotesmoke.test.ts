@@ -67,7 +67,7 @@ describe('remote smoke', () => {
         expect(['ready', 'needs-auth']).toContain(report.status);
         if (report.authentication.connect_command) {
             expect(report.authentication.connect_command).toBe(
-                'wb connect lux-db/lux#migrations'
+                'wb connect lux-db/lux#migrations --runtime local'
             );
         }
         expect(
