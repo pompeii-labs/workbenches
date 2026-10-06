@@ -530,8 +530,9 @@ describe('Docker runtime provider', () => {
             // Images whose default user is not root could not chown the volume otherwise.
             expect(chown[chown.indexOf('--user') + 1]).toBe('0:0');
             expect(chown.slice(-2)).toEqual(['501', '20']);
-            expect(chown).toContain('dev.workbenches.managed=true');
-            expect(chown.slice(0, 3)).toEqual(['/usr/bin/docker', 'run', '--rm']);
+            expectIsolatedHelper(chown);
+            // chown needs exactly one capability back after dropping all of them.
+            expect(chown[chown.indexOf('--cap-add') + 1]).toBe('CHOWN');
         } finally {
             await runtime.cleanup();
         }
@@ -582,21 +583,16 @@ describe('Docker runtime provider', () => {
             expect(write?.input).toContain('fixture');
             for (const helper of helpers) {
                 expect(helper.command.join(' ')).not.toContain('fixture');
-                expect(helper.command.slice(0, 3)).toEqual([
-                    '/usr/bin/docker',
-                    'run',
-                    '--rm',
-                ]);
-                expect(helper.command).toContain('dev.workbenches.managed=true');
-                expect(helper.command.join(' ')).toContain(
-                    '--network none --read-only'
+                expectIsolatedHelper(helper.command);
+                expect(helper.command[helper.command.indexOf('--user') + 1]).toBe(
+                    '501:20'
                 );
-                expect(helper.command).toContain('501:20');
                 expect(helper.command).toContain(
                     `${DockerCredentialVolume.nameFor('opencode')}:/workbench-credentials`
                 );
             }
             expect(write?.command).toContain('--interactive');
+            expect(write?.command.join('\n')).toContain(`trap 'rm -f "$1.tmp"' EXIT`);
             await expect(files.write('../escape', 'x')).rejects.toThrow(
                 'Invalid credential path'
             );
@@ -1196,6 +1192,23 @@ function dockerMock(
         if (command[1] === 'container') return result(0);
         throw new Error(`Unexpected Docker command: ${command.join(' ')}`);
     };
+}
+
+/**
+ * Credential helpers print secrets, so no log driver may keep their output,
+ * and they run with no capabilities, network, privilege gain, or image pull.
+ */
+function expectIsolatedHelper(command: string[]): void {
+    expect(command.slice(0, 2)).toEqual(['/usr/bin/docker', 'run']);
+    const option = (name: string) => command[command.indexOf(name) + 1];
+    expect(command).toContain('--rm');
+    expect(command).toContain('--read-only');
+    expect(command).toContain('dev.workbenches.managed=true');
+    expect(option('--log-driver')).toBe('none');
+    expect(option('--cap-drop')).toBe('ALL');
+    expect(option('--security-opt')).toBe('no-new-privileges');
+    expect(option('--pull')).toBe('never');
+    expect(option('--network')).toBe('none');
 }
 
 function result(code: number, stdout = '', stderr = ''): DockerCommandResult {
