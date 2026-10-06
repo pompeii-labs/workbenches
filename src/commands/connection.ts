@@ -42,6 +42,7 @@ type CredentialSource = { entry: NativeCredentialEntry } | { advice: string };
 export class ModelConnection {
     readonly #options: ModelConnectionOptions;
     readonly #setup: ConnectionSetup;
+    readonly #store: ConnectionStore;
     readonly #environment: Record<string, string | undefined>;
     readonly #interactive: boolean;
 
@@ -50,68 +51,47 @@ export class ModelConnection {
         this.#environment = options.environment ?? process.env;
         this.#interactive =
             options.interactive ?? Boolean(process.stdin.isTTY && process.stderr.isTTY);
+        this.#store = new ConnectionStore(options.home);
         this.#setup =
             options.setup ??
             new ConnectionSetup({
                 home: options.home,
                 target: options.target,
                 environment: this.#environment,
-                store: new ConnectionStore(options.home),
+                store: this.#store,
                 ...(options.workbench ? { workbench: options.workbench } : {}),
             });
     }
 
     /**
-     * Saves the preferred route, fills the runtime's credential store, and
-     * prints readiness. Throws `AuthenticationRequiredError` (exit 3) with the
-     * missing piece and the command that fixes it when a run could not
-     * authenticate.
+     * Fills the runtime's credential store, checks it, and saves the preferred
+     * route only once the route is ready. Otherwise it throws
+     * `AuthenticationRequiredError` (exit 3) with the missing piece and the
+     * command that fixes it, and the previous default stays.
      */
     async connect(flags: { stdin: boolean; yes: boolean }): Promise<void> {
-        const { target, home } = this.#options;
-        await new ConnectionStore(home).save(
-            { runner: target.harness, runtime: target.runtime },
-            {
-                provider: target.provider,
-                nativeProvider: target.method.nativeProvider,
-                authenticationMethod: target.method.authenticationMethod,
-                method: target.method.id,
-                ...(target.method.nativeMethod
-                    ? { nativeMethod: target.method.nativeMethod }
-                    : {}),
-            }
-        );
-        if (!this.#setup.writable && (flags.stdin || flags.yes)) {
-            throw new Error(
-                target.runtime === 'local'
-                    ? `--stdin and --yes fill docker and e2b; local uses your own ${this.#runner} sign-in`
-                    : `--stdin and --yes fill docker and e2b; Daytona reads provider keys only from the environment`
-            );
-        }
+        const { target } = this.#options;
+        this.#validate(flags);
         if (target.runtime === 'local') {
-            this.#report(await this.#setup.verify(), this.#localAdvice());
+            await this.#report(await this.#setup.verify(), this.#localAdvice());
             return;
         }
         if (target.runtime === 'daytona') {
-            this.#report(
+            await this.#report(
                 await this.#setup.verify(),
                 `Set ${this.#variables() || 'the provider key'} where wb runs`
             );
             return;
         }
-        if (target.runtime === 'docker' && !this.#options.workbench) {
-            this.#report(await this.#setup.verify(), `Run ${this.#placeholder()}`);
-            return;
-        }
         const source = await this.#source(flags);
         if ('advice' in source) {
-            this.#report(await this.#setup.verify(), source.advice);
+            await this.#report(await this.#setup.verify(), source.advice);
             return;
         }
         this.#options.output.progress(
             `Writing the ${this.#provider} credential for ${this.#runner} in ${this.#runtime}`
         );
-        this.#report(
+        await this.#report(
             await this.#setup.save(source.entry),
             this.#options.workbench
                 ? `Check what the runner reports with wb smoke ${this.#options.workbench.reference} --runtime ${target.runtime}`
@@ -119,18 +99,19 @@ export class ModelConnection {
         );
     }
 
-    /** Removes the target provider's entries from the runtime's store, keeping others. */
+    /**
+     * Removes the target provider's entries from the runtime's store, keeping
+     * others, and drops the saved default when it pointed at this provider.
+     */
     async remove(methods: ConnectionAuthenticationMethod[]): Promise<void> {
         const { target, output } = this.#options;
-        if (target.runtime === 'docker' && !this.#options.workbench) {
-            throw new Error(
-                `Docker credentials are changed through a Workbench image. Run ${this.#placeholder(['--remove'])}`
-            );
-        }
-        // Local and Daytona have no store Workbench writes, so `remove` refuses them with the reason.
         const removed = await this.#setup.remove([
             ...new Set(methods.map((method) => method.nativeProvider)),
         ]);
+        await this.#store.forget(
+            { runner: target.harness, runtime: target.runtime },
+            target.provider
+        );
         output.record({
             machine: [
                 removed ? 'removed' : 'absent',
@@ -145,20 +126,32 @@ export class ModelConnection {
         });
     }
 
+    /** Rejects flags that would have no effect, before anything is read or written. */
+    #validate(flags: { stdin: boolean; yes: boolean }): void {
+        const { target } = this.#options;
+        if (flags.stdin || flags.yes) this.#setup.requireStore();
+        if (flags.stdin && target.method.authenticationMethod === 'oauth') {
+            throw new Error(
+                `--stdin reads an API key, but ${target.method.label} is a sign-in. Choose an API-key method with --method`
+            );
+        }
+        if (flags.yes && flags.stdin) {
+            throw new Error(
+                '--yes copies a local API key, so it cannot be combined with --stdin'
+            );
+        }
+        if (flags.yes && target.method.authenticationMethod === 'oauth') {
+            throw new Error(
+                `--yes copies a local API key, but ${target.method.label} always signs in fresh`
+            );
+        }
+    }
+
     async #source(flags: { stdin: boolean; yes: boolean }): Promise<CredentialSource> {
         const { target } = this.#options;
         const method = target.method.authenticationMethod;
         if (flags.stdin) {
-            if (method === 'oauth') {
-                throw new Error(
-                    `--stdin reads an API key, but ${target.method.label} is a sign-in. Choose an API-key method with --method`
-                );
-            }
-            return {
-                entry: this.#setup.file.apiKey(
-                    await (this.#options.readKey ?? (() => Bun.stdin.text()))()
-                ),
-            };
+            return { entry: this.#setup.file.apiKey(await this.#stdinKey()) };
         }
         // Only an API key is offered for copying; sign-ins below are always fresh.
         const host = await this.#setup.hostApiKey();
@@ -202,26 +195,48 @@ export class ModelConnection {
         return { entry: this.#setup.file.apiKey(key) };
     }
 
-    #report(readiness: ConnectionReadiness, advice: string): void {
+    /** The piped key, with one trailing newline removed and nothing else forgiven. */
+    async #stdinKey(): Promise<string> {
+        const raw = await (this.#options.readKey ?? (() => Bun.stdin.text()))();
+        const key = raw.replace(/\r?\n$/, '');
+        if (/\s/.test(key)) {
+            throw new Error(
+                'The key on standard input contains whitespace or several lines; pipe only the key value'
+            );
+        }
+        return key;
+    }
+
+    async #report(readiness: ConnectionReadiness, advice: string): Promise<void> {
         const { target, output } = this.#options;
         if (!readiness.ready) {
             throw new AuthenticationRequiredError(
                 `${readiness.missing ?? `${this.#provider} is not connected`}. ${advice}. For one run, --env-file also works.`
             );
         }
-        // A remote store is only read back on the host; the first run confirms it.
-        const saved = readiness.verified === 'stored' && target.runtime !== 'local';
+        await this.#store.save(
+            { runner: target.harness, runtime: target.runtime },
+            {
+                provider: target.provider,
+                nativeProvider: target.method.nativeProvider,
+                authenticationMethod: target.method.authenticationMethod,
+                method: target.method.id,
+                ...(target.method.nativeMethod
+                    ? { nativeMethod: target.method.nativeMethod }
+                    : {}),
+            }
+        );
         output.record({
             machine: [
-                saved ? 'saved' : 'ready',
+                readiness.saved ? 'saved' : 'ready',
                 target.runtime,
                 target.harness,
                 target.provider,
             ],
-            title: `${saved ? 'Saved' : 'Ready'}: ${this.#provider} for ${this.#runner} in ${this.#runtime}`,
-            details: saved
+            title: `${readiness.saved ? 'Saved' : 'Ready'}: ${this.#provider} for ${this.#runner} in ${this.#runtime}`,
+            details: readiness.saved
                 ? ['the first run confirms it']
-                : readiness.verified === 'environment'
+                : readiness.fromEnvironment
                   ? [`from ${this.#variables()} in the environment`]
                   : [],
         });
@@ -256,10 +271,10 @@ export class ModelConnection {
     }
 
     /** The `wb connect` command for this target, plus `extra` flags. */
-    #command(extra: string[] = [], base = this.#base()): string {
+    #command(extra: string[] = []): string {
         const { target } = this.#options;
         return [
-            base,
+            this.#base(),
             '--provider',
             target.provider,
             '--method',
@@ -273,14 +288,6 @@ export class ModelConnection {
         return workbench
             ? connectCommand(workbench.reference, target.runtime)
             : `wb connect --runtime ${target.runtime} --harness ${target.harness}`;
-    }
-
-    /** The command for a runtime that needs a Workbench the user has not named. */
-    #placeholder(extra: string[] = []): string {
-        return this.#command(
-            extra,
-            `wb connect <workbench> --runtime ${this.#options.target.runtime}`
-        );
     }
 
     get #provider(): string {

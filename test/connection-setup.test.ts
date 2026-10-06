@@ -20,6 +20,7 @@ import type { RunnerAuthenticationStatus } from '../src/connections/inspector.js
 import { NativeCredentialFile } from '../src/connections/nativecredentials.js';
 import { ConnectionSetup, type ConnectionWorkbench } from '../src/connections/setup.js';
 import { HostSignIn } from '../src/connections/signin.js';
+import { ConnectionStore } from '../src/connections/store.js';
 import type { ConnectionTarget } from '../src/connections/targets.js';
 import type {
     PreparedRuntime,
@@ -82,6 +83,19 @@ describe('native credential files', () => {
         expect(() => NativeCredentialFile.for('codex')).toThrow('Unsupported runner');
     });
 
+    test('removes its temporary file when a write fails', async () => {
+        const root = await temporary('workbench-native-failed-');
+        // A directory where the file belongs makes the final rename fail.
+        await mkdir(join(root, 'auth.json', 'blocked'), { recursive: true });
+        await expect(
+            new HostCredentialFiles(root).write('auth.json', '{"fixture":true}\n')
+        ).rejects.toThrow();
+        expect((await readdir(root)).toSorted()).toEqual(['auth.json']);
+        await expect(
+            new HostCredentialFiles(root).write('../auth.json', 'x')
+        ).rejects.toThrow('Invalid credential path');
+    });
+
     test('leaves a credential file it cannot parse unchanged', async () => {
         const root = await temporary('workbench-native-invalid-');
         await writeFile(join(root, 'auth.json'), 'not json');
@@ -120,7 +134,8 @@ describe('connection setup', () => {
 
         await expect(setup.save(file.apiKey('fixture-key'))).resolves.toEqual({
             ready: true,
-            verified: 'runtime',
+            saved: false,
+            fromEnvironment: false,
         });
         expect(JSON.parse(volume.get('opencode/auth.json'))).toEqual({
             openrouter: { type: 'api', key: 'fixture-key' },
@@ -130,7 +145,84 @@ describe('connection setup', () => {
         expect(JSON.parse(volume.get('opencode/auth.json'))).toEqual({});
         await expect(setup.verify()).resolves.toMatchObject({
             ready: false,
-            missing: 'OpenCode in Docker has no OpenRouter credential',
+            missing:
+                'OpenCode in Docker has no OpenRouter credential for OpenRouter sign-in',
+        });
+    });
+
+    test('counts only routes that serve the chosen method', async () => {
+        const home = await temporary('workbench-setup-method-');
+        const routes = [
+            {
+                provider: 'openai',
+                nativeProvider: 'openai',
+                nativeModel: 'gpt',
+                authenticationMethod: 'api',
+            },
+        ];
+        const setup = new ConnectionSetup({
+            home,
+            target: chatgpt('docker'),
+            environment: { OPENAI_API_KEY: 'fixture' },
+            workbench: workbench(),
+            check: () => ({
+                open: (work) => work(runtime(new MemoryFiles()), unusedRunner()),
+                inspect: async () => ({ ...status(false), connections: routes }),
+            }),
+        });
+        // An API key in the environment does not make a ChatGPT subscription ready.
+        await expect(setup.verify()).resolves.toMatchObject({ ready: false });
+        const e2b = new ConnectionSetup({
+            home,
+            target: chatgpt('e2b'),
+            environment: { OPENAI_API_KEY: 'fixture' },
+        });
+        await expect(e2b.verify()).resolves.toMatchObject({ ready: false });
+        await NativeCredentialFile.for('opencode').save(
+            new HostCredentialFiles(
+                await mkdirPrivate(join(home, 'runtime-credentials', 'e2b', 'opencode'))
+            ),
+            'openai',
+            { type: 'oauth', value: { type: 'oauth', refresh: 'fixture' } }
+        );
+        await expect(e2b.verify()).resolves.toEqual({
+            ready: true,
+            saved: true,
+            fromEnvironment: false,
+        });
+    });
+
+    test('lets a stored Pi entry decide readiness, as Pi reads it before the environment', async () => {
+        const home = await temporary('workbench-setup-pi-');
+        const target = {
+            ...chatgpt('e2b'),
+            harness: 'pi' as const,
+            method: {
+                id: 'api-key',
+                label: 'OpenAI API key',
+                nativeProvider: 'openai',
+                authenticationMethod: 'api' as const,
+            },
+        };
+        const setup = new ConnectionSetup({
+            home,
+            target,
+            environment: { OPENAI_API_KEY: 'fixture' },
+        });
+        await expect(setup.verify()).resolves.toMatchObject({
+            ready: true,
+            fromEnvironment: true,
+        });
+        await NativeCredentialFile.for('pi').save(
+            new HostCredentialFiles(
+                await mkdirPrivate(join(home, 'runtime-credentials', 'e2b', 'pi'))
+            ),
+            'openai',
+            { type: 'oauth', value: { type: 'oauth', refresh: 'fixture' } }
+        );
+        await expect(setup.verify()).resolves.toMatchObject({
+            ready: false,
+            missing: 'The saved OpenAI credential for Pi is oauth, not OpenAI API key',
         });
     });
 
@@ -149,7 +241,7 @@ describe('connection setup', () => {
         expect(await readdir(home)).toEqual([]);
         await expect(
             setup.save(NativeCredentialFile.for('opencode').apiKey('fixture'))
-        ).resolves.toEqual({ ready: true, verified: 'stored' });
+        ).resolves.toEqual({ ready: true, saved: true, fromEnvironment: false });
         const directory = join(home, 'runtime-credentials', 'e2b', 'opencode');
         expect((await stat(directory)).mode & 0o777).toBe(0o700);
     });
@@ -165,7 +257,9 @@ describe('connection setup', () => {
                     throw new Error('a sandbox must not be prepared');
                 },
             });
-        expect(setup({}).writable).toBeFalse();
+        expect(() => setup({}).requireStore()).toThrow(
+            'Daytona has no runner credential store'
+        );
         await expect(setup({}).verify()).resolves.toMatchObject({
             ready: false,
             missing:
@@ -173,7 +267,7 @@ describe('connection setup', () => {
         });
         await expect(
             setup({ OPENROUTER_API_KEY: 'fixture' }).verify()
-        ).resolves.toEqual({ ready: true, verified: 'environment' });
+        ).resolves.toEqual({ ready: true, saved: false, fromEnvironment: true });
         await expect(
             setup({}).save(NativeCredentialFile.for('opencode').apiKey('fixture'))
         ).rejects.toThrow('Daytona has no runner credential store');
@@ -204,7 +298,96 @@ describe('model connection', () => {
         expect((failure as Error).message).toBe(
             'No OpenRouter credential is saved for OpenCode in E2B. Pass the OpenRouter API key on standard input: wb connect --runtime e2b --harness opencode --provider openrouter --method native --stdin. For one run, --env-file also works.'
         );
-        expect(await readdir(home)).toEqual(['connections.json']);
+        // Nothing is written, and no default is saved for a route that cannot run.
+        expect(await readdir(home)).toEqual([]);
+    });
+
+    test('rejects flags that would do nothing, before reading or writing', async () => {
+        const home = await temporary('workbench-connection-flags-');
+        const connect = (
+            connectionTarget: ConnectionTarget,
+            flags: { stdin: boolean; yes: boolean }
+        ) =>
+            new ModelConnection({
+                home,
+                target: connectionTarget,
+                output: presenter([]),
+                environment: {},
+                interactive: false,
+                readKey: async () => {
+                    throw new Error('stdin must not be read');
+                },
+            }).connect(flags);
+
+        await expect(
+            connect(target('local'), { stdin: false, yes: true })
+        ).rejects.toThrow('Workbench neither writes nor removes it');
+        await expect(
+            connect(target('daytona'), { stdin: true, yes: false })
+        ).rejects.toThrow('Daytona has no runner credential store');
+        await expect(
+            connect(chatgpt('e2b'), { stdin: false, yes: true })
+        ).rejects.toThrow(
+            '--yes copies a local API key, but ChatGPT subscription (headless) always signs in fresh'
+        );
+        await expect(
+            connect(target('e2b'), { stdin: true, yes: true })
+        ).rejects.toThrow('cannot be combined with --stdin');
+        expect(await readdir(home)).toEqual([]);
+    });
+
+    test('rejects a piped value that is not a bare key', async () => {
+        const home = await temporary('workbench-connection-key-');
+        const connect = (value: string) =>
+            new ModelConnection({
+                home,
+                target: target('e2b'),
+                output: presenter([]),
+                environment: {},
+                interactive: false,
+                readKey: async () => value,
+            }).connect({ stdin: true, yes: false });
+
+        await expect(connect('OPENROUTER_API_KEY=fixture\n')).rejects.toThrow(
+            'not an env-file line'
+        );
+        await expect(connect('fixture one\n')).rejects.toThrow(
+            'contains whitespace or several lines'
+        );
+        await expect(connect('fixture\nsecond\n')).rejects.toThrow(
+            'contains whitespace or several lines'
+        );
+        await expect(connect(' fixture\n')).rejects.toThrow('contains whitespace');
+        expect(await readdir(home)).toEqual([]);
+        await connect('fixture-padded==\n');
+        expect(await readdir(home)).toContain('runtime-credentials');
+    });
+
+    test('keeps the previous default when a connection fails, and forgets it on remove', async () => {
+        const home = await temporary('workbench-connection-default-');
+        const store = new ConnectionStore(home);
+        const context = { runner: 'opencode', runtime: 'e2b' };
+        const connection = (connectionTarget: ConnectionTarget, key?: string) =>
+            new ModelConnection({
+                home,
+                target: connectionTarget,
+                output: presenter([]),
+                environment: { HOME: home },
+                interactive: false,
+                ...(key ? { readKey: async () => key } : {}),
+            });
+
+        await connection(target('e2b'), 'fixture').connect({ stdin: true, yes: false });
+        expect((await store.find(context))?.provider).toBe('openrouter');
+        await expect(
+            connection(chatgpt('e2b')).connect({ stdin: false, yes: false })
+        ).rejects.toBeInstanceOf(AuthenticationRequiredError);
+        expect((await store.find(context))?.provider).toBe('openrouter');
+
+        await connection(chatgpt('e2b')).remove([chatgpt('e2b').method]);
+        expect((await store.find(context))?.provider).toBe('openrouter');
+        await connection(target('e2b')).remove([target('e2b').method]);
+        expect(await store.find(context)).toBeUndefined();
     });
 
     test('writes a key read from stdin and reports a saved remote route', async () => {
@@ -293,7 +476,6 @@ describe('model connection', () => {
             target: subscription,
             environment: { HOME: user },
         });
-        expect(await setup.hostEntry()).toBeDefined();
         expect(await setup.hostApiKey()).toBeUndefined();
         const signIns: string[] = [];
         const lines: string[] = [];
@@ -313,7 +495,7 @@ describe('model connection', () => {
                     };
                 },
             },
-        }).connect({ stdin: false, yes: true });
+        }).connect({ stdin: false, yes: false });
 
         expect(signIns).toEqual(['chatgpt']);
         expect(lines).toEqual(['saved\te2b\topencode\topenai\n']);
@@ -361,7 +543,7 @@ describe('model connection', () => {
             environment: { HOME: user },
             interactive: false,
         })
-            .connect({ stdin: false, yes: true })
+            .connect({ stdin: false, yes: false })
             .catch((error: unknown) => error);
 
         expect(failure).toBeInstanceOf(AuthenticationRequiredError);
@@ -373,6 +555,62 @@ describe('model connection', () => {
 });
 
 describe('host sign-in', () => {
+    test('survives Ctrl-C during the login and still removes its temporary home', async () => {
+        const root = await temporary('workbench-signin-signal-');
+        const user = await mkdirPrivate(join(root, 'user'));
+        const scratch = await mkdirPrivate(join(root, 'tmp'));
+        const script = join(root, 'signal.ts');
+        await writeFile(
+            script,
+            [
+                `import { stat } from 'node:fs/promises';`,
+                `import { HostSignIn } from ${JSON.stringify(join(import.meta.dir, '..', 'src', 'connections', 'signin.ts'))};`,
+                `const before = process.listenerCount('SIGINT');`,
+                'let home = "";',
+                'const signIn = new HostSignIn({',
+                `    which: () => '/usr/local/bin/opencode',`,
+                '    interact: async (_command, env) => {',
+                '        home = env.XDG_DATA_HOME ?? "";',
+                // The terminal sends Ctrl-C to the whole process group, wb included.
+                `        process.kill(process.pid, 'SIGINT');`,
+                `        process.kill(process.pid, 'SIGTERM');`,
+                '        await Bun.sleep(200);',
+                '        return 130;',
+                '    },',
+                '});',
+                'const target = { runtime: "e2b", harness: "opencode", provider: "openai", method: { id: "chatgpt", label: "ChatGPT", nativeProvider: "openai", authenticationMethod: "oauth" } };',
+                'const entry = await signIn.run(target, process.env);',
+                'const removed = await stat(home).then(() => false, () => true);',
+                `console.log(JSON.stringify({ entry: entry ?? null, removed, restored: process.listenerCount('SIGINT') === before }));`,
+            ].join('\n')
+        );
+        const child = Bun.spawn([process.execPath, script], {
+            cwd: root,
+            env: {
+                PATH: process.env.PATH,
+                HOME: user,
+                XDG_DATA_HOME: join(user, '.local', 'share'),
+                PI_CODING_AGENT_DIR: join(user, '.pi', 'agent'),
+                TMPDIR: scratch,
+            },
+            stdout: 'pipe',
+            stderr: 'pipe',
+        });
+        const [code, stdout, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+        ]);
+
+        expect({ code, stderr }).toEqual({ code: 0, stderr: '' });
+        expect(JSON.parse(stdout)).toEqual({
+            entry: null,
+            removed: true,
+            restored: true,
+        });
+        expect(await readdir(scratch)).toEqual([]);
+    });
+
     test('signs in against a private temporary data home and keeps only the provider entry', async () => {
         let command: string[] = [];
         let dataHome = '';
@@ -519,5 +757,10 @@ function presenter(lines: string[]): CliPresenter {
 async function temporary(prefix: string): Promise<string> {
     const directory = await mkdtemp(join(tmpdir(), prefix));
     temporaryDirectories.push(directory);
+    return directory;
+}
+
+async function mkdirPrivate(directory: string): Promise<string> {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
     return directory;
 }

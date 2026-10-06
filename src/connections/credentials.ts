@@ -1,10 +1,11 @@
-import { chmod, lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, sep } from 'node:path';
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 import type {
     RuntimeCredentialBinding,
     RuntimeCredentialFiles,
 } from '../runtimes/contracts.js';
+import { credentialPathSegments } from '../runtimes/credentialpath.js';
 
 // Native auth files for the supported harnesses. Logs, databases, and caches are session state.
 export const nativeCredentialPaths = ['auth.json', 'opencode/auth.json'] as const;
@@ -39,11 +40,6 @@ export class RunnerCredentialStore {
         }
         return binding;
     }
-
-    /** The credential files a remote runtime syncs for `runner`, created private on first use. */
-    async files(runtime: string, runner: string): Promise<HostCredentialFiles> {
-        return new HostCredentialFiles((await this.prepare(runtime, runner)).directory);
-    }
 }
 
 /**
@@ -60,26 +56,23 @@ export class HostCredentialFiles implements RuntimeCredentialFiles {
         });
     }
 
+    /** Writes inside an existing store; only the file's own directory is created. */
     async write(path: string, contents: string): Promise<void> {
         const destination = this.resolve(path);
-        let directory = this.directory;
-        for (const part of relative(this.directory, dirname(destination))
-            .split(sep)
-            .filter(Boolean)) {
-            directory = join(directory, part);
-            await ensurePrivateDirectory(directory);
-        }
+        await ensurePrivateDirectory(dirname(destination));
         const temporary = `${destination}.${crypto.randomUUID()}.tmp`;
-        await writeFile(temporary, contents, { mode: 0o600 });
-        await rename(temporary, destination);
-        await chmod(destination, 0o600);
+        try {
+            await writeFile(temporary, contents, { mode: 0o600 });
+            await chmod(temporary, 0o600);
+            await rename(temporary, destination);
+        } catch (error) {
+            await rm(temporary, { force: true });
+            throw error;
+        }
     }
 
     private resolve(path: string): string {
-        if (!/^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*)*$/.test(path)) {
-            throw new Error(`Invalid credential path: ${path}`);
-        }
-        return join(this.directory, ...path.split('/'));
+        return join(this.directory, ...credentialPathSegments(path));
     }
 }
 

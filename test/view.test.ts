@@ -31,7 +31,7 @@ describe('Workbench view', () => {
             ],
             runner_auth: {
                 status: 'unchecked',
-                connect_command: 'wb connect lux-core',
+                connect_command: 'wb connect lux-core --runtime local',
             },
             skills: ['lux-migrations'],
             tools: ['cargo', 'lux'],

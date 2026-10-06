@@ -1,5 +1,6 @@
 import { autocomplete, type Option, password, select } from '@clack/prompts';
 import { defineCommand } from 'citty';
+import { AuthenticationRequiredError } from '../connections/error.js';
 import type { ConnectionWorkbench } from '../connections/setup.js';
 import {
     type ConnectionAuthenticationMethod,
@@ -114,8 +115,8 @@ export const connectCommand = defineCommand({
                 '--stdin reads a model key with --runtime and --provider, or a runtime key with --runtime e2b or --runtime daytona alone'
             );
         }
-        if (args.stdin && args.remove) {
-            throw new Error('--stdin and --remove cannot be combined');
+        if (args.remove && (args.stdin || args.yes)) {
+            throw new Error('--remove cannot be combined with --stdin or --yes');
         }
         await new ModelCatalog({ home }).refresh();
         let cleanup = async () => {};
@@ -147,6 +148,12 @@ export const connectCommand = defineCommand({
                 });
             const method = choice.method ?? choice.methods[0];
             if (!method) throw new Error('An authentication method must be selected');
+            if (choice.runtime === 'docker' && !workbench) {
+                // The volume is written and checked through a Workbench image.
+                throw new AuthenticationRequiredError(
+                    `Docker keeps ${harnessLabel(choice.harness)} credentials in a volume that is written and checked through a Workbench image. Run wb connect <workbench> --runtime docker --provider ${choice.provider} --method ${method.id}${args.remove ? ' --remove' : ''}`
+                );
+            }
             if (args.remove) {
                 await connection(method).remove(
                     choice.method ? [choice.method] : choice.methods

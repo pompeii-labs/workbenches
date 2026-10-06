@@ -66,6 +66,12 @@ export class NativeCredentialFile {
     apiKey(key: string): NativeCredentialEntry {
         const trimmed = key.trim();
         if (!trimmed) throw new Error('The API key is empty');
+        // `NAME=value` is an env-file line; a bare `=` can be base64 padding in a real key.
+        if (/\s/.test(trimmed) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(trimmed)) {
+            throw new Error(
+                'The API key contains whitespace or starts with NAME=; give only the key value, not an env-file line'
+            );
+        }
         return { type: this.apiType, value: { type: this.apiType, key: trimmed } };
     }
 

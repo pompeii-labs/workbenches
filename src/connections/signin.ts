@@ -58,6 +58,11 @@ export class HostSignIn {
         }
         // mkdtemp creates the directory 0700, so the login's files stay private.
         const directory = await mkdtemp(join(tmpdir(), 'workbench-signin-'));
+        // Ctrl-C reaches the login in the same process group and ends it. wb
+        // ignores the signal meanwhile, so the cleanup below always runs.
+        const ignore = () => {};
+        process.on('SIGINT', ignore);
+        process.on('SIGTERM', ignore);
         try {
             const code = await this.#interact(
                 [
@@ -78,7 +83,10 @@ export class HostSignIn {
                 target.method.nativeProvider
             );
         } finally {
-            await rm(directory, { recursive: true, force: true });
+            await rm(directory, { recursive: true, force: true }).finally(() => {
+                process.off('SIGINT', ignore);
+                process.off('SIGTERM', ignore);
+            });
         }
     }
 }

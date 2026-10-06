@@ -182,7 +182,7 @@ describe('native runner authentication', () => {
                 reference: 'publisher/project#core',
             }).require()
         ).rejects.toThrow(
-            'No authenticated route is available for openai/gpt-5.6-terra. Run wb connect publisher/project#core, or pass the provider key for one run with --env-file.'
+            'No authenticated route is available for openai/gpt-5.6-terra. Run wb connect publisher/project#core --runtime local, or pass the provider key for one run with --env-file.'
         );
     });
 
