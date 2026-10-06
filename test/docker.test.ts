@@ -11,8 +11,15 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { ConnectionCheck } from '../src/connections/check.js';
+import { NativeCredentialFile } from '../src/connections/nativecredentials.js';
+import { ConnectionSetup } from '../src/connections/setup.js';
 import { OutcomeOutput } from '../src/outcomes/output.js';
+import type { RunnerRegistry } from '../src/runners/registry.js';
+import type { PreparedRunner } from '../src/runners/runner.js';
+import { RunEvents } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/index.js';
+import { ExecutionPreparation } from '../src/runs/preparation.js';
 import { DockerBuildContext } from '../src/runtimes/docker/build-context.js';
 import { DockerCredentialVolume } from '../src/runtimes/docker/credentials.js';
 import {
@@ -507,6 +514,292 @@ describe('Docker runtime provider', () => {
             expect(interactiveCommand).toContain('--interactive');
             expect(interactiveEnvironment).toContain(
                 'XDG_DATA_HOME=/workbench-credentials\n'
+            );
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('connects a native-only provider through the runtime registry and reports Ready', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        const volume = new Map<string, string>();
+        const base = dockerMock([]);
+        const authFile = '/workbench-credentials/opencode/auth.json';
+        // The registry wraps each prepared runtime, the path a real connect takes.
+        const registry = new RuntimeRegistry([
+            new DockerRuntimeProvider({
+                host: new NodeHost(),
+                findExecutable: () => '/usr/bin/docker',
+                user: () => ({ uid: 501, gid: 20 }),
+                command: async (command, options) => {
+                    const path = command.at(-1) ?? '';
+                    if (
+                        command[1] === 'run' &&
+                        path.startsWith('/workbench-credentials/')
+                    ) {
+                        if (options?.input === undefined) {
+                            return result(0, volume.get(path) ?? '');
+                        }
+                        volume.set(path, options.input);
+                        return result(0);
+                    }
+                    // What `opencode auth list` prints for the volume's entries.
+                    if (
+                        command[1] === 'run' &&
+                        command.slice(-2).join(' ') === 'auth list'
+                    ) {
+                        const entries = Object.keys(
+                            JSON.parse(volume.get(authFile) ?? '{}')
+                        );
+                        return result(
+                            0,
+                            entries.map((name) => `●  ${name} api\n`).join('')
+                        );
+                    }
+                    return base(command);
+                },
+            }),
+        ]);
+        const runner: PreparedRunner = {
+            name: 'opencode',
+            failureLabel: 'OpenCode',
+            assets: [],
+            build: () => ({ command: [], cwd: '/workspace', env: {} }),
+            native: (runtime, command) => ({
+                command,
+                cwd: runtime.workspaceDirectory,
+                env: runtime.environment,
+            }),
+            publicInvocation: () => ({}),
+            events: () => ({
+                consume: () => ({ events: [] }),
+                summary: () => ({ finalText: '', turnCompleted: false }),
+            }),
+            startSession: () => Promise.reject(new Error('unused')),
+            cleanup: async () => {},
+        };
+        const setup = new ConnectionSetup({
+            home: fixture.root,
+            target: {
+                runtime: 'docker',
+                harness: 'opencode',
+                provider: 'openrouter',
+                method: {
+                    id: 'native',
+                    label: 'OpenRouter sign-in',
+                    nativeProvider: 'openrouter',
+                    authenticationMethod: 'native',
+                },
+            },
+            environment: {},
+            workbench: {
+                workbench: fixture.workbench,
+                reference: 'lux-core',
+                workspaceDirectory: fixture.root,
+            },
+            check: (options) =>
+                new ConnectionCheck({
+                    ...options,
+                    runtimes: registry,
+                    runners: { prepare: async () => runner },
+                }),
+        });
+
+        await expect(
+            setup.save(NativeCredentialFile.for('opencode').apiKey('fixture-key'))
+        ).resolves.toEqual({ ready: true, saved: false, fromEnvironment: false });
+        expect(JSON.parse(volume.get(authFile) ?? '{}')).toEqual({
+            openrouter: { type: 'api', key: 'fixture-key' },
+        });
+        await expect(setup.verify()).resolves.toMatchObject({ ready: true });
+    });
+
+    test('runs authenticate from the stored volume entry with no provider variable', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        const home = join(fixture.root, 'home');
+        const native = join(fixture.root, 'native');
+        await mkdir(native, { recursive: true });
+        const volumeName = DockerCredentialVolume.nameFor('opencode');
+        const authFile = '/workbench-credentials/opencode/auth.json';
+        // What connect stored: the volume, keyed by path inside the container.
+        const volume = new Map([
+            [authFile, '{"openrouter":{"type":"api","key":"fixture-key"}}\n'],
+        ]);
+        const base = dockerMock([]);
+        const launched: { argv: string[]; environment: string }[] = [];
+        const registry = new RuntimeRegistry([
+            new DockerRuntimeProvider({
+                host: new NodeHost(),
+                findExecutable: () => '/usr/bin/docker',
+                user: () => ({ uid: 501, gid: 20 }),
+                command: async (command) => {
+                    // `opencode auth list` reads the data home the env file names.
+                    if (
+                        command[1] === 'run' &&
+                        command.slice(-2).join(' ') === 'auth list'
+                    ) {
+                        const file = command[command.indexOf('--env-file') + 1] ?? '';
+                        const dataHome = readFileSync(file, 'utf8').match(
+                            /^XDG_DATA_HOME=(.*)$/m
+                        )?.[1];
+                        const listed =
+                            command.includes(`${volumeName}:/workbench-credentials`) &&
+                            volume.has(`${dataHome}/opencode/auth.json`);
+                        return result(0, listed ? '●  OpenRouter api\n' : '');
+                    }
+                    return base(command);
+                },
+                spawn: (command) => {
+                    const file = command[command.indexOf('--env-file') + 1] ?? '';
+                    launched.push({
+                        argv: command,
+                        environment: readFileSync(file, 'utf8'),
+                    });
+                    return { exited: Promise.resolve(0) };
+                },
+            }),
+        ]);
+        const runner: PreparedRunner = {
+            name: 'opencode',
+            failureLabel: 'OpenCode',
+            assets: [],
+            build: () => ({ command: [], cwd: '/workspace', env: {} }),
+            native: (runtime, command) => ({
+                command,
+                cwd: runtime.workspaceDirectory,
+                env: runtime.environment,
+            }),
+            publicInvocation: () => ({}),
+            events: () => ({
+                consume: () => ({ events: [] }),
+                summary: () => ({ finalText: '', turnCompleted: false }),
+            }),
+            startSession: () => Promise.reject(new Error('unused')),
+            cleanup: async () => {},
+        };
+        const events = new RunEvents({
+            runId: RunStore.createId(),
+            runner: 'opencode',
+        });
+        const preparation = new ExecutionPreparation(
+            {
+                workbench: fixture.workbench,
+                workspaceDirectory: fixture.root,
+                events,
+                mode: 'session',
+                home,
+                captureOutcomes: false,
+                session: { id: 'wb_fixture', directory: native },
+            },
+            {
+                environment: {},
+                runtimes: registry,
+                runners: { prepare: async () => runner } as unknown as RunnerRegistry,
+            }
+        );
+        try {
+            const prepared = await preparation.prepare();
+            expect(prepared.configuration.provider).toBe('openrouter');
+            expect(prepared.runtime.credentials).toBeDefined();
+            prepared.runtime.launchService(() => ({
+                command: ['opencode', 'serve'],
+                cwd: prepared.runtime.workspaceDirectory,
+                env: prepared.runtime.environment,
+            }));
+            const [server] = launched;
+            if (!server) throw new Error('The run did not launch the runner');
+            expect(server.argv).toContain(`${volumeName}:/workbench-credentials`);
+            const dataHome = server.environment.match(/^XDG_DATA_HOME=(.*)$/m)?.[1];
+            expect(dataHome).toBe('/workbench-credentials');
+            expect(volume.has(`${dataHome}/opencode/auth.json`)).toBeTrue();
+            expect(server.environment).not.toContain('OPENROUTER_API_KEY');
+        } finally {
+            await preparation.cleanup();
+        }
+    });
+
+    test('hands the credential volume to the host user from a root helper', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        const commands: string[][] = [];
+        const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock(commands),
+            user: () => ({ uid: 501, gid: 20 }),
+        }).prepare({ ...request(fixture), purpose: 'connect' });
+        try {
+            const chown = commands.find((command) =>
+                command.includes('chown "$1:$2" /workbench-credentials')
+            );
+            if (!chown) throw new Error('The credential volume was not initialized');
+            // Images whose default user is not root could not chown the volume otherwise.
+            expect(chown[chown.indexOf('--user') + 1]).toBe('0:0');
+            expect(chown.slice(-2)).toEqual(['501', '20']);
+            expectIsolatedHelper(chown);
+            // chown needs exactly one capability back after dropping all of them.
+            expect(chown[chown.indexOf('--cap-add') + 1]).toBe('CHOWN');
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('writes credential files through a labeled offline helper with content on stdin', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        const helpers: Array<{ command: string[]; input?: string }> = [];
+        const volume = new Map<string, string>();
+        const base = dockerMock([]);
+        const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: () => '/usr/bin/docker',
+            command: async (command, options) => {
+                const path = command.at(-1) ?? '';
+                if (
+                    command[1] === 'run' &&
+                    path.startsWith('/workbench-credentials/')
+                ) {
+                    helpers.push({
+                        command,
+                        ...(options?.input !== undefined
+                            ? { input: options.input }
+                            : {}),
+                    });
+                    if (options?.input !== undefined) {
+                        volume.set(path, options.input);
+                        return result(0);
+                    }
+                    return result(0, volume.get(path) ?? '');
+                }
+                return base(command);
+            },
+            user: () => ({ uid: 501, gid: 20 }),
+        }).prepare({ ...request(fixture), purpose: 'connect' });
+        try {
+            const files = runtime.credentials;
+            if (!files) throw new Error('Docker did not expose its credential volume');
+            expect(await files.read('opencode/auth.json')).toBeUndefined();
+            await files.write(
+                'opencode/auth.json',
+                '{"openrouter":{"key":"fixture"}}\n'
+            );
+            expect(await files.read('opencode/auth.json')).toBe(
+                '{"openrouter":{"key":"fixture"}}\n'
+            );
+            const write = helpers.find((helper) => helper.input !== undefined);
+            expect(write?.input).toContain('fixture');
+            for (const helper of helpers) {
+                expect(helper.command.join(' ')).not.toContain('fixture');
+                expectIsolatedHelper(helper.command);
+                expect(helper.command[helper.command.indexOf('--user') + 1]).toBe(
+                    '501:20'
+                );
+                expect(helper.command).toContain(
+                    `${DockerCredentialVolume.nameFor('opencode')}:/workbench-credentials`
+                );
+            }
+            expect(write?.command).toContain('--interactive');
+            expect(write?.command.join('\n')).toContain(`trap 'rm -f "$1.tmp"' EXIT`);
+            await expect(files.write('../escape', 'x')).rejects.toThrow(
+                'Invalid credential path'
             );
         } finally {
             await runtime.cleanup();
@@ -1104,6 +1397,23 @@ function dockerMock(
         if (command[1] === 'container') return result(0);
         throw new Error(`Unexpected Docker command: ${command.join(' ')}`);
     };
+}
+
+/**
+ * Credential helpers print secrets, so no log driver may keep their output,
+ * and they run with no capabilities, network, privilege gain, or image pull.
+ */
+function expectIsolatedHelper(command: string[]): void {
+    expect(command.slice(0, 2)).toEqual(['/usr/bin/docker', 'run']);
+    const option = (name: string) => command[command.indexOf(name) + 1];
+    expect(command).toContain('--rm');
+    expect(command).toContain('--read-only');
+    expect(command).toContain('dev.workbenches.managed=true');
+    expect(option('--log-driver')).toBe('none');
+    expect(option('--cap-drop')).toBe('ALL');
+    expect(option('--security-opt')).toBe('no-new-privileges');
+    expect(option('--pull')).toBe('never');
+    expect(option('--network')).toBe('none');
 }
 
 function result(code: number, stdout = '', stderr = ''): DockerCommandResult {

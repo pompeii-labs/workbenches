@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRouter } from '../src/models/index.js';
+import { sessionFailure } from '../src/runners/opencode/router.js';
 import type {
     RunnerPermissionRequest,
     RunnerQuestionRequest,
@@ -1247,17 +1248,35 @@ describe('OpenCode interactive server adapter', () => {
             {
                 status: 'rejected',
                 reason: expect.objectContaining({
-                    message: 'OpenCode session failed',
+                    message:
+                        'OpenCode session failed: ProviderAuthError: Authentication failed',
                 }),
             },
             {
                 status: 'rejected',
                 reason: expect.objectContaining({
-                    message: 'OpenCode session failed',
+                    message:
+                        'OpenCode session failed: ProviderAuthError: Authentication failed',
                 }),
             },
         ]);
         await session.close();
+    });
+
+    test('reports the native failure text with token-like values redacted', () => {
+        expect(
+            sessionFailure({
+                name: 'APIError',
+                data: {
+                    message:
+                        'Invalid key sk-or-v1-0123456789abcdef0123456789abcdef\nfor   user',
+                },
+            })
+        ).toBe('OpenCode session failed: APIError: Invalid key [redacted] for user');
+        expect(
+            sessionFailure({ name: 'APIError', data: { message: 'word '.repeat(200) } })
+        ).toHaveLength('OpenCode session failed: '.length + 300);
+        expect(sessionFailure(undefined)).toBe('OpenCode session failed');
     });
 
     test('can close while the host has not answered a permission request', async () => {

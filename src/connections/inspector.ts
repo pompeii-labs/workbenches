@@ -1,6 +1,7 @@
 import {
     ActiveModelCatalog,
     type AuthenticatedModelRoute,
+    connectAdvice,
     connectCommand,
     type ModelRoute,
     ModelRouter,
@@ -120,7 +121,7 @@ export class ConnectionInspector {
             : undefined;
         if (options.connection && !requested) {
             throw new AuthenticationRequiredError(
-                `Connection ${options.connection} is not authenticated for ${canonicalModel(this.#workbench)} with ${this.#workbench.manifest.runner} in the ${this.#runtime.name} runtime. Run ${connectCommand(this.#reference)}.`
+                `Connection ${options.connection} is not authenticated for ${canonicalModel(this.#workbench)} with ${this.#workbench.manifest.runner} in the ${this.#runtime.name} runtime. ${connectAdvice(this.#connectCommand())}.`
             );
         }
         const preferredConnection = requested ?? storedPreference;
@@ -154,7 +155,7 @@ export class ConnectionInspector {
                         : {}),
                 };
             }),
-            connectCommand: connectCommand(this.#reference),
+            connectCommand: this.#connectCommand(),
             ...(selected ? { configuration } : {}),
         };
     }
@@ -166,8 +167,12 @@ export class ConnectionInspector {
         });
         if (status.ready && status.configuration) return status.configuration;
         throw new AuthenticationRequiredError(
-            `No authenticated route is available for ${canonicalModel(this.#workbench)}. Run ${status.connectCommand}.`
+            `No authenticated route is available for ${canonicalModel(this.#workbench)}. ${connectAdvice(status.connectCommand)}.`
         );
+    }
+
+    #connectCommand(): string {
+        return connectCommand(this.#reference, this.#runtime.name);
     }
 
     configurationFor(

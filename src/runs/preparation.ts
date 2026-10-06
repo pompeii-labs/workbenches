@@ -6,7 +6,11 @@ import {
     ConnectionStore,
     type RunnerConnectionSelection,
 } from '../connections/store.js';
-import type { ResolvedRunnerConfiguration } from '../models/index.js';
+import {
+    connectAdvice,
+    connectCommand,
+    type ResolvedRunnerConfiguration,
+} from '../models/index.js';
 import { OutcomeApplier } from '../outcomes/apply.js';
 import type { OutcomeCompleteness, RunOutcome } from '../outcomes/contracts.js';
 import { OutcomeLifecycle } from '../outcomes/lifecycle.js';
@@ -346,14 +350,17 @@ export class ExecutionPreparation {
         const model = status?.model ?? workbench.manifest.model.id;
         const connect =
             status?.connectCommand ??
-            `wb connect ${this.options.reference ?? workbench.manifest.name}`;
+            connectCommand(
+                this.options.reference ?? workbench.manifest.name,
+                runtime.name
+            );
         if (connection) {
             throw new AuthenticationRequiredError(
-                `Connection ${connection} is not authenticated for ${model} with ${workbench.manifest.runner} in the ${runtime.name} runtime. Run ${connect}.`
+                `Connection ${connection} is not authenticated for ${model} with ${workbench.manifest.runner} in the ${runtime.name} runtime. ${connectAdvice(connect)}.`
             );
         }
         throw new AuthenticationRequiredError(
-            `No authenticated route is available for ${model}. Run ${connect}.`
+            `No authenticated route is available for ${model}. ${connectAdvice(connect)}.`
         );
     }
 

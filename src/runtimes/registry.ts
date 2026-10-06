@@ -16,6 +16,7 @@ import type {
     PreparedRuntime,
     RuntimeCommandOptions,
     RuntimeCommandResult,
+    RuntimeCredentialFiles,
     RuntimeInfrastructureMetadata,
     RuntimePlacement,
     RuntimePreparation,
@@ -170,6 +171,10 @@ class GuardedRuntime implements PreparedRuntime {
 
     get sandboxId(): string | undefined {
         return this.runtime.sandboxId;
+    }
+
+    get credentials(): RuntimeCredentialFiles | undefined {
+        return this.runtime.credentials;
     }
 
     pathFor(hostPath: string): string {

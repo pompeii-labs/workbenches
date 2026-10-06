@@ -89,6 +89,18 @@ export class ConnectionStore {
             : undefined;
     }
 
+    /** Removes the preference for `context` when it points at `provider`. */
+    async forget(context: RunnerConnectionContext, provider: string): Promise<boolean> {
+        const connections = await this.list();
+        const kept = connections.filter(
+            (candidate) =>
+                !(sameContext(candidate, context) && candidate.provider === provider)
+        );
+        if (kept.length === connections.length) return false;
+        await writeConnections(this.#home, kept);
+        return true;
+    }
+
     async save(
         context: RunnerConnectionContext,
         selection: RunnerConnectionSelection

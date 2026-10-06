@@ -265,16 +265,29 @@ The Workbench author selects the runner, model, allowed provider routes, and nat
 
 ```sh
 wb connect
-# Model provider → runtime → harness → provider → authentication method
+# Model provider → runtime → harness → provider → authentication method → credential
 # Or E2B or Daytona runtime → masked API-key prompt
 wb run project-core --task "Review this migration"
 ```
 
-The model-provider path is configuration-only. It does not launch a runner, start Docker, create an E2B sandbox, require an E2B key, contact a model provider, or ask for model credentials. The resulting default belongs to the runner and runtime, not a Workbench. Compatible Workbenches automatically reuse it. The same flow can be scripted explicitly:
+The model-provider path saves the preferred route for that runner and runtime, puts the provider credential into the store that runtime reads, and then checks it. It ends with `Ready: <Provider> for <Runner> in <runtime>`, or with exactly what is missing and the one command that fixes it, exiting 3. The default belongs to the runner and runtime, not a Workbench, and compatible Workbenches reuse it. Each runtime reads a different store:
+
+| Runtime | Credential store | How `wb connect` fills it | How it is checked |
+| --- | --- | --- | --- |
+| `local` | The runner's own sign-in on this machine | It does not; sign in with the runner (`opencode auth login`) or set the provider variable | With a Workbench, the runner itself lists the provider; otherwise only the provider variable counts |
+| `docker` | A per-runner named volume mounted at `/workbench-credentials` | A short-lived helper container from the Workbench image, with no network and a read-only root, receives the file on standard input | The same inspection `wb smoke` runs, inside the container |
+| `e2b` | `~/.workbench/runtime-credentials/e2b/<runner>/`, synced into each sandbox | Written on the host, files `0600` in `0700` directories | The entry exists on the host; no sandbox is created, so the first run confirms it |
+| `daytona` | None; Daytona runs read provider variables only | It does not; set the provider variable or pass `--env-file` | The provider variable is set |
+
+Readiness respects the chosen method: a provider variable holds an API key, so it counts as ready for an API-key or native method (it takes precedence for a run) but never for a subscription. The default is saved only once the route is ready; a connect that exits 3 or is cancelled leaves the previous default in place, and `--remove` drops the default when it pointed at the removed provider. Flags that would have no effect, such as `--stdin` with a subscription method or on `local` and `daytona`, are rejected before anything is read or written. A piped key must be the bare value: one trailing newline is removed, and whitespace or a `NAME=` prefix is rejected. Every API-key method (OpenRouter, Anthropic, an OpenAI API key, and the E2B and Daytona runtime keys) takes a pasted key: a hidden prompt in a terminal (`OpenRouter API key for Docker runs (input hidden)`), or `--stdin` otherwise. A subscription method runs a fresh `opencode auth login` against a private temporary data home, then keeps only that provider's entry. `wb connect` never reads another tool's credential files, so your own runner sign-in is neither read nor copied. Only the selected provider's entry is written, merged into the store beside existing entries. Credential values are never printed, logged, passed in argv, or placed in a child process environment.
 
 ```sh
-wb connect --runtime e2b --harness opencode --provider openai --method chatgpt
+wb connect my-expert --runtime docker
+printf '%s' "$OPENROUTER_API_KEY" | wb connect --runtime e2b --harness opencode --provider openrouter --stdin
+wb connect --runtime e2b --harness opencode --provider openrouter --remove
 ```
+
+`--remove` with `--provider` deletes that provider's entry from that runtime's store and keeps the others. Docker writes and checks go through a Workbench image, so Docker needs a Workbench reference. Pi API keys use Pi's documented `auth.json` format. Pi has no command-line sign-in, so a Pi subscription cannot be connected for another runtime; use an API-key method there. Inherited provider variables and `--env-file` still take effect for a run, so a key passed with `--env-file` works for one run without connecting. Pi is the exception to that precedence: as Pi documents, an entry in its `auth.json` wins over the provider variable.
 
 The E2B runtime-provider path saves its host-only API key once, without starting a sandbox or incurring E2B usage:
 
@@ -296,7 +309,7 @@ wb connect --runtime daytona --remove
 
 An inherited `DAYTONA_API_KEY` overrides the saved Daytona key for one process. Set `DAYTONA_API_URL` to use a Daytona API endpoint other than the public one. The key is never printed, is never passed to the sandbox, and is not accepted as a command-line value. Saving it creates no sandbox and incurs no Daytona usage.
 
-Passing a Workbench reference narrows the provider choices to routes allowed by that package; it still performs no runtime work.
+Passing a Workbench reference narrows the provider choices to routes allowed by that package and checks readiness with that Workbench's runner and runtime. `--runtime` selects one of its declared runtimes, and without it `wb connect <ref>` uses the first declared runtime. So `wb smoke`, `wb view`, and run preflight always name the runtime in their connect hint, such as `wb connect my-expert --runtime docker`.
 
 `wb connect` records which compatible provider and authentication method should be preferred for that runner and runtime. A single run can select a different configured or authenticated connection without changing the default:
 
@@ -306,7 +319,7 @@ wb run project-core --connection openrouter --task "Review this migration"
 
 An override must match one of the provider routes allowed by the Workbench. Resolution order is the explicit `--connection` override, the runner/runtime default, then the first allowed authenticated route in manifest order. Connection defaults, including the selected authentication method, are stored in `~/.workbench/connections.json`. No login command is injected into a Workbench conversation, and no Workbench package or model is modified by selecting a default.
 
-If the selected OpenCode credential is missing, the first foreground or TUI run starts the real execution runtime, asks OpenCode for the configured browser or headless authorization flow, displays its URL and instructions, waits for completion, and then continues that same run. Detached execution refuses to start an invisible first-time login and directs the user to run interactively once. First-run Pi login and interactive API-key entry are not yet implemented; those routes must already be available through runner credentials or declared provider environment.
+If the selected OpenCode credential is missing, the first foreground or TUI run starts the real execution runtime, asks OpenCode for the configured browser or headless authorization flow, displays its URL and instructions, waits for completion, and then continues that same run. Detached execution refuses to start an invisible first-time login and directs the user to run interactively once. First-run Pi login and API-key entry during a run are not implemented; connect the key with `wb connect` or pass it with `--env-file`.
 
 The provider menu is the intersection of providers serving catalog models and the selected harness version's capability map; model availability alone never implies that a harness supports a provider. Versioned harness maps may be delivered with the verified model metadata, with an engine-bundled map for the pinned harness version as the offline and compatibility fallback. Runtime-specific constraints, such as browser versus headless authentication, remain enforced by the engine.
 
@@ -557,6 +570,22 @@ Attaching observes or replays the latest run without taking control or starting 
 
 Resuming with a task sends one non-interactive continuation through the same session. It joins an active run's follow-up queue or starts a linked internal run when the previous one is closed. `--detach` returns the stable session ID while that continuation runs in the background. Killing cooperatively terminates the active run without deleting the session or its resumable context.
 
+`wb status` shows live progress for every active run on the machine, plus runs that finished in the last 10 minutes: a plan bar from the agent's todo list (`plan.updated`) with the current todo, elapsed time, and cost. A run waiting on input shows that first, with its `wb answer` command. When the current todo passes a typical todo's tool calls, the line adds the count in orange, which also shows a todo list the agent stopped updating. "Typical" is the run's own median once three todos have finished, otherwise the median over the Workbench's finished runs.
+
+```sh
+wb status              # one line per run
+wb status --line       # one line for a status bar
+wb status --json       # run summaries for other tools
+```
+
+`--line` suits any status bar that runs a command, such as Claude Code:
+
+```json
+{ "statusLine": { "type": "command", "command": "wb status --line", "refreshInterval": 1 } }
+```
+
+Status folds each run's event log incrementally into a private `status-cache.json` in the run directory, so frequent polling reads only new events.
+
 Headless callers can supervise the same engine without keeping a client attached:
 
 ```sh
@@ -709,7 +738,7 @@ A source that cannot be resolved prints `error: <message>` on stderr with no JSO
 | 0 | Success. For `wait`: idle, `turn_completed`, or `completed` |
 | 1 | Failure |
 | 2 | `wait` only: the run needs input |
-| 3 | No authenticated model route or runtime credential. Any command can return it, including `run`, `resume`, `attach`, `send`, `smoke`, `build`, `create`, and `outcome --recover`. `wait` reports such a run as failed (1). |
+| 3 | No authenticated model route or runtime credential. Any command can return it, including `run`, `resume`, `attach`, `send`, `smoke`, `build`, `create`, `connect`, and `outcome --recover`. `wait` reports such a run as failed (1). |
 | 124 | `wait` only: timeout. The run is unchanged |
 | 130 | Cancelled or interrupted |
 

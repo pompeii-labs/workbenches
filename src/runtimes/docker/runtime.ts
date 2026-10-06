@@ -101,6 +101,10 @@ export class DockerRuntime implements PreparedRuntime {
         this.workbench = options.mounts.remap(options.request.workbench);
     }
 
+    get credentials(): DockerCredentialVolume | undefined {
+        return this.options.credentials;
+    }
+
     pathFor(hostPath: string): string {
         return this.options.mounts.pathFor(hostPath);
     }

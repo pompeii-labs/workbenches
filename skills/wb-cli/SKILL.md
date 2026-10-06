@@ -66,7 +66,7 @@ Keys come from the environment of the `wb` process, plus `--env-file FILE` and `
 
 There is no single required provider. If a run asks for a key the person does not have, check `wb view` for the other routes; an OpenAI or Anthropic key is often enough where an example used OpenRouter. Details and every error text are in [references/connections.md](references/connections.md).
 
-`wb connect <alias>` stores a preference (runner, runtime, provider, method), never a key. Without flags it prompts; with `--runtime`, `--harness`, `--provider`, and `--method` it runs non-interactively. OAuth and native sign-in happen on the first interactive `wb run`, which needs a person at a terminal. Hand sign-in to the person; do not try to drive it. A detached run cannot finish first-run OAuth: run interactively once, or use an API key in the environment.
+`wb connect <alias> --runtime <runtime>` saves the default route for that runner and runtime, puts the provider credential into the store that runtime reads, and checks it. It ends with `Ready: <Provider> for <Runner> in <runtime>` (`Saved:` for `e2b`, which the first run confirms), or exits 3 naming what is missing and the one command that fixes it. Run it with the `--runtime` from the smoke or run hint. Unattended, the only way to give a key is standard input (`--stdin`); the hidden key prompt and a fresh subscription sign-in need a person at a terminal, so hand them over. `wb connect` never reads or copies the person's own runner sign-in. For a one-off run, `--env-file` works without connecting. Details are in [references/connections.md](references/connections.md).
 
 Never print, `cat`, or echo a key or an env file to check for it. Check by variable name only, for example `test -n "$OPENAI_API_KEY" && echo set`.
 
@@ -94,6 +94,6 @@ For scripts and agents:
 - `wait`, `send`, `answer`, `ps`, `view`, `build`, `outcome`, `smoke` take `--json`.
 - Piped output of other commands is tab separated and not a stable contract.
 
-Exit codes: `0` success; `1` failure; `2` `wait` stopped on a pending input; `3` no authenticated model route or runtime credential (any command can return it, including `run`, `resume`, `attach`, `send`, `smoke`, `build`, `create`, and `outcome --recover`; `wait` reports such a run as failed, 1); `124` `wait` timed out (the run continues); `130` cancelled or interrupted.
+Exit codes: `0` success; `1` failure; `2` `wait` stopped on a pending input; `3` no authenticated model route or runtime credential (any command can return it, including `run`, `resume`, `attach`, `send`, `smoke`, `build`, `create`, `connect`, and `outcome --recover`; `wait` reports such a run as failed, 1); `124` `wait` timed out (the run continues); `130` cancelled or interrupted.
 
 The full command reference, state locations, and environment variables are in [references/commands.md](references/commands.md). Every common failure with its fix is in [references/troubleshooting.md](references/troubleshooting.md).
