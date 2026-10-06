@@ -31,7 +31,7 @@ Use classes for objects that own state, resources, policy, or a lifecycle. The c
 - `Runner` defines the harness contract. Concrete runners own translation, authentication, assets, event normalization, and sessions for one harness.
 - `Runtime` defines the execution-environment contract. Concrete runtimes own preparation, process execution, isolation, and cleanup.
 - `WorkbenchRun` owns one run lifecycle and normalized event stream.
-- `ConnectionStore` owns non-secret runtime, harness, provider, and authentication-method preferences. Authentication itself belongs to the selected runner session inside the real execution runtime.
+- `ConnectionStore` owns non-secret runtime, harness, provider, and authentication-method preferences. `ConnectionSetup` writes one provider entry, in the runner's own format, into the credential store a runtime reads, and checks readiness. Authentication itself belongs to the runner.
 - `ModelCatalog` owns verified metadata retrieval and local caching.
 
 Use pure functions for parsing, formatting, schema validation, and small deterministic transformations. Keep them private unless another domain truly requires them. Do not model a stateful workflow as a chain of exported utility functions.
