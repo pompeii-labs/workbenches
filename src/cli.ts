@@ -36,6 +36,7 @@ import { resumeCommand } from './commands/resume.js';
 import { runCommand } from './commands/run.js';
 import { sendCommand } from './commands/send.js';
 import { smokeCommand } from './commands/smoke.js';
+import { statusCommand } from './commands/status.js';
 import { unpublishCommand } from './commands/unpublish.js';
 import { updateCommand } from './commands/update.js';
 import { upgradeCommand } from './commands/upgrade.js';
@@ -77,6 +78,7 @@ export const workbenchCommand = defineCommand({
         publish: publishCommand,
         unpublish: unpublishCommand,
         ps: psCommand,
+        status: statusCommand,
         build: buildCommand,
         clean: cleanCommand,
         connect: connectCommand,
