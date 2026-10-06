@@ -58,12 +58,6 @@ export const connectCommand = defineCommand({
                 'Read the key from standard input: a model key with --provider, or the E2B or Daytona runtime key',
             default: false,
         },
-        yes: {
-            type: 'boolean',
-            description:
-                "Copy your local runner's API key for the provider into the runtime without asking",
-            default: false,
-        },
         status: {
             type: 'boolean',
             description: 'Show runtime provider connection status',
@@ -115,8 +109,8 @@ export const connectCommand = defineCommand({
                 '--stdin reads a model key with --runtime and --provider, or a runtime key with --runtime e2b or --runtime daytona alone'
             );
         }
-        if (args.remove && (args.stdin || args.yes)) {
-            throw new Error('--remove cannot be combined with --stdin or --yes');
+        if (args.remove && args.stdin) {
+            throw new Error('--stdin and --remove cannot be combined');
         }
         await new ModelCatalog({ home }).refresh();
         let cleanup = async () => {};
@@ -160,7 +154,7 @@ export const connectCommand = defineCommand({
                 );
                 return;
             }
-            await connection(method).connect({ stdin: args.stdin, yes: args.yes });
+            await connection(method).connect({ stdin: args.stdin });
         } finally {
             await cleanup();
         }
@@ -243,9 +237,9 @@ async function connectRuntimeProvider(
             );
         }
         const entered = await password({
-            message: `${label} API key`,
+            message: `${label} API key for creating ${label} sandboxes (input hidden)`,
             validate: (value) =>
-                value?.trim() ? undefined : `Enter your ${label} API key`,
+                value?.trim() ? undefined : `Paste your ${label} API key`,
         });
         if (typeof entered === 'symbol') {
             throw new Error('Connection setup cancelled');

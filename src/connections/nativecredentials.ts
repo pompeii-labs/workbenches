@@ -1,8 +1,4 @@
-import { isAbsolute, join } from 'node:path';
-
-import { PiConfigStaging } from '../runners/pi/config.js';
 import type { RuntimeCredentialFiles } from '../runtimes/contracts.js';
-import { HostCredentialFiles } from './credentials.js';
 
 /** One provider's entry in a runner's native credential file. */
 export interface NativeCredentialEntry {
@@ -12,54 +8,27 @@ export interface NativeCredentialEntry {
 }
 
 /**
- * A runner's documented credential file: a JSON object keyed by native
- * provider. OpenCode keeps it at `opencode/auth.json` under its data home and
- * Pi at `auth.json` in its agent directory. Entry values are secrets and are
- * never printed.
+ * A runner's documented credential file inside a Workbench credential store: a
+ * JSON object keyed by native provider. OpenCode keeps it at
+ * `opencode/auth.json` under its data home and Pi at `auth.json`. Entry values
+ * are secrets and are never printed. Workbench never reads the user's own
+ * runner files.
  */
 export class NativeCredentialFile {
     private constructor(
         readonly runner: string,
         /** The file's path relative to a credential root. */
         readonly path: string,
-        private readonly apiType: string,
-        private readonly root: (
-            environment: Record<string, string | undefined>
-        ) => string | undefined
+        private readonly apiType: string
     ) {}
 
     static for(runner: string): NativeCredentialFile {
         if (runner === 'opencode') {
-            // OpenCode follows the XDG base directory layout on every platform.
-            return new NativeCredentialFile(
-                'opencode',
-                'opencode/auth.json',
-                'api',
-                (environment) => {
-                    const configured = environment.XDG_DATA_HOME?.trim();
-                    if (configured && isAbsolute(configured)) return configured;
-                    const home = environment.HOME?.trim();
-                    return home ? join(home, '.local', 'share') : undefined;
-                }
-            );
+            return new NativeCredentialFile('opencode', 'opencode/auth.json', 'api');
         }
-        if (runner === 'pi') {
-            return new NativeCredentialFile(
-                'pi',
-                'auth.json',
-                'api_key',
-                (environment) => PiConfigStaging.directoryFor(environment)
-            );
-        }
+        if (runner === 'pi')
+            return new NativeCredentialFile('pi', 'auth.json', 'api_key');
         throw new Error(`Unsupported runner: ${runner}`);
-    }
-
-    /** The runner's own sign-in on this machine, for reading only. */
-    host(
-        environment: Record<string, string | undefined>
-    ): HostCredentialFiles | undefined {
-        const root = this.root(environment);
-        return root ? new HostCredentialFiles(root) : undefined;
     }
 
     /** The entry an API key becomes in this runner's format. */

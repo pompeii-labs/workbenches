@@ -73,18 +73,6 @@ export class ConnectionSetup {
         );
     }
 
-    /**
-     * The host's API key for the target, the only kind of entry that may be
-     * copied. Providers rotate subscription refresh tokens, so a copied
-     * sign-in could invalidate the original; those get a fresh sign-in.
-     */
-    async hostApiKey(): Promise<NativeCredentialEntry | undefined> {
-        const { method } = this.#options.target;
-        if (method.authenticationMethod === 'oauth') return undefined;
-        const entry = await this.#hostEntry();
-        return entry && this.file.serves(entry, 'api') ? entry : undefined;
-    }
-
     /** Writes `entry` into the store the target runtime reads, then checks readiness. */
     async save(entry: NativeCredentialEntry): Promise<ConnectionReadiness> {
         this.requireStore();
@@ -112,7 +100,7 @@ export class ConnectionSetup {
     /** Checks readiness without writing anything. */
     async verify(): Promise<ConnectionReadiness> {
         const { target, workbench } = this.#options;
-        if (target.runtime === 'docker' || (target.runtime === 'local' && workbench)) {
+        if (target.runtime === 'docker') {
             return this.#inspect(async (runtime) =>
                 this.file.find(
                     this.#runtimeFiles(runtime),
@@ -120,41 +108,39 @@ export class ConnectionSetup {
                 )
             );
         }
-        if (target.runtime === 'daytona') {
+        // The runner itself reports its own sign-in; Workbench never reads its files.
+        if (target.runtime === 'local' && workbench) return this.#inspect();
+        if (target.runtime !== 'e2b') {
             return this.#environmentServes()
                 ? ready({ fromEnvironment: true })
                 : this.#missing(
-                      `Daytona has no runner credential store, so ${this.#runner} there reads ${this.#provider} keys only from the environment`
+                      target.runtime === 'local'
+                          ? `Without a Workbench, wb cannot ask ${this.#runner} which providers it is signed in to, and no ${this.#provider} key is in the environment`
+                          : `Daytona has no runner credential store, so ${this.#runner} there reads ${this.#provider} keys only from the environment`
                   );
         }
-        const files =
-            target.runtime === 'local'
-                ? this.file.host(this.#options.environment)
-                : // Reading must not create the store, so this skips the private-directory setup.
-                  new HostCredentialFiles(
-                      new RunnerCredentialStore(this.#options.home).binding(
-                          target.runtime,
-                          target.harness
-                      ).directory
-                  );
-        const entry = files
-            ? await this.file.find(files, target.method.nativeProvider)
-            : undefined;
-        const saved = target.runtime !== 'local';
+        // Reading must not create the store, so this skips the private-directory setup.
+        const entry = await this.file.find(
+            new HostCredentialFiles(
+                new RunnerCredentialStore(this.#options.home).binding(
+                    target.runtime,
+                    target.harness
+                ).directory
+            ),
+            target.method.nativeProvider
+        );
         // Pi reads its auth.json before the environment, so a stored Pi entry decides alone.
         if (entry && target.harness === 'pi') {
             return this.#serves(entry)
-                ? ready({ saved })
+                ? ready({ saved: true })
                 : this.#missing(this.#mismatch(entry));
         }
         if (this.#environmentServes()) return ready({ fromEnvironment: true });
-        if (entry && this.#serves(entry)) return ready({ saved });
+        if (entry && this.#serves(entry)) return ready({ saved: true });
         return this.#missing(
             entry
                 ? this.#mismatch(entry)
-                : target.runtime === 'local'
-                  ? `No ${this.#provider} credential for ${this.#runner} on this machine`
-                  : `No ${this.#provider} credential is saved for ${this.#runner} in ${runtimeLabel(target.runtime)}`
+                : `No ${this.#provider} credential is saved for ${this.#runner} in ${runtimeLabel(target.runtime)}`
         );
     }
 
@@ -180,11 +166,14 @@ export class ConnectionSetup {
     }
 
     /**
-     * Checks inside the runtime. `stored` writes or reads the target store's
-     * entry first, so a Pi entry can decide readiness as it does for a run.
+     * Checks inside the runtime with the inspector smoke uses. `stored` writes
+     * or reads the runtime store's entry first, so a Pi entry can decide
+     * readiness as it does for a run. A runtime without a store passes none.
      */
     async #inspect(
-        stored: (runtime: PreparedRuntime) => Promise<NativeCredentialEntry | undefined>
+        stored?: (
+            runtime: PreparedRuntime
+        ) => Promise<NativeCredentialEntry | undefined>
     ): Promise<ConnectionReadiness> {
         const { target } = this.#options;
         let entry: NativeCredentialEntry | undefined;
@@ -194,9 +183,13 @@ export class ConnectionSetup {
                 nativeProvider: target.method.nativeProvider,
                 authenticationMethod: target.method.authenticationMethod,
             },
-            before: async (runtime) => {
-                entry = runtime.credentials ? await stored(runtime) : undefined;
-            },
+            ...(stored
+                ? {
+                      before: async (runtime: PreparedRuntime) => {
+                          entry = await stored(runtime);
+                      },
+                  }
+                : {}),
         });
         if (entry && target.harness === 'pi' && !this.#serves(entry)) {
             return this.#missing(this.#mismatch(entry));
@@ -242,13 +235,6 @@ export class ConnectionSetup {
 
     #missing(missing: string): ConnectionReadiness {
         return { ready: false, saved: false, fromEnvironment: false, missing };
-    }
-
-    async #hostEntry(): Promise<NativeCredentialEntry | undefined> {
-        const files = this.file.host(this.#options.environment);
-        return files
-            ? this.file.find(files, this.#options.target.method.nativeProvider)
-            : undefined;
     }
 
     #check(): Pick<ConnectionCheck, 'open' | 'inspect'> {

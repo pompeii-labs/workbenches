@@ -951,7 +951,7 @@ describe('CLI integration', () => {
         );
     });
 
-    test('copies only the selected provider host API key, and only when asked explicitly', async () => {
+    test("never copies the runner's own sign-in from this machine", async () => {
         const home = await temporaryDirectory('workbench-connect-reuse-');
         const user = await fakeUserHome();
         const hostFile = join(user.XDG_DATA_HOME, 'opencode', 'auth.json');
@@ -960,8 +960,6 @@ describe('CLI integration', () => {
             hostFile,
             JSON.stringify({
                 openrouter: { type: 'api', key: 'fixture-host-openrouter' },
-                anthropic: { type: 'oauth', refresh: 'fixture-host-refresh' },
-                openai: { type: 'oauth', refresh: 'fixture-host-refresh' },
             })
         );
         const environment = {
@@ -980,89 +978,16 @@ describe('CLI integration', () => {
             'openrouter',
         ];
 
-        const unconfirmed = await executeCli(target, environment);
-        expect(unconfirmed.code).toBe(AuthenticationRequiredError.exitCode);
-        expect(unconfirmed.stderr).toContain(
-            'Copy your local OpenCode OpenRouter API key with wb connect --runtime e2b --harness opencode --provider openrouter --method native --yes'
+        const result = await executeCli(target, environment);
+        expect(result.code).toBe(AuthenticationRequiredError.exitCode);
+        expect(result.stderr).toContain(
+            'Pass the OpenRouter API key on standard input: wb connect --runtime e2b --harness opencode --provider openrouter --method native --stdin'
         );
+        expect(result.stderr).not.toContain('fixture-host');
         await expect(stat(join(home, 'runtime-credentials'))).rejects.toThrow();
-
-        const copied = await executeCli([...target, '--yes'], environment);
-        expect(copied.code).toBe(0);
-        expect(copied.stdout).toBe('saved\te2b\topencode\topenrouter\n');
-        expect(`${copied.stdout}${copied.stderr}`).not.toContain('fixture-host');
-        expect(
-            JSON.parse(
-                await readFile(
-                    join(
-                        home,
-                        'runtime-credentials',
-                        'e2b',
-                        'opencode',
-                        'opencode',
-                        'auth.json'
-                    ),
-                    'utf8'
-                )
-            )
-        ).toEqual({ openrouter: { type: 'api', key: 'fixture-host-openrouter' } });
         expect(JSON.parse(await readFile(hostFile, 'utf8'))).toHaveProperty(
-            'anthropic'
+            'openrouter'
         );
-
-        // Subscription sign-ins are never copied, even with --yes: they need a fresh sign-in.
-        const subscription = await executeCli(
-            [
-                'connect',
-                '--runtime',
-                'e2b',
-                '--harness',
-                'opencode',
-                '--provider',
-                'openai',
-                '--method',
-                'chatgpt',
-                '--yes',
-            ],
-            { ...environment, OPENAI_API_KEY: '' }
-        );
-        expect(subscription.code).toBe(1);
-        expect(subscription.stderr).toContain(
-            '--yes copies a local API key, but ChatGPT subscription (headless) always signs in fresh'
-        );
-        const native = await executeCli(
-            [
-                'connect',
-                '--runtime',
-                'e2b',
-                '--harness',
-                'opencode',
-                '--provider',
-                'anthropic',
-                '--yes',
-            ],
-            { ...environment, ANTHROPIC_API_KEY: '' }
-        );
-        expect(native.code).toBe(AuthenticationRequiredError.exitCode);
-        expect(native.stderr).not.toContain('Copy your local');
-        expect(`${subscription.stderr}${native.stderr}`).not.toContain('fixture-host');
-        expect(
-            Object.keys(
-                JSON.parse(
-                    await readFile(
-                        join(
-                            home,
-                            'runtime-credentials',
-                            'e2b',
-                            'opencode',
-                            'opencode',
-                            'auth.json'
-                        ),
-                        'utf8'
-                    )
-                )
-            )
-        ).toEqual(['openrouter']);
     });
 
     test('reports Daytona as environment-only and refuses to store a key for it', async () => {
@@ -1136,7 +1061,7 @@ describe('CLI integration', () => {
         });
         expect(missing.code).toBe(AuthenticationRequiredError.exitCode);
         expect(missing.stderr).toContain(
-            'No OpenRouter credential for OpenCode on this machine. Run opencode auth login --provider openrouter, or set OPENROUTER_API_KEY'
+            'Without a Workbench, wb cannot ask OpenCode which providers it is signed in to, and no OpenRouter key is in the environment. Name a Workbench so its runner can check its own sign-in: wb connect <workbench> --runtime local --provider openrouter --method native, or set OPENROUTER_API_KEY'
         );
     });
 
