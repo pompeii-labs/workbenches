@@ -513,6 +513,30 @@ describe('Docker runtime provider', () => {
         }
     });
 
+    test('hands the credential volume to the host user from a root helper', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        const commands: string[][] = [];
+        const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock(commands),
+            user: () => ({ uid: 501, gid: 20 }),
+        }).prepare({ ...request(fixture), purpose: 'connect' });
+        try {
+            const chown = commands.find((command) =>
+                command.includes('chown "$1:$2" /workbench-credentials')
+            );
+            if (!chown) throw new Error('The credential volume was not initialized');
+            // Images whose default user is not root could not chown the volume otherwise.
+            expect(chown[chown.indexOf('--user') + 1]).toBe('0:0');
+            expect(chown.slice(-2)).toEqual(['501', '20']);
+            expect(chown).toContain('dev.workbenches.managed=true');
+            expect(chown.slice(0, 3)).toEqual(['/usr/bin/docker', 'run', '--rm']);
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('writes credential files through a labeled offline helper with content on stdin', async () => {
         const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
         const helpers: Array<{ command: string[]; input?: string }> = [];
