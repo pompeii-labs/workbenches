@@ -182,7 +182,30 @@ describe('native runner authentication', () => {
                 reference: 'publisher/project#core',
             }).require()
         ).rejects.toThrow(
-            'No authenticated route is available for openai/gpt-5.6-terra. Run wb connect publisher/project#core.'
+            'No authenticated route is available for openai/gpt-5.6-terra. Run wb connect publisher/project#core --runtime local, or pass the provider key for one run with --env-file.'
+        );
+    });
+
+    test('names a non-local runtime in the connect command so it fills that store', async () => {
+        const workbench = fixture('opencode');
+        const status = await inspector(workbench, {
+            runner: runner('opencode'),
+            runtime: runtime('┌ Credentials\n└ 0 credentials\n', { name: 'docker' }),
+            reference: './project#core',
+        }).inspect();
+
+        expect(status.ready).toBeFalse();
+        expect(status.connectCommand).toBe(
+            'wb connect ./project#core --runtime docker'
+        );
+        await expect(
+            inspector(workbench, {
+                runner: runner('opencode'),
+                runtime: runtime('', { name: 'e2b' }),
+                reference: 'fixture',
+            }).require()
+        ).rejects.toThrow(
+            'Run wb connect fixture --runtime e2b, or pass the provider key'
         );
     });
 });

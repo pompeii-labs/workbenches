@@ -260,7 +260,7 @@ class SmokeRun {
                     : 'no required tools',
                 result.authentication.ready
                     ? `auth ${result.authentication.configuration?.provider ?? 'environment'}`
-                    : result.authentication.connectCommand,
+                    : `${result.authentication.connectCommand} (or --env-file for one run)`,
                 ...requirements,
             ],
             tone: result.authentication.ready ? 'success' : 'warning',

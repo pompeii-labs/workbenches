@@ -63,7 +63,7 @@ Sources: `.#name` and `/path#name` select one package in a repo, `org/name` is t
 
 | Command | What it does |
 | --- | --- |
-| `wb connect [WORKBENCH] [--runtime] [--harness] [--provider] [--method]` | Save the default provider and sign-in method for a runner and runtime. Prompts unless all four flags are given. |
+| `wb connect [WORKBENCH] [--runtime] [--harness] [--provider] [--method] [--stdin\|--remove]` | Save the default provider and sign-in method for a runner and runtime, fill that runtime's credential store, and check it. `--stdin` reads an API key (a terminal gets a hidden prompt instead), `--remove` deletes the provider's entry. Exits 3 when not ready. |
 | `wb connect --runtime e2b\|daytona [--stdin\|--status\|--remove]` | Save, check, or remove a sandbox provider key. |
 | `wb update [--check]` | Update the CLI binary. |
 

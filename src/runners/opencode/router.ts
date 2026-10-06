@@ -125,11 +125,12 @@ export class OpenCodeEventRouter {
         }
         if (!active) return;
         if (type === 'session.error') {
-            const errorName = string(record(properties.error)?.name);
+            const error = record(properties.error);
+            const errorName = string(error?.name);
             if (active.cancelRequested && errorName === 'MessageAbortedError') {
                 return;
             }
-            state.failTurn(new Error('OpenCode session failed'));
+            state.failTurn(new Error(sessionFailure(error)));
             return;
         }
         if (type === 'session.status') {
@@ -172,4 +173,23 @@ export class OpenCodeEventRouter {
         }
         await this.emitted.part(active, record(properties.part), sessionId);
     }
+}
+
+/**
+ * The failure OpenCode reported, such as a provider rejecting the key, so a
+ * run that fails before any answer says why. Long token-like strings are
+ * redacted, since provider errors can echo credentials.
+ */
+export function sessionFailure(error: Record<string, unknown> | undefined): string {
+    const message =
+        string(record(error?.data)?.message) ?? string(error?.message) ?? '';
+    const detail = [string(error?.name), message]
+        .filter(Boolean)
+        .join(': ')
+        .replaceAll(/\s+/g, ' ')
+        .replaceAll(/[A-Za-z0-9_\-.+/=]{24,}/g, '[redacted]')
+        .trim();
+    return detail
+        ? `OpenCode session failed: ${detail.slice(0, 300)}`
+        : 'OpenCode session failed';
 }
