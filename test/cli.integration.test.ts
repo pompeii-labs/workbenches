@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test';
 import {
     chmod,
+    cp,
     mkdir,
     mkdtemp,
     readdir,
@@ -15,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { OfficialWorkbenchResolver } from '../src/authoring/official.js';
 import { WorkbenchPackage } from '../src/catalog/package.js';
+import { AuthenticationRequiredError } from '../src/connections/error.js';
 import { OutcomeStore } from '../src/outcomes/store.js';
 import { RunControl } from '../src/runs/control.js';
 import { RunEvents } from '../src/runs/events.js';
@@ -2002,6 +2004,8 @@ describe('CLI integration', () => {
         expect(added.stdout).toContain(
             `saved\tfixture-saved\t${fixture.packageDirectory}`
         );
+        expect(added.stderr).not.toContain('anonymous');
+        expect(await stat(join(home, 'preferences.json')).catch(() => null)).toBeNull();
 
         const currentAdd = await executeCli(
             ['add', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
@@ -2228,6 +2232,31 @@ describe('CLI integration', () => {
         expect(missingImage.stderr).toContain(
             '--image is required for the docker runtime'
         );
+        const missingDaytonaImage = await executeCli(
+            ['init', 'core', '--runtimes', 'local,daytona'],
+            {},
+            repository
+        );
+        expect(missingDaytonaImage.code).toBe(1);
+        expect(missingDaytonaImage.stderr).toContain(
+            '--image is required for the daytona runtime'
+        );
+        const missingTwo = await executeCli(
+            ['init', 'core', '--runtimes', 'docker,e2b'],
+            {},
+            repository
+        );
+        expect(missingTwo.stderr).toContain(
+            '--image is required for the docker and e2b runtimes'
+        );
+        const missingThree = await executeCli(
+            ['init', 'core', '--runtimes', 'docker,e2b,daytona'],
+            {},
+            repository
+        );
+        expect(missingThree.stderr).toContain(
+            '--image is required for the docker, e2b, and daytona runtimes'
+        );
         const unknown = await executeCli(
             ['init', 'core', '--runtimes', 'kubernetes'],
             {},
@@ -2429,6 +2458,364 @@ describe('CLI integration', () => {
         expect(result.stderr).toContain('wb add <source>');
         expect(result.stderr).not.toContain('at async');
         expect(result.stderr).not.toContain('/$bunfs/');
+    });
+});
+
+const providerKeys = [
+    'OPENROUTER_API_KEY',
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'GEMINI_API_KEY',
+    'GOOGLE_GENERATIVE_AI_API_KEY',
+    'XAI_API_KEY',
+    'GROQ_API_KEY',
+    'DEEPSEEK_API_KEY',
+    'MISTRAL_API_KEY',
+    'TOGETHER_API_KEY',
+    'FIREWORKS_API_KEY',
+];
+
+/** An environment in which no model route can authenticate. */
+function withoutProviderKeys(
+    environment: Record<string, string | undefined>
+): Record<string, string | undefined> {
+    return {
+        ...Object.fromEntries(providerKeys.map((name) => [name, ''])),
+        ...environment,
+    };
+}
+
+describe('CLI exit 3 for missing credentials', () => {
+    setDefaultTimeout(30_000);
+
+    test('smoke --json reports a ready Workbench and exits 0', async () => {
+        const fixture = await createFixture({ tools: ['fixture-tool'] });
+        const home = await temporaryDirectory('smoke-json-ready-');
+        const bin = await fakeBin(['fixture-tool']);
+        const smoked = await executeCli(['smoke', fixture.packageDirectory, '--json'], {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        });
+        expect(smoked.code).toBe(0);
+        const lines = smoked.stdout.trim().split('\n');
+        expect(lines).toHaveLength(1);
+        const report = JSON.parse(lines[0] ?? '');
+        expect(report).toMatchObject({
+            status: 'ready',
+            workbench: 'fixture-core',
+            version: '0.1.0',
+            runtime: 'local',
+            runner: { name: 'opencode', path: join(bin, 'opencode') },
+            tools: [{ name: 'fixture-tool', path: join(bin, 'fixture-tool') }],
+            authentication: {
+                ready: true,
+                provider: expect.any(String),
+                authenticated_providers: expect.any(Array),
+            },
+            requirements: { checked: [], applied: [], unchecked: [] },
+            workspaces: [],
+            warnings: [],
+        });
+        expect(report.authentication.connect_command).toBeUndefined();
+        expect(report.error).toBeUndefined();
+    });
+
+    test('smoke exits 3 with and without --json when no route is connected', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('smoke-needs-auth-');
+        const bin = await fakeBin();
+        const environment = withoutProviderKeys({
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        });
+        const human = await executeCli(
+            ['smoke', fixture.packageDirectory],
+            environment
+        );
+        expect(human.code).toBe(3);
+        expect(human.stdout).toContain('needs-auth\tfixture-core');
+        const machine = await executeCli(
+            ['smoke', fixture.packageDirectory, '--json'],
+            environment
+        );
+        expect(machine.code).toBe(3);
+        const report = JSON.parse(machine.stdout);
+        expect(report).toMatchObject({
+            status: 'needs-auth',
+            workbench: 'fixture-core',
+            authentication: { ready: false, authenticated_providers: [] },
+        });
+        expect(report.authentication.connect_command).toStartWith('wb connect ');
+    });
+
+    test('smoke --json reports a failure as an object and exits 1', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('smoke-json-failed-');
+        const bin = await fakeBin();
+        const smoked = await executeCli(
+            ['smoke', fixture.packageDirectory, '--runtime', 'e2b', '--json'],
+            { PATH: `${bin}:${process.env.PATH}`, WORKBENCH_HOME: home }
+        );
+        expect(smoked.code).toBe(1);
+        const report = JSON.parse(smoked.stdout);
+        expect(report).toMatchObject({
+            status: 'failed',
+            workbench: 'fixture-core',
+            error: { code: 'smoke_failed' },
+        });
+        expect(report.error.message).toContain('does not declare runtime: e2b');
+    });
+
+    test('smoke --json writes one line per Workbench', async () => {
+        const fixture = await createFixture();
+        const second = join(fixture.root, '.workbenches', 'second');
+        await cp(fixture.packageDirectory, second, { recursive: true });
+        const manifest = join(second, 'workbench.yml');
+        await writeFile(
+            manifest,
+            (await readFile(manifest, 'utf8')).replace(
+                'name: fixture-core',
+                'name: fixture-second'
+            )
+        );
+        const home = await temporaryDirectory('smoke-json-several-');
+        const bin = await fakeBin();
+        const smoked = await executeCli(['smoke', fixture.root, '--json'], {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        });
+        expect(smoked.code).toBe(0);
+        const names = smoked.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line).workbench)
+            .toSorted();
+        expect(names).toEqual(['fixture-core', 'fixture-second']);
+    });
+
+    test('smoke connect_command keeps the package selector for a repository source', async () => {
+        const fixture = await createFixture();
+        const second = join(fixture.root, '.workbenches', 'second');
+        await cp(fixture.packageDirectory, second, { recursive: true });
+        const manifest = join(second, 'workbench.yml');
+        await writeFile(
+            manifest,
+            (await readFile(manifest, 'utf8')).replace(
+                'name: fixture-core',
+                'name: fixture-second'
+            )
+        );
+        const home = await temporaryDirectory('smoke-connect-selector-');
+        const bin = await fakeBin();
+        const smoked = await executeCli(
+            ['smoke', fixture.root, '--json'],
+            withoutProviderKeys({
+                PATH: `${bin}:${process.env.PATH}`,
+                WORKBENCH_HOME: home,
+            })
+        );
+        expect(smoked.code).toBe(3);
+        const commands = smoked.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line).authentication.connect_command)
+            .toSorted();
+        expect(commands).toEqual([
+            `wb connect ${fixture.root}#core`,
+            `wb connect ${fixture.root}#second`,
+        ]);
+    });
+
+    test('smoke exits 3 when a sandbox runtime has no API key', async () => {
+        const fixture = await createFixture();
+        await writeRuntimesManifest(
+            fixture.packageDirectory,
+            ['runtimes:', '  e2b:', '    image: alpine:3.22'].join('\n')
+        );
+        const home = await temporaryDirectory('smoke-e2b-key-');
+        const bin = await fakeBin();
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+            E2B_API_KEY: '',
+        };
+        const human = await executeCli(
+            ['smoke', fixture.packageDirectory],
+            environment
+        );
+        expect(human.code).toBe(3);
+        expect(human.stderr).toContain('E2B_API_KEY is required for the E2B runtime');
+        const machine = await executeCli(
+            ['smoke', fixture.packageDirectory, '--json'],
+            environment
+        );
+        expect(machine.code).toBe(3);
+        expect(JSON.parse(machine.stdout)).toMatchObject({
+            status: 'needs-auth',
+            runtime: 'e2b',
+            error: { code: 'authentication_required' },
+        });
+    });
+
+    test('run exits 3 in the foreground, detached, and as a dry run', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('run-needs-auth-');
+        const bin = await fakeBin();
+        const environment = withoutProviderKeys({
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        });
+        const foreground = await executeSavedCli(
+            ['run', fixture.packageDirectory, '--task', 'work', '--json'],
+            environment
+        );
+        expect(foreground.code).toBe(3);
+        expect(`${foreground.stdout}${foreground.stderr}`).toContain(
+            'No authenticated route is available'
+        );
+        const [runId] = await readdir(join(home, 'runs'));
+        const failed = (await new RunStore(home).readEvents(runId ?? '')).find(
+            (event) => event.type === 'run.failed'
+        );
+        expect(failed?.data).toMatchObject({
+            code: 'authentication_required',
+            exit_code: 3,
+        });
+        const detached = await executeCli(
+            ['run', 'fixture-run', '--task', 'work', '--detach'],
+            environment
+        );
+        expect(detached.code).toBe(3);
+        expect(detached.stderr).toContain('No authenticated route is available');
+        const dryRun = await executeCli(
+            ['run', 'fixture-run', '--task', 'work', '--dry-run'],
+            environment
+        );
+        expect(dryRun.code).toBe(3);
+    });
+
+    test('resume and send exit 3 when a session needs a connection', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('session-needs-auth-');
+        const bin = await fakeBin();
+        const authenticated = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+        const first = await executeSavedCli(
+            ['run', fixture.packageDirectory, '--task', 'first', '--json'],
+            authenticated
+        );
+        expect(first.code).toBe(0);
+        const sessionId = JSON.parse(first.stdout.trim().split('\n')[0] ?? '').run_id;
+        const environment = withoutProviderKeys(authenticated);
+
+        const resumed = await executeCli(
+            ['resume', sessionId, 'again', '--final'],
+            environment
+        );
+        expect(resumed.code).toBe(3);
+        expect(resumed.stderr).toContain('No authenticated route is available');
+
+        const sent = await executeCli(['send', sessionId, 'again'], environment);
+        expect(sent.code).toBe(3);
+        expect(sent.stderr).toContain('No authenticated route is available');
+
+        const sentJson = await executeCli(
+            ['send', sessionId, 'again', '--json'],
+            environment
+        );
+        expect(sentJson.code).toBe(3);
+        expect(JSON.parse(sentJson.stdout).error).toMatchObject({
+            code: 'authentication_required',
+        });
+    });
+
+    test('create exits 3 when the creator has no connected route', async () => {
+        const root = await temporaryDirectory('create-needs-auth-');
+        const home = await temporaryDirectory('create-needs-auth-home-');
+        await seedCreator(home, root);
+        const bin = await fakeBin([], { authoring: 'valid' });
+        const created = await executeCli(
+            [
+                'create',
+                'core',
+                '--task',
+                'Build a repository audit expert',
+                '--json',
+                '--api-url',
+                'http://127.0.0.1:1',
+            ],
+            withoutProviderKeys({
+                PATH: `${bin}:${process.env.PATH}`,
+                WORKBENCH_HOME: home,
+            }),
+            root
+        );
+        expect(created.code).toBe(3);
+        expect(created.stderr).toContain('No authenticated route is available');
+    });
+
+    test('attach maps stored failures to stable exit codes', async () => {
+        const home = await temporaryDirectory('attach-exit-codes-');
+        const store = new RunStore(home);
+        const seed = async (
+            status: 'failed' | 'cancelled',
+            type: 'run.failed' | 'run.cancelled',
+            data: Record<string, unknown>
+        ) => {
+            const run = await store.create({
+                metadata: {
+                    workbench: 'probe',
+                    workbench_version: '0.1.0',
+                    runner: 'opencode',
+                    model: 'openai/gpt-5.6-terra',
+                    workspace: home,
+                },
+                request: { workbench_path: home, workspace: home, task: '' },
+            });
+            const events = new RunEvents({
+                runId: run.id,
+                runner: run.runner,
+                onEvent: (event) => store.appendEvent(run.id, event),
+            });
+            await events.emit(type, data);
+            await store.update(run.id, {
+                status,
+                exit_code: typeof data.exit_code === 'number' ? data.exit_code : 1,
+                finished_at: new Date().toISOString(),
+            });
+            return run.id;
+        };
+        const attachCode = async (id: string) =>
+            (await executeCli(['attach', id, '--json'], { WORKBENCH_HOME: home })).code;
+
+        for (const raw of [2, 124, 137]) {
+            const id = await seed('failed', 'run.failed', {
+                message: `runner exited with code ${raw}`,
+                exit_code: raw,
+            });
+            expect(await attachCode(id)).toBe(1);
+        }
+        const authentication = await seed('failed', 'run.failed', {
+            message: 'connect first',
+            ...AuthenticationRequiredError.failure(
+                new AuthenticationRequiredError('connect first')
+            ),
+        });
+        expect(await attachCode(authentication)).toBe(3);
+        const cancelled = await seed('cancelled', 'run.cancelled', {
+            reason: 'requested',
+        });
+        expect(await attachCode(cancelled)).toBe(130);
+    });
+
+    test('keeps exit 1 for other failures', async () => {
+        const home = await temporaryDirectory('exit-one-');
+        const failed = await executeCli(['smoke', '/nonexistent-workbench-path'], {
+            WORKBENCH_HOME: home,
+        });
+        expect(failed.code).toBe(1);
     });
 });
 

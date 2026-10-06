@@ -1,5 +1,6 @@
 import { defineCommand } from 'citty';
 
+import { AuthenticationRequiredError } from '../connections/error.js';
 import { createEventRenderer } from '../rendering/index.js';
 import { RepositoryDeliveryStore } from '../repositories/receipts.js';
 import { RunStore } from '../runs/index.js';
@@ -48,15 +49,21 @@ export const attachCommand = defineCommand({
             mode: args.json ? 'json' : args.final ? 'final' : 'human',
             ...(args.color === undefined ? {} : { color: args.color }),
         });
+        let failureExitCode = 1;
         try {
             for await (const event of store.follow(initial.id)) {
                 renderer.render(event);
+                if (event.type === 'run.failed') {
+                    failureExitCode = AuthenticationRequiredError.exitCodeFor(
+                        event.data
+                    );
+                }
             }
         } finally {
             renderer.finish();
         }
         const completed = await store.read(initial.id);
-        if (completed.status === 'failed') process.exitCode = completed.exit_code ?? 1;
+        if (completed.status === 'failed') process.exitCode = failureExitCode;
         if (completed.status === 'cancelled') process.exitCode = 130;
         if (
             (await new RepositoryDeliveryStore(home).read(completed.id))?.state ===

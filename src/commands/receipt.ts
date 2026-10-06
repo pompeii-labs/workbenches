@@ -1,3 +1,4 @@
+import { AuthenticationRequiredError } from '../connections/error.js';
 import { RunControlRejected } from '../runs/handle.js';
 import type { SessionInputResult } from '../sessions/control.js';
 
@@ -16,9 +17,10 @@ export class CliReceipt {
         } catch (error) {
             if (!json) throw error;
             process.stdout.write(
-                `${JSON.stringify(error instanceof RunControlRejected ? { receipt: error.receipt, error: error.receipt.error } : { error: { code: 'input_unavailable', message: error instanceof Error ? error.message : String(error) } })}\n`
+                `${JSON.stringify(error instanceof RunControlRejected ? { receipt: error.receipt, error: error.receipt.error } : { error: { code: error instanceof AuthenticationRequiredError ? error.code : 'input_unavailable', message: error instanceof Error ? error.message : String(error) } })}\n`
             );
-            process.exitCode = 1;
+            process.exitCode =
+                error instanceof AuthenticationRequiredError ? error.exitCode : 1;
         }
     }
 }

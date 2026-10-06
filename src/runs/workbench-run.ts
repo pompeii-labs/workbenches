@@ -1,3 +1,4 @@
+import { AuthenticationRequiredError } from '../connections/error.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
 import type { OutcomeCompleteness } from '../outcomes/contracts.js';
 import type { RepositoryBinding } from '../repositories/contracts.js';
@@ -196,10 +197,11 @@ export class WorkbenchRun {
             await events.emit('run.failed', {
                 message: RunnerOutput.redact(message, workbench, this.environment),
                 duration_ms: this.duration(),
+                ...AuthenticationRequiredError.failure(error),
                 ...(outcomeId ? { outcome_id: outcomeId } : {}),
                 ...(infrastructure ? { infrastructure } : {}),
             });
-            return 1;
+            return error instanceof AuthenticationRequiredError ? error.exitCode : 1;
         } finally {
             await preparation.cleanup();
         }

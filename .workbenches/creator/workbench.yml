@@ -1,5 +1,5 @@
 spec: 1
-version: 0.1.9
+version: 0.2.0
 
 name: workbench-creator
 description: Design, author, review, and test repository-owned Workbenches.
@@ -10,7 +10,7 @@ model:
 
 instructions: ./instructions.md
 skills:
-  - ./skills/workbench-authoring
+  - ./skills/wb-authoring
 
 tools:
   - wb

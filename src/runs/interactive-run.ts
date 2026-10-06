@@ -1,3 +1,4 @@
+import { AuthenticationRequiredError } from '../connections/error.js';
 import type { OutcomeCompleteness, RunOutcome } from '../outcomes/contracts.js';
 import type { RepositoryBinding } from '../repositories/contracts.js';
 import { RunnerRegistry } from '../runners/registry.js';
@@ -201,6 +202,7 @@ export class InteractiveRun {
             await emitter
                 .emit('run.failed', {
                     message: InteractiveRun.errorMessage(error),
+                    ...AuthenticationRequiredError.failure(error),
                     ...(outcomeId ? { outcome_id: outcomeId } : {}),
                     ...(infrastructure ? { infrastructure } : {}),
                 })

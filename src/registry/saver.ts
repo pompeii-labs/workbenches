@@ -53,7 +53,7 @@ export class RegistryWorkbenchSaver {
             expectedDigest: registry.digest,
             registry: catalogRegistry,
         });
-        if (!existing && registry.visibility !== 'private')
+        if (!existing)
             await this.#telemetry.report({ registry: catalogRegistry, kind: 'save' });
         return entry;
     }

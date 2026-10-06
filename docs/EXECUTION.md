@@ -1,14 +1,10 @@
-# Workbench execution protocol, draft 0
+# Workbench execution protocol
 
-**Status:** pre-release working draft
+**Status:** launch standard, `protocol: 0`. The run event protocol keeps `protocol: 0` and its schema at `schemas/events/v0`. It is versioned separately from the manifest spec number, and changing it would break existing clients.
 
-A Workbench run has an ordered event stream, identity, and one terminal result.
-It may contain one or more tasks as turns.
+A Workbench run has an ordered event stream, identity, and one terminal result. It may contain one or more tasks as turns.
 
-The Workbench engine, not the model or runner, reads `workbench.yml`. It resolves
-the versioned manifest into a canonical representation, provisions the runtime,
-performs preflight inside that runtime, and translates canonical inputs through
-the selected runner adapter.
+The Workbench engine, not the model or runner, reads `workbench.yml`. It resolves the versioned manifest into a canonical representation, provisions the runtime, performs preflight inside that runtime, and translates canonical inputs through the selected runner adapter.
 
 ```text
 Workbench package
@@ -26,65 +22,27 @@ No runner is asked to interpret the Workbench manifest itself.
 
 ## Runner adapter contract
 
-Each registered runner adapter declares the native command it drives, the exact
-native versions and interfaces it has been verified against, and an exhaustive
-capability map. The initial capability catalog covers streamed assistant text,
-tool events, file changes, usage, permissions, questions, multiple turns,
-steering, image input, image generation, native session resume, cancellation,
-failures, and unknown native events.
+Each registered runner adapter declares the native command it drives, the exact native versions and interfaces it has been verified against, and an exhaustive capability map. The initial capability catalog covers streamed assistant text, tool events, file changes, usage, permissions, questions, multiple turns, steering, image input, image generation, native session resume, cancellation, failures, and unknown native events.
 
 Every capability has one of three outcomes:
 
-- `supported` passes the portable behavior defined by the shared conformance
-  suite.
+- `supported` passes the portable behavior defined by the shared conformance suite.
 - `degraded` is usable with a documented semantic limitation.
 - `unsupported` is rejected or omitted deliberately, with a documented reason.
 
-Adapters translate native runner behavior; they do not create runner features.
-A capability can be `supported` only when the verified native interface exposes
-the behavior being normalized. The engine does not inject tools, extensions, or
-prompts to manufacture a missing capability. Publisher-supplied `runner_config`
-remains native runner configuration and does not change the adapter declaration.
+Adapters translate native runner behavior; they do not create runner features. A capability can be `supported` only when the verified native interface exposes the behavior being normalized. The engine does not inject tools, extensions, or prompts to manufacture a missing capability. Publisher-supplied `runner_config` remains native runner configuration and does not change the adapter declaration.
 
-An adapter cannot be registered without a verified native version, a named
-native interface, and an outcome for every capability. A declaration is
-evidence about the listed native versions and interfaces only. It is not a
-claim that untested future runner releases conform.
+An adapter cannot be registered without a verified native version, a named native interface, and an outcome for every capability. A declaration is evidence about the listed native versions and interfaces only. It is not a claim that untested future runner releases conform.
 
-The shared runner conformance suite exercises streamed text, tool and file
-lifecycle, usage, explicit permission decisions, questions, multi-turn
-continuity, steering, image input, cancellation, failures, and unknown native
-events through the normalized session boundary. It also injects reasoning, credentials, shell
-commands, tool output, image data, and arbitrary future payloads and asserts
-that none cross that boundary. Unknown native events become a minimal
-`runner.event` marker containing only their native type.
+The shared runner conformance suite exercises streamed text, tool and file lifecycle, usage, explicit permission decisions, questions, multi-turn continuity, steering, image input, cancellation, failures, and unknown native events through the normalized session boundary. It also injects reasoning, credentials, shell commands, tool output, image data, and arbitrary future payloads and asserts that none cross that boundary. Unknown native events become a minimal `runner.event` marker containing only their native type.
 
 ## Runtime provider contract
 
-The engine resolves the manifest before selecting a runtime. A spec 1 manifest
-declares its supported runtimes in `runtimes`. A spec 0 manifest declares one
-`runtime`, which the engine turns into a one-entry map internally. The caller can name one with `--runtime <name>`;
-otherwise the first declared runtime is used, and naming an undeclared runtime
-fails before any preparation. The selected name is recorded with the run and its
-session, so a detached worker and a resumed session prepare the same runtime.
-`daytona` is implemented by the reference Daytona provider described below.
+The engine resolves the manifest before selecting a runtime. A spec 1 manifest declares its supported runtimes in `runtimes`. A spec 0 manifest declares one `runtime`, which the engine turns into a one-entry map internally. The caller can name one with `--runtime <name>`; otherwise the first declared runtime is used, and naming an undeclared runtime fails before any preparation. The selected name is recorded with the run and its session, so a detached worker and a resumed session prepare the same runtime. `daytona` is implemented by the reference Daytona provider described below.
 
-The `ResolvedWorkbench` a provider receives carries the selection. Providers read
-the selected runtime's configuration (`image`, `docker`, `class`) and the
-Workbench `requirements` from it, never a top-level manifest field.
+The `ResolvedWorkbench` a provider receives carries the selection. Providers read the selected runtime's configuration (`image`, `docker`, `class`) and the Workbench `requirements` from it, never a top-level manifest field.
 
-Before `prepare`, the engine checks the requirements against the selected
-runtime. Local compares `os`, `arch`, `cpu`, and `memory_gb` with the host.
-Docker requires `linux` and the host architecture, and applies `cpu` and
-`memory_gb` as `--cpus` and `--memory` limits on every container. E2B requires
-`linux` and reports `arch`, `cpu`, `memory_gb`, and `disk_gb` as unchecked. A
-`gpu: true` requirement is refused on local unless the caller passes
-`--allow-unchecked-gpu`, and always refused on Docker and E2B. Daytona checks its
-class against `os`, applies `cpu`, `memory_gb`, and `disk_gb` as sandbox
-resources, reports `arch` as unchecked, and refuses `gpu: true` until its `gpu`
-class is supported. What a provider applies or could not check is returned in
-`PreflightResult.requirements` as `checked`, `applied`, and `unchecked` lists.
-Every provider implements the same lifecycle:
+Before `prepare`, the engine checks the requirements against the selected runtime. Local compares `os`, `arch`, `cpu`, and `memory_gb` with the host. Docker requires `linux` and the host architecture, and applies `cpu` and `memory_gb` as `--cpus` and `--memory` limits on every container. E2B requires `linux` and reports `arch`, `cpu`, `memory_gb`, and `disk_gb` as unchecked. A `gpu: true` requirement is refused on local unless the caller passes `--allow-unchecked-gpu`, and always refused on Docker and E2B. Daytona checks its class against `os`, applies `cpu`, `memory_gb`, and `disk_gb` as sandbox resources, reports `arch` as unchecked, and refuses `gpu: true` until its `gpu` class is supported. What a provider applies or could not check is returned in `PreflightResult.requirements` as `checked`, `applied`, and `unchecked` lists. Every provider implements the same lifecycle:
 
 ```ts
 interface RuntimeProvider {
@@ -139,405 +97,110 @@ interface PreparedRuntime {
 }
 ```
 
-`prepare` provisions or selects the environment, makes the workspace,
-Workbench package, instructions, skills, named workspaces, and runner assets
-available, binds the environment, and returns their runtime-visible locations.
-The primary workspace is read-write; immutable package assets are read-only,
-and each named workspace has its manifest-declared access. Generated runner
-state can be a separate writable ephemeral asset. Local execution uses host
-paths unchanged. Isolated providers mount or copy only the declared
-assets and return remapped paths.
+`prepare` provisions or selects the environment, makes the workspace, Workbench package, instructions, skills, named workspaces, and runner assets available, binds the environment, and returns their runtime-visible locations. The primary workspace is read-write; immutable package assets are read-only, and each named workspace has its manifest-declared access. Generated runner state can be a separate writable ephemeral asset. Local execution uses host paths unchanged. Isolated providers mount or copy only the declared assets and return remapped paths.
 
-Providers that mount host paths, local and Docker, never read file contents and
-need nothing beyond the host filesystem. Providers that copy bytes into a remote
-sandbox, E2B and Daytona, read the package, workspace, and named workspace files
-through an asset source: a small interface that stats, lists, and reads files and
-may report Git state. The provider's dependencies take it as `assets`. The
-reference CLI passes the local disk, and an embedding host can pass any store
-that answers the same calls. The Daytona provider also takes a `RemoteTransfer`,
-which packs the files into archives and collects what comes back, so a host
-without a filesystem supplies `MemoryTransfer` and the CLI supplies
-`DiskTransfer`. The asset source changes where bytes come from, not
-which bytes are sent: selection, exclusions, size limits, and symlink rules are
-applied identically. The runner adapter's staging of skills and native config
-follows the same idea: the OpenCode runner takes a staging object built over its
-own `RunnerFiles` interface.
+Providers that mount host paths, local and Docker, never read file contents and need nothing beyond the host filesystem. Providers that copy bytes into a remote sandbox, E2B and Daytona, read the package, workspace, and named workspace files through an asset source: a small interface that stats, lists, and reads files and may report Git state. The provider's dependencies take it as `assets`. The reference CLI passes the local disk, and an embedding host can pass any store that answers the same calls. The Daytona provider also takes a `RemoteTransfer`, which packs the files into archives and collects what comes back, so a host without a filesystem supplies `MemoryTransfer` and the CLI supplies `DiskTransfer`. The asset source changes where bytes come from, not which bytes are sent: selection, exclusions, size limits, and symlink rules are applied identically. The runner adapter's staging of skills and native config follows the same idea: the OpenCode runner takes a staging object built over its own `RunnerFiles` interface.
 
-Preparation must be safe to repeat with the same inputs, including after an
-interrupted attempt. `cleanup` must be safe to call more than once. A provider
-must reject `launch` until its own preflight has succeeded. Cancellation targets
-the provider-owned process or remote job; cleanup still runs afterward.
-Durable executions supply an engine-owned outbox directory in `outcome`.
-Providers expose its runtime path as `WORKBENCH_OUTPUT_DIR` and implement
-`collectOutcome` to return changesets, artifacts, links, warnings, and their
-initial application state. The engine commits this collection to `OutcomeStore`
-before publishing `outcome.available` and ending the run. `finalizeOutcome` lets
-a provider release its private recovery checkpoint after that durable commit.
-Collection errors must not become successful empty results. Cleanup still runs;
-E2B preserves an original-sandbox recovery checkpoint rather than destroying
-uncollected work. The separate [outcomes contract](OUTCOMES.md) defines these
-data structures, explicit apply/export behavior, limits, and recovery semantics.
+Preparation must be safe to repeat with the same inputs, including after an interrupted attempt. `cleanup` must be safe to call more than once. A provider must reject `launch` until its own preflight has succeeded. Cancellation targets the provider-owned process or remote job; cleanup still runs afterward. Durable executions supply an engine-owned outbox directory in `outcome`. Providers expose its runtime path as `WORKBENCH_OUTPUT_DIR` and implement `collectOutcome` to return changesets, artifacts, links, warnings, and their initial application state. The engine commits this collection to `OutcomeStore` before publishing `outcome.available` and ending the run. `finalizeOutcome` lets a provider release its private recovery checkpoint after that durable commit. Collection errors must not become successful empty results. Cleanup still runs; E2B preserves an original-sandbox recovery checkpoint rather than destroying uncollected work. The separate [outcomes contract](OUTCOMES.md) defines these data structures, explicit apply/export behavior, limits, and recovery semantics.
 
-Failures are normalized at the `resolve`, `prepare`, `mount`, `bind`,
-`preflight`, `launch`, `cancel`, `collect`, or `cleanup` boundary and identify the selected
-runtime without exposing bound environment values. Runtime-native logs and
-identifiers are diagnostics, not additions to the portable Workbench event
-protocol. Providers must pass the shared runtime contract suite before being
-registered by the reference engine.
+Failures are normalized at the `resolve`, `prepare`, `mount`, `bind`, `preflight`, `launch`, `cancel`, `collect`, or `cleanup` boundary and identify the selected runtime without exposing bound environment values. Runtime-native logs and identifiers are diagnostics, not additions to the portable Workbench event protocol. Providers must pass the shared runtime contract suite before being registered by the reference engine.
 
 ### Reference Docker provider
 
-The reference Docker provider accepts either a published image reference or a
-local build declared by `image`. Published tags are pulled and resolved to an
-immutable repository digest before preflight or launch. An already-present
-digest is reused. Local builds stage the declared context, exclude common
-credential stores and secret-bearing files, hash the resulting files and
-Dockerfile, and cache the image under that content identity. `wb run` prepares
-automatically; `wb build` exposes preparation without preflight or runner
-launch.
+The reference Docker provider accepts either a published image reference or a local build declared by `image`. Published tags are pulled and resolved to an immutable repository digest before preflight or launch. An already-present digest is reused. Local builds stage the declared context, exclude common credential stores and secret-bearing files, hash the resulting files and Dockerfile, and cache the image under that content identity. `wb run` prepares automatically; `wb build` exposes preparation without preflight or runner launch.
 
-The provider mounts only runtime assets supplied by the engine. The primary
-workspace is read-write, named workspaces are mounted at
-`/workspaces/<name>` with their declared access, and the Workbench package is
-read-only. Generated runner state is a separate writable, ephemeral asset because a runner may need
-to update its own configuration during startup; it is discarded during runtime
-cleanup. Containers run as the host user where the platform provides a numeric
-user and group, with a read-only root filesystem and writable `/tmp` temporary
-filesystem. Draft 0 does not impose implicit CPU, memory, or
-temporary-filesystem capacity limits.
+The provider mounts only runtime assets supplied by the engine. The primary workspace is read-write, named workspaces are mounted at `/workspaces/<name>` with their declared access, and the Workbench package is read-only. Generated runner state is a separate writable, ephemeral asset because a runner may need to update its own configuration during startup; it is discarded during runtime cleanup. Containers run as the host user where the platform provides a numeric user and group, with a read-only root filesystem and writable `/tmp` temporary filesystem. Protocol 0 does not impose implicit CPU, memory, or temporary-filesystem capacity limits beyond the declared `requirements`.
 
-Preflight containers have networking disabled. A launched runner uses Docker's
-bridge network because model providers and remote MCPs require outbound access.
-The container receives the Workbench's declared environment, environment names
-used by its allowed model providers, and engine-generated runner configuration.
-Once a route is selected, provider environment values for routes that were not
-selected are removed. Values are written to a mode-`0600` ephemeral Docker
-environment file and removed after the container exits. Values do not appear in
-Docker command arguments, and the host Docker client retains its own
-environment.
+Preflight containers have networking disabled. A launched runner uses Docker's bridge network because model providers and remote MCPs require outbound access. The container receives the Workbench's declared environment, environment names used by its allowed model providers, and engine-generated runner configuration. Once a route is selected, provider environment values for routes that were not selected are removed. Values are written to a mode-`0600` ephemeral Docker environment file and removed after the container exits. Values do not appear in Docker command arguments, and the host Docker client retains its own environment.
 
-Long-lived runner containers use random engine-owned names and carry managed,
-run ID, and opaque data-scope labels. The scope is a one-way digest of the
-Workbench data directory, not the host path. This lets cleanup identify only
-containers created for the same local store. Preflight and other short-lived
-containers are not labeled because they execute synchronously under `--rm`.
+Long-lived runner containers use random engine-owned names and carry managed, run ID, and opaque data-scope labels. The scope is a one-way digest of the Workbench data directory, not the host path. This lets cleanup identify only containers created for the same local store. Preflight and other short-lived containers are not labeled because they execute synchronously under `--rm`.
 
-Each supported runner uses a private named Docker volume for its native
-credential store. `wb connect` only selects runtime, harness, provider, and
-authentication method; it does not start Docker or ask for credentials. The
-selected default can be reused by any compatible Docker Workbench using that
-runner. When an OpenCode credential is missing, the first foreground or TUI run
-performs its headless authentication flow inside the actual Workbench container
-and then continues that run. Detached execution requires a previously
-authenticated credential.
-Provider choices are filtered through the selected harness version's capability
-map after model-route metadata is loaded. The map also records native provider
-aliases, so a catalog provider is never presented merely because it serves a
-model and runner-specific names remain explicit. Verified metadata can supply
-versioned maps; the engine retains the map matching its pinned harness as a safe
-fallback.
-First-run Pi authentication and interactive API-key entry are not yet supported
-by the in-run flow. Workbench packages are never given ownership of the volume,
-and the engine does not read or upload the stored token contents.
+Each supported runner uses a private named Docker volume for its native credential store. `wb connect` only selects runtime, harness, provider, and authentication method; it does not start Docker or ask for credentials. The selected default can be reused by any compatible Docker Workbench using that runner. When an OpenCode credential is missing, the first foreground or TUI run performs its headless authentication flow inside the actual Workbench container and then continues that run. Detached execution requires a previously authenticated credential. Provider choices are filtered through the selected harness version's capability map after model-route metadata is loaded. The map also records native provider aliases, so a catalog provider is never presented merely because it serves a model and runner-specific names remain explicit. Verified metadata can supply versioned maps; the engine retains the map matching its pinned harness as a safe fallback. First-run Pi authentication and interactive API-key entry are not yet supported by the in-run flow. Workbench packages are never given ownership of the volume, and the engine does not read or upload the stored token contents.
 
-Interactive runners remain inside the selected Docker runtime. Pi uses its
-native stdin RPC transport, so the container is launched with piped input.
-OpenCode starts its native HTTP service on a fixed container port. Docker
-publishes that port only to a dynamically assigned host loopback port, and the
-adapter connects through the resolved loopback URL. The service is never bound
-to an external host interface.
+Interactive runners remain inside the selected Docker runtime. Pi uses its native stdin RPC transport, so the container is launched with piped input. OpenCode starts its native HTTP service on a fixed container port. Docker publishes that port only to a dynamically assigned host loopback port, and the adapter connects through the resolved loopback URL. The service is never bound to an external host interface.
 
-The reference binaries currently target macOS and Linux. Numeric host-user
-mapping is applied only where the host runtime exposes it. Docker Desktop uses
-virtualized bind mounts, so permission behavior and filesystem performance may
-differ from native Linux. A Workbench image must support an arbitrary numeric
-user, a read-only root filesystem, and writable state beneath the temporary
-`HOME`. Draft 0 supports one-shot, detached, and interactive Docker execution for
-OpenCode and Pi.
+The reference binaries currently target macOS and Linux. Numeric host-user mapping is applied only where the host runtime exposes it. Docker Desktop uses virtualized bind mounts, so permission behavior and filesystem performance may differ from native Linux. A Workbench image must support an arbitrary numeric user, a read-only root filesystem, and writable state beneath the temporary `HOME`. The reference engine supports one-shot, detached, and interactive Docker execution for OpenCode and Pi.
 
-A manifest can request `docker.engine.mode: host`. The request is inert until
-the caller supplies an explicit per-run authorization; the reference CLI uses
-`--allow-host-docker`. The provider resolves the active Docker context only when
-it is a local Unix socket, binds it at `/var/run/docker.sock`, passes its group
-when needed, and sets `DOCKER_HOST` inside the container. It then verifies both
-the in-image Docker CLI and an engine request during preflight. Socket paths and
-credentials are not package inputs.
+A manifest can request `docker.engine.mode: host`. The request is inert until the caller supplies an explicit per-run authorization; the reference CLI uses `--allow-host-docker`. The provider resolves the active Docker context only when it is a local Unix socket, binds it at `/var/run/docker.sock`, passes its group when needed, and sets `DOCKER_HOST` inside the container. It then verifies both the in-image Docker CLI and an engine request during preflight. Socket paths and credentials are not package inputs.
 
-Access to a host Docker socket is equivalent to administrative access to that
-Docker host and can escape the Workbench container's filesystem isolation. The
-grant must never be inferred from `tools: [docker]`, inherited environment, or
-socket presence. TCP contexts, isolated engines, and other modes are
-unsupported in draft 0 and must fail explicitly.
+Access to a host Docker socket is equivalent to administrative access to that Docker host and can escape the Workbench container's filesystem isolation. The grant must never be inferred from `tools: [docker]`, inherited environment, or socket presence. TCP contexts, isolated engines, and other modes are unsupported and must fail explicitly.
 
-Nested containers resolve bind-mount sources on the host daemon, not inside the
-Workbench container. For that reason, a host-engine run maps its primary and
-named workspaces to their resolved host paths and runs the adapter from the
-path-preserved primary workspace. This is the documented exception to ordinary
-Docker paths such as `/workspace` and `/workspaces/<name>`.
+Nested containers resolve bind-mount sources on the host daemon, not inside the Workbench container. For that reason, a host-engine run maps its primary and named workspaces to their resolved host paths and runs the adapter from the path-preserved primary workspace. This is the documented exception to ordinary Docker paths such as `/workspace` and `/workspaces/<name>`.
 
 ### Reference E2B provider
 
-The reference E2B provider accepts the same published OCI image or
-Workbench-local Dockerfile declaration as Docker. It builds and caches an E2B
-template, then creates a fresh secure sandbox for an execution. `E2B_API_KEY` is
-required by the host control plane but is excluded from the runtime environment.
-The sandbox receives manifest-declared environment values for allowed model
-routes and a separately staged native credential store for the selected runner.
+The reference E2B provider accepts the same published OCI image or Workbench-local Dockerfile declaration as Docker. It builds and caches an E2B template, then creates a fresh secure sandbox for an execution. `E2B_API_KEY` is required by the host control plane but is excluded from the runtime environment. The sandbox receives manifest-declared environment values for allowed model routes and a separately staged native credential store for the selected runner.
 
-`wb connect --runtime e2b` saves the E2B control-plane key locally without
-creating a sandbox or incurring E2B usage. An inherited `E2B_API_KEY` overrides
-it. The separate model-provider path selects E2B before the harness, provider,
-and authentication method and persists that non-secret preference locally.
-When a configured OpenCode
-credential is missing, the first real foreground or TUI run creates its normal
-sandbox, exposes the headless authorization URL and code through normalized run
-events, waits for completion, and then creates the native session in that same
-sandbox. The resulting credential files are synchronized to private, runtime-
-and runner-scoped storage beneath the Workbench data directory before the
-sandbox is destroyed. Any compatible E2B Workbench using that runner can copy
-the store into a fresh sandbox. The store is never included in the package,
-workspace, run record, normalized event stream, or artifact output.
+`wb connect --runtime e2b` saves the E2B control-plane key locally without creating a sandbox or incurring E2B usage. An inherited `E2B_API_KEY` overrides it. The separate model-provider path selects E2B before the harness, provider, and authentication method and persists that non-secret preference locally. When a configured OpenCode credential is missing, the first real foreground or TUI run creates its normal sandbox, exposes the headless authorization URL and code through normalized run events, waits for completion, and then creates the native session in that same sandbox. The resulting credential files are synchronized to private, runtime- and runner-scoped storage beneath the Workbench data directory before the sandbox is destroyed. Any compatible E2B Workbench using that runner can copy the store into a fresh sandbox. The store is never included in the package, workspace, run record, normalized event stream, or artifact output.
 
-The engine treats native credential files as opaque. Some runners keep several
-provider logins in one file, so the E2B sandbox receives the native store for the
-runner rather than a parsed subset for one provider. The E2B provider and
-Workbench image are therefore part of the credential trust boundary. Existing
-stored credentials remain unchanged when staging or startup fails. A host crash
-before synchronization can lose credentials created during that remote login
-attempt.
+The engine treats native credential files as opaque. Some runners keep several provider logins in one file, so the E2B sandbox receives the native store for the runner rather than a parsed subset for one provider. The E2B provider and Workbench image are therefore part of the credential trust boundary. Existing stored credentials remain unchanged when staging or startup fails. A host crash before synchronization can lose credentials created during that remote login attempt.
 
-The provider copies only engine-declared runtime assets. The primary workspace
-is staged at `/workspace`, named workspaces at `/workspaces/<name>`, the
-Workbench package at `/workbench`, and other assets beneath `/runtime-assets`.
-Workspace selection uses tracked and unignored Git files when possible, with a
-filesystem walk as the non-repository fallback. Repository metadata, dependency
-trees, common credential directories, and common secret-bearing files are
-excluded. Symlinks that escape the copied root are rejected. Read-write files
-are rejected because workspace collection operates on directory snapshots.
-A separately staged asset nested beneath another asset is excluded from the
-parent copy and its workspace changeset.
+The provider copies only engine-declared runtime assets. The primary workspace is staged at `/workspace`, named workspaces at `/workspaces/<name>`, the Workbench package at `/workbench`, and other assets beneath `/runtime-assets`. Workspace selection uses tracked and unignored Git files when possible, with a filesystem walk as the non-repository fallback. Repository metadata, dependency trees, common credential directories, and common secret-bearing files are excluded. Symlinks that escape the copied root are rejected. Read-write files are rejected because workspace collection operates on directory snapshots. A separately staged asset nested beneath another asset is excluded from the parent copy and its workspace changeset.
 
-Read-only assets are isolated copies, have their write permission bits removed
-as defense in depth, and are never copied back. This is not a claim that a
-privileged process inside the sandbox cannot modify its private copy.
-Read-write directories receive a synthetic Git baseline inside the sandbox.
-After execution, the provider collects changed paths, modes, and deletions
-against that baseline. It validates returned archives and commits original-byte
-artifacts and pending workspace changesets locally. Collection never changes
-host workspace files. An explicit `wb outcome <id> --apply` checks current host
-fingerprints against the recorded baseline and refuses conflicts before changing
-any file. Input and output each have a 512 MiB limit based on uncompressed file
-content; result storage has additional limits defined in the outcomes contract.
+Read-only assets are isolated copies, have their write permission bits removed as defense in depth, and are never copied back. This is not a claim that a privileged process inside the sandbox cannot modify its private copy. Read-write directories receive a synthetic Git baseline inside the sandbox. After execution, the provider collects changed paths, modes, and deletions against that baseline. It validates returned archives and commits original-byte artifacts and pending workspace changesets locally. Collection never changes host workspace files. An explicit `wb outcome <id> --apply` checks current host fingerprints against the recorded baseline and refuses conflicts before changing any file. Input and output each have a 512 MiB limit based on uncompressed file content; result storage has additional limits defined in the outcomes contract.
 
-The selected image must include the runner, declared tools, Git, and GNU tar
-with `--null` support. The OpenCode service uses E2B's authenticated host mapping
-for the sandbox port. Pi continues to use its piped stdin transport for normal
-sessions. Native authentication uses an E2B PTY so interactive login menus,
-terminal resize, and control input behave like a real terminal.
+The selected image must include the runner, declared tools, Git, and GNU tar with `--null` support. The OpenCode service uses E2B's authenticated host mapping for the sandbox port. Pi continues to use its piped stdin transport for normal sessions. Native authentication uses an E2B PTY so interactive login menus, terminal resize, and control input behave like a real terminal.
 
-Normal completion collects and commits outcomes before destroying the sandbox.
-Failure and cancellation collect partial outcomes when possible. Cleanup
-terminates active commands, synchronizes private native state separately, and
-removes local transfer files. Failed outcome collection retains a private
-checkpoint and pauses the original sandbox when possible. A provider lease of 60
-minutes pauses a process-orphaned sandbox without retaining memory. Managed
-sandboxes carry the run ID and an opaque digest of the Workbench data directory.
-`wb clean` can list only sandboxes for the current key and scope. It can destroy
-only those whose run is terminal, or whose run is absent locally and whose
-sandbox is paused. A running sandbox with an absent local run is protected
-because another host may own it. A run with a pending outcome recovery checkpoint
-protects its original sandbox and local history from ordinary cleanup until
-explicit recovery or discard. Template cache entries are outside the cleanup contract.
+Normal completion collects and commits outcomes before destroying the sandbox. Failure and cancellation collect partial outcomes when possible. Cleanup terminates active commands, synchronizes private native state separately, and removes local transfer files. Failed outcome collection retains a private checkpoint and pauses the original sandbox when possible. A provider lease of 60 minutes pauses a process-orphaned sandbox without retaining memory. Managed sandboxes carry the run ID and an opaque digest of the Workbench data directory. `wb clean` can list only sandboxes for the current key and scope. It can destroy only those whose run is terminal, or whose run is absent locally and whose sandbox is paused. A running sandbox with an absent local run is protected because another host may own it. A run with a pending outcome recovery checkpoint protects its original sandbox and local history from ordinary cleanup until explicit recovery or discard. Template cache entries are outside the cleanup contract.
 
-The provider does not automatically retry template builds, sandbox creation,
-command starts, transfers, or native-state synchronization. Those boundaries can have an
-ambiguous remote outcome, so replaying them could duplicate billable work or
-replay mutations. A failure is terminal for that run and cleanup is still
-attempted. `wb outcome <run-id> --recover` explicitly collects partial work from
-the original scoped sandbox without starting new model work. `--discard-recovery`
-explicitly abandons it. Neither action implicitly applies host changes.
+The provider does not automatically retry template builds, sandbox creation, command starts, transfers, or native-state synchronization. Those boundaries can have an ambiguous remote outcome, so replaying them could duplicate billable work or replay mutations. A failure is terminal for that run and cleanup is still attempted. `wb outcome <run-id> --recover` explicitly collects partial work from the original scoped sandbox without starting new model work. `--discard-recovery` explicitly abandons it. Neither action implicitly applies host changes.
 
-Foreground dispatch allows isolated Docker and E2B workers up to five minutes
-to become ready so a legitimate image pull or sandbox cold start is not mistaken
-for a failed worker. Local startup retains the short 15-second readiness bound.
-An exited worker still fails immediately in either case.
+Foreground dispatch allows isolated Docker and E2B workers up to five minutes to become ready so a legitimate image pull or sandbox cold start is not mistaken for a failed worker. Local startup retains the short 15-second readiness bound. An exited worker still fails immediately in either case.
 
-E2B reports sandbox duration, configured CPU and memory, and a clearly marked
-USD cost estimate on the terminal run event. The estimate uses the public E2B
-per-second rates recorded by this engine version. It is infrastructure metadata,
-not model usage, and never appears in `usage.updated`.
+E2B reports sandbox duration, configured CPU and memory, and a clearly marked USD cost estimate on the terminal run event. The estimate uses the public E2B per-second rates recorded by this engine version. It is infrastructure metadata, not model usage, and never appears in `usage.updated`.
 
-The draft E2B boundary differs from local and Docker execution in several
-intentional ways. It copies selected files rather than mounting host paths,
-keeps a private Workbench-managed copy of runner credentials, creates a fresh
-sandbox when a linked session resumes, and requires explicit host acceptance of
-returned workspace changes. Recovery requires the original checkpoint and
-provider filesystem to survive. It is not a guarantee against provider data
-loss or expiration, and outcome recovery is separate from native session resume.
-Inspecting, applying, and exporting already-collected results requires no live
-sandbox or runtime key.
+The E2B boundary differs from local and Docker execution in several intentional ways. It copies selected files rather than mounting host paths, keeps a private Workbench-managed copy of runner credentials, creates a fresh sandbox when a linked session resumes, and requires explicit host acceptance of returned workspace changes. Recovery requires the original checkpoint and provider filesystem to survive. It is not a guarantee against provider data loss or expiration, and outcome recovery is separate from native session resume. Inspecting, applying, and exporting already-collected results requires no live sandbox or runtime key.
 
 ### Reference Daytona provider
 
-The reference Daytona provider creates a fresh Daytona sandbox from the
-Workbench's published image for each execution. The runner runs inside the
-sandbox and the engine drives it from outside through Daytona's REST API. No
-engine code runs in the sandbox beyond the repository tools install that E2B also
-performs.
+The reference Daytona provider creates a fresh Daytona sandbox from the Workbench's published image for each execution. The runner runs inside the sandbox and the engine drives it from outside through Daytona's REST API. No engine code runs in the sandbox beyond the repository tools install that E2B also performs.
 
-The image is `runtimes.daytona.image`, and the provider fails `prepare` with
-"The daytona runtime needs an image. Set runtimes.daytona.image." when the entry
-has none. An image that is a Workbench-local Dockerfile build is refused,
-because Daytona creates sandboxes from published images. Only the `linux` class is available. `windows`, `macos`, and `gpu` fail
-with "class X is not available yet", and a `gpu: true` requirement is refused.
-`cpu`, `memory_gb`, and `disk_gb` become the sandbox's CPU, memory, and disk,
-rounded up to whole CPUs and GiB. `arch` is reported as unchecked.
+The image is `runtimes.daytona.image`, and the provider fails `prepare` with "The daytona runtime needs an image. Set runtimes.daytona.image." when the entry has none. There is no fallback to the docker entry's image or any other image. An image that is a Workbench-local Dockerfile build is refused, because Daytona creates sandboxes from published images. Only the `linux` class is available. `windows`, `macos`, and `gpu` fail with "class X is not available yet", and a `gpu: true` requirement is refused. `cpu`, `memory_gb`, and `disk_gb` become the sandbox's CPU, memory, and disk, rounded up to whole CPUs and GiB. `arch` is reported as unchecked.
 
-For `--repo` runs the provider first checks for `git` and `gh` as the sandbox
-user and installs them as root or sudo only when one is missing, so an image that
-ships both works with a non-root user; a missing tool with no root access fails
-naming the tool. Staging directories follow the same rule on every remote
-provider: the engine first tries to create them as the sandbox user, which needs
-no root access for writable parents or directories the image pre-created;
-otherwise it creates them as root or sudo and fails naming the first directory
-when neither is available.
+For `--repo` runs the provider first checks for `git` and `gh` as the sandbox user and installs them as root or sudo only when one is missing, so an image that ships both works with a non-root user; a missing tool with no root access fails naming the tool. Staging directories follow the same rule on every remote provider: the engine first tries to create them as the sandbox user, which needs no root access for writable parents or directories the image pre-created; otherwise it creates them as root or sudo and fails naming the first directory when neither is available.
 
-`DAYTONA_API_KEY` is required by the host and is excluded from the runtime
-environment. `DAYTONA_API_URL` optionally selects another Daytona API endpoint;
-the default is the public API. `wb connect --runtime daytona` saves the key
-locally without creating a sandbox, and an inherited `DAYTONA_API_KEY` overrides
-it. The sandbox receives manifest-declared environment values for allowed model
-routes. Daytona has no native credential store in this engine, so model access
-comes from those environment values. Every request to Daytona has a timeout, and
-no error message contains the key.
+`DAYTONA_API_KEY` is required by the host and is excluded from the runtime environment. `DAYTONA_API_URL` optionally selects another Daytona API endpoint; the default is the public API. `wb connect --runtime daytona` saves the key locally without creating a sandbox, and an inherited `DAYTONA_API_KEY` overrides it. The sandbox receives manifest-declared environment values for allowed model routes. Daytona has no native credential store in this engine, so model access comes from those environment values. Every request to Daytona has a timeout, and no error message contains the key.
 
-The staging layout and exclusion rules are the E2B ones. The primary workspace is
-copied to `/workspace`, named workspaces to `/workspaces/<name>`, the Workbench
-package to `/workbench`, other assets beneath `/runtime-assets`, and the outbox
-to `/outbox`. Workspace selection uses tracked and unignored Git files when the
-asset source reports Git state, with a filesystem walk otherwise. Repository
-metadata, dependency trees, common credential directories, and common
-secret-bearing files are excluded, symlinks that escape the copied root are
-rejected, and read-only assets lose their write bits. Input and output each have
-a 512 MiB limit by default. Read-write workspaces receive the same synthetic Git
-baseline, and collected changes return as pending outcomes that are applied only
-by an explicit `wb outcome <id> --apply`. The CLI's `DiskTransfer` writes
-archives to the host temporary directory, because outcome collection diffs
-against the archive that was sent.
+The staging layout and exclusion rules are the E2B ones. The primary workspace is copied to `/workspace`, named workspaces to `/workspaces/<name>`, the Workbench package to `/workbench`, other assets beneath `/runtime-assets`, and the outbox to `/outbox`. Workspace selection uses tracked and unignored Git files when the asset source reports Git state, with a filesystem walk otherwise. Repository metadata, dependency trees, common credential directories, and common secret-bearing files are excluded, symlinks that escape the copied root are rejected, and read-only assets lose their write bits. Input and output each have a 512 MiB limit by default. Read-write workspaces receive the same synthetic Git baseline, and collected changes return as pending outcomes that are applied only by an explicit `wb outcome <id> --apply`. The CLI's `DiskTransfer` writes archives to the host temporary directory, because outcome collection diffs against the archive that was sent.
 
-The selected image must include the runner, declared tools, Git, and GNU tar with
-`--null` support. For repository runs the provider installs `git` and `gh` in
-the sandbox after creating it when they are missing, which needs root or
-passwordless `sudo`. The OpenCode service binds `0.0.0.0:4096` in the sandbox and
-is reached through a signed Daytona preview URL whose token is part of the host
-name, so the sandbox is not made public. One-shot commands return standard error
-merged into standard output. Background commands are followed by polling the
-session logs, so output arrives with a delay of a fraction of a second.
+The selected image must include the runner, declared tools, Git, and GNU tar with `--null` support. For repository runs the provider installs `git` and `gh` in the sandbox after creating it when they are missing, which needs root or passwordless `sudo`. The OpenCode service binds `0.0.0.0:4096` in the sandbox and is reached through a signed Daytona preview URL whose token is part of the host name, so the sandbox is not made public. One-shot commands return standard error merged into standard output. Background commands are followed by polling the session logs, so output arrives with a delay of a fraction of a second.
 
-Every sandbox carries the labels `dev.workbenches.managed`,
-`dev.workbenches.run`, and `dev.workbenches.scope`, matching E2B's metadata.
-The engine sends `autoStopInterval: 0` and `ttlMinutes` set to the lease (60
-minutes by default). Inactivity auto-stop is off because a run owns its sandbox
-until cleanup, and the wall-clock TTL is the only bound that does not depend on
-the engine process: Daytona's documentation says it "destroys a sandbox after a
-fixed deadline regardless of state", counted from creation, so a sandbox whose
-host died is destroyed when the lease ends and needs no separate stop or delete.
-Daytona may cap the TTL at the organization's maximum sandbox lifespan. Cleanup
-terminates active commands, captures native session state when the transfer
-keeps it, and deletes the sandbox, retrying a failed delete four times with a
-growing delay. If it still cannot be deleted, cleanup fails with an error that
-names the sandbox id so it can be deleted by hand, and a later cleanup call
-tries again. A create request that times out or returns an unreadable reply
-deletes any sandbox carrying the run's labels before it fails.
+Every sandbox carries the labels `dev.workbenches.managed`, `dev.workbenches.run`, and `dev.workbenches.scope`, matching E2B's metadata. The engine sends `autoStopInterval: 0` and `ttlMinutes` set to the lease (60 minutes by default). Inactivity auto-stop is off because a run owns its sandbox until cleanup, and the wall-clock TTL is the only bound that does not depend on the engine process: Daytona's documentation says it "destroys a sandbox after a fixed deadline regardless of state", counted from creation, so a sandbox whose host died is destroyed when the lease ends and needs no separate stop or delete. Daytona may cap the TTL at the organization's maximum sandbox lifespan. Cleanup terminates active commands, captures native session state when the transfer keeps it, and deletes the sandbox, retrying a failed delete four times with a growing delay. If it still cannot be deleted, cleanup fails with an error that names the sandbox id so it can be deleted by hand, and a later cleanup call tries again. A create request that times out or returns an unreadable reply deletes any sandbox carrying the run's labels before it fails.
 
 Current limits:
 
-- No interactive terminal, so interactive native authentication is not available.
-  `wb run` works with environment-backed model credentials.
-- No pause or recovery. A sandbox is deleted at cleanup even when outcome
-  collection failed, and `wb outcome <run-id> --recover` has nothing to recover
-  from. A linked session resumed later gets a fresh sandbox.
-- Runners that read from standard input, such as Pi, are refused at `prepare`
-  with "The daytona runtime does not support runners that read from standard
-  input yet". The toolbox can write to a command's input but cannot close it, so
-  those sessions would hang. Use OpenCode, or another runtime, for them.
-- No cost estimate. Terminal run events report duration and resources with cost
-  marked unavailable.
-- The provider does not retry sandbox creation, command starts, or transfers,
-  because those boundaries can have an ambiguous remote outcome. A failure is
-  terminal for the run and cleanup is still attempted.
+- No interactive terminal, so interactive native authentication is not available. `wb run` works with environment-backed model credentials.
+- No pause or recovery. A sandbox is deleted at cleanup even when outcome collection failed, and `wb outcome <run-id> --recover` has nothing to recover from. A linked session resumed later gets a fresh sandbox.
+- Runners that read from standard input, such as Pi, are refused at `prepare` with "The daytona runtime does not support runners that read from standard input yet". The toolbox can write to a command's input but cannot close it, so those sessions would hang. Use OpenCode, or another runtime, for them.
+- No cost estimate. Terminal run events report duration and resources with cost marked unavailable.
+- The provider does not retry sandbox creation, command starts, or transfers, because those boundaries can have an ambiguous remote outcome. A failure is terminal for the run and cleanup is still attempted.
 
 ## Repository execution and GitHub authentication
 
-`run --repo owner/repository` selects a GitHub input independently of the package
-source and caller workspace. `--ref` defaults to the repository's default branch.
-Before runtime preparation, the engine resolves an immutable commit and tree,
-stores their non-secret provenance on the session, run, and worker request, and
-checks out that commit under `sessions/<session_id>/repository`. The recorded
-caller workspace remains the discovery scope, not a transfer source or apply
-destination. Repository mode rejects named host bindings and host Docker access.
+`run --repo owner/repository` selects a GitHub input independently of the package source and caller workspace. `--ref` defaults to the repository's default branch. Before runtime preparation, the engine resolves an immutable commit and tree, stores their non-secret provenance on the session, run, and worker request, and checks out that commit under `sessions/<session_id>/repository`. The recorded caller workspace remains the discovery scope, not a transfer source or apply destination. Repository mode rejects named host bindings and host Docker access.
 
-Resolution and checkout use inherited `GH_TOKEN`, `GITHUB_TOKEN`, or the GitHub
-CLI's existing login. Authenticated host Git runs only against fresh
-engine-generated metadata, with credential helpers, hooks, filesystem monitors,
-global configuration, and redirect following disabled. The engine does not put
-the token in Git arguments, persisted configuration, normalized events, or
-package metadata. A new repository run receives `GH_TOKEN` in the runner's
-process environment. Git uses `gh auth git-credential` as its
-HTTPS credential helper. The same credential resolves the commit author's
-GitHub no-reply identity; the engine does not invent a shared account or use
-the caller's unrelated Git configuration. The checkout has a normal `origin` remote.
-Docker and E2B stage writable Git metadata separately from the engine's
-checkout. E2B captures that metadata as resumable native state. Local execution
-can access host credentials independently and is not a security sandbox. Older
-sessions retain their recorded authentication choice when resumed.
+Resolution and checkout use inherited `GH_TOKEN`, `GITHUB_TOKEN`, or the GitHub CLI's existing login. Authenticated host Git runs only against fresh engine-generated metadata, with credential helpers, hooks, filesystem monitors, global configuration, and redirect following disabled. The engine does not put the token in Git arguments, persisted configuration, normalized events, or package metadata. A new repository run receives `GH_TOKEN` in the runner's process environment. Git uses `gh auth git-credential` as its HTTPS credential helper. The same credential resolves the commit author's GitHub no-reply identity; the engine does not invent a shared account or use the caller's unrelated Git configuration. The checkout has a normal `origin` remote. Docker and E2B stage writable Git metadata separately from the engine's checkout. E2B captures that metadata as resumable native state. Local execution can access host credentials independently and is not a security sandbox. Older sessions retain their recorded authentication choice when resumed.
 
-Collected remote workspace changes are applied only to this managed checkout.
-Pending results from earlier attempts are recovered before a continuation takes
-its baseline. Missing checkout provenance, missing history, or conflicts fail
-closed rather than replacing session edits or synchronizing the caller project.
-The original pinned commit remains stable across continuations.
+Collected remote workspace changes are applied only to this managed checkout. Pending results from earlier attempts are recovered before a continuation takes its baseline. Missing checkout provenance, missing history, or conflicts fail closed rather than replacing session edits or synchronizing the caller project. The original pinned commit remains stable across continuations.
 
-`--repo` enables ordinary authenticated `git` and `gh` use in the runner.
-It is not a restricted PR capability: the token keeps its actual GitHub scopes.
-The agent may commit, push, create or update a PR, inspect CI, or perform other
-operations permitted by that token. The user should supply an appropriately
-scoped token. Workbench does not provide a GitHub-specific agent tool, proxy
-commands through the engine, or publish a PR automatically when execution ends.
-The agent must verify remote operations before reporting success.
+`--repo` enables ordinary authenticated `git` and `gh` use in the runner. It is not a restricted PR capability: the token keeps its actual GitHub scopes. The agent may commit, push, create or update a PR, inspect CI, or perform other operations permitted by that token. The user should supply an appropriately scoped token. Workbench does not provide a GitHub-specific agent tool, proxy commands through the engine, or publish a PR automatically when execution ends. The agent must verify remote operations before reporting success.
 
-The normal outcome contract remains separate from GitHub activity. A confirmed
-PR URL may be saved as a `pull_request` outcome link. The TUI verifies a saved
-link against GitHub before showing the PR and can inspect observed checks and
-bounded job logs. A saved link alone does not create, update, or authorize a PR.
-Events `repository.preparing` and `repository.ready` carry repository identity
-and the pinned revision. CLI and TUI results report saved outcomes; a completed
-run does not imply that the agent created a PR. Users may resume the native
-session to ask the agent to continue GitHub work.
+The normal outcome contract remains separate from GitHub activity. A confirmed PR URL may be saved as a `pull_request` outcome link. The TUI verifies a saved link against GitHub before showing the PR and can inspect observed checks and bounded job logs. A saved link alone does not create, update, or authorize a PR. Events `repository.preparing` and `repository.ready` carry repository identity and the pinned revision. CLI and TUI results report saved outcomes; a completed run does not imply that the agent created a PR. Users may resume the native session to ask the agent to continue GitHub work.
 
 ## Session, run, and turn boundaries
 
-A Workbench session is the stable user-facing identity for work with one locked
-Workbench, runner, model, and workspace. A run is one execution attempt inside
-that session. The first run and session share an ID; resuming creates a new
-internal run while preserving the session ID. An optional user-defined name is
-presentation metadata only. It never replaces the stable ID in automation,
-provenance, control messages, or native runner mappings.
+A Workbench session is the stable user-facing identity for work with one locked Workbench, runner, model, and workspace. A run is one execution attempt inside that session. The first run and session share an ID; resuming creates a new internal run while preserving the session ID. An optional user-defined name is presentation metadata only. It never replaces the stable ID in automation, provenance, control messages, or native runner mappings.
 
-A run may contain multiple turns. `turn.completed` means the runner completed
-one response and may accept another input; it does not terminate the run.
+A run may contain multiple turns. `turn.completed` means the runner completed one response and may accept another input; it does not terminate the run.
 
 The host decides how long the session lives:
 
 - A one-shot client closes after the first completed turn.
 - A streaming client renders events while waiting for that turn.
 - An interactive client keeps the session open and sends additional inputs.
-- A detached client transfers ownership of the same session to a background
-  host and exits without cancelling it.
+- A detached client transfers ownership of the same session to a background host and exits without cancelling it.
 
-`close()` ends the session gracefully. `cancelTurn()` requests cancellation of
-the active turn while preserving the host process when the native interface
-allows it.
+`close()` ends the session gracefully. `cancelTurn()` requests cancellation of the active turn while preserving the host process when the native interface allows it.
 
 ## Runner session
 
@@ -563,167 +226,57 @@ interface RunnerSession {
 }
 ```
 
-`steer()` changes an active turn through the runner's native steering operation
-and must never silently become a later follow-up. The Workbench host owns a FIFO
-follow-up queue so ordering does not depend on runner-specific behavior. Image
-data is translated into the runner's native input but never copied into
-normalized events. The manifest does not declare runner features. Adapter
-declarations and runtime negotiation determine what is possible.
+`steer()` changes an active turn through the runner's native steering operation and must never silently become a later follow-up. The Workbench host owns a FIFO follow-up queue so ordering does not depend on runner-specific behavior. Image data is translated into the runner's native input but never copied into normalized events. The manifest does not declare runner features. Adapter declarations and runtime negotiation determine what is possible.
 
-Input lifecycle events distinguish admission from consumption. `input.accepted`
-means the host accepted the control request. `input.queued` means the input is
-waiting inside the host or runner. `input.delivered` means it left that queue for
-the runner's active execution path. An adapter can delay delivery until it sees
-native evidence of consumption. OpenCode steering does this when the runner
-creates the assistant message parented by that input. A client can therefore
-keep steering visibly queued without adding it to the conversation early.
+Input lifecycle events distinguish admission from consumption. `input.accepted` means the host accepted the control request. `input.queued` means the input is waiting inside the host or runner. `input.delivered` means it left that queue for the runner's active execution path. An adapter can delay delivery until it sees native evidence of consumption. OpenCode steering does this when the runner creates the assistant message parented by that input. A client can therefore keep steering visibly queued without adding it to the conversation early.
 
-Clients control a stored run through `RunHandle`. A handle follows the durable
-event stream, resolves the terminal result, sends idle-turn input, steers an
-active turn, queues follow-up input, cancels a turn, answers permission requests
-and questions, and closes or cancels the run. The handle writes transient
-requests to a private run-scoped control inbox. Persisted receipts and normalized
-input lifecycle events contain request IDs and dispositions, never prompt, image,
-or raw question-answer contents. Runner output can still reference an answer
-after receiving it.
+Clients control a stored run through `RunHandle`. A handle follows the durable event stream, resolves the terminal result, sends idle-turn input, steers an active turn, queues follow-up input, cancels a turn, answers permission requests and questions, and closes or cancels the run. The handle writes transient requests to a private run-scoped control inbox. Persisted receipts and normalized input lifecycle events contain request IDs and dispositions, never prompt, image, or raw question-answer contents. Runner output can still reference an answer after receiving it.
 
 ## Resumable interactive sessions
 
-The CLI exposes the same stored control protocol through `send`, `wait`, and
-`answer`. `send` is idle-only unless the caller explicitly selects active-turn
-steering or a queued follow-up. A closed resumable session can start a linked
-execution through an ordinary send. Accepted receipts expose correlation IDs
-and an event cursor, not proof that the runner has consumed queued input.
+The CLI exposes the same stored control protocol through `send`, `wait`, and `answer`. `send` is idle-only unless the caller explicitly selects active-turn steering or a queued follow-up. A closed resumable session can start a linked execution through an ordinary send. Accepted receipts expose correlation IDs and an event cursor, not proof that the runner has consumed queued input.
 
-Observation resolves a session ID to its latest run, but a linked run ID to
-that exact execution. `wait --run` explicitly selects an exact run, including
-the first run whose ID is shared with the session. Event cursors are run-scoped;
-use the receipt's run ID with `--run --after` to observe a submitted input.
+Observation resolves a session ID to its latest run, but a linked run ID to that exact execution. `wait --run` explicitly selects an exact run, including the first run whose ID is shared with the session. Event cursors are run-scoped; use the receipt's run ID with `--run --after` to observe a submitted input.
 
-`wait` is a read-only observer. It returns the first completed turn after its
-cursor, an idle boundary, terminal execution, or pending native input request.
-Without a cursor, observation starts at the beginning of that run. A
-`turn_completed` snapshot preserves that turn's final response, usage, outcome,
-and boundary sequence even when queued work starts immediately. It does not
-claim execution or runtime cleanup has finished. Repeat with `--after` set to
-the returned sequence to observe subsequent boundaries or terminal completion.
-`usage` is labelled `kind: delta` and counts usage events strictly after `--after`
-through the returned `sequence`. `usage_total`, labelled `kind: total`, counts
-the run's usage through that same sequence, across all turns. Advance the cursor
-to the returned sequence before summing another wait's `usage`; observing the
-same cursor again repeats the same interval. A cursor at the final sequence
-returns zero for previously reported usage fields. Costs are provider-reported
-model costs, not a billing reconciliation or runtime infrastructure charges.
+`wait` is a read-only observer. It returns the first completed turn after its cursor, an idle boundary, terminal execution, or pending native input request. Without a cursor, observation starts at the beginning of that run. A `turn_completed` snapshot preserves that turn's final response, usage, outcome, and boundary sequence even when queued work starts immediately. It does not claim execution or runtime cleanup has finished. Repeat with `--after` set to the returned sequence to observe subsequent boundaries or terminal completion. `usage` is labelled `kind: delta` and counts usage events strictly after `--after` through the returned `sequence`. `usage_total`, labelled `kind: total`, counts the run's usage through that same sequence, across all turns. Advance the cursor to the returned sequence before summing another wait's `usage`; observing the same cursor again repeats the same interval. A cursor at the final sequence returns zero for previously reported usage fields. Costs are provider-reported model costs, not a billing reconciliation or runtime infrastructure charges.
 
-Terminal state and currently pending requests remain visible. Terminal snapshots
-drain the durable event tail before reporting final response, usage,
-and outcome. Waiting does not attach an audience, restart an execution, or
-initiate authentication. Timeouts and interruptions stop observation only.
-`answer` validates a pending request's
-offered scope and submits the existing transient control message. Raw decisions
-and answers are not retained in receipts or normalized request-resolution events.
+Terminal state and currently pending requests remain visible. Terminal snapshots drain the durable event tail before reporting final response, usage, and outcome. Waiting does not attach an audience, restart an execution, or initiate authentication. Timeouts and interruptions stop observation only. `answer` validates a pending request's offered scope and submits the existing transient control message. Raw decisions and answers are not retained in receipts or normalized request-resolution events.
 
-Native continuation refreshes current attempt facts alongside the first resumed
-input without changing the stored user task. OpenCode uses a synthetic text part;
-Pi RPC carries the runtime reminder in its message because it has no equivalent
-part type. Stable package instructions remain in native system context; no
-credential values are included in either channel.
+Native continuation refreshes current attempt facts alongside the first resumed input without changing the stored user task. OpenCode uses a synthetic text part; Pi RPC carries the runtime reminder in its message because it has no equivalent part type. Stable package instructions remain in native system context; no credential values are included in either channel.
 
-Headless `create` uses the official creator and a separate authoring supervisor.
-The generic run engine does not own authoring validation. A private checkpoint
-retains baseline file paths and digests, not file contents or environment values.
-Candidate verification bindings travel in a private transient request consumed
-and removed by the supervisor. Once the creator execution ends, the supervisor
-checks package validity, scope, version advancement, and runtime smoke. `wait`
-includes that verification boundary for an authoring run and reports package
-paths, changed files, and evidence provenance. A successful native execution
-with failed verification is a failed authoring result, never a verified package.
+Headless `create` uses the official creator and a separate authoring supervisor. The generic run engine does not own authoring validation. A private checkpoint retains baseline file paths and digests, not file contents or environment values. Candidate verification bindings travel in a private transient request consumed and removed by the supervisor. Once the creator execution ends, the supervisor checks package validity, scope, version advancement, and runtime smoke. `wait` includes that verification boundary for an authoring run and reports package paths, changed files, and evidence provenance. A successful native execution with failed verification is a failed authoring result, never a verified package.
 
-Every execution has one stable Workbench session ID. Runners with native session
-support use the same background session engine for foreground commands, detached
-commands, and the terminal client in local, Docker, and E2B runtimes. The first
-execution owns the stable ID. A later continuation either joins its active run
-or creates a new internal run linked to the same session after the previous run
-closes. The session index records only the locked Workbench identity, runner,
-model, runtime, workspace bindings, native session identifier, and latest run.
-Native runner state remains authoritative and is stored under the session's
-private native-state directory. Docker mounts that directory read-write into
-each new container for native resume. E2B copies it into each fresh sandbox and
-synchronizes it back during orderly cleanup. Runner credentials use a separate
-runtime- and runner-scoped store so authentication persists across unrelated
-sessions without becoming conversation state. Neither provider reconstructs
-context from the normalized event stream.
+Every execution has one stable Workbench session ID. Runners with native session support use the same background session engine for foreground commands, detached commands, and the terminal client in local, Docker, and E2B runtimes. The first execution owns the stable ID. A later continuation either joins its active run or creates a new internal run linked to the same session after the previous run closes. The session index records only the locked Workbench identity, runner, model, runtime, workspace bindings, native session identifier, and latest run. Native runner state remains authoritative and is stored under the session's private native-state directory. Docker mounts that directory read-write into each new container for native resume. E2B copies it into each fresh sandbox and synchronizes it back during orderly cleanup. Runner credentials use a separate runtime- and runner-scoped store so authentication persists across unrelated sessions without becoming conversation state. Neither provider reconstructs context from the normalized event stream.
 
-`wb resume <session-or-run-id>` opens the exact Workbench package and workspace
-recorded by the session. It attaches to an active run or starts a linked run from
-saved native context. Adding a task performs the same continuation without
-opening the terminal client; `--detach` leaves it in the background. The TUI
-exposes the same operation through an active-workspace-scoped `/resume` browser.
-On a bare invocation the active workspace is the current working directory; an
-explicit `--dir` or resumed session preserves its recorded workspace. A resume
-is rejected if the package no longer matches the recorded Workbench name,
-version, runner, model, or workspace, or if the original runner never reached a
-resumable state. A Workbench that declares host Docker engine access requires a
-new explicit `--allow-host-docker` authorization on resume.
+`wb resume <session-or-run-id>` opens the exact Workbench package and workspace recorded by the session. It attaches to an active run or starts a linked run from saved native context. Adding a task performs the same continuation without opening the terminal client; `--detach` leaves it in the background. The TUI exposes the same operation through an active-workspace-scoped `/resume` browser. On a bare invocation the active workspace is the current working directory; an explicit `--dir` or resumed session preserves its recorded workspace. A resume is rejected if the package no longer matches the recorded Workbench name, version, runner, model, or workspace, or if the original runner never reached a resumable state. A Workbench that declares host Docker engine access requires a new explicit `--allow-host-docker` authorization on resume.
 
-`/rename <name>` updates the session's durable display metadata. Named sessions
-use that label in `/resume`, the active chat header, and `wb ps`, while still
-retaining the stable ID for control. After the alternate screen has closed, the
-terminal client prints a resume handoff only when the session reached native
-resumable state. Failed starts and runners without native resume support do not
-receive a misleading resume command.
+`/rename <name>` updates the session's durable display metadata. Named sessions use that label in `/resume`, the active chat header, and `wb ps`, while still retaining the stable ID for control. After the alternate screen has closed, the terminal client prints a resume handoff only when the session reached native resumable state. Failed starts and runners without native resume support do not receive a misleading resume command.
 
-`wb attach` is observation only. It follows the latest normalized event stream
-without keeping the runner alive or becoming a controlling client. Exiting the
-terminal client detaches that client rather than cancelling work. If a turn is
-active, it and all accepted follow-ups finish before the unattended worker
-closes. The stable session and native runner context remain available afterward.
+`wb attach` is observation only. It follows the latest normalized event stream without keeping the runner alive or becoming a controlling client. Exiting the terminal client detaches that client rather than cancelling work. If a turn is active, it and all accepted follow-ups finish before the unattended worker closes. The stable session and native runner context remain available afterward.
 
-The TUI rebuilds visual history from retained normalized events across the stable
-session's runs, including delivered user messages, assistant replies, tool
-activity, and returned results. Its local transcript cache is disposable and is
-used as a fallback when no run logs remain. Missing, incompatible, or truncated
-cache contents do not replace retained event history. Historical startup failures
-without conversation content stay in their run logs rather than appearing as a
-current chat error; failures during actual work remain labeled in the history.
-Neither the cache nor event replay is sent to the model. OpenCode or Pi native
-session state remains the resume boundary.
+The TUI rebuilds visual history from retained normalized events across the stable session's runs, including delivered user messages, assistant replies, tool activity, and returned results. Its local transcript cache is disposable and is used as a fallback when no run logs remain. Missing, incompatible, or truncated cache contents do not replace retained event history. Historical startup failures without conversation content stay in their run logs rather than appearing as a current chat error; failures during actual work remain labeled in the history. Neither the cache nor event replay is sent to the model. OpenCode or Pi native session state remains the resume boundary.
 
 ## Interactive terminal client
 
-Running `wb run <ref>` without a task opens a runner-neutral terminal session.
-The composer supports multiple lines, persistent local prompt history, command
-discovery with `/` or `Ctrl+K`, queued steering, turn cancellation, and supported
-image attachments. Follow-up input remains beside the composer as queued until
-the normalized input lifecycle confirms delivery.
+Running `wb run <ref>` without a task opens a runner-neutral terminal session. The composer supports multiple lines, persistent local prompt history, command discovery with `/` or `Ctrl+K`, queued steering, turn cancellation, and supported image attachments. Follow-up input remains beside the composer as queued until the normalized input lifecycle confirms delivery.
 
-For a runner with native image input, dragging a supported image file into the
-composer, or pasting its local path, attaches it to the next message. The
-terminal-provided path is replaced by an attachment marker and is never sent as
-prompt text.
+For a runner with native image input, dragging a supported image file into the composer, or pasting its local path, attaches it to the next message. The terminal-provided path is replaced by an attachment marker and is never sent as prompt text.
 
-Slash commands inspect or control the Workbench client. They are never passed to
-the runner as model input. Commands expose Workbench, runtime, locked model,
-native runner capability, recent session details, and images staged for the next
-message; select a persisted theme; clear staged attachments or the local
-transcript; cancel the active turn; or close the session. A
-command backed by an unsupported native capability is hidden or explains why it
-is unavailable. Workbench does not inject replacement tools into a runner to
-make unsupported capabilities appear present.
+Slash commands inspect or control the Workbench client. They are never passed to the runner as model input. Commands expose Workbench, runtime, locked model, native runner capability, recent session details, and images staged for the next message; select a persisted theme; clear staged attachments or the local transcript; cancel the active turn; or close the session. A command backed by an unsupported native capability is hidden or explains why it is unavailable. Workbench does not inject replacement tools into a runner to make unsupported capabilities appear present.
 
-The built-in terminal themes are adapted from OpenCode under the repository's
-MIT attribution. Theme choice is local CLI state under `WORKBENCH_HOME`; it does
-not modify a Workbench package or affect execution.
+The built-in terminal themes are adapted from OpenCode under the repository's MIT attribution. Theme choice is local CLI state under `WORKBENCH_HOME`; it does not modify a Workbench package or affect execution.
 
 ## Canonical events
 
-Events are ordered by a monotonically increasing `sequence` within one run and
-carry execution protocol version `0`.
+Events are ordered by a monotonically increasing `sequence` within one run and carry execution protocol version `0`.
 
-The initial catalog is deliberately small:
+The catalog has 31 event types, matching the JSON Schema:
 
 ```text
 run.started       run.ready
+repository.preparing  repository.ready  repository.checks
+delivery.started  delivery.completed  delivery.failed
+authentication.requested  authentication.completed
 turn.started      turn.completed
 output.text
 tool.started      tool.completed
@@ -733,150 +286,63 @@ input.requested   input.accepted
 input.queued      input.delivered      input.rejected
 question.requested    question.answered    question.rejected
 usage.updated
-outcome.available
+outcome.available     outcome.failed
 run.completed     run.failed     run.cancelled
 runner.event
 ```
 
-Adapters should translate events when the meaning is known and emit a minimal
-`runner.event` marker for unrecognized runner-native data. Portable Workbench
-events do not copy arbitrary native payloads: those can contain reasoning
-material, credentials, provider metadata, or complete tool results. A future
-opt-in diagnostic stream can preserve native data behind a separate security
-contract.
+`repository.preparing` and `repository.ready` report checkout preparation. `repository.checks` and `delivery.*` are reserved in protocol 0; the reference engine does not emit them. `authentication.*` events report an in-run runner authorization flow. `outcome.failed` reports that outcome collection failed.
 
-Tool lifecycle events include a stable call ID and native tool name. Adapters
-may also provide a safe display title, target, short description, duration, and
-normalized failure. These fields let clients show concrete activity such as a
-file read or search without persisting arbitrary commands, file contents, or
-tool output in the portable event log.
+Adapters should translate events when the meaning is known and emit a minimal `runner.event` marker for unrecognized runner-native data. Portable Workbench events do not copy arbitrary native payloads: those can contain reasoning material, credentials, provider metadata, or complete tool results. A future opt-in diagnostic stream can preserve native data behind a separate security contract.
 
-`plan.updated` carries the agent's own plan whenever the runner reports it, such
-as after an OpenCode todo tool call. Each event holds the whole list, never a
-diff: `items` (up to 50, each with `text` and a `status` of `pending`,
-`in_progress`, `completed`, or `cancelled`), plus `completed` and `total`
-counts, where `total` excludes cancelled items. Item text is model-authored,
-like `output.text`, and is sanitized and truncated the same way as tool titles.
-The plan can grow as the agent discovers work, so clients that draw progress
-from it should expect the total to change. Runners without a native plan emit
-no plan events.
+Tool lifecycle events include a stable call ID and native tool name. Adapters may also provide a safe display title, target, short description, duration, and normalized failure. These fields let clients show concrete activity such as a file read or search without persisting arbitrary commands, file contents, or tool output in the portable event log.
 
-OpenCode descendant sessions contribute their own usage deltas and tool activity
-to the owning run as native events arrive. Child activity includes
-`native_session_id`; child tool IDs are scoped to that session. A child reply
-or completion does not replace the parent's final response or complete its turn.
-Descendant permissions and questions use the same headless input controls.
-Waiting for an answer does not stop the adapter from receiving usage from other
-branches. Usage is reported at native step completion, not token by token;
-budget guards cannot account for unfinished provider requests in real time.
+`plan.updated` carries the agent's own plan whenever the runner reports it, such as after an OpenCode todo tool call. Each event holds the whole list, never a diff: `items` (up to 50, each with `text` and a `status` of `pending`, `in_progress`, `completed`, or `cancelled`), plus `completed` and `total` counts, where `total` excludes cancelled items. Item text is model-authored, like `output.text`, and is sanitized and truncated the same way as tool titles. The plan can grow as the agent discovers work, so clients that draw progress from it should expect the total to change. Runners without a native plan emit no plan events.
 
-Exactly one of `run.completed`, `run.failed`, or `run.cancelled` terminates the
-event stream. The `result` promise resolves to the matching status.
+OpenCode descendant sessions contribute their own usage deltas and tool activity to the owning run as native events arrive. Child activity includes `native_session_id`; child tool IDs are scoped to that session. A child reply or completion does not replace the parent's final response or complete its turn. Descendant permissions and questions use the same headless input controls. Waiting for an answer does not stop the adapter from receiving usage from other branches. Usage is reported at native step completion, not token by token; budget guards cannot account for unfinished provider requests in real time.
 
-`outcome.available` refers to a locally committed immutable result. It includes
-`outcome_id`, `completeness`, `application_state`, counts of `changesets`,
-`artifacts`, `links`, and `warnings`, and an optional `summary`. It carries no
-artifact bytes or raw tool result. A terminal execution may have a partial
-outcome without being successful. See [OUTCOMES.md](OUTCOMES.md).
+Exactly one of `run.completed`, `run.failed`, or `run.cancelled` terminates the event stream. The `result` promise resolves to the matching status.
 
-Remote runtimes may attach an `infrastructure` object to that terminal event.
-It contains provider duration, maximum lease, resource shape, and an estimated
-or unavailable USD cost. Model tokens and provider-reported model cost remain
-exclusive to `usage.updated`; clients must not combine the two fields silently.
+`outcome.available` refers to a locally committed immutable result. It includes `outcome_id`, `completeness`, `application_state`, counts of `changesets`, `artifacts`, `links`, and `warnings`, and an optional `summary`. It carries no artifact bytes or raw tool result. A terminal execution may have a partial outcome without being successful. See [OUTCOMES.md](OUTCOMES.md).
 
-The normative v0 JSON Schema is
-[`schemas/events/v0/workbench-event.schema.json`](../schemas/events/v0/workbench-event.schema.json).
+Remote runtimes may attach an `infrastructure` object to that terminal event. It contains provider duration, maximum lease, resource shape, and an estimated or unavailable USD cost. Model tokens and provider-reported model cost remain exclusive to `usage.updated`; clients must not combine the two fields silently.
+
+The normative v0 JSON Schema is [`schemas/events/v0/workbench-event.schema.json`](../schemas/events/v0/workbench-event.schema.json).
 
 ## CLI output modes
 
 One-shot execution is selected by a positional task or `--task`:
 
 ```sh
-wb run lux-core "Explain this repository"
-wb run lux-core --task "Explain this repository"
+wb run project-core "Explain this repository"
+wb run project-core --task "Explain this repository"
 ```
 
-Manifest-declared environment bindings can come from the invoking process, a
-dotenv file passed with `--env-file`, or repeatable `--env NAME=value`
-arguments. Precedence is explicit override, then dotenv file, then inherited
-environment. File entries outside the manifest are ignored, while undeclared
-explicit overrides fail before runtime preparation. Bound values are
-invocation-only state: they are never added to stored run requests, metadata,
-or normalized events. Detached workers receive them through their private
-process environment rather than the durable run store.
+Manifest-declared environment bindings can come from the invoking process, a dotenv file passed with `--env-file`, or repeatable `--env NAME=value` arguments. Precedence is explicit override, then dotenv file, then inherited environment. File entries outside the manifest are ignored, while undeclared explicit overrides fail before runtime preparation. Bound values are invocation-only state: they are never added to stored run requests, metadata, or normalized events. Detached workers receive them through their private process environment rather than the durable run store.
 
-Named workspace bindings come from repeatable `--workspace NAME=PATH`
-arguments. Paths are resolved and checked on the host before preparation. The
-binding is durable run metadata for detached execution; the engine exposes only
-the runtime-visible path as `WORKBENCH_WORKSPACE_<NAME>`. In the local runtime,
-access is a checked requirement rather than an enforceable isolation boundary.
-Container providers must enforce read-only bindings at the mount boundary.
+Named workspace bindings come from repeatable `--workspace NAME=PATH` arguments. Paths are resolved and checked on the host before preparation. The binding is durable run metadata for detached execution; the engine exposes only the runtime-visible path as `WORKBENCH_WORKSPACE_<NAME>`. In the local runtime, access is a checked requirement rather than an enforceable isolation boundary. Container providers must enforce read-only bindings at the mount boundary.
 
-The default renderer consumes canonical events and writes a human-readable live
-log. `--json` writes one complete canonical event per line as NDJSON (newline-
-delimited JSON). This is the portable integration boundary for hosts; it is not
-the selected runner's native JSON. `--final` buffers
-`output.text` events and writes only the final assistant response.
+The default renderer consumes canonical events and writes a human-readable live log. `--json` writes one complete canonical event per line as NDJSON (newline- delimited JSON). This is the portable integration boundary for hosts; it is not the selected runner's native JSON. `--final` buffers `output.text` events and writes only the final assistant response.
 
-Human output uses a shared Workbench visual language for run identity, runtime
-readiness, optional integrations, tool lifecycle, file changes, assistant text,
-and terminal status. Assistant text renders the terminal-representable parts of
-CommonMark and GitHub Flavored Markdown: distinct heading levels, emphasis,
-strikethrough, nested and task lists, blockquotes, inline code, fenced code,
-links, horizontal rules, and aligned tables. Completed Markdown blocks render
-while later blocks are still streaming; an unfinished block is flushed at the
-next tool or turn boundary.
+Human output uses a shared Workbench visual language for run identity, runtime readiness, optional integrations, tool lifecycle, file changes, assistant text, and terminal status. Assistant text renders the terminal-representable parts of CommonMark and GitHub Flavored Markdown: distinct heading levels, emphasis, strikethrough, nested and task lists, blockquotes, inline code, fenced code, links, horizontal rules, and aligned tables. Completed Markdown blocks render while later blocks are still streaming; an unfinished block is flushed at the next tool or turn boundary.
 
-The renderer never tries to imitate a browser. It strips terminal control
-characters, turns raw HTML into text, and represents images by alt text without
-fetching them. Browser-only behavior such as collapsible details and portable
-rendering of images or typeset mathematics is unavailable. Syntax from
-non-GFM extensions, including definition lists, footnotes, abbreviations, math,
-and emoji shortcodes, is preserved as readable source text rather than claimed
-as rendered output. The interactive TUI uses the same safety boundary. Active
-turns use a synchronous, marker-free preview so frequent runner deltas do not
-cause syntax-highlighting flicker; completed turns switch once to OpenTUI's
-native rich Markdown layout.
+The renderer never tries to imitate a browser. It strips terminal control characters, turns raw HTML into text, and represents images by alt text without fetching them. Browser-only behavior such as collapsible details and portable rendering of images or typeset mathematics is unavailable. Syntax from non-GFM extensions, including definition lists, footnotes, abbreviations, math, and emoji shortcodes, is preserved as readable source text rather than claimed as rendered output. The interactive TUI uses the same safety boundary. Active turns use a synchronous, marker-free preview so frequent runner deltas do not cause syntax-highlighting flicker; completed turns switch once to OpenTUI's native rich Markdown layout.
 
-Color is enabled automatically for an interactive stdout, can be forced with
-`--color`, and is disabled by `NO_COLOR` or `--no-color`. Assistant text wraps
-to the terminal width; fenced code preserves its content with hard wrapping for
-overlong lines. Paths beneath the target workspace render relative to that
-workspace. ANSI formatting never appears in JSON or final-only modes.
+Color is enabled automatically for an interactive stdout, can be forced with `--color`, and is disabled by `NO_COLOR` or `--no-color`. Assistant text wraps to the terminal width; fenced code preserves its content with hard wrapping for overlong lines. Paths beneath the target workspace render relative to that workspace. ANSI formatting never appears in JSON or final-only modes.
 
-Stdout is reserved for the selected output contract. Human and final-mode errors
-go to stderr. JSON mode represents failures as `run.failed` on stdout and also
-uses a non-zero process exit code.
+Stdout is reserved for the selected output contract. Human and final-mode errors go to stderr. Once a run has started, JSON mode reports failures as `run.failed` on stdout with a non-zero exit code. A failure before the run starts (argument errors, preflight, authentication, worker startup) prints `error: <message>` (a red `✗ <message>` on a colour terminal) on stderr, emits no events, and exits 1 or 3. `wb attach <id> --json` replays any stored `run.failed`.
 
 ## Background runs and session attachment
 
-`wb run <ref> --task <task> --detach` creates a durable session and run, launches
-a background worker, and prints only the stable `wb_...` session ID. `wb attach
-<id>` resolves the session's latest run, replays its persisted event stream, and
-follows new events. Without an ID, `wb attach` selects the most recent session in
-`WORKBENCH_HOME`.
+`wb run <ref> --task <task> --detach` creates a durable session and run, launches a background worker, and prints the stable `wb_...` session ID, or a JSON launch receipt with `--json`. `wb attach <id>` resolves the session's latest run, replays its persisted event stream, and follows new events. Without an ID, `wb attach` selects the most recent session in `WORKBENCH_HOME`.
 
-Run metadata and `events.ndjson` live under
-`$WORKBENCH_HOME/runs/<id>/` (normally the Workbench data directory). The initial
-task is stored only until the worker consumes it, then removed. Direct foreground
-runs use the same stored handle and event stream, so their history can also be
-attached after completion.
+Run metadata and `events.ndjson` live under `$WORKBENCH_HOME/runs/<id>/` (normally the Workbench data directory). The initial task is stored only until the worker consumes it, then removed. Direct foreground runs use the same stored handle and event stream, so their history can also be attached after completion.
 
-Attach is read-only and never starts model work. `wb ps` lists active sessions
-and completed sessions with resumable native context; `wb ps --all` also includes
-terminal one-shot history. `wb kill <id>` cooperatively cancels the active run in
-the named session. The worker observes
-a private cancellation request, terminates the runner child, emits
-`run.cancelled`, and then marks the durable run cancelled. Session metadata and
-native resumable context remain available.
+Attach is read-only and never starts model work. `wb ps` lists active sessions and completed sessions with resumable native context; `wb ps --all` also includes terminal one-shot history. `wb kill <id>` cooperatively cancels the active run in the named session. The worker observes a private cancellation request, terminates the runner child, emits `run.cancelled`, and then marks the durable run cancelled. Session metadata and native resumable context remain available.
 
 ## Retention and cleanup
 
-`wb clean` previews deletion and never removes data unless `--apply` is passed.
-Its default cutoff is 30 days and can be changed with durations such as `12h`,
-`7d`, or `4w`. `--json` emits one versioned report with the policy, eligible
-resources, protected resources, reconciled runs, byte counts, and applied
-result. Previewing may repair stale nonterminal metadata as described below.
+`wb clean` previews deletion and never removes data unless `--apply` is passed. Its default cutoff is 30 days and can be changed with durations such as `12h`, `7d`, or `4w`. `--json` emits one versioned report with the policy, eligible resources, protected resources, reconciled runs, byte counts, and applied result. Previewing may repair stale nonterminal metadata as described below.
 
 The default policy may select:
 
@@ -886,43 +352,23 @@ The default policy may select:
 - A managed Docker container whose scoped run is terminal or no longer exists.
 - A managed E2B sandbox whose scoped run is terminal or no longer exists.
 
-Active runs are never eligible. A session with native resumable state protects
-its session directory and latest run even after the cutoff. Repository sessions
-retain all linked attempt history for cumulative change composition until their
-session is removed. Removing resumable state requires both `--include-sessions`
-and `--apply`. Images, build caches, E2B
-templates, saved Workbench packages, runner credential volumes, and unrelated
-Docker containers or E2B sandboxes are outside this cleanup contract.
+Active runs are never eligible. A session with native resumable state protects its session directory and latest run even after the cutoff. Repository sessions retain all linked attempt history for cumulative change composition until their session is removed. Removing resumable state requires both `--include-sessions` and `--apply`. Images, build caches, E2B templates, saved Workbench packages, runner credential volumes, and unrelated Docker containers or E2B sandboxes are outside this cleanup contract.
 
-Before cleanup, nonterminal records are reconciled against their worker process.
-A missing worker produces one `run.failed` event and one terminal metadata
-transition. Reconciliation is serialized per run so concurrent `ps`, `attach`,
-or cleanup processes cannot create duplicate terminal events. Cleanup then
-rechecks every candidate under the session lease before deletion. A resource
-that became active or became the latest session run is left in place.
+Before cleanup, nonterminal records are reconciled against their worker process. A missing worker produces one `run.failed` event and one terminal metadata transition. Reconciliation is serialized per run so concurrent `ps`, `attach`, or cleanup processes cannot create duplicate terminal events. Cleanup then rechecks every candidate under the session lease before deletion. A resource that became active or became the latest session run is left in place.
 
-Pending E2B outcome recovery protects its original run, session history, and
-sandbox until explicit recovery or discard. Selected terminal runs carry their
-outcomes into deletion. Shared result blobs are reclaimed only after their final
-retained reference is removed, and active captures prevent unsafe collection.
-The result store enforces bounded admission before writes rather than silently
-evicting old outcomes to make room. See [OUTCOMES.md](OUTCOMES.md) for storage limits.
+Pending E2B outcome recovery protects its original run, session history, and sandbox until explicit recovery or discard. Selected terminal runs carry their outcomes into deletion. Shared result blobs are reclaimed only after their final retained reference is removed, and active captures prevent unsafe collection. The result store enforces bounded admission before writes rather than silently evicting old outcomes to make room. See [OUTCOMES.md](OUTCOMES.md) for storage limits.
 
 ## Preflight boundary
 
-No runner launch or model request may occur until runtime preflight succeeds.
-For local execution, checks run against the host environment. For Docker, E2B,
-or any future remote runtime, checks run inside the provisioned environment.
+No runner launch or model request may occur until runtime preflight succeeds. For local execution, checks run against the host environment. For Docker, E2B, or any future remote runtime, checks run inside the provisioned environment.
 
 Preflight verifies at least:
 
-- The selected runtime satisfies the Workbench requirements, and any it cannot
-  verify are reported as unchecked.
+- The selected runtime satisfies the Workbench requirements, and any it cannot verify are reported as unchecked.
 - The selected runner is installed.
 - Every declared CLI tool resolves inside the runtime.
 - Required environment bindings exist.
 - Instructions and skills were staged successfully.
 - Eligible MCP configuration can be translated without exposing secret values.
 
-Draft 0 verifies tool presence only. An engine must not imply that presence also
-proves version compatibility or operational health.
+The reference engine verifies tool presence only. An engine must not imply that presence also proves version compatibility or operational health.

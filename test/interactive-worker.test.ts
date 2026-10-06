@@ -93,7 +93,7 @@ describe('interactive run worker', () => {
 
         await expect(
             workerFor(home, stored.id, adapter).execute({ environment: {} })
-        ).resolves.toBe(1);
+        ).resolves.toBe(3);
         expect(adapter.starts).toBe(0);
         expect(await new RunStore(home).readEvents(stored.id)).toContainEqual(
             expect.objectContaining({
@@ -101,9 +101,12 @@ describe('interactive run worker', () => {
                 data: {
                     message:
                         'Authentication is required for openai. Start this Workbench interactively once to finish openai sign-in.',
+                    code: 'authentication_required',
+                    exit_code: 3,
                 },
             })
         );
+        expect((await new RunStore(home).read(stored.id)).exit_code).toBe(3);
     });
 
     test('executes an initial detached task as a resumable native session', async () => {

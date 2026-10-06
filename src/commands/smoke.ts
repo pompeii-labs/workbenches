@@ -1,12 +1,19 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join, resolve } from 'node:path';
+
 import { defineCommand } from 'citty';
 
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
-import { RuntimeSmoke, type WorkbenchSmokeResult } from '../runtimes/index.js';
+import { CatalogSnapshots } from '../catalog/snapshots.js';
+import { RuntimeSmoke } from '../runtimes/index.js';
+import { SmokeReport } from '../runtimes/smokereport.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
 import type { ResolvedWorkbench } from '../types.js';
 import {
     selectedRuntime,
+    Workbench,
     WorkbenchEnvironment,
     WorkbenchResolver,
     WorkbenchSource,
@@ -59,15 +66,29 @@ export const smokeCommand = defineCommand({
             description: 'Accept a GPU requirement on a runtime that cannot check it',
             default: false,
         },
+        json: {
+            type: 'boolean',
+            description: 'Emit one JSON report per Workbench (NDJSON for several)',
+            default: false,
+        },
     },
     async run({ args, rawArgs }) {
         const workbenchEnvironment = new WorkbenchEnvironment();
-        const workbenchWorkspaces = new WorkbenchWorkspaces();
         const overrides = await workbenchEnvironment.load({
             ...(args['env-file'] ? { envFile: args['env-file'] } : {}),
             rawArgs,
         });
         const home = workbenchHome();
+        const smoke = new SmokeRun({
+            ...(args.runtime ? { runtime: args.runtime } : {}),
+            allowHostDocker: args['allow-host-docker'],
+            allowUncheckedGpu: args['allow-unchecked-gpu'],
+            json: args.json,
+            rawArgs,
+            environment: workbenchEnvironment,
+            overrides,
+            home,
+        });
         const saved = !args.source.includes('/')
             ? await new SavedWorkbenchCatalog(home).find(args.source)
             : undefined;
@@ -75,139 +96,204 @@ export const smokeCommand = defineCommand({
             const resolved = await new WorkbenchResolver().resolve(args.source, {
                 home,
             });
-            const workbench = withRuntime(resolved.workbench, args.runtime);
-            const workspaces = await workbenchWorkspaces.bind({
-                workbench,
-                rawArgs,
+            await smoke.check(args.source, resolved.workbench, {
+                workspaceDirectory: resolved.workspaceDirectory,
             });
-            validateHostDockerAuthorization(workbench, args['allow-host-docker']);
-            await printResult(
-                workbench.manifest.name,
-                new RuntimeSmoke({
-                    workbench,
-                    workspaceDirectory: resolved.workspaceDirectory,
-                    environment: workbenchEnvironment.bind(workbench, overrides),
-                    workspaces,
-                    allowHostDocker: args['allow-host-docker'],
-                    allowUncheckedGpu: args['allow-unchecked-gpu'],
-                    reference: args.source,
-                    home,
-                }).check()
-            );
-            return;
-        }
-        const source = new WorkbenchSource();
-        const reference = source.parse(args.source);
-        const local = await source.local(reference.source);
-        if (local) {
-            const selected = reference.selector
-                ? [await source.select(local.directory, reference.selector)]
-                : await source.discover(local.directory);
-            if (selected.length === 0) throw new Error('No matching Workbenches found');
-            for (const candidate of selected) {
-                const workbench = withRuntime(candidate, args.runtime);
-                const workspaces = await workbenchWorkspaces.bind({
-                    workbench,
-                    rawArgs,
-                });
-                validateHostDockerAuthorization(workbench, args['allow-host-docker']);
-                await printResult(
-                    workbench.manifest.name,
-                    new RuntimeSmoke({
-                        workbench,
-                        environment: workbenchEnvironment.bind(workbench, overrides),
-                        workspaces,
-                        allowHostDocker: args['allow-host-docker'],
-                        allowUncheckedGpu: args['allow-unchecked-gpu'],
-                        reference: args.source,
-                        home,
-                    }).check()
+        } else {
+            const source = new WorkbenchSource();
+            const reference = source.parse(args.source);
+            const local = await source.local(reference.source);
+            if (local) {
+                const selected = reference.selector
+                    ? [await source.select(local.directory, reference.selector)]
+                    : await source.discover(local.directory);
+                if (selected.length === 0)
+                    throw new Error('No matching Workbenches found');
+                for (const candidate of selected) {
+                    const inRepository =
+                        !reference.selector &&
+                        resolve(candidate.packageDirectory) !== local.directory;
+                    await smoke.check(
+                        inRepository
+                            ? `${args.source}#${basename(candidate.packageDirectory)}`
+                            : args.source,
+                        candidate
+                    );
+                }
+            } else {
+                const github = new GitHubWorkbenchSource();
+                const workbenches = await github.fetchAll(
+                    reference.source,
+                    reference.selector
                 );
+                if (workbenches.length === 0)
+                    throw new Error('No matching Workbenches found');
+                // Smoke reads skills and instructions from disk, so the remote
+                // packages are materialized into a scratch directory first.
+                const scratch = await mkdtemp(join(tmpdir(), 'wb-smoke-'));
+                try {
+                    const snapshots = new CatalogSnapshots(scratch);
+                    for (const workbench of workbenches) {
+                        const { packagePath } = await snapshots.materialize(
+                            workbench.selector,
+                            workbench.files
+                        );
+                        const candidate = await Workbench.load(packagePath);
+                        await smoke.check(
+                            `${reference.source}#${workbench.selector}`,
+                            candidate
+                        );
+                    }
+                } finally {
+                    await rm(scratch, { recursive: true, force: true });
+                }
             }
-            return;
         }
-        const github = new GitHubWorkbenchSource();
-        const workbenches = await github.fetchAll(reference.source, reference.selector);
-        if (workbenches.length === 0) throw new Error('No matching Workbenches found');
-        for (const workbench of workbenches) {
-            const resolved = withRuntime(github.resolve(workbench), args.runtime);
-            const workspaces = await workbenchWorkspaces.bind({
-                workbench: resolved,
-                rawArgs,
-            });
-            validateHostDockerAuthorization(resolved, args['allow-host-docker']);
-            await printResult(
-                workbench.manifest.name,
-                new RuntimeSmoke({
-                    workbench: resolved,
-                    environment: workbenchEnvironment.bind(resolved, overrides),
-                    workspaces,
-                    allowHostDocker: args['allow-host-docker'],
-                    allowUncheckedGpu: args['allow-unchecked-gpu'],
-                    reference: args.source,
-                    home,
-                }).check()
-            );
-        }
+        if (smoke.exitCode !== 0) process.exitCode = smoke.exitCode;
     },
 });
 
-async function printResult(name: string, pending: Promise<WorkbenchSmokeResult>) {
-    const output = new CliPresenter();
-    output.progress(`Checking ${name}`);
-    const result = await pending;
-    const disabled = result.disabledMcps.length
-        ? `; optional MCPs disabled: ${result.disabledMcps.join(', ')}`
-        : '';
-    const workspaces = result.workspaces.length
-        ? `; workspaces: ${result.workspaces.map((workspace) => `${workspace.name}=${workspace.path} (${workspace.access})`).join(', ')}`
-        : '';
-    const dockerEngine = result.dockerEngine
-        ? `; docker-engine: ${result.dockerEngine}`
-        : '';
-    const requirements = [
-        ...(result.requirements?.applied ?? []).map((entry) => `applied ${entry}`),
-        ...(result.requirements?.unchecked ?? []).map((entry) => `unchecked: ${entry}`),
-    ];
-    const unchecked = requirements.length
-        ? `; requirements: ${requirements.join(', ')}`
-        : '';
-    const authentication = result.authentication.ready
-        ? `; auth: ready (${result.authentication.configuration?.provider ?? 'environment'})`
-        : `; auth: required (${result.authentication.connectCommand})`;
-    const status = result.authentication.ready ? 'ready' : 'needs-auth';
-    output.record({
-        machine: [
-            status,
-            name,
-            `runner=${result.runner.path}`,
-            `tools=${result.tools.map((tool) => tool.path).join(',') || '-'}${authentication}${workspaces}${dockerEngine}${unchecked}${disabled}`,
-        ],
-        title: result.authentication.ready
-            ? `${name} is ready`
-            : `${name} needs a connection`,
-        details: [
-            result.runner.path,
-            result.tools.length > 0
-                ? `${result.tools.length} ${result.tools.length === 1 ? 'tool' : 'tools'}`
-                : 'no required tools',
-            result.authentication.ready
-                ? `auth ${result.authentication.configuration?.provider ?? 'environment'}`
-                : result.authentication.connectCommand,
-            ...requirements,
-        ],
-        tone: result.authentication.ready ? 'success' : 'warning',
-    });
-    if (!result.authentication.ready) process.exitCode = 1;
+interface SmokeSettings {
+    runtime?: string;
+    allowHostDocker: boolean;
+    allowUncheckedGpu: boolean;
+    json: boolean;
+    rawArgs: string[];
+    environment: WorkbenchEnvironment;
+    overrides: Awaited<ReturnType<WorkbenchEnvironment['load']>>;
+    home: string;
 }
 
-function validateHostDockerAuthorization(
-    workbench: ResolvedWorkbench,
-    authorized: boolean
-): void {
-    if (authorized && !selectedRuntime(workbench).docker?.engine) {
-        throw new Error(
-            '--allow-host-docker requires a Workbench that declares docker.engine'
+/**
+ * Smokes each Workbench of one invocation and prints its result. Human output
+ * stops at the first thrown error; JSON output reports each failure as its own
+ * object and carries on.
+ */
+class SmokeRun {
+    /** 0 when every Workbench is ready, 1 if any failed, else 3 for missing authentication. */
+    exitCode = 0;
+    private readonly workspaces = new WorkbenchWorkspaces();
+
+    constructor(private readonly settings: SmokeSettings) {}
+
+    /** `reference` is the pasteable selector used in connect commands. */
+    async check(
+        reference: string,
+        candidate: ResolvedWorkbench,
+        options: { workspaceDirectory?: string | undefined } = {}
+    ) {
+        const { workspaceDirectory } = options;
+        const report = this.settings.json
+            ? await this.report(reference, candidate, workspaceDirectory)
+            : await this.print(reference, candidate, workspaceDirectory);
+        if (report.exitCode === 1 || this.exitCode === 0) {
+            this.exitCode = report.exitCode;
+        }
+    }
+
+    private async report(
+        reference: string,
+        candidate: ResolvedWorkbench,
+        workspaceDirectory?: string
+    ): Promise<SmokeReport> {
+        let report: SmokeReport;
+        try {
+            const workbench = await this.run(reference, candidate, workspaceDirectory);
+            report = SmokeReport.completed(workbench.workbench, workbench.result);
+        } catch (error) {
+            report = SmokeReport.failed(candidate, error);
+        }
+        process.stdout.write(`${JSON.stringify(report)}\n`);
+        return report;
+    }
+
+    private async print(
+        reference: string,
+        candidate: ResolvedWorkbench,
+        workspaceDirectory?: string
+    ): Promise<SmokeReport> {
+        const output = new CliPresenter();
+        output.progress(`Checking ${candidate.manifest.name}`);
+        const { workbench, result } = await this.run(
+            reference,
+            candidate,
+            workspaceDirectory
         );
+        const report = SmokeReport.completed(workbench, result);
+        const name = workbench.manifest.name;
+        const disabled = result.disabledMcps.length
+            ? `; optional MCPs disabled: ${result.disabledMcps.join(', ')}`
+            : '';
+        const workspaces = result.workspaces.length
+            ? `; workspaces: ${result.workspaces.map((workspace) => `${workspace.name}=${workspace.path} (${workspace.access})`).join(', ')}`
+            : '';
+        const dockerEngine = result.dockerEngine
+            ? `; docker-engine: ${result.dockerEngine}`
+            : '';
+        const requirements = [
+            ...(result.requirements?.applied ?? []).map((entry) => `applied ${entry}`),
+            ...(result.requirements?.unchecked ?? []).map(
+                (entry) => `unchecked: ${entry}`
+            ),
+        ];
+        const unchecked = requirements.length
+            ? `; requirements: ${requirements.join(', ')}`
+            : '';
+        const authentication = result.authentication.ready
+            ? `; auth: ready (${result.authentication.configuration?.provider ?? 'environment'})`
+            : `; auth: required (${result.authentication.connectCommand})`;
+        const status = result.authentication.ready ? 'ready' : 'needs-auth';
+        output.record({
+            machine: [
+                status,
+                name,
+                `runner=${result.runner.path}`,
+                `tools=${result.tools.map((tool) => tool.path).join(',') || '-'}${authentication}${workspaces}${dockerEngine}${unchecked}${disabled}`,
+            ],
+            title: result.authentication.ready
+                ? `${name} is ready`
+                : `${name} needs a connection`,
+            details: [
+                result.runner.path,
+                result.tools.length > 0
+                    ? `${result.tools.length} ${result.tools.length === 1 ? 'tool' : 'tools'}`
+                    : 'no required tools',
+                result.authentication.ready
+                    ? `auth ${result.authentication.configuration?.provider ?? 'environment'}`
+                    : result.authentication.connectCommand,
+                ...requirements,
+            ],
+            tone: result.authentication.ready ? 'success' : 'warning',
+        });
+        return report;
+    }
+
+    private async run(
+        reference: string,
+        candidate: ResolvedWorkbench,
+        workspaceDirectory?: string
+    ) {
+        const { settings } = this;
+        const workbench = withRuntime(candidate, settings.runtime);
+        const workspaces = await this.workspaces.bind({
+            workbench,
+            rawArgs: settings.rawArgs,
+        });
+        if (settings.allowHostDocker && !selectedRuntime(workbench).docker?.engine) {
+            throw new Error(
+                '--allow-host-docker requires a Workbench that declares docker.engine'
+            );
+        }
+        const result = await new RuntimeSmoke({
+            workbench,
+            ...(workspaceDirectory ? { workspaceDirectory } : {}),
+            environment: settings.environment.bind(workbench, settings.overrides),
+            workspaces,
+            allowHostDocker: settings.allowHostDocker,
+            allowUncheckedGpu: settings.allowUncheckedGpu,
+            reference,
+            home: settings.home,
+        }).check();
+        return { workbench, result };
     }
 }

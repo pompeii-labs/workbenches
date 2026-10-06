@@ -1,6 +1,13 @@
 #!/usr/bin/env bun
 
-import { defineCommand, renderUsage, runMain } from 'citty';
+import {
+    type ArgsDef,
+    type CommandDef,
+    defineCommand,
+    renderUsage,
+    runCommand as runCitty,
+    runMain,
+} from 'citty';
 import pc from 'picocolors';
 import packageMetadata from '../package.json' with { type: 'json' };
 import { AuthoringJob } from './authoring/job.js';
@@ -30,7 +37,6 @@ import { runCommand } from './commands/run.js';
 import { sendCommand } from './commands/send.js';
 import { smokeCommand } from './commands/smoke.js';
 import { statusCommand } from './commands/status.js';
-import { telemetryCommand } from './commands/telemetry.js';
 import { unpublishCommand } from './commands/unpublish.js';
 import { updateCommand } from './commands/update.js';
 import { upgradeCommand } from './commands/upgrade.js';
@@ -38,6 +44,7 @@ import { validateCommand } from './commands/validate.js';
 import { viewCommand } from './commands/view.js';
 import { waitCommand } from './commands/wait.js';
 import { whoamiCommand } from './commands/whoami.js';
+import { AuthenticationRequiredError } from './connections/error.js';
 import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
 import { RunWorker } from './runs/index.js';
@@ -60,7 +67,6 @@ export const workbenchCommand = defineCommand({
         view: viewCommand,
         validate: validateCommand,
         smoke: smokeCommand,
-        telemetry: telemetryCommand,
         update: updateCommand,
         upgrade: upgradeCommand,
         login: loginCommand,
@@ -148,19 +154,40 @@ if (import.meta.main) {
         if (usesModelCatalog(invocation.args)) {
             await new ModelCatalog({ home: workbenchHome() }).refresh();
         }
-        if (bareInvocation) {
+        const showUsage = async <T extends ArgsDef>(
+            command: CommandDef<T>,
+            parent?: CommandDef<T>
+        ) => {
             process.stdout.write(
-                `${commandUsage(await renderUsage(workbenchCommand))}\n\n`
+                `${commandUsage(await renderUsage(command, parent))}\n\n`
             );
+        };
+        if (bareInvocation) {
+            await showUsage(workbenchCommand);
+        } else if (
+            explicitHelp ||
+            (invocation.args.length === 1 &&
+                (invocation.args[0] === '--version' || invocation.args[0] === '-v'))
+        ) {
+            await runMain(workbenchCommand, { rawArgs: invocation.args, showUsage });
         } else {
-            await runMain(workbenchCommand, {
-                rawArgs: invocation.args,
-                showUsage: async (command, parent) => {
-                    process.stdout.write(
-                        `${commandUsage(await renderUsage(command, parent))}\n\n`
-                    );
-                },
-            });
+            // citty's runMain exits 1 for every failure, so commands run here and
+            // this is the one place an error becomes an exit code.
+            try {
+                await runCitty(workbenchCommand, { rawArgs: invocation.args });
+            } catch (error) {
+                if (error instanceof AuthenticationRequiredError) {
+                    console.error(error);
+                    process.exit(error.exitCode);
+                }
+                if (error instanceof Error && error.name === 'CLIError') {
+                    await showUsage(...usageTarget(workbenchCommand, invocation.args));
+                    console.error(error.message);
+                } else {
+                    console.error(error, '\n');
+                }
+                process.exit(1);
+            }
         }
     } catch (error) {
         console.error(
@@ -172,6 +199,20 @@ if (import.meta.main) {
     } finally {
         console.error = defaultConsoleError;
     }
+}
+
+/** The command whose usage describes `args`, with its parent, as citty resolves it. */
+function usageTarget(
+    command: CommandDef,
+    args: string[],
+    parent?: CommandDef
+): [CommandDef, CommandDef | undefined] {
+    const subCommands = command.subCommands as Record<string, CommandDef> | undefined;
+    const name = args.find((argument) => !argument.startsWith('-'));
+    const subCommand = name ? subCommands?.[name] : undefined;
+    return subCommand
+        ? usageTarget(subCommand, args.slice(args.indexOf(name as string) + 1), command)
+        : [command, parent];
 }
 
 /** Citty renders the command summary in dim gray, which is hard to read in some terminals. */
