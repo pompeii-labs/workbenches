@@ -282,7 +282,7 @@ The model-provider path saves the preferred route for that runner and runtime, p
 Readiness respects the chosen method: a provider variable holds an API key, so it counts as ready for an API-key or native method (it takes precedence for a run) but never for a subscription. The default is saved only once the route is ready; a connect that exits 3 or is cancelled leaves the previous default in place, and `--remove` drops the default when it pointed at the removed provider. Flags that would have no effect, such as `--stdin` with a subscription method or on `local` and `daytona`, are rejected before anything is read or written. A piped key must be the bare value: one trailing newline is removed, and whitespace or a `NAME=` prefix is rejected. Every API-key method (OpenRouter, Anthropic, an OpenAI API key, and the E2B and Daytona runtime keys) takes a pasted key: a hidden prompt in a terminal (`OpenRouter API key for Docker runs (input hidden)`), or `--stdin` otherwise. A subscription method runs a fresh `opencode auth login` against a private temporary data home, then keeps only that provider's entry. `wb connect` never reads another tool's credential files, so your own runner sign-in is neither read nor copied. Only the selected provider's entry is written, merged into the store beside existing entries. Credential values are never printed, logged, passed in argv, or placed in a child process environment.
 
 ```sh
-wb connect launch-video --runtime docker
+wb connect my-expert --runtime docker
 printf '%s' "$OPENROUTER_API_KEY" | wb connect --runtime e2b --harness opencode --provider openrouter --stdin
 wb connect --runtime e2b --harness opencode --provider openrouter --remove
 ```
@@ -309,7 +309,7 @@ wb connect --runtime daytona --remove
 
 An inherited `DAYTONA_API_KEY` overrides the saved Daytona key for one process. Set `DAYTONA_API_URL` to use a Daytona API endpoint other than the public one. The key is never printed, is never passed to the sandbox, and is not accepted as a command-line value. Saving it creates no sandbox and incurs no Daytona usage.
 
-Passing a Workbench reference narrows the provider choices to routes allowed by that package and checks readiness with that Workbench's runner and runtime. `--runtime` selects one of its declared runtimes, and without it `wb connect <ref>` uses the first declared runtime. So `wb smoke`, `wb view`, and run preflight always name the runtime in their connect hint, such as `wb connect launch-video --runtime docker`.
+Passing a Workbench reference narrows the provider choices to routes allowed by that package and checks readiness with that Workbench's runner and runtime. `--runtime` selects one of its declared runtimes, and without it `wb connect <ref>` uses the first declared runtime. So `wb smoke`, `wb view`, and run preflight always name the runtime in their connect hint, such as `wb connect my-expert --runtime docker`.
 
 `wb connect` records which compatible provider and authentication method should be preferred for that runner and runtime. A single run can select a different configured or authenticated connection without changing the default:
 
