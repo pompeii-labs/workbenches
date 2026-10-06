@@ -1,4 +1,5 @@
 import type { RuntimeCredentialFiles } from '../contracts.js';
+import { credentialPathSegments } from '../credentialpath.js';
 import type { DockerClient } from './client.js';
 import { DockerManagedContainers } from './containers.js';
 import type { DockerUser } from './contracts.js';
@@ -38,16 +39,12 @@ export class DockerCredentialVolume implements RuntimeCredentialFiles {
             [
                 this.client.executable,
                 'run',
-                '--rm',
-                ...DockerManagedContainers.helperLabels(),
-                // Only root can chown, whatever user the image runs as by default.
+                ...this.isolation(),
+                // Only root with CAP_CHOWN can chown, whatever user the image runs as by default.
+                '--cap-add',
+                'CHOWN',
                 '--user',
                 '0:0',
-                '--network',
-                'none',
-                '--read-only',
-                '--tmpfs',
-                '/tmp:rw,nosuid,nodev,mode=1777',
                 ...this.mountArguments(),
                 '--entrypoint',
                 '/bin/sh',
@@ -83,6 +80,8 @@ export class DockerCredentialVolume implements RuntimeCredentialFiles {
                 [
                     'set -e',
                     'umask 077',
+                    // A failed write must not leave a partial copy of the secret behind.
+                    `trap 'rm -f "$1.tmp"' EXIT`,
                     'mkdir -p "$(dirname "$1")"',
                     'cat > "$1.tmp"',
                     'chmod 600 "$1.tmp"',
@@ -110,20 +109,12 @@ export class DockerCredentialVolume implements RuntimeCredentialFiles {
     }
 
     private helper(input: boolean, script: string, path: string): string[] {
-        if (!/^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*)*$/.test(path)) {
-            throw new Error(`Invalid credential path: ${path}`);
-        }
+        const target = `${credentialRoot}/${credentialPathSegments(path).join('/')}`;
         return [
             this.client.executable,
             'run',
-            '--rm',
             ...(input ? ['--interactive'] : []),
-            ...DockerManagedContainers.helperLabels(),
-            '--network',
-            'none',
-            '--read-only',
-            '--tmpfs',
-            '/tmp:rw,nosuid,nodev,mode=1777',
+            ...this.isolation(),
             ...(this.user ? ['--user', `${this.user.uid}:${this.user.gid}`] : []),
             ...this.mountArguments(),
             '--entrypoint',
@@ -132,7 +123,32 @@ export class DockerCredentialVolume implements RuntimeCredentialFiles {
             '-c',
             script,
             'workbench-credentials',
-            `${credentialRoot}/${path}`,
+            target,
+        ];
+    }
+
+    /**
+     * Shared by every helper. `--log-driver none` matters most: helper output
+     * is credential content, and any other driver would copy it into host or
+     * remote logs even for a `--rm` container.
+     */
+    private isolation(): string[] {
+        return [
+            '--rm',
+            ...DockerManagedContainers.helperLabels(),
+            '--log-driver',
+            'none',
+            '--cap-drop',
+            'ALL',
+            '--security-opt',
+            'no-new-privileges',
+            '--pull',
+            'never',
+            '--network',
+            'none',
+            '--read-only',
+            '--tmpfs',
+            '/tmp:rw,nosuid,nodev,mode=1777',
         ];
     }
 }
