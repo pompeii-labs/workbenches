@@ -153,7 +153,7 @@ export class DockerClient {
         const child = Bun.spawn(command, {
             ...(options.cwd ? { cwd: options.cwd } : {}),
             env: options.env ?? process.env,
-            stdin: 'ignore',
+            stdin: options.input === undefined ? 'ignore' : new Blob([options.input]),
             stdout: 'pipe',
             stderr: 'pipe',
         });

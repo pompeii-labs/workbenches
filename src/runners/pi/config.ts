@@ -86,14 +86,20 @@ export class PiConfigStaging {
     async findConfigDirectory(
         environment: Record<string, string | undefined>
     ): Promise<string | undefined> {
-        const configured = environment.PI_CODING_AGENT_DIR?.trim();
-        const home = environment.HOME?.trim();
-        if (!configured && !home) return undefined;
-        const candidate = configured
-            ? resolve(configured)
-            : join(home as string, '.pi', 'agent');
+        const candidate = PiConfigStaging.directoryFor(environment);
+        if (!candidate) return undefined;
         const found = await this.files.stat(candidate).catch(() => undefined);
         return found?.kind === 'directory' ? candidate : undefined;
+    }
+
+    /** Where Pi keeps its own config for `environment`, whether or not it exists. */
+    static directoryFor(
+        environment: Record<string, string | undefined>
+    ): string | undefined {
+        const configured = environment.PI_CODING_AGENT_DIR?.trim();
+        const home = environment.HOME?.trim();
+        if (configured) return resolve(configured);
+        return home ? join(home, '.pi', 'agent') : undefined;
     }
 
     private async isFile(path: string): Promise<boolean> {

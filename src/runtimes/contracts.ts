@@ -36,6 +36,18 @@ export interface RuntimeCredentialBinding {
     directory: string;
 }
 
+/**
+ * The native credential files a runtime keeps for its runner, addressed by
+ * paths relative to the credential root. Contents are secrets: callers never
+ * print or log them.
+ */
+export interface RuntimeCredentialFiles {
+    /** The file's contents, or undefined when it does not exist. */
+    read(path: string): Promise<string | undefined>;
+    /** Replaces the file, readable only by the runner. */
+    write(path: string, contents: string): Promise<void>;
+}
+
 export interface RuntimePrepareRequest {
     workbench: ResolvedWorkbench;
     workspaceDirectory: string;
@@ -120,6 +132,8 @@ export interface PreparedRuntime {
      */
     readonly sandboxId?: string | undefined;
     readonly nativeAuthentication: 'persistent' | 'unavailable';
+    /** The runner credential store this runtime mounts, when the host can write it directly. */
+    readonly credentials?: RuntimeCredentialFiles | undefined;
     pathFor(hostPath: string): string;
     preflight(): Promise<PreflightResult>;
     execute(

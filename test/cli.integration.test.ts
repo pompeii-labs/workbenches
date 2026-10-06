@@ -794,7 +794,7 @@ describe('CLI integration', () => {
         expect(result.stderr).not.toContain('Path is not staged');
     });
 
-    test('configures E2B headless authentication without an E2B key or runtime work', async () => {
+    test('keeps the E2B preference and exits 3 until a credential is stored', async () => {
         const home = await temporaryDirectory('workbench-connect-config-');
         const result = await executeCli(
             [
@@ -809,15 +809,21 @@ describe('CLI integration', () => {
                 'chatgpt',
             ],
             {
+                ...(await fakeUserHome()),
                 WORKBENCH_HOME: home,
                 PATH: '/usr/bin:/bin',
                 E2B_API_KEY: '',
+                OPENAI_API_KEY: '',
             }
         );
 
-        expect(result.code).toBe(0);
-        expect(result.stdout).toBe('configured\te2b\topencode\topenai\n');
-        expect(result.stderr).toBe('');
+        expect(result.code).toBe(AuthenticationRequiredError.exitCode);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain(
+            'No OpenAI credential is saved for OpenCode in E2B. Run wb connect --runtime e2b --harness opencode --provider openai --method chatgpt in a terminal with OpenCode installed'
+        );
+        expect(result.stderr).toContain('--env-file');
+        expect(result.stderr).not.toContain('Configured');
         const homeEntries = await readdir(home);
         expect(homeEntries).toContain('connections.json');
         expect(homeEntries).not.toContain('runs');
@@ -856,7 +862,7 @@ describe('CLI integration', () => {
         await expect(stat(record)).rejects.toThrow();
     });
 
-    test('configures Pi without requiring the harness to be installed', async () => {
+    test('saves the local Pi preference and reports the missing harness instead of success', async () => {
         const fixture = await createFixture({ runner: 'pi' });
         const bin = await fakeBin();
         const home = await temporaryDirectory('workbench-connect-pi-');
@@ -870,15 +876,238 @@ describe('CLI integration', () => {
                 'chatgpt',
             ],
             {
+                ...(await fakeUserHome()),
                 PATH: `${bin}:/usr/bin:/bin`,
                 WORKBENCH_HOME: home,
             }
         );
 
+        expect(result.code).toBe(1);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain('pi');
+        expect(
+            JSON.parse(await readFile(join(home, 'connections.json'), 'utf8'))
+        ).toMatchObject({
+            connections: [{ runner: 'pi', runtime: 'local', provider: 'openai' }],
+        });
+    });
+
+    test('writes a piped model key into the E2B store without printing it or creating a sandbox', async () => {
+        const home = await temporaryDirectory('workbench-connect-e2b-key-');
+        const store = join(home, 'runtime-credentials', 'e2b', 'opencode');
+        await mkdir(join(store, 'opencode'), { recursive: true, mode: 0o700 });
+        await writeFile(
+            join(store, 'opencode', 'auth.json'),
+            '{"anthropic":{"type":"api","key":"fixture-anthropic"}}\n',
+            { mode: 0o600 }
+        );
+        const environment = {
+            ...(await fakeUserHome()),
+            WORKBENCH_HOME: home,
+            PATH: '/usr/bin:/bin',
+            E2B_API_KEY: '',
+            OPENROUTER_API_KEY: '',
+        };
+        const target = [
+            'connect',
+            '--runtime',
+            'e2b',
+            '--harness',
+            'opencode',
+            '--provider',
+            'openrouter',
+        ];
+        const result = await connectCli(
+            [...target, '--stdin'],
+            environment,
+            'fixture-openrouter-secret\n'
+        );
+
         expect(result.code).toBe(0);
-        expect(result.stdout).toBe('configured\tlocal\tpi\topenai\n');
-        expect(result.stderr).toBe('');
-        expect(result.stderr).not.toContain('Executable not found');
+        expect(result.stdout).toBe('saved\te2b\topencode\topenrouter\n');
+        expect(`${result.stdout}${result.stderr}`).not.toContain(
+            'fixture-openrouter-secret'
+        );
+        const file = join(store, 'opencode', 'auth.json');
+        expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+            anthropic: { type: 'api', key: 'fixture-anthropic' },
+            openrouter: { type: 'api', key: 'fixture-openrouter-secret' },
+        });
+        expect((await stat(file)).mode & 0o777).toBe(0o600);
+        expect((await stat(join(store, 'opencode'))).mode & 0o777).toBe(0o700);
+        expect(await readdir(home)).not.toContain('runs');
+
+        const removed = await executeCli([...target, '--remove'], environment);
+        expect(removed.code).toBe(0);
+        expect(removed.stdout).toBe('removed\te2b\topencode\topenrouter\n');
+        expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+            anthropic: { type: 'api', key: 'fixture-anthropic' },
+        });
+        const verify = await executeCli([...target, '--method', 'native'], environment);
+        expect(verify.code).toBe(AuthenticationRequiredError.exitCode);
+        expect(verify.stderr).toContain(
+            'No OpenRouter credential is saved for OpenCode in E2B. Pass the OpenRouter API key on standard input: wb connect --runtime e2b --harness opencode --provider openrouter --method native --stdin'
+        );
+    });
+
+    test('copies only the selected provider from the host sign-in when asked explicitly', async () => {
+        const home = await temporaryDirectory('workbench-connect-reuse-');
+        const user = await fakeUserHome();
+        const hostFile = join(user.XDG_DATA_HOME, 'opencode', 'auth.json');
+        await mkdir(join(user.XDG_DATA_HOME, 'opencode'), { recursive: true });
+        await writeFile(
+            hostFile,
+            JSON.stringify({
+                openrouter: { type: 'api', key: 'fixture-host-openrouter' },
+                anthropic: { type: 'api', key: 'fixture-host-anthropic' },
+            })
+        );
+        const environment = {
+            ...user,
+            WORKBENCH_HOME: home,
+            PATH: '/usr/bin:/bin',
+            OPENROUTER_API_KEY: '',
+        };
+        const target = [
+            'connect',
+            '--runtime',
+            'e2b',
+            '--harness',
+            'opencode',
+            '--provider',
+            'openrouter',
+        ];
+
+        const unconfirmed = await executeCli(target, environment);
+        expect(unconfirmed.code).toBe(AuthenticationRequiredError.exitCode);
+        expect(unconfirmed.stderr).toContain(
+            'Copy your local OpenCode OpenRouter credential with wb connect --runtime e2b --harness opencode --provider openrouter --method native --yes'
+        );
+        await expect(stat(join(home, 'runtime-credentials'))).rejects.toThrow();
+
+        const copied = await executeCli([...target, '--yes'], environment);
+        expect(copied.code).toBe(0);
+        expect(copied.stdout).toBe('saved\te2b\topencode\topenrouter\n');
+        expect(`${copied.stdout}${copied.stderr}`).not.toContain('fixture-host');
+        expect(
+            JSON.parse(
+                await readFile(
+                    join(
+                        home,
+                        'runtime-credentials',
+                        'e2b',
+                        'opencode',
+                        'opencode',
+                        'auth.json'
+                    ),
+                    'utf8'
+                )
+            )
+        ).toEqual({ openrouter: { type: 'api', key: 'fixture-host-openrouter' } });
+        expect(JSON.parse(await readFile(hostFile, 'utf8'))).toHaveProperty(
+            'anthropic'
+        );
+    });
+
+    test('reports Daytona as environment-only and refuses to store a key for it', async () => {
+        const home = await temporaryDirectory('workbench-connect-daytona-');
+        const environment = {
+            ...(await fakeUserHome()),
+            WORKBENCH_HOME: home,
+            PATH: '/usr/bin:/bin',
+            DAYTONA_API_KEY: '',
+        };
+        const target = [
+            'connect',
+            '--runtime',
+            'daytona',
+            '--harness',
+            'opencode',
+            '--provider',
+            'openrouter',
+        ];
+
+        const missing = await executeCli(target, {
+            ...environment,
+            OPENROUTER_API_KEY: '',
+        });
+        expect(missing.code).toBe(AuthenticationRequiredError.exitCode);
+        expect(missing.stderr).toContain(
+            'Daytona has no runner credential store, so OpenCode there reads OpenRouter keys only from the environment. Set OPENROUTER_API_KEY where wb runs. For one run, --env-file also works.'
+        );
+        const ready = await executeCli(target, {
+            ...environment,
+            OPENROUTER_API_KEY: 'fixture-openrouter-key',
+        });
+        expect(ready.code).toBe(0);
+        expect(ready.stdout).toBe('ready\tdaytona\topencode\topenrouter\n');
+        const piped = await connectCli(
+            [...target, '--stdin'],
+            environment,
+            'fixture\n'
+        );
+        expect(piped.code).toBe(1);
+        expect(piped.stderr).toContain(
+            'Daytona reads provider keys only from the environment'
+        );
+        expect(await readdir(home)).not.toContain('runtime-credentials');
+    });
+
+    test('verifies local readiness from the environment or names the missing login', async () => {
+        const home = await temporaryDirectory('workbench-connect-local-');
+        const target = [
+            'connect',
+            '--runtime',
+            'local',
+            '--harness',
+            'opencode',
+            '--provider',
+            'openrouter',
+        ];
+        const user = await fakeUserHome();
+        const ready = await executeCli(target, {
+            ...user,
+            WORKBENCH_HOME: home,
+            OPENROUTER_API_KEY: 'fixture-openrouter-key',
+        });
+        expect(ready.code).toBe(0);
+        expect(ready.stdout).toBe('ready\tlocal\topencode\topenrouter\n');
+
+        const missing = await executeCli(target, {
+            ...user,
+            WORKBENCH_HOME: home,
+            OPENROUTER_API_KEY: '',
+        });
+        expect(missing.code).toBe(AuthenticationRequiredError.exitCode);
+        expect(missing.stderr).toContain(
+            'No OpenRouter credential for OpenCode on this machine. Run opencode auth login --provider openrouter, or set OPENROUTER_API_KEY'
+        );
+    });
+
+    test('asks for a Workbench before writing a Docker credential volume', async () => {
+        const home = await temporaryDirectory('workbench-connect-docker-');
+        const result = await executeCli(
+            [
+                'connect',
+                '--runtime',
+                'docker',
+                '--harness',
+                'opencode',
+                '--provider',
+                'openrouter',
+            ],
+            {
+                ...(await fakeUserHome()),
+                WORKBENCH_HOME: home,
+                PATH: '/usr/bin:/bin',
+                OPENROUTER_API_KEY: '',
+            }
+        );
+
+        expect(result.code).toBe(AuthenticationRequiredError.exitCode);
+        expect(result.stderr).toContain(
+            'Run wb connect <workbench> --runtime docker --provider openrouter --method native'
+        );
     });
 
     test('rejects unknown run options without launching the runner', async () => {
@@ -2831,6 +3060,34 @@ async function executeCli(
         { ...environment, WORKBENCH_HOME: home },
         cwd
     );
+    const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+    ]);
+    return { stdout, stderr, code };
+}
+
+/** A throwaway user home, so connect never reads this machine's runner sign-ins. */
+async function fakeUserHome() {
+    const home = await temporaryDirectory('workbench-user-home-');
+    return {
+        HOME: home,
+        XDG_DATA_HOME: join(home, '.local', 'share'),
+        PI_CODING_AGENT_DIR: join(home, '.pi', 'agent'),
+    };
+}
+
+async function connectCli(
+    arguments_: string[],
+    environment: Record<string, string | undefined>,
+    input: string
+) {
+    const child = await launchCli(arguments_, environment, projectDirectory, 'pipe');
+    if (child.stdin) {
+        child.stdin.write(input);
+        await child.stdin.end();
+    }
     const [stdout, stderr, code] = await Promise.all([
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),

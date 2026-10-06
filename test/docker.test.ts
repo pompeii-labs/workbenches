@@ -513,6 +513,74 @@ describe('Docker runtime provider', () => {
         }
     });
 
+    test('writes credential files through a labeled offline helper with content on stdin', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        const helpers: Array<{ command: string[]; input?: string }> = [];
+        const volume = new Map<string, string>();
+        const base = dockerMock([]);
+        const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: () => '/usr/bin/docker',
+            command: async (command, options) => {
+                const path = command.at(-1) ?? '';
+                if (
+                    command[1] === 'run' &&
+                    path.startsWith('/workbench-credentials/')
+                ) {
+                    helpers.push({
+                        command,
+                        ...(options?.input !== undefined
+                            ? { input: options.input }
+                            : {}),
+                    });
+                    if (options?.input !== undefined) {
+                        volume.set(path, options.input);
+                        return result(0);
+                    }
+                    return result(0, volume.get(path) ?? '');
+                }
+                return base(command);
+            },
+            user: () => ({ uid: 501, gid: 20 }),
+        }).prepare({ ...request(fixture), purpose: 'connect' });
+        try {
+            const files = runtime.credentials;
+            if (!files) throw new Error('Docker did not expose its credential volume');
+            expect(await files.read('opencode/auth.json')).toBeUndefined();
+            await files.write(
+                'opencode/auth.json',
+                '{"openrouter":{"key":"fixture"}}\n'
+            );
+            expect(await files.read('opencode/auth.json')).toBe(
+                '{"openrouter":{"key":"fixture"}}\n'
+            );
+            const write = helpers.find((helper) => helper.input !== undefined);
+            expect(write?.input).toContain('fixture');
+            for (const helper of helpers) {
+                expect(helper.command.join(' ')).not.toContain('fixture');
+                expect(helper.command.slice(0, 3)).toEqual([
+                    '/usr/bin/docker',
+                    'run',
+                    '--rm',
+                ]);
+                expect(helper.command).toContain('dev.workbenches.managed=true');
+                expect(helper.command.join(' ')).toContain(
+                    '--network none --read-only'
+                );
+                expect(helper.command).toContain('501:20');
+                expect(helper.command).toContain(
+                    `${DockerCredentialVolume.nameFor('opencode')}:/workbench-credentials`
+                );
+            }
+            expect(write?.command).toContain('--interactive');
+            await expect(files.write('../escape', 'x')).rejects.toThrow(
+                'Invalid credential path'
+            );
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('fails smoke on a missing in-image tool before spawning a runner', async () => {
         const fixture = await createFixture({
             image: 'ghcr.io/example/lux:0.1.0',

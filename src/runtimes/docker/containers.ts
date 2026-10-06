@@ -30,6 +30,11 @@ export class DockerManagedContainers {
         ];
     }
 
+    /** Marks a short-lived `--rm` helper container as Workbench-made. Helpers carry no run. */
+    static helperLabels(): string[] {
+        return ['--label', `${managedLabel}=true`];
+    }
+
     static async connect(
         scope: string,
         dependencies: DockerClientDependencies = {}

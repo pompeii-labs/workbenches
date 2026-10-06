@@ -1,8 +1,18 @@
+import type { RuntimeCredentialFiles } from '../contracts.js';
 import type { DockerClient } from './client.js';
+import { DockerManagedContainers } from './containers.js';
 import type { DockerUser } from './contracts.js';
 import { dockerCredentialVolume } from './identity.js';
 
-export class DockerCredentialVolume {
+const credentialRoot = '/workbench-credentials';
+
+/**
+ * The per-runner named volume that holds native credentials for Docker runs.
+ * Reads and writes go through a short-lived helper container from the
+ * Workbench image with no network and a read-only root; file contents travel
+ * on standard input and output, never in argv or environment.
+ */
+export class DockerCredentialVolume implements RuntimeCredentialFiles {
     readonly name: string;
 
     constructor(
@@ -48,17 +58,77 @@ export class DockerCredentialVolume {
         );
     }
 
+    async read(path: string): Promise<string | undefined> {
+        const result = await this.client.run(
+            this.helper(false, 'if [ -f "$1" ]; then cat "$1"; fi', path)
+        );
+        if (result.code !== 0) {
+            // stdout may hold credential bytes, so only stderr explains a failure.
+            const detail = result.stderr.trim().split(/\r?\n/)[0];
+            throw new Error(
+                `Failed to read ${path} from ${this.name}${detail ? `: ${detail.slice(0, 500)}` : ''}`
+            );
+        }
+        return result.stdout ? result.stdout : undefined;
+    }
+
+    async write(path: string, contents: string): Promise<void> {
+        await this.client.require(
+            this.helper(
+                true,
+                [
+                    'set -e',
+                    'umask 077',
+                    'mkdir -p "$(dirname "$1")"',
+                    'cat > "$1.tmp"',
+                    'chmod 600 "$1.tmp"',
+                    'mv -f "$1.tmp" "$1"',
+                ].join('\n'),
+                path
+            ),
+            `Failed to write ${path} to ${this.name}`,
+            { input: contents }
+        );
+    }
+
     mountArguments(): string[] {
-        return ['--volume', `${this.name}:/workbench-credentials`];
+        return ['--volume', `${this.name}:${credentialRoot}`];
     }
 
     environment(): Record<string, string | undefined> {
         if (this.runner === 'opencode') {
-            return { XDG_DATA_HOME: '/workbench-credentials' };
+            return { XDG_DATA_HOME: credentialRoot };
         }
         if (this.runner === 'pi') {
-            return { WORKBENCH_CREDENTIALS_DIR: '/workbench-credentials' };
+            return { WORKBENCH_CREDENTIALS_DIR: credentialRoot };
         }
         return {};
+    }
+
+    private helper(input: boolean, script: string, path: string): string[] {
+        if (!/^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*)*$/.test(path)) {
+            throw new Error(`Invalid credential path: ${path}`);
+        }
+        return [
+            this.client.executable,
+            'run',
+            '--rm',
+            ...(input ? ['--interactive'] : []),
+            ...DockerManagedContainers.helperLabels(),
+            '--network',
+            'none',
+            '--read-only',
+            '--tmpfs',
+            '/tmp:rw,nosuid,nodev,mode=1777',
+            ...(this.user ? ['--user', `${this.user.uid}:${this.user.gid}`] : []),
+            ...this.mountArguments(),
+            '--entrypoint',
+            '/bin/sh',
+            this.image,
+            '-c',
+            script,
+            'workbench-credentials',
+            `${credentialRoot}/${path}`,
+        ];
     }
 }
