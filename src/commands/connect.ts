@@ -60,7 +60,7 @@ export const connectCommand = defineCommand({
         yes: {
             type: 'boolean',
             description:
-                'Copy your local runner credential for the provider into the runtime without asking',
+                "Copy your local runner's API key for the provider into the runtime without asking",
             default: false,
         },
         status: {

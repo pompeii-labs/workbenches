@@ -279,7 +279,7 @@ The model-provider path saves the preferred route for that runner and runtime, p
 | `e2b` | `~/.workbench/runtime-credentials/e2b/<runner>/`, synced into each sandbox | Written on the host, files `0600` in `0700` directories | The entry exists on the host; no sandbox is created, so the first run confirms it |
 | `daytona` | None; Daytona runs read provider variables only | It does not; set the provider variable or pass `--env-file` | The provider variable is set |
 
-A provider variable already in the environment counts as ready on every runtime, because it takes precedence for a run. The credential comes from, in order: a key piped with `--stdin`; your local runner sign-in for that provider, which the terminal offers to copy (`Use your local OpenRouter credential in Docker? [Y/n]`) and automation copies only with `--yes`; a fresh `opencode auth login` against a private temporary data home for subscription and sign-in methods, so your own sign-in is never touched; or a masked API-key prompt. Only the selected provider's entry is copied, merged into the store beside existing entries. Credential values are never printed, logged, passed in argv, or placed in a child process environment.
+A provider variable already in the environment counts as ready on every runtime, because it takes precedence for a run. The credential comes from, in order: a key piped with `--stdin`; an API key your local runner already has for that provider, which the terminal offers to copy (`Use your local OpenRouter API key in Docker? [Y/n]`) and automation copies only with `--yes`; a fresh `opencode auth login` against a private temporary data home for subscription and sign-in methods; or a masked API-key prompt. A subscription sign-in is never copied from your own login, because providers rotate its refresh token and a copy could sign out the original. Only the selected provider's entry is written, merged into the store beside existing entries. Credential values are never printed, logged, passed in argv, or placed in a child process environment.
 
 ```sh
 wb connect launch-video --runtime docker
@@ -288,7 +288,7 @@ wb connect --runtime e2b --harness opencode --provider openrouter --yes
 wb connect --runtime e2b --harness opencode --provider openrouter --remove
 ```
 
-`--remove` with `--provider` deletes that provider's entry from that runtime's store and keeps the others. Docker writes and checks go through a Workbench image, so Docker needs a Workbench reference. Pi has no command-line sign-in: Pi API keys use Pi's documented `auth.json` format, and a Pi subscription must first be signed in with `pi` (`/login`) on this machine and then copied. Inherited provider variables and `--env-file` still take effect for a run, so a key passed with `--env-file` works for one run without connecting.
+`--remove` with `--provider` deletes that provider's entry from that runtime's store and keeps the others. Docker writes and checks go through a Workbench image, so Docker needs a Workbench reference. Pi API keys use Pi's documented `auth.json` format. Pi has no command-line sign-in, so a Pi subscription cannot be connected for another runtime; use an API-key method there. Inherited provider variables and `--env-file` still take effect for a run, so a key passed with `--env-file` works for one run without connecting. Pi is the exception to that precedence: as Pi documents, an entry in its `auth.json` wins over the provider variable.
 
 The E2B runtime-provider path saves its host-only API key once, without starting a sandbox or incurring E2B usage:
 

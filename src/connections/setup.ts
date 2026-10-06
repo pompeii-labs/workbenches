@@ -81,6 +81,18 @@ export class ConnectionSetup {
             : undefined;
     }
 
+    /**
+     * The host's API key for the target, the only kind of entry that may be
+     * copied. Providers rotate subscription refresh tokens, so a copied
+     * sign-in could invalidate the original; those get a fresh sign-in.
+     */
+    async hostApiKey(): Promise<NativeCredentialEntry | undefined> {
+        if (this.#options.target.method.authenticationMethod === 'oauth')
+            return undefined;
+        const entry = await this.hostEntry();
+        return entry && this.file.serves(entry, 'api') ? entry : undefined;
+    }
+
     /** Writes `entry` into the store the target runtime reads, then checks readiness. */
     async save(entry: NativeCredentialEntry): Promise<ConnectionReadiness> {
         const provider = this.#options.target.method.nativeProvider;
