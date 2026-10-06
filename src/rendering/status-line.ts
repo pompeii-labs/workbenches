@@ -6,7 +6,7 @@ import { sanitizeTerminalText } from './terminal-text.js';
 export interface StatusLineOptions {
     /** Wall clock in ms; the liveness glyph advances one frame per second. */
     now: number;
-    /** Typical tool calls per todo for the step bar. */
+    /** Typical tool calls per todo; past it the line shows the count. */
     typicalStep: number;
     color: boolean;
 }
@@ -22,7 +22,7 @@ const SHADES = [208, 214, 215, 214];
 
 /**
  * One status line for a run: liveness glyph, workbench, plan bar with the
- * current item, step bar, elapsed time, and cost. A run waiting on input or
+ * current item, a long-step warning, elapsed time, and cost. A run waiting on input or
  * finished renders as that instead. Agent-supplied text is sanitized: plan
  * items and tool titles must not drive the terminal.
  */
@@ -66,30 +66,25 @@ export function renderStatusLine(run: RunStatus, options: StatusLineOptions): st
     return `${c.red('✕')} ${name} ${c.dim(`${run.status} ${ago} ago ·`)} ${cost}`;
 }
 
-/** ▰▰▰▱▱ 3/5 ▮▮▯▯▯▯ 7/16 · current item */
+/** ▰▰▰▱▱ 3/5 · current item, plus the step count once a todo runs long. */
 function planBar(run: RunStatus, typicalStep: number, c: Palette): string | undefined {
     const plan = run.plan;
     if (!plan || plan.total <= 0) return undefined;
     const cells = Math.min(plan.total, 10);
     const filled = Math.round((plan.completed / plan.total) * cells);
     const bar = `${c.orange('▰'.repeat(filled))}${c.dim('▱'.repeat(cells - filled))} ${plan.completed}/${plan.total}`;
-    const step =
-        run.steps.item === null ? '' : ` ${stepBar(run.steps.current, typicalStep, c)}`;
     const current = plan.items.find((item) => item.status === 'in_progress')?.text;
-    return `${bar}${step}${current ? ` ${c.dim('·')} ${clean(current, 48)}` : ''}`;
+    const item = current ? ` ${c.dim('·')} ${clean(current, 36)}` : '';
+    return `${bar}${item}${overrun(run, typicalStep, c)}`;
 }
 
 /**
- * Tool calls on the current todo against a typical todo: the fast bar under
- * the plan's slow one. Past typical it fills orange and keeps counting, which
- * also exposes a todo list the agent stopped updating.
+ * Tool calls on the current todo, shown only once they pass a typical todo:
+ * a step that runs long, or a todo list the agent stopped updating.
  */
-function stepBar(current: number, typical: number, c: Palette): string {
-    const cells = 6;
-    if (current > typical)
-        return c.orange(`${'▮'.repeat(cells)} ${current}/${typical}`);
-    const filled = Math.round((current / typical) * cells);
-    return `${'▮'.repeat(filled)}${c.dim(`${'▯'.repeat(cells - filled)} ${current}/${typical}`)}`;
+function overrun(run: RunStatus, typical: number, c: Palette): string {
+    if (run.steps.item === null || run.steps.current <= typical) return '';
+    return ` ${c.dim('·')} ${c.orange(`${run.steps.current} calls`)}`;
 }
 
 function activity(run: RunStatus, now: number): string {

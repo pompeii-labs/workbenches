@@ -557,7 +557,7 @@ Attaching observes or replays the latest run without taking control or starting 
 
 Resuming with a task sends one non-interactive continuation through the same session. It joins an active run's follow-up queue or starts a linked internal run when the previous one is closed. `--detach` returns the stable session ID while that continuation runs in the background. Killing cooperatively terminates the active run without deleting the session or its resumable context.
 
-`wb status` shows live progress for every active run on the machine, plus runs that finished in the last 10 minutes: a plan bar from the agent's todo list (`plan.updated`), a step bar of tool calls on the current todo against a typical todo, elapsed time, and cost. A run waiting on input shows that first, with its `wb answer` command. The step bar's "typical" is the run's own median once three todos have finished, otherwise the median over the Workbench's finished runs. Past typical it turns orange and keeps counting, which also shows a todo list the agent stopped updating.
+`wb status` shows live progress for every active run on the machine, plus runs that finished in the last 10 minutes: a plan bar from the agent's todo list (`plan.updated`) with the current todo, elapsed time, and cost. A run waiting on input shows that first, with its `wb answer` command. When the current todo passes a typical todo's tool calls, the line adds the count in orange, which also shows a todo list the agent stopped updating. "Typical" is the run's own median once three todos have finished, otherwise the median over the Workbench's finished runs.
 
 ```sh
 wb status              # one line per run

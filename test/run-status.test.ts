@@ -159,16 +159,16 @@ describe('status line', () => {
     };
     const now = Date.parse('2026-10-05T00:10:00.000Z');
 
-    test('shows the plan bar, an overflowing step bar, elapsed time, and cost', () => {
+    test('shows the plan bar, a long step, elapsed time, and cost', () => {
         expect(renderStatusLine(base, { now, typicalStep: 16, color: false })).toBe(
-            '□ threejs-game ▰▱ 1/2 ▮▮▮▮▮▮ 20/16 · Skill tree · 10m · $3.50'
+            '□ threejs-game ▰▱ 1/2 · Skill tree · 20 calls · 10m · $3.50'
         );
         expect(
             renderStatusLine(
                 { ...base, steps: { ...base.steps, current: 8 } },
                 { now, typicalStep: 16, color: false }
             )
-        ).toContain('▮▮▮▯▯▯ 8/16');
+        ).toBe('□ threejs-game ▰▱ 1/2 · Skill tree · 10m · $3.50');
     });
 
     test('puts open input first and names the answer command', () => {
