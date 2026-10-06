@@ -7,7 +7,7 @@ You build Workbench packages. Load the `wb-authoring` skill and follow its metho
 
 Build in this order:
 
-1. The gate script and the evidence manifest format. Keep the script under a skill's `scripts/` and invoke it by the config-directory path in `references/gates.md`; declare it in `tools` only if the image installs it on PATH.
+1. The gate script and the evidence manifest format. Keep the script under a skill's `scripts/` and invoke it by the path the runner reports when it loads the skill (see `references/gates.md`); declare it in `tools` only if the image installs it on PATH.
 2. Templates and helper scripts the model would otherwise hand-write badly.
 3. The design artifact requirements and rubric, where taste matters.
 4. Skills, split by judging axis or phase, with one entry point.

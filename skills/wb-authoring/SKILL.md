@@ -34,7 +34,7 @@ Then name the three to five axes the result is judged on, in words a skeptical e
 
 ### 3. Build the gate before the prose
 
-Write the script that decides whether the work is done. Ship it in a skill's `scripts/` directory and invoke it by its path under the runner's config directory (a package script is not on PATH; the exact variable is in [references/gates.md](references/gates.md)), or install it on PATH in the image and declare it in `tools`. It builds the result, runs it, captures evidence (test results, screenshots, metrics, logs), checks that evidence against what the work planned, writes a JSON summary, and exits non-zero on any failure. Exit 0 becomes the only definition of done in the instructions.
+Write the script that decides whether the work is done. Ship it in a skill's `scripts/` directory and invoke it by the path the runner reports when it loads the skill (a package script is not on PATH; see [references/gates.md](references/gates.md)), or install it on PATH in the image and declare it in `tools`. It builds the result, runs it, captures evidence (test results, screenshots, metrics, logs), checks that evidence against what the work planned, writes a JSON summary, and exits non-zero on any failure. Exit 0 becomes the only definition of done in the instructions.
 
 The gate must not be fakeable. Drive it from a manifest the work declares up front, so a failing item cannot quietly disappear. Number its runs so history cannot be edited. Then name the cheats explicitly in the instructions: "never drop a failing capture", "do not delete a planned state to pass the gate", "test hooks implement real states, never fake an acknowledgment".
 
