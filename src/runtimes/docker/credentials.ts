@@ -39,6 +39,10 @@ export class DockerCredentialVolume implements RuntimeCredentialFiles {
                 this.client.executable,
                 'run',
                 '--rm',
+                ...DockerManagedContainers.helperLabels(),
+                // Only root can chown, whatever user the image runs as by default.
+                '--user',
+                '0:0',
                 '--network',
                 'none',
                 '--read-only',
