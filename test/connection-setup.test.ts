@@ -62,21 +62,16 @@ describe('native credential files', () => {
         });
     });
 
-    test('uses each runner documented format and location', async () => {
+    test('uses each runner documented format', async () => {
         const pi = NativeCredentialFile.for('pi');
         expect(pi.path).toBe('auth.json');
         expect(pi.apiKey('fixture').value).toEqual({ type: 'api_key', key: 'fixture' });
-        expect(pi.host({ HOME: '/home/user' })?.directory).toBe('/home/user/.pi/agent');
-        expect(
-            pi.host({ HOME: '/home/user', PI_CODING_AGENT_DIR: '/pi' })?.directory
-        ).toBe('/pi');
         const openCode = NativeCredentialFile.for('opencode');
-        expect(openCode.host({ HOME: '/home/user' })?.directory).toBe(
-            '/home/user/.local/share'
-        );
-        expect(
-            openCode.host({ HOME: '/home/user', XDG_DATA_HOME: '/data' })?.directory
-        ).toBe('/data');
+        expect(openCode.path).toBe('opencode/auth.json');
+        expect(openCode.apiKey('fixture').value).toEqual({
+            type: 'api',
+            key: 'fixture',
+        });
         expect(() => openCode.apiKey('  ')).toThrow('The API key is empty');
         expect(openCode.serves({ type: 'oauth', value: {} }, 'api')).toBeFalse();
         expect(openCode.serves({ type: 'oauth', value: {} }, 'native')).toBeTrue();
@@ -291,7 +286,7 @@ describe('model connection', () => {
         });
 
         const failure = await connection
-            .connect({ stdin: false, yes: false })
+            .connect({ stdin: false })
             .catch((error: unknown) => error);
         expect(failure).toBeInstanceOf(AuthenticationRequiredError);
         expect((failure as AuthenticationRequiredError).exitCode).toBe(3);
@@ -304,10 +299,7 @@ describe('model connection', () => {
 
     test('rejects flags that would do nothing, before reading or writing', async () => {
         const home = await temporary('workbench-connection-flags-');
-        const connect = (
-            connectionTarget: ConnectionTarget,
-            flags: { stdin: boolean; yes: boolean }
-        ) =>
+        const connect = (connectionTarget: ConnectionTarget) =>
             new ModelConnection({
                 home,
                 target: connectionTarget,
@@ -317,23 +309,40 @@ describe('model connection', () => {
                 readKey: async () => {
                     throw new Error('stdin must not be read');
                 },
-            }).connect(flags);
+            }).connect({ stdin: true });
 
-        await expect(
-            connect(target('local'), { stdin: false, yes: true })
-        ).rejects.toThrow('Workbench neither writes nor removes it');
-        await expect(
-            connect(target('daytona'), { stdin: true, yes: false })
-        ).rejects.toThrow('Daytona has no runner credential store');
-        await expect(
-            connect(chatgpt('e2b'), { stdin: false, yes: true })
-        ).rejects.toThrow(
-            '--yes copies a local API key, but ChatGPT subscription (headless) always signs in fresh'
+        await expect(connect(target('local'))).rejects.toThrow(
+            'Workbench neither writes nor removes it'
         );
-        await expect(
-            connect(target('e2b'), { stdin: true, yes: true })
-        ).rejects.toThrow('cannot be combined with --stdin');
+        await expect(connect(target('daytona'))).rejects.toThrow(
+            'Daytona has no runner credential store'
+        );
+        await expect(connect(chatgpt('e2b'))).rejects.toThrow(
+            '--stdin reads an API key, but ChatGPT subscription (headless) is a sign-in'
+        );
         expect(await readdir(home)).toEqual([]);
+    });
+
+    test('asks for a pasted key, never a sign-in, for a method that is not a subscription', async () => {
+        const home = await temporary('workbench-connection-paste-');
+        const failure = await new ModelConnection({
+            home,
+            target: target('e2b'),
+            output: presenter([]),
+            environment: {},
+            interactive: false,
+            signIn: {
+                available: () => true,
+                run: () => Promise.reject(new Error('a key method must not sign in')),
+            },
+        })
+            .connect({ stdin: false })
+            .catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(AuthenticationRequiredError);
+        expect((failure as Error).message).toContain(
+            'Pass the OpenRouter API key on standard input'
+        );
     });
 
     test('rejects a piped value that is not a bare key', async () => {
@@ -346,7 +355,7 @@ describe('model connection', () => {
                 environment: {},
                 interactive: false,
                 readKey: async () => value,
-            }).connect({ stdin: true, yes: false });
+            }).connect({ stdin: true });
 
         await expect(connect('OPENROUTER_API_KEY=fixture\n')).rejects.toThrow(
             'not an env-file line'
@@ -377,10 +386,10 @@ describe('model connection', () => {
                 ...(key ? { readKey: async () => key } : {}),
             });
 
-        await connection(target('e2b'), 'fixture').connect({ stdin: true, yes: false });
+        await connection(target('e2b'), 'fixture').connect({ stdin: true });
         expect((await store.find(context))?.provider).toBe('openrouter');
         await expect(
-            connection(chatgpt('e2b')).connect({ stdin: false, yes: false })
+            connection(chatgpt('e2b')).connect({ stdin: false })
         ).rejects.toBeInstanceOf(AuthenticationRequiredError);
         expect((await store.find(context))?.provider).toBe('openrouter');
 
@@ -400,7 +409,7 @@ describe('model connection', () => {
             environment: {},
             interactive: false,
             readKey: async () => 'fixture-stdin-key\n',
-        }).connect({ stdin: true, yes: false });
+        }).connect({ stdin: true });
 
         expect(lines).toEqual(['saved\te2b\topencode\topenrouter\n']);
         expect(
@@ -424,19 +433,10 @@ describe('model connection', () => {
         const home = await temporary('workbench-connection-ready-');
         const lines: string[] = [];
         const volume = new MemoryFiles();
-        const user = await temporary('workbench-user-');
-        await mkdir(join(user, '.local', 'share', 'opencode'), { recursive: true });
-        await writeFile(
-            join(user, '.local', 'share', 'opencode', 'auth.json'),
-            JSON.stringify({
-                openrouter: { type: 'api', key: 'fixture-host' },
-                openai: { type: 'oauth', refresh: 'fixture-refresh' },
-            })
-        );
         const setup = new ConnectionSetup({
             home,
             target: target('docker'),
-            environment: { HOME: user },
+            environment: {},
             workbench: workbench(),
             check: () => ({
                 open: (work) => work(runtime(volume), unusedRunner()),
@@ -451,32 +451,22 @@ describe('model connection', () => {
             target: target('docker'),
             workbench: workbench(),
             output: presenter(lines),
-            environment: { HOME: user },
+            environment: {},
             interactive: false,
+            readKey: async () => 'fixture-pasted\n',
             setup,
-        }).connect({ stdin: false, yes: true });
+        }).connect({ stdin: true });
 
         expect(lines).toEqual(['ready\tdocker\topencode\topenrouter\n']);
         expect(JSON.parse(volume.get('opencode/auth.json'))).toEqual({
-            openrouter: { type: 'api', key: 'fixture-host' },
+            openrouter: { type: 'api', key: 'fixture-pasted' },
         });
     });
 
-    test('signs in fresh for a subscription instead of copying the host sign-in', async () => {
+    test('signs in fresh for a subscription into a private directory', async () => {
         const home = await temporary('workbench-connection-fresh-');
         const user = await temporary('workbench-user-');
-        await mkdir(join(user, '.local', 'share', 'opencode'), { recursive: true });
-        await writeFile(
-            join(user, '.local', 'share', 'opencode', 'auth.json'),
-            JSON.stringify({ openai: { type: 'oauth', refresh: 'fixture-host' } })
-        );
         const subscription = chatgpt('e2b');
-        const setup = new ConnectionSetup({
-            home,
-            target: subscription,
-            environment: { HOME: user },
-        });
-        expect(await setup.hostApiKey()).toBeUndefined();
         const signIns: string[] = [];
         const lines: string[] = [];
         await new ModelConnection({
@@ -495,7 +485,7 @@ describe('model connection', () => {
                     };
                 },
             },
-        }).connect({ stdin: false, yes: false });
+        }).connect({ stdin: false });
 
         expect(signIns).toEqual(['chatgpt']);
         expect(lines).toEqual(['saved\te2b\topencode\topenai\n']);
@@ -516,16 +506,9 @@ describe('model connection', () => {
         ).toEqual({ openai: { type: 'oauth', refresh: 'fixture-fresh' } });
     });
 
-    test('offers Pi subscriptions an API key instead of copying a sign-in', async () => {
+    test('offers Pi subscriptions an API key, since Pi has no command-line sign-in', async () => {
         const home = await temporary('workbench-connection-pi-');
         const user = await temporary('workbench-user-');
-        await mkdir(join(user, '.pi', 'agent'), { recursive: true });
-        await writeFile(
-            join(user, '.pi', 'agent', 'auth.json'),
-            JSON.stringify({
-                'openai-codex': { type: 'oauth', refresh: 'fixture-host' },
-            })
-        );
         const target = {
             ...chatgpt('e2b'),
             harness: 'pi' as const,
@@ -543,12 +526,12 @@ describe('model connection', () => {
             environment: { HOME: user },
             interactive: false,
         })
-            .connect({ stdin: false, yes: false })
+            .connect({ stdin: false })
             .catch((error: unknown) => error);
 
         expect(failure).toBeInstanceOf(AuthenticationRequiredError);
         expect((failure as Error).message).toContain(
-            'Pi has no command-line sign-in, and a copied subscription sign-in could invalidate yours. Use an API key instead: wb connect --runtime e2b --harness pi --provider openai --method api-key --stdin'
+            'Pi has no command-line sign-in, so a Pi subscription cannot be connected here. Use an API key instead: wb connect --runtime e2b --harness pi --provider openai --method api-key --stdin'
         );
         await expect(stat(join(home, 'runtime-credentials'))).rejects.toThrow();
     });
