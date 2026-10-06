@@ -3,7 +3,10 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { NativeCredentialFile } from '../src/connections/nativecredentials.js';
 import { InteractiveRun, RunStore, type WorkbenchEvent } from '../src/runs/index.js';
+import { DockerClient } from '../src/runtimes/docker/client.js';
+import { DockerCredentialVolume } from '../src/runtimes/docker/credentials.js';
 import {
     DockerManagedContainers,
     DockerRuntimeProvider,
@@ -136,6 +139,78 @@ describe('Docker runtime end-to-end', () => {
                     stderr: 'ignore',
                 }).exited;
             }
+        },
+        120_000
+    );
+
+    dockerTest(
+        'merges and removes a provider entry in a throwaway credential volume',
+        async () => {
+            const executable = Bun.which('docker');
+            if (!executable) throw new Error('Docker is unavailable');
+            const client = new DockerClient(executable, {}, []);
+            // A per-test runner name keeps every real runner volume untouched.
+            const runner = `connect-e2e-${crypto.randomUUID().slice(0, 8)}`;
+            const volume = new DockerCredentialVolume(
+                client,
+                'alpine:3.22',
+                runner,
+                client.user
+            );
+            const file = NativeCredentialFile.for('opencode');
+            try {
+                await volume.prepare();
+                await file.save(volume, 'anthropic', file.apiKey('fixture-anthropic'));
+                await file.save(
+                    volume,
+                    'openrouter',
+                    file.apiKey('fixture-openrouter')
+                );
+                expect(JSON.parse((await volume.read(file.path)) ?? '')).toEqual({
+                    anthropic: { type: 'api', key: 'fixture-anthropic' },
+                    openrouter: { type: 'api', key: 'fixture-openrouter' },
+                });
+                const mode = await client.run([
+                    executable,
+                    'run',
+                    '--rm',
+                    ...DockerManagedContainers.helperLabels(),
+                    '--network',
+                    'none',
+                    ...volume.mountArguments(),
+                    'alpine:3.22',
+                    'stat',
+                    '-c',
+                    '%a',
+                    `/workbench-credentials/${file.path}`,
+                ]);
+                expect(mode.stdout.trim()).toBe('600');
+                expect(await file.remove(volume, 'openrouter')).toBeTrue();
+                expect(JSON.parse((await volume.read(file.path)) ?? '')).toEqual({
+                    anthropic: { type: 'api', key: 'fixture-anthropic' },
+                });
+            } finally {
+                await client.run([executable, 'volume', 'rm', '--force', volume.name]);
+            }
+            const remaining = await client.run([
+                executable,
+                'volume',
+                'ls',
+                '--quiet',
+                '--filter',
+                `name=${volume.name}`,
+            ]);
+            expect(remaining.stdout.trim()).toBe('');
+            const helpers = await client.run([
+                executable,
+                'container',
+                'ls',
+                '--all',
+                '--quiet',
+                '--filter',
+                `volume=${volume.name}`,
+            ]);
+            expect(helpers.stdout.trim()).toBe('');
         },
         120_000
     );

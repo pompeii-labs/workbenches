@@ -18,6 +18,8 @@ export interface DockerCommandResult {
 export interface DockerProcessOptions {
     cwd?: string;
     env?: Record<string, string | undefined>;
+    /** Written to standard input, so the content never appears in argv. */
+    input?: string;
 }
 
 export interface DockerSpawnOptions extends DockerProcessOptions {
