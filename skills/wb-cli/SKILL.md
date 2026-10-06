@@ -20,7 +20,7 @@ If that fails, install it. macOS and Linux on arm64 or x64; no Windows.
 curl -fsSL https://workbenches.dev/install.sh | sh
 ```
 
-The installer verifies a SHA-256 checksum, writes `workbench` and a `wb` symlink to `$XDG_BIN_HOME` when set, else `~/.local/bin` (override with `--bin-dir` or `WORKBENCH_INSTALL_DIR`; flags through a pipe need `sh -s -- --bin-dir DIR`), never uses `sudo`, and never edits shell startup files. If it warns that the directory is not on `PATH`, tell the person which line to add to their shell profile instead of editing it yourself. In a sensitive environment, download and read `install.sh` before running it.
+The installer verifies a SHA-256 checksum, writes `workbench` and a `wb` symlink to `$XDG_BIN_HOME` when set, else `~/.local/bin` (override with `--bin-dir` or `WORKBENCH_INSTALL_DIR`; flags through a pipe need `sh -s -- --bin-dir DIR`), never uses `sudo`, and never edits shell startup files. `~/.local/bin` is often not on `PATH`. For the current shell run `export PATH="$HOME/.local/bin:$PATH"`. To make it permanent, tell the person to add that line to their shell profile (`~/.zshrc` or `~/.bashrc`) instead of editing it yourself. In a sensitive environment, download and read `install.sh` before running it.
 
 The default installs the newest stable release; `--version` pins any version, prereleases included.
 
@@ -32,8 +32,10 @@ The CLI reports anonymous save and run counts, but only for registry Workbenches
 
 `wb` does not ship a model harness. Every Workbench names a runner, and the runner must be installed where the run happens: on the host for the `local` runtime, inside the image for `docker`, `e2b`, and `daytona`.
 
-- `opencode`: `npm install -g opencode-ai` (or the official installer).
-- `pi`: `npm install -g @earendil-works/pi-coding-agent`.
+- `opencode`: as root, `npm install -g opencode-ai`. As a non-root user that fails on the global prefix; use the official installer, `curl -fsSL https://opencode.ai/install | bash`, which installs to `~/.opencode/bin`, or `npm install -g --prefix ~/.local opencode-ai`, which installs to `~/.local/bin`.
+- `pi`: `npm install -g @earendil-works/pi-coding-agent` (as non-root, add `--prefix ~/.local`).
+
+`wb` finds the runner by looking up its name on `PATH`, so a non-root install must put its bin directory on `PATH` (`export PATH="$HOME/.opencode/bin:$PATH"`, plus a profile line to keep it).
 
 Missing runner on the host: `Runner CLI is unavailable: opencode. Install opencode and rerun this command.` Missing tool: `Required CLI tool is unavailable: <tool>`.
 
