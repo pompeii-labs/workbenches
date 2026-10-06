@@ -278,6 +278,98 @@ describe('model connection', () => {
             openrouter: { type: 'api', key: 'fixture-host' },
         });
     });
+
+    test('signs in fresh for a subscription instead of copying the host sign-in', async () => {
+        const home = await temporary('workbench-connection-fresh-');
+        const user = await temporary('workbench-user-');
+        await mkdir(join(user, '.local', 'share', 'opencode'), { recursive: true });
+        await writeFile(
+            join(user, '.local', 'share', 'opencode', 'auth.json'),
+            JSON.stringify({ openai: { type: 'oauth', refresh: 'fixture-host' } })
+        );
+        const subscription = chatgpt('e2b');
+        const setup = new ConnectionSetup({
+            home,
+            target: subscription,
+            environment: { HOME: user },
+        });
+        expect(await setup.hostEntry()).toBeDefined();
+        expect(await setup.hostApiKey()).toBeUndefined();
+        const signIns: string[] = [];
+        const lines: string[] = [];
+        await new ModelConnection({
+            home,
+            target: subscription,
+            output: presenter(lines),
+            environment: { HOME: user },
+            interactive: true,
+            signIn: {
+                available: () => true,
+                run: async (target) => {
+                    signIns.push(target.method.id);
+                    return {
+                        type: 'oauth',
+                        value: { type: 'oauth', refresh: 'fixture-fresh' },
+                    };
+                },
+            },
+        }).connect({ stdin: false, yes: true });
+
+        expect(signIns).toEqual(['chatgpt']);
+        expect(lines).toEqual(['saved\te2b\topencode\topenai\n']);
+        expect(
+            JSON.parse(
+                await readFile(
+                    join(
+                        home,
+                        'runtime-credentials',
+                        'e2b',
+                        'opencode',
+                        'opencode',
+                        'auth.json'
+                    ),
+                    'utf8'
+                )
+            )
+        ).toEqual({ openai: { type: 'oauth', refresh: 'fixture-fresh' } });
+    });
+
+    test('offers Pi subscriptions an API key instead of copying a sign-in', async () => {
+        const home = await temporary('workbench-connection-pi-');
+        const user = await temporary('workbench-user-');
+        await mkdir(join(user, '.pi', 'agent'), { recursive: true });
+        await writeFile(
+            join(user, '.pi', 'agent', 'auth.json'),
+            JSON.stringify({
+                'openai-codex': { type: 'oauth', refresh: 'fixture-host' },
+            })
+        );
+        const target = {
+            ...chatgpt('e2b'),
+            harness: 'pi' as const,
+            method: {
+                id: 'chatgpt',
+                label: 'ChatGPT subscription',
+                nativeProvider: 'openai-codex',
+                authenticationMethod: 'oauth' as const,
+            },
+        };
+        const failure = await new ModelConnection({
+            home,
+            target,
+            output: presenter([]),
+            environment: { HOME: user },
+            interactive: false,
+        })
+            .connect({ stdin: false, yes: true })
+            .catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(AuthenticationRequiredError);
+        expect((failure as Error).message).toContain(
+            'Pi has no command-line sign-in, and a copied subscription sign-in could invalidate yours. Use an API key instead: wb connect --runtime e2b --harness pi --provider openai --method api-key --stdin'
+        );
+        await expect(stat(join(home, 'runtime-credentials'))).rejects.toThrow();
+    });
 });
 
 describe('host sign-in', () => {
@@ -366,6 +458,21 @@ function target(runtime: ConnectionTarget['runtime']): ConnectionTarget {
             label: 'OpenRouter sign-in',
             nativeProvider: 'openrouter',
             authenticationMethod: 'native',
+        },
+    };
+}
+
+function chatgpt(runtime: ConnectionTarget['runtime']): ConnectionTarget {
+    return {
+        runtime,
+        harness: 'opencode',
+        provider: 'openai',
+        method: {
+            id: 'chatgpt',
+            label: 'ChatGPT subscription (headless)',
+            nativeProvider: 'openai',
+            nativeMethod: 'ChatGPT Pro/Plus (headless)',
+            authenticationMethod: 'oauth',
         },
     };
 }

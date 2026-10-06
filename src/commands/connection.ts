@@ -160,16 +160,17 @@ export class ModelConnection {
                 ),
             };
         }
-        const host = await this.#setup.hostEntry();
+        // Only an API key is offered for copying; sign-ins below are always fresh.
+        const host = await this.#setup.hostApiKey();
         if (host && flags.yes) return { entry: host };
         if (host && !this.#interactive) {
             return {
-                advice: `Copy your local ${this.#runner} ${this.#provider} credential with ${this.#command(['--yes'])}`,
+                advice: `Copy your local ${this.#runner} ${this.#provider} API key with ${this.#command(['--yes'])}`,
             };
         }
         if (host) {
             const reuse = await confirm({
-                message: `Use your local ${this.#provider} credential in ${this.#runtime}?`,
+                message: `Use your local ${this.#provider} API key in ${this.#runtime}?`,
                 initialValue: true,
             });
             if (typeof reuse === 'symbol')
@@ -226,11 +227,12 @@ export class ModelConnection {
         });
     }
 
-    /** OAuth with no host sign-in available: the one place that can still finish it. */
+    /** A subscription sign-in that cannot run here: where it can still finish. */
     #signInAdvice(): string {
         const { target, workbench } = this.#options;
         if (target.harness === 'pi') {
-            return `Pi has no command-line sign-in. Sign in with pi on this machine (/login), then run ${this.#command(['--yes'])}`;
+            // Copying the user's own Pi sign-in could invalidate it, so only a key remains.
+            return `Pi has no command-line sign-in, and a copied subscription sign-in could invalidate yours. Use an API key instead: ${this.#base()} --provider ${target.provider} --method api-key --stdin`;
         }
         return workbench
             ? `Run ${this.#command()} in a terminal with OpenCode installed, or start the Workbench interactively once with wb run ${workbench.reference} --runtime ${target.runtime}`

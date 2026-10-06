@@ -39,15 +39,15 @@ Runner credential stores, one per runtime:
 Where the credential comes from, in order:
 
 1. `--stdin`: an API key on standard input. The only unattended way to give a new key. Never put a key in argv.
-2. The person's own local runner sign-in for that provider. A terminal asks `Use your local <Provider> credential in <runtime>? [Y/n]`; unattended, it is copied only with `--yes`. Only that provider's entry is copied.
-3. A subscription or native sign-in: `opencode auth login` runs on the host against a private temporary directory. It needs a person at a terminal. Pi has no command-line sign-in: the person signs in with `pi` (`/login`) locally, then `wb connect ... --yes` copies it.
+2. An API key the person's own local runner already has for that provider. A terminal asks `Use your local <Provider> API key in <runtime>? [Y/n]`; unattended, it is copied only with `--yes`. Only that provider's entry is copied.
+3. A subscription or native sign-in: a fresh `opencode auth login` runs on the host against a private temporary directory. It needs a person at a terminal. An existing subscription sign-in is never copied, even with `--yes`: providers rotate its refresh token, so a copy could sign out the original. Pi has no command-line sign-in, so a Pi subscription cannot be connected for another runtime; use an API-key method.
 4. A masked API-key prompt in a terminal.
 
 The last line is `Ready: <Provider> for <Runner> in <runtime>` after the runner itself listed the credential, or `Saved: ...` for `e2b`, where checking would create a billable sandbox and the first run confirms it. Anything else exits 3 with the missing piece and the command that fixes it. Piped output is `ready`, `saved`, `removed`, or `absent`, then runtime, runner, and provider, tab separated.
 
 `wb connect --runtime e2b --harness opencode --provider openrouter --remove` removes that provider's entry from that store and keeps the others (`docker` needs the Workbench reference). Plain `wb connect --runtime e2b --remove` still removes the saved E2B key.
 
-An environment variable for the provider, or `--env-file`, always wins over a stored entry and works for one run without connecting.
+An environment variable for the provider, or `--env-file`, wins over a stored entry and works for one run without connecting. Pi is the exception: as Pi documents, an entry in its `auth.json` wins over the provider variable.
 
 ## Errors and fixes
 
@@ -56,7 +56,8 @@ An environment variable for the provider, or `--env-file`, always wins over a st
 | `No authenticated route is available for <model>. Run wb connect <ref> --runtime <runtime>, or pass the provider key for one run with --env-file.` | Run `wb view <ref>` to see allowed routes. Pass one provider's key with `--env-file` (or the environment of `wb`), or run the exact `wb connect` command shown, which fills that runtime's store. Exit code 3. |
 | `Connection X is not authenticated for <model> with <runner> in the <runtime> runtime. Run wb connect ...` | The `--connection` provider has no credential in this runtime. Drop the flag, supply that provider's key, or connect it for that runtime. |
 | `wb connect` exits 3 with `Pass the <Provider> API key on standard input: ...` | No key was given and no terminal is attached. Pipe the key with `--stdin`, or have the person run the command in a terminal. |
-| `wb connect` exits 3 with `Copy your local <Runner> <Provider> credential with ... --yes` | The person's own sign-in has that provider. Add `--yes` only if they agree to copy it into the runtime. |
+| `wb connect` exits 3 with `Copy your local <Runner> <Provider> API key with ... --yes` | The person's own runner has an API key for that provider. Add `--yes` only if they agree to copy it into the runtime. |
+| `wb connect` exits 3 with `... in a terminal with OpenCode installed` | A subscription needs a fresh sign-in. Hand the command to the person, or have them start the Workbench interactively once. |
 | `Docker keeps <Runner> credentials in a volume that is written and checked through a Workbench image` | Rerun with a Workbench reference: `wb connect <alias> --runtime docker`. |
 | `Daytona has no runner credential store...` | Set the provider variable where `wb` runs, or pass `--env-file` on each run. |
 | `Authentication is required for <provider>. Start this Workbench interactively once to finish <provider> sign-in.` | The saved default is an OAuth or native sign-in that has not finished. Run once without `--detach`, or switch to an API key. |
