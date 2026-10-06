@@ -265,16 +265,30 @@ The Workbench author selects the runner, model, allowed provider routes, and nat
 
 ```sh
 wb connect
-# Model provider → runtime → harness → provider → authentication method
+# Model provider → runtime → harness → provider → authentication method → credential
 # Or E2B or Daytona runtime → masked API-key prompt
 wb run project-core --task "Review this migration"
 ```
 
-The model-provider path is configuration-only. It does not launch a runner, start Docker, create an E2B sandbox, require an E2B key, contact a model provider, or ask for model credentials. The resulting default belongs to the runner and runtime, not a Workbench. Compatible Workbenches automatically reuse it. The same flow can be scripted explicitly:
+The model-provider path saves the preferred route for that runner and runtime, puts the provider credential into the store that runtime reads, and then checks it. It ends with `Ready: <Provider> for <Runner> in <runtime>`, or with exactly what is missing and the one command that fixes it, exiting 3. The default belongs to the runner and runtime, not a Workbench, and compatible Workbenches reuse it. Each runtime reads a different store:
+
+| Runtime | Credential store | How `wb connect` fills it | How it is checked |
+| --- | --- | --- | --- |
+| `local` | The runner's own sign-in on this machine | It does not; sign in with the runner (`opencode auth login`) or set the provider variable | The runner lists the provider, or the provider variable is set |
+| `docker` | A per-runner named volume mounted at `/workbench-credentials` | A short-lived helper container from the Workbench image, with no network and a read-only root, receives the file on standard input | The same inspection `wb smoke` runs, inside the container |
+| `e2b` | `~/.workbench/runtime-credentials/e2b/<runner>/`, synced into each sandbox | Written on the host, files `0600` in `0700` directories | The entry exists on the host; no sandbox is created, so the first run confirms it |
+| `daytona` | None; Daytona runs read provider variables only | It does not; set the provider variable or pass `--env-file` | The provider variable is set |
+
+A provider variable already in the environment counts as ready on every runtime, because it takes precedence for a run. The credential comes from, in order: a key piped with `--stdin`; your local runner sign-in for that provider, which the terminal offers to copy (`Use your local OpenRouter credential in Docker? [Y/n]`) and automation copies only with `--yes`; a fresh `opencode auth login` against a private temporary data home for subscription and sign-in methods, so your own sign-in is never touched; or a masked API-key prompt. Only the selected provider's entry is copied, merged into the store beside existing entries. Credential values are never printed, logged, passed in argv, or placed in a child process environment.
 
 ```sh
-wb connect --runtime e2b --harness opencode --provider openai --method chatgpt
+wb connect launch-video --runtime docker
+printf '%s' "$OPENROUTER_API_KEY" | wb connect --runtime e2b --harness opencode --provider openrouter --stdin
+wb connect --runtime e2b --harness opencode --provider openrouter --yes
+wb connect --runtime e2b --harness opencode --provider openrouter --remove
 ```
+
+`--remove` with `--provider` deletes that provider's entry from that runtime's store and keeps the others. Docker writes and checks go through a Workbench image, so Docker needs a Workbench reference. Pi has no command-line sign-in: Pi API keys use Pi's documented `auth.json` format, and a Pi subscription must first be signed in with `pi` (`/login`) on this machine and then copied. Inherited provider variables and `--env-file` still take effect for a run, so a key passed with `--env-file` works for one run without connecting.
 
 The E2B runtime-provider path saves its host-only API key once, without starting a sandbox or incurring E2B usage:
 
@@ -296,7 +310,7 @@ wb connect --runtime daytona --remove
 
 An inherited `DAYTONA_API_KEY` overrides the saved Daytona key for one process. Set `DAYTONA_API_URL` to use a Daytona API endpoint other than the public one. The key is never printed, is never passed to the sandbox, and is not accepted as a command-line value. Saving it creates no sandbox and incurs no Daytona usage.
 
-Passing a Workbench reference narrows the provider choices to routes allowed by that package; it still performs no runtime work.
+Passing a Workbench reference narrows the provider choices to routes allowed by that package and checks readiness with that Workbench's runner and runtime. `--runtime` selects one of its declared runtimes; `wb smoke` and run preflight name it in their connect hint, such as `wb connect launch-video --runtime docker`.
 
 `wb connect` records which compatible provider and authentication method should be preferred for that runner and runtime. A single run can select a different configured or authenticated connection without changing the default:
 
@@ -306,7 +320,7 @@ wb run project-core --connection openrouter --task "Review this migration"
 
 An override must match one of the provider routes allowed by the Workbench. Resolution order is the explicit `--connection` override, the runner/runtime default, then the first allowed authenticated route in manifest order. Connection defaults, including the selected authentication method, are stored in `~/.workbench/connections.json`. No login command is injected into a Workbench conversation, and no Workbench package or model is modified by selecting a default.
 
-If the selected OpenCode credential is missing, the first foreground or TUI run starts the real execution runtime, asks OpenCode for the configured browser or headless authorization flow, displays its URL and instructions, waits for completion, and then continues that same run. Detached execution refuses to start an invisible first-time login and directs the user to run interactively once. First-run Pi login and interactive API-key entry are not yet implemented; those routes must already be available through runner credentials or declared provider environment.
+If the selected OpenCode credential is missing, the first foreground or TUI run starts the real execution runtime, asks OpenCode for the configured browser or headless authorization flow, displays its URL and instructions, waits for completion, and then continues that same run. Detached execution refuses to start an invisible first-time login and directs the user to run interactively once. First-run Pi login and API-key entry during a run are not implemented; connect the key with `wb connect` or pass it with `--env-file`.
 
 The provider menu is the intersection of providers serving catalog models and the selected harness version's capability map; model availability alone never implies that a harness supports a provider. Versioned harness maps may be delivered with the verified model metadata, with an engine-bundled map for the pinned harness version as the offline and compatibility fallback. Runtime-specific constraints, such as browser versus headless authentication, remain enforced by the engine.
 
@@ -709,7 +723,7 @@ A source that cannot be resolved prints `error: <message>` on stderr with no JSO
 | 0 | Success. For `wait`: idle, `turn_completed`, or `completed` |
 | 1 | Failure |
 | 2 | `wait` only: the run needs input |
-| 3 | No authenticated model route or runtime credential. Any command can return it, including `run`, `resume`, `attach`, `send`, `smoke`, `build`, `create`, and `outcome --recover`. `wait` reports such a run as failed (1). |
+| 3 | No authenticated model route or runtime credential. Any command can return it, including `run`, `resume`, `attach`, `send`, `smoke`, `build`, `create`, `connect`, and `outcome --recover`. `wait` reports such a run as failed (1). |
 | 124 | `wait` only: timeout. The run is unchanged |
 | 130 | Cancelled or interrupted |
 
