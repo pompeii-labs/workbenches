@@ -5,6 +5,7 @@
 export { modelLabel } from './label.js';
 export {
     type AuthenticatedModelRoute,
+    connectAdvice,
     connectCommand,
     type ModelCatalogData,
     type ModelRoute,

@@ -273,8 +273,14 @@ export class ModelRouter {
     }
 }
 
-export function connectCommand(reference: string): string {
-    return `wb connect ${shellWord(reference)}`;
+/** The command that connects `reference`, naming any runtime other than local. */
+export function connectCommand(reference: string, runtime?: string): string {
+    return `wb connect ${shellWord(reference)}${runtime && runtime !== 'local' ? ` --runtime ${shellWord(runtime)}` : ''}`;
+}
+
+/** What to do when no route is authenticated: connect once, or bring a key for one run. */
+export function connectAdvice(command: string): string {
+    return `Run ${command}, or pass the provider key for one run with --env-file`;
 }
 
 function shellWord(value: string): string {

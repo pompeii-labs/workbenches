@@ -298,7 +298,8 @@ export class WorkbenchInspection {
         options: WorkbenchInspectionOptions
     ): WorkbenchView['runner_auth'] {
         const command = connectCommand(
-            options.reference ?? options.workbench.manifest.name
+            options.reference ?? options.workbench.manifest.name,
+            selectedRuntime(options.workbench).name
         );
         if (options.authentication === 'unavailable') {
             return { status: 'unavailable', connect_command: command };

@@ -1,6 +1,7 @@
 import { defineCommand } from 'citty';
 
 import { AuthenticationRequiredError } from '../connections/error.js';
+import { connectAdvice } from '../models/index.js';
 import { createEventRenderer } from '../rendering/index.js';
 import { parseRepository, RepositoryDeliveryStore } from '../repositories/index.js';
 import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
@@ -303,7 +304,7 @@ export const runCommand = defineCommand({
                     }).check();
                     if (!smoke.authentication.ready) {
                         throw new AuthenticationRequiredError(
-                            `No authenticated route is available for ${smoke.authentication.model}. Run ${smoke.authentication.connectCommand}.`
+                            `No authenticated route is available for ${smoke.authentication.model}. ${connectAdvice(smoke.authentication.connectCommand)}.`
                         );
                     }
                 }
