@@ -85,6 +85,18 @@ describe('run status', () => {
         expect((await new RunStatusReader(home).read(run)).status).toBe('lost');
     });
 
+    test('a terminal event outranks a stale running record', async () => {
+        const home = await temporaryHome();
+        const store = new RunStore(home);
+        const created = await fixtureRun(home);
+        const run = await store.update(created.id, {
+            status: 'running',
+            pid: 2 ** 22 + 7,
+        });
+        await store.appendEvent(run.id, event(run.id, 1, 'run.failed', {}));
+        expect((await new RunStatusReader(home).read(run)).status).toBe('failed');
+    });
+
     test('typical step is the median over finished runs of the same workbench', async () => {
         const home = await temporaryHome();
         const store = new RunStore(home);

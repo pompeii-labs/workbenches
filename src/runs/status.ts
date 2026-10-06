@@ -49,6 +49,8 @@ interface Fold {
     pending: Record<string, { id: string; kind: string; action?: string }>;
     plan: RunStatus['plan'];
     steps: RunStatus['steps'];
+    /** Set by a terminal run event; it outranks a stale `run.json`. */
+    terminal?: StoredRunStatus;
 }
 
 interface Cache {
@@ -86,11 +88,12 @@ export class RunStatusReader {
 
     async read(run: StoredRun): Promise<RunStatus> {
         const fold = await this.fold(run.id);
+        // A crashed worker can leave `run.json` active after the log ended.
+        const active = ACTIVE.has(run.status);
+        const gone = run.pid !== undefined && !processAlive(run.pid);
         const status =
-            ACTIVE.has(run.status) && run.pid !== undefined && !processAlive(run.pid)
-                ? 'lost'
-                : run.status;
-        const { open_tools: _tools, pending, ...rest } = fold;
+            (active && fold.terminal) || (active && gone ? 'lost' : run.status);
+        const { open_tools: _tools, pending, terminal: _terminal, ...rest } = fold;
         return {
             run_id: run.id,
             workbench: run.workbench,
@@ -233,6 +236,15 @@ function apply(fold: Fold, event: WorkbenchEvent): void {
             return;
         case 'turn.started':
             touch(fold, event, { kind: 'thinking' });
+            return;
+        case 'run.completed':
+            fold.terminal = 'completed';
+            return;
+        case 'run.failed':
+            fold.terminal = 'failed';
+            return;
+        case 'run.cancelled':
+            fold.terminal = 'cancelled';
             return;
         default:
             return;
