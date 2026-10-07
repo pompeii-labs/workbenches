@@ -1,10 +1,9 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { StoredRun, WorkbenchEvent } from '../runs/index.js';
 import { RunStore } from '../runs/index.js';
 import type { StoredSession } from '../sessions/index.js';
-import { SessionStore } from '../sessions/index.js';
 
 interface StoredTranscriptItem {
     id?: string;
@@ -31,14 +30,12 @@ export interface ImprovementEvidenceResult {
 }
 
 export class ImprovementEvidence {
-    readonly #sessions: SessionStore;
     readonly #runs: RunStore;
 
     constructor(
         readonly home: string,
         private readonly maximumCharacters = 48_000
     ) {
-        this.#sessions = new SessionStore(home);
         this.#runs = new RunStore(home);
     }
 
@@ -48,7 +45,7 @@ export class ImprovementEvidence {
         feedback: string;
     }): Promise<ImprovementEvidenceResult> {
         const runs = await this.sessionRuns(options.session.id);
-        const transcript = await this.transcript(options.session.id, runs);
+        const transcript = await this.runTranscript(runs);
         const body = this.document(
             options.session,
             runs,
@@ -65,38 +62,6 @@ export class ImprovementEvidence {
             transcriptItems: transcript.items.length,
             runs: runs.length,
         };
-    }
-
-    private async transcript(
-        sessionId: string,
-        runs: StoredRun[]
-    ): Promise<StoredTranscriptFile> {
-        const canonical = await this.runTranscript(runs);
-        const source = await readFile(
-            this.#sessions.transcriptPath(sessionId),
-            'utf8'
-        ).catch(() => undefined);
-        if (!source) return canonical;
-        let value: unknown;
-        try {
-            value = JSON.parse(source);
-        } catch {
-            return canonical;
-        }
-        if (!value || typeof value !== 'object' || Array.isArray(value)) {
-            return canonical;
-        }
-        const items = Reflect.get(value, 'items');
-        if (!Array.isArray(items)) return canonical;
-        const cached = {
-            version: 1,
-            items: items.filter(this.isItem),
-        } satisfies StoredTranscriptFile;
-        return canonical.items.some((item) => item.kind === 'user')
-            ? canonical
-            : cached.items.length > 0
-              ? cached
-              : canonical;
     }
 
     private async runTranscript(runs: StoredRun[]): Promise<StoredTranscriptFile> {
@@ -313,26 +278,6 @@ export class ImprovementEvidence {
         if (value.length <= maximum) return value;
         const suffix = '\n[truncated]';
         return `${value.slice(0, Math.max(0, maximum - suffix.length))}${suffix}`;
-    }
-
-    private isItem(value: unknown): value is StoredTranscriptItem {
-        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-        const kind = Reflect.get(value, 'kind');
-        if (!['user', 'assistant', 'tool', 'notice'].includes(String(kind))) {
-            return false;
-        }
-        return [
-            'text',
-            'name',
-            'title',
-            'target',
-            'description',
-            'error',
-            'status',
-        ].every((field) => {
-            const item = Reflect.get(value, field);
-            return item === undefined || typeof item === 'string';
-        });
     }
 
     private object(value: unknown): Record<string, unknown> {

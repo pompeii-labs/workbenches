@@ -7,12 +7,9 @@ import { parseRepository, RepositoryDeliveryStore } from '../repositories/index.
 import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
 import { RuntimeRegistry, RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
-import { assertWorkbenchTuiSupported, launchWorkbenchTui } from '../tui.js';
-import { workspaceEnvironment } from '../workbench/bindings.js';
 import {
     selectedRuntime,
     WorkbenchEnvironment,
-    WorkbenchPreflight,
     WorkbenchResolver,
     WorkbenchWorkspaces,
     withRuntime,
@@ -24,7 +21,7 @@ import { CliRunClient } from './run-client.js';
 export const runCommand = defineCommand({
     meta: {
         name: 'run',
-        description: 'Run or interact with a Workbench.',
+        description: 'Run a Workbench.',
     },
     args: {
         workbench: {
@@ -170,44 +167,9 @@ export const runCommand = defineCommand({
                       stdin: args.stdin,
                   });
         if (!task) {
-            if (args.detach || args.json || args.final || args['dry-run']) {
-                throw new Error('This run mode requires a non-empty task');
-            }
-            assertWorkbenchTuiSupported();
-            const resolved = await new WorkbenchResolver().resolve(args.workbench, {
-                savedOnly: true,
-                ...(args.dir ? { workspaceDirectory: args.dir } : {}),
-            });
-            if (repository) resolved.repository = repository;
-            selectRuntime(resolved, args, runtimes);
-            const workspaces = await workbenchWorkspaces.bind({
-                workbench: resolved.workbench,
-                rawArgs,
-            });
-            validateHostDockerAuthorization(
-                selectedRuntime(resolved.workbench).docker?.engine !== undefined,
-                args['allow-host-docker']
+            throw new Error(
+                'wb run requires a task. Pass --task, --task-file, or --stdin.'
             );
-            const environment = {
-                ...process.env,
-                ...workbenchEnvironment.bind(resolved.workbench, overrides),
-                ...workspaceEnvironment(workspaces),
-            };
-            if (selectedRuntime(resolved.workbench).name === 'local') {
-                new WorkbenchPreflight({ environment }).check(resolved.workbench);
-            }
-            await launchWorkbenchTui({
-                initial: {
-                    alias: args.workbench,
-                    resolved,
-                    ...(args.connection ? { connection: args.connection } : {}),
-                },
-                environment,
-                workspaces,
-                allowHostDocker: args['allow-host-docker'],
-                ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
-            });
-            return;
         }
         if (args.detach && (args.final || args['dry-run'])) {
             throw new Error('--detach cannot be combined with --final or --dry-run');

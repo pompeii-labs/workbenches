@@ -16,7 +16,6 @@ src/
   runs/
   registry/
   commands/
-  tui/
 ```
 
 Only executable and public entrypoints belong directly under `src/`. Do not add new root modules for a feature that is owned by one of the domains above.

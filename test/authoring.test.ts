@@ -434,33 +434,59 @@ describe('native Workbench authoring', () => {
             workspaces: [],
             latest_run_id: sessionId,
         });
-        await writeFile(
-            sessions.transcriptPath(sessionId),
-            `${JSON.stringify({
-                version: 1,
-                items: [
-                    { id: '1', kind: 'user', text: 'use API_KEY=secret-value' },
-                    {
-                        id: '2',
-                        kind: 'assistant',
-                        text: 'The migration failed.',
-                    },
-                    {
-                        id: '3',
-                        kind: 'tool',
-                        name: 'bash',
-                        title: 'Run migration',
-                        status: 'failed',
-                        error: 'Bearer abcdefghijklmnop',
-                    },
-                    {
-                        id: '4',
-                        kind: 'user',
-                        text: { locally: 'tampered' },
-                    },
-                ],
-            })}\n`
-        );
+        const runs = new RunStore(home);
+        await runs.create({
+            id: sessionId,
+            metadata: {
+                workbench: 'lux-ops',
+                workbench_version: '1.2.3',
+                runner: 'opencode',
+                model: 'openai/gpt-5.6-terra',
+                workspace: '/repo',
+                mode: 'detached',
+                execution: 'one_shot',
+                session_id: sessionId,
+            },
+            request: {
+                workbench_path: '/repo/.workbenches/lux-ops',
+                workspace: '/repo',
+                task: 'ignored after dispatch',
+            },
+        });
+        await runs.takeRequest(sessionId);
+        for (const [index, event] of [
+            {
+                type: 'input.delivered' as const,
+                data: {
+                    id: 'input-1',
+                    kind: 'send',
+                    text: 'use API_KEY=secret-value',
+                },
+            },
+            {
+                type: 'output.text' as const,
+                data: { id: 'output-1', text: 'The migration failed.' },
+            },
+            {
+                type: 'tool.completed' as const,
+                data: {
+                    id: 'tool-1',
+                    name: 'bash',
+                    title: 'Run migration',
+                    status: 'failed',
+                    error: 'Bearer abcdefghijklmnop',
+                },
+            },
+        ].entries()) {
+            await runs.appendEvent(sessionId, {
+                protocol: 0,
+                run_id: sessionId,
+                sequence: index + 1,
+                timestamp: new Date(index).toISOString(),
+                runner: 'opencode',
+                ...event,
+            });
+        }
 
         const result = await new ImprovementEvidence(home).write({
             operationId: 'author_evidence',
@@ -487,7 +513,7 @@ describe('native Workbench authoring', () => {
         expect(await readFile(bounded.path, 'utf8')).toBe(bounded.content);
     });
 
-    test('builds improvement evidence from canonical run events without a TUI transcript', async () => {
+    test('builds improvement evidence from canonical run events', async () => {
         const home = await temporaryDirectory('workbench-run-evidence-');
         const sessionId = 'wb_canonicalsession1234567890';
         const runId = 'wb_canonicalrun1234567890123';

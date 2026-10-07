@@ -5,14 +5,14 @@ import { RepositoryDeliveryStore } from '../repositories/receipts.js';
 import { RunContinuation } from '../runs/index.js';
 import { SessionResolver } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
-import { launchWorkbenchTui } from '../tui.js';
 import { selectedRuntime, WorkbenchEnvironment } from '../workbench/index.js';
+import { CliInput } from './input.js';
 import { CliRunClient } from './run-client.js';
 
 export const resumeCommand = defineCommand({
     meta: {
         name: 'resume',
-        description: 'Open or continue a resumable Workbench session.',
+        description: 'Continue a resumable Workbench session.',
     },
     args: {
         session: {
@@ -22,13 +22,22 @@ export const resumeCommand = defineCommand({
         },
         prompt: {
             type: 'positional',
-            description: 'Optional task to send without opening the TUI',
+            description: 'Optional task to send',
             required: false,
         },
         task: {
             type: 'string',
             alias: 't',
             description: 'Task to send (equivalent to the positional task)',
+        },
+        'task-file': {
+            type: 'string',
+            description: 'Read the task from a UTF-8 file',
+        },
+        stdin: {
+            type: 'boolean',
+            description: 'Read the task from stdin',
+            default: false,
         },
         detach: {
             type: 'boolean',
@@ -74,13 +83,21 @@ export const resumeCommand = defineCommand({
         },
     },
     async run({ args, rawArgs }) {
-        if (args.prompt !== undefined && args.task !== undefined) {
-            throw new Error('Pass a task either positionally or with --task, not both');
-        }
         if (args.json && args.final) {
             throw new Error('--json and --final cannot be used together');
         }
-        const task = (args.task ?? args.prompt ?? '').trim();
+        const hasInput =
+            args.prompt !== undefined ||
+            args.task !== undefined ||
+            args['task-file'] !== undefined ||
+            args.stdin;
+        const task = hasInput
+            ? await new CliInput().read({
+                  text: args.task ?? args.prompt,
+                  file: args['task-file'],
+                  stdin: args.stdin,
+              })
+            : '';
         const home = workbenchHome();
         const target = await new SessionResolver(home).resolve(args.session);
         const workbenchEnvironment = new WorkbenchEnvironment();
@@ -101,19 +118,9 @@ export const resumeCommand = defineCommand({
             );
         }
         if (!task) {
-            if (args.detach || args.json || args.final) {
-                throw new Error('This resume mode requires a non-empty task');
-            }
-            await launchWorkbenchTui({
-                initial: {
-                    ...target,
-                    ...(args.connection ? { connection: args.connection } : {}),
-                },
-                environment,
-                workspaces: target.session.workspaces,
-                allowHostDocker: args['allow-host-docker'],
-            });
-            return;
+            throw new Error(
+                `Session ${target.session.id} needs new input. Use wb send ${target.session.id} <task> or pass --task, --task-file, or --stdin.`
+            );
         }
         if (args.detach && args.final) {
             throw new Error('--detach cannot be combined with --final');

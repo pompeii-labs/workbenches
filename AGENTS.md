@@ -131,9 +131,9 @@ wb kill wb_...
 
 `wb attach` observes or replays the session's latest run without starting new model work. `wb resume` starts a new run from saved native context when that session is resumable. Without an ID, `wb attach` selects the latest session. `wb kill` requires a session ID. `wb ps` shows active and resumable sessions; `wb ps --all` also includes terminal one-shot history. Runs persist their normalized events for replay.
 
-## Leave interactive work to the human
+## Supervise multi-turn work
 
-For headless supervision, use the session control commands instead of parsing an activity stream:
+The calling agent owns multi-turn supervision through the session control commands:
 
 ```sh
 wb run project-core --task "Review the migration" --detach --json
@@ -152,7 +152,7 @@ Use a receipt's `run_id` with `wait --run --after` to keep its cursor on that ex
 
 Only answer reported requests. `allow` grants permission once and `deny` rejects it. `allow_always` must be explicitly offered by the runner. A question accepts an offered label or free text when permitted; multiple questions use JSON string arrays, such as `[["First option"],["Second option"]]`, supplied as text, `--response-file`, or `--stdin`. `answer --reject` dismisses a question. Authentication requests report the runner's URL and instructions; never send credentials through `answer`. `ps --json` includes `needs_input` and pending request metadata.
 
-Running `wb run <name>` without a task opens the experimental terminal client. Bare `wb` displays command help. Agents should normally use an explicit one-shot task, `--final`, or `--json`; the interactive interface is intended for a human who wants a multi-turn session and explicit permission prompts.
+`wb run <name>` requires a task through `--task`, `--task-file`, `--stdin`, or the positional task. `wb resume <id>` also requires new input; use `wb send` to continue an idle resumable session. Bare `wb` displays command help.
 
 ## Authorization and safety
 
@@ -249,11 +249,11 @@ wb wait wb_... --timeout 120 --json
 wb create --from wb_... --feedback "Check failure cleanup" --detach --json
 ```
 
-Supply one brief through `--task`, `--task-file`, or `--stdin`; `--from` can infer improvements from evidence without one. Bare `create` remains interactive. Detached JSON reports session/run/operation IDs. A later `wait` reports verified package paths and changed files in `authoring`, not merely the creator's final text. Engine-owned validation, package scope, version advancement, and runtime smoke must pass before authoring is completed. A native run may be completed while authoring verification is running or failed; `run_state` distinguishes that case. Answer reported permissions explicitly, then wait again. Saved snapshots are immutable: author or improve a local source package.
+Supply one brief through `--task`, `--task-file`, or `--stdin`; `--from` can infer improvements from evidence without one. Detached JSON reports session/run/operation IDs. A later `wait` reports verified package paths and changed files in `authoring`, not merely the creator's final text. Engine-owned validation, package scope, version advancement, and runtime smoke must pass before authoring is completed. A native run may be completed while authoring verification is running or failed; `run_state` distinguishes that case. Answer reported permissions explicitly, then wait again. Saved snapshots are immutable: author or improve a local source package.
 
 ## Current reference-engine support
 
-The current reference engine supports spec 0 and spec 1 manifests (spec 1 is the standard; spec 0 is frozen legacy) plus OpenCode and Pi runners. Local, Docker, and E2B execution support one-shot, detached, and experimental interactive sessions, including native context resume. Docker and E2B support image preparation and runtime smoke checks. Daytona runs one-shot and detached sessions in a fresh sandbox from the declared image, without an interactive terminal or sandbox recovery yet. OpenCode only; Pi cannot run on Daytona yet. OpenCode and Pi have different native capabilities, which must be reported honestly rather than hidden behind a fallback. Other runners and runtimes remain part of the standard's extensible design.
+The current reference engine supports spec 0 and spec 1 manifests (spec 1 is the standard; spec 0 is frozen legacy) plus OpenCode and Pi runners. Local, Docker, and E2B execution support one-shot, detached, and multi-turn sessions with native context resume. Docker and E2B support image preparation and runtime smoke checks. Daytona runs one-shot, detached, and resumed OpenCode sessions in fresh sandboxes from the declared image, without native authentication or sandbox recovery. Pi cannot run on Daytona yet. OpenCode and Pi have different native capabilities, which must be reported honestly rather than hidden behind a fallback. Other runners and runtimes remain part of the standard's extensible design.
 
 The Workbench author locks its runner, model policy, provider routes, and native runner configuration. Consumers connect credentials once per runner/runtime trust boundary with `wb connect`. A `--connection` run override can select only an authenticated route allowed by the manifest. Never place credential values in a manifest, saved run, dry-run output, or normalized event.
 

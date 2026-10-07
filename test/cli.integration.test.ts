@@ -68,7 +68,7 @@ describe('CLI integration', () => {
             environment,
             fixture.root
         );
-        expect(taskless.stderr).toContain('requires an interactive terminal');
+        expect(taskless.stderr).toContain('wb run requires a task');
         expect(taskless.stderr).not.toContain('Workbench is not saved');
         expect(
             (
@@ -1540,13 +1540,13 @@ describe('CLI integration', () => {
         expect(final.stdout).toBe('fixture response\n');
     });
 
-    test('shows help for a bare invocation and reserves taskless runs for the TUI', async () => {
+    test('shows help for a bare invocation and rejects taskless runs and authoring', async () => {
         const fixture = await createFixture();
         const result = await executeSavedCli(['run', fixture.packageDirectory]);
 
         expect(result.code).toBe(1);
         expect(result.stderr).toContain(
-            'The Workbench TUI requires an interactive terminal'
+            'wb run requires a task. Pass --task, --task-file, or --stdin.'
         );
 
         const bare = await executeCli([]);
@@ -1561,9 +1561,38 @@ describe('CLI integration', () => {
         const create = await executeCli(['create', 'core'], { WORKBENCH_HOME: home });
         expect(create.code).toBe(1);
         expect(create.stderr).toContain(
-            'The Workbench TUI requires an interactive terminal'
+            'wb create requires an authoring brief. Pass --task, --task-file, or --stdin, or use --from to improve a previous session.'
         );
         expect(await stat(join(home, 'authoring')).catch(() => null)).toBeNull();
+    });
+
+    test('tells a resumable session how to continue when resume has no input', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-taskless-resume-');
+        const sessionId = 'wb_tasklessresume1234567890';
+        await new SessionStore(home).create({
+            id: sessionId,
+            workbench: 'fixture-core',
+            workbench_version: '0.1.0',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            runtime: 'local',
+            reference: fixture.packageDirectory,
+            workbench_path: fixture.packageDirectory,
+            workspace: fixture.root,
+            workspaces: [],
+            native_session_id: 'ses_taskless_resume',
+            latest_run_id: sessionId,
+        });
+
+        const result = await executeCli(['resume', sessionId], {
+            WORKBENCH_HOME: home,
+        });
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(
+            `Session ${sessionId} needs new input. Use wb send ${sessionId} <task> or pass --task, --task-file, or --stdin.`
+        );
     });
 
     test('detaches, prints a session ID, and attaches to its latest run', async () => {

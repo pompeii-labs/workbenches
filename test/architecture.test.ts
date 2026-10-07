@@ -19,7 +19,7 @@ describe('engine architecture', () => {
         expect(importCycles(valueImports(sources))).toEqual([]);
     });
 
-    test('keeps engine domains independent of CLI and TUI presentation', async () => {
+    test('keeps engine domains independent of CLI presentation', async () => {
         const sources = new Map(
             await Promise.all(
                 (await sourceFiles(source)).map(
@@ -30,9 +30,7 @@ describe('engine architecture', () => {
         );
         const presentation = (file: string) =>
             file === 'cli.ts' ||
-            file === 'tui.ts' ||
             file.startsWith('commands/') ||
-            file.startsWith('tui/') ||
             file.startsWith('rendering/');
         const violations: string[] = [];
         for (const [file, imports] of valueImports(sources)) {
@@ -70,7 +68,6 @@ describe('engine architecture', () => {
             'cli.ts',
             'index.ts',
             'storage.ts',
-            'tui.ts',
             'types.ts',
             'user-agent.ts',
         ]);

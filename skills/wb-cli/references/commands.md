@@ -27,11 +27,11 @@ Sources: `.#name` and `/path#name` select one package in a repo, `org/name` is t
 
 | Command | What it does |
 | --- | --- |
-| `wb run <ALIAS> [PROMPT]` | No task opens the interactive terminal. `--task`, `--task-file`, or `--stdin` runs one task. `--final`, `--json`, or `--detach` choose the output. `--dir` sets the workspace; `--repo owner/name [--ref]` works on an isolated GitHub checkout; `--workspace NAME=PATH` binds named workspaces; `--env-file`, `--env NAME=value`, `--connection`, `--runtime`, `--allow-host-docker`. Unknown options are rejected. |
+| `wb run <ALIAS> [PROMPT]` | Requires a task through the positional prompt, `--task`, `--task-file`, or `--stdin`. `--final`, `--json`, or `--detach` choose the output. `--dir` sets the workspace; `--repo owner/name [--ref]` works on an isolated GitHub checkout; `--workspace NAME=PATH` binds named workspaces; `--env-file`, `--env NAME=value`, `--connection`, `--runtime`, `--allow-host-docker`. Unknown options are rejected. |
 | `wb ps [--all] [--json]` | Active and resumable sessions, with `needs_input` and pending requests. |
 | `wb wait <SESSION\|RUN> [--run] [--after SEQ] [--timeout SECONDS] [--json]` | Read-only. Returns at the next turn boundary, terminal state, or input request. |
 | `wb send <SESSION> [TEXT\|--task-file F\|--stdin] [--steer\|--queue] [--json]` | Send to an idle session, steer the active turn, or queue a follow-up. Uses the inherited environment for credentials. |
-| `wb resume <SESSION> [PROMPT\|--task T] [--detach] [--json\|--final] [--env-file] [--env] [--connection]` | Continue a resumable session. No task opens the interactive terminal. |
+| `wb resume <SESSION> [PROMPT\|--task T\|--task-file F\|--stdin] [--detach] [--json\|--final] [--env-file] [--env] [--connection]` | Continue a resumable session with new input. Use `wb send` for agent-driven session control. |
 | `wb answer <SESSION> <REQUEST> [RESPONSE\|--response-file F\|--stdin\|--reject] [--json]` | Answer one pending permission or question. |
 | `wb attach [SESSION] [--json\|--final]` | Replay and follow the latest run. Read-only. |
 | `wb kill <SESSION>` | Cancel the active run. |

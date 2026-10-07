@@ -259,7 +259,7 @@ export class WorkbenchAuthoring {
             kind: 'edit',
             repository,
             targetSelector: selector,
-            prompt: `Review and edit the source Workbench at ${this.relativePackage(repository, packageDirectory)}. Preserve its existing package boundary unless the requested change requires a redesign. Inspect the repository authority, make the requested improvements interactively, increment the package version for any package content change, then validate and smoke it.`,
+            prompt: `Review and edit the source Workbench at ${this.relativePackage(repository, packageDirectory)}. Preserve its existing package boundary unless the requested change requires a redesign. Inspect the repository authority, make the requested improvements, increment the package version for any package content change, then validate and smoke it.`,
         });
     }
 

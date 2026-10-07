@@ -5,7 +5,6 @@ import { join } from 'node:path';
 
 import { RunStore } from '../src/runs/index.js';
 import { SessionResolver, SessionStore } from '../src/sessions/index.js';
-import { SessionTranscript } from '../src/tui/session-transcript.js';
 
 const homes: string[] = [];
 
@@ -15,7 +14,7 @@ afterEach(async () => {
     );
 });
 
-describe('interactive session storage', () => {
+describe('session storage', () => {
     for (const inaccessible of [false, true]) {
         test(`serializes session operations when owner is ${inaccessible ? 'inaccessible' : 'accessible'}`, async () => {
             const home = await temporaryHome();
@@ -298,63 +297,6 @@ describe('interactive session storage', () => {
                 (session) => session.id
             )
         ).toEqual([current.id]);
-    });
-
-    test('keeps the latest valid transcript as a disposable presentation cache', async () => {
-        const home = await temporaryHome();
-        const sessionId = 'wb_transcriptcache123456789';
-        const store = new SessionStore(home);
-        await store.create({
-            id: sessionId,
-            workbench: 'creator',
-            workbench_version: '0.1.0',
-            runner: 'opencode',
-            model: 'openai/gpt-5.6-terra',
-            reference: 'creator',
-            workbench_path: '/repo/.workbenches/creator',
-            workspace: '/repo',
-            workspaces: [],
-            latest_run_id: sessionId,
-        });
-        const transcript = new SessionTranscript(home, sessionId, 1);
-        transcript.schedule([{ id: 'first', kind: 'user', text: 'first' }], {
-            runId: sessionId,
-            sequence: 3,
-        });
-        const firstWrite = transcript.flush();
-        transcript.schedule([{ id: 'second', kind: 'assistant', text: 'second' }], {
-            runId: sessionId,
-            sequence: 8,
-        });
-        const secondWrite = transcript.flush();
-        await Promise.all([firstWrite, secondWrite]);
-
-        expect(await transcript.load()).toEqual([
-            { id: 'second', kind: 'assistant', text: 'second' },
-        ]);
-        expect(await transcript.cursor()).toEqual({
-            runId: sessionId,
-            sequence: 8,
-        });
-        const card = {
-            id: 'outcome-card',
-            kind: 'outcome' as const,
-            outcomeId: 'wbo_1234567890abcdefghij',
-            applicationState: 'pending' as const,
-            completeness: 'complete' as const,
-            changesets: 1,
-            artifacts: 2,
-            links: 0,
-            warnings: 0,
-        };
-        transcript.schedule([card], { runId: sessionId, sequence: 9 });
-        await transcript.flush();
-        expect(await transcript.load()).toEqual([card]);
-        await writeFile(store.transcriptPath(sessionId), '{broken', {
-            mode: 0o600,
-        });
-        expect(await transcript.load()).toEqual([]);
-        expect(await transcript.cursor()).toBeUndefined();
     });
 
     test('refuses to present old interactive runs as resumable sessions', async () => {

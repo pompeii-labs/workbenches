@@ -227,7 +227,7 @@ export class ModelConnection {
             return `Pi has no command-line sign-in, so a Pi subscription cannot be connected here. Use an API key instead: ${this.#base()} --provider ${target.provider} --method api-key --stdin`;
         }
         return workbench
-            ? `Run ${this.#command()} in a terminal with OpenCode installed, or start the Workbench interactively once with wb run ${workbench.reference} --runtime ${target.runtime}`
+            ? `Run ${this.#command()} in a terminal with OpenCode installed, or start a foreground task once with wb run ${workbench.reference} --runtime ${target.runtime} --task <task>`
             : `Run ${this.#command()} in a terminal with OpenCode installed`;
     }
 
