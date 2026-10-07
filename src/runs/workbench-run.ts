@@ -3,6 +3,7 @@ import type { ResolvedRunnerConfiguration } from '../models/index.js';
 import type { OutcomeCompleteness } from '../outcomes/contracts.js';
 import type { RepositoryBinding } from '../repositories/contracts.js';
 import type { PreparedRunner } from '../runners/runner.js';
+import { TRUNCATED_FAILURE, TRUNCATED_REASON } from '../runners/session.js';
 import {
     type PreparedRuntime,
     type RuntimeInfrastructureMetadata,
@@ -253,6 +254,18 @@ export class WorkbenchRun {
             }
             if (!result.summary.turnCompleted) {
                 await events.emit('turn.completed', { reason: 'process-exit' });
+            }
+            if (result.summary.completionReason === TRUNCATED_REASON) {
+                const outcomeId = await this.collectOutcome('partial');
+                const infrastructure = await this.infrastructure();
+                await events.emit('run.failed', {
+                    ...TRUNCATED_FAILURE,
+                    exit_code: 1,
+                    duration_ms: this.duration(),
+                    ...(outcomeId ? { outcome_id: outcomeId } : {}),
+                    ...(infrastructure ? { infrastructure } : {}),
+                });
+                return 1;
             }
             const outcomeId = await this.collectOutcome('complete');
             const infrastructure = await this.infrastructure();

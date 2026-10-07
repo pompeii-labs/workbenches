@@ -13,6 +13,7 @@ import type {
 export interface RunnerSummary {
     finalText: string;
     turnCompleted: boolean;
+    completionReason?: string;
     failureMessage?: string;
 }
 

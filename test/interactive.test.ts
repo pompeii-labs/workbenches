@@ -13,6 +13,7 @@ import {
     type RunnerSessionStartOptions,
 } from '../src/runners/session.js';
 import { InteractiveRun, type WorkbenchEvent } from '../src/runs/index.js';
+import { TRUNCATION_RECOVERY_PROMPT } from '../src/runs/interactive-run.js';
 import type {
     PreparedRuntime,
     RuntimePrepareRequest,
@@ -335,6 +336,80 @@ describe('runner-neutral interactive host', () => {
         expect(adapter.closes).toBe(1);
     });
 
+    test('sends one recovery prompt when an unattended turn hits the output limit', async () => {
+        const events: WorkbenchEvent[] = [];
+        const adapter = new FakeAdapter({ reasons: ['length', 'stop'] });
+        const session = await InteractiveRun.start({
+            resolved: reference(),
+            onEvent: (event) => {
+                events.push(event);
+            },
+            dependencies: dependencies(adapter),
+        });
+
+        await session.send('build the game', 'input-1');
+        expect(session.outputTruncated).toBe(false);
+        await session.close();
+
+        expect(adapter.prompts).toEqual(['build the game', TRUNCATION_RECOVERY_PROMPT]);
+        expect(
+            events
+                .filter((event) => event.type.startsWith('turn.'))
+                .map((event) => event.data)
+        ).toEqual([
+            { index: 1, input_id: 'input-1' },
+            { index: 1, reason: 'length', input_id: 'input-1' },
+            { index: 2, recovery: 'length' },
+            { index: 2, reason: 'stop' },
+        ]);
+        expect(events.at(-1)?.type).toBe('run.completed');
+    });
+
+    test('fails a run whose recovery also hits the output limit', async () => {
+        const events: WorkbenchEvent[] = [];
+        const adapter = new FakeAdapter({ reasons: ['length', 'length'] });
+        const session = await InteractiveRun.start({
+            resolved: reference(),
+            onEvent: (event) => {
+                events.push(event);
+            },
+            dependencies: dependencies(adapter),
+        });
+
+        await session.send('build the game');
+        expect(adapter.prompts).toHaveLength(2);
+        expect(session.outputTruncated).toBe(true);
+        await session.close();
+
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: { code: 'output_truncated' },
+        });
+        expect(events.some((event) => event.type === 'run.completed')).toBe(false);
+    });
+
+    test('leaves a truncated turn to the person in an interactive run', async () => {
+        const events: WorkbenchEvent[] = [];
+        const adapter = new FakeAdapter({ reasons: ['length', 'stop'] });
+        const session = await InteractiveRun.start({
+            resolved: reference(),
+            onEvent: (event) => {
+                events.push(event);
+            },
+            dependencies: dependencies(adapter),
+            interactive: true,
+        });
+
+        await session.send('build the game');
+        expect(adapter.prompts).toEqual(['build the game']);
+        expect(session.outputTruncated).toBe(true);
+        await session.send('split it up');
+        expect(session.outputTruncated).toBe(false);
+        await session.close();
+
+        expect(events.at(-1)?.type).toBe('run.completed');
+    });
+
     test('keeps the declared runtime alive for the native session lifecycle', async () => {
         const events: WorkbenchEvent[] = [];
         const adapter = new FakeAdapter();
@@ -403,6 +478,7 @@ class FakeAdapter implements RunnerSessionAdapter {
         closeFailure?: Error;
         requestPermission?: boolean;
         requestQuestion?: boolean;
+        reasons?: string[];
     };
 
     constructor(
@@ -412,6 +488,7 @@ class FakeAdapter implements RunnerSessionAdapter {
             closeFailure?: Error;
             requestPermission?: boolean;
             requestQuestion?: boolean;
+            reasons?: string[];
         } = {}
     ) {
         this.options = options;
@@ -467,7 +544,7 @@ class FakeAdapter implements RunnerSessionAdapter {
             if (response) this.questionResponses.push(response);
         }
         await this.host?.emit({ type: 'output.text', data: { text: 'done' } });
-        return { reason: 'stop' };
+        return { reason: this.options.reasons?.[this.prompts.length - 1] ?? 'stop' };
     }
 
     private async cancelTurn() {

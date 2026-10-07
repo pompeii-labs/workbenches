@@ -193,6 +193,8 @@ A Workbench session is the stable user-facing identity for work with one locked 
 
 A run may contain multiple turns. `turn.completed` means the runner completed one response and may accept another input; it does not terminate the run.
 
+A turn that ends with `reason: "length"` hit the model's output limit, so its final tool call did not run. Runners report every provider's spelling of that limit as `length`. A run with no person attached gets one recovery turn, whose `turn.started` carries `recovery: "length"`, asking the agent to continue in smaller writes. A run whose latest turn still ends on `length` when it closes reports `run.failed` with `code: "output_truncated"`, a partial outcome, and exit code 1, never `run.completed`.
+
 The host decides how long the session lives:
 
 - A one-shot client closes after the first completed turn.

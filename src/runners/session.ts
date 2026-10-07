@@ -45,6 +45,26 @@ export interface RunnerTurnResult {
     reason?: string;
 }
 
+/** The completion reason for a response the model's output limit cut off. */
+export const TRUNCATED_REASON = 'length';
+
+/** The `run.failed` message and code for a run whose final response was cut off. */
+export const TRUNCATED_FAILURE = {
+    message:
+        "The model's output limit cut off the final response, so the work is unfinished",
+    code: 'output_truncated',
+} as const;
+
+/**
+ * Maps a native stop reason onto the reason runners report: every provider's
+ * spelling of "hit the output limit" becomes `length`.
+ */
+export function completionReason(native: string): string {
+    return ['length', 'max_tokens', 'max_output_tokens'].includes(native)
+        ? TRUNCATED_REASON
+        : native;
+}
+
 export interface RunnerInputDelivery {
     delivered: Promise<void>;
 }

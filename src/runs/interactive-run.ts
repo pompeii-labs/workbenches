@@ -12,6 +12,8 @@ import {
     type RunnerQuestionResponse,
     type RunnerSession,
     type RunnerSessionContext,
+    TRUNCATED_FAILURE,
+    TRUNCATED_REASON,
 } from '../runners/session.js';
 import {
     type RuntimeInfrastructureMetadata,
@@ -30,6 +32,8 @@ export interface InteractiveRunSession {
     readonly runId: string;
     readonly runnerSessionId: string | undefined;
     readonly busy: boolean;
+    /** The latest turn hit the model's output limit, so the work is unfinished. */
+    readonly outputTruncated: boolean;
     send(task: RunnerInput, inputId?: string): Promise<void>;
     steer(task: RunnerInput): Promise<RunnerInputDelivery>;
     cancelTurn(): Promise<void>;
@@ -273,6 +277,14 @@ export class InteractiveRun {
     }
 }
 
+/**
+ * Sent once when an unattended turn hits the model's output limit. The cut-off
+ * tool call never ran, so without it the run ends on a half-written step.
+ */
+export const TRUNCATION_RECOVERY_PROMPT =
+    "Your last response hit the model's output limit and was cut off, so its final tool call did not run. " +
+    'Continue from where you stopped. Keep each write or edit small: split a large file into several smaller writes.';
+
 class HostedInteractiveSession implements InteractiveRunSession {
     readonly runId: string;
     private readonly runner: RunnerSession;
@@ -282,6 +294,8 @@ class HostedInteractiveSession implements InteractiveRunSession {
     private closed = false;
     private terminal = false;
     private cancellationRequested = false;
+    private truncated = false;
+    private recoveredTruncation = false;
     private activeTurn: Promise<void> | undefined;
     private releasePromise:
         | Promise<{
@@ -315,6 +329,10 @@ class HostedInteractiveSession implements InteractiveRunSession {
 
     get busy(): boolean {
         return this.working;
+    }
+
+    get outputTruncated(): boolean {
+        return this.truncated;
     }
 
     send(task: RunnerInput, inputId?: string): Promise<void> {
@@ -381,12 +399,39 @@ class HostedInteractiveSession implements InteractiveRunSession {
         turn: number,
         inputId?: string
     ): Promise<void> {
+        await this.runTurn(task, turn, inputId);
+        if (
+            this.truncated &&
+            !this.interactive &&
+            !this.recoveredTruncation &&
+            !this.terminal
+        ) {
+            this.recoveredTruncation = true;
+            this.turn += 1;
+            await this.runTurn(
+                normalizeRunnerInput(TRUNCATION_RECOVERY_PROMPT),
+                this.turn,
+                undefined,
+                TRUNCATED_REASON
+            );
+        }
+    }
+
+    private async runTurn(
+        task: RunnerInput,
+        turn: number,
+        inputId?: string,
+        recovery?: string
+    ): Promise<void> {
         await this.emitter.emit('turn.started', {
             index: turn,
             ...(inputId ? { input_id: inputId } : {}),
+            ...(recovery ? { recovery } : {}),
         });
         try {
             const result = await this.runner.prompt(task);
+            this.truncated =
+                !this.cancellationRequested && result.reason === TRUNCATED_REASON;
             if (!this.cancellationRequested && result.reason !== 'cancelled') {
                 try {
                     await this.checkpoint(turn);
@@ -436,14 +481,15 @@ class HostedInteractiveSession implements InteractiveRunSession {
         if (this.closed) return;
         if (this.working) await this.cancelTurn();
         this.closed = true;
+        const truncated = type === 'run.completed' && this.truncated;
         try {
             const released = await this.releaseResources(
-                type === 'run.completed' ? 'complete' : 'partial'
+                type === 'run.completed' && !truncated ? 'complete' : 'partial'
             );
             if (!this.terminal) {
                 this.terminal = true;
-                await this.emitter.emit(type, {
-                    ...data,
+                await this.emitter.emit(truncated ? 'run.failed' : type, {
+                    ...(truncated ? TRUNCATED_FAILURE : data),
                     ...(released.outcomeId ? { outcome_id: released.outcomeId } : {}),
                     ...(released.infrastructure
                         ? { infrastructure: released.infrastructure }

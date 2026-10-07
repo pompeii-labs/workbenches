@@ -1,4 +1,5 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
+import { completionReason } from '../session.js';
 import { describeTool, planFromTodos } from '../tool.js';
 import { record, string } from './json.js';
 
@@ -167,8 +168,9 @@ export class OpenCodeEventAdapter {
                 }),
             });
         }
-        const reason = string(part?.reason);
-        if (reason && reason !== 'tool-calls') {
+        const native = string(part?.reason);
+        if (native && native !== 'tool-calls') {
+            const reason = completionReason(native);
             this.turnCompleted = true;
             this.completionReason = reason;
             events.push({ type: 'turn.completed', data: { reason } });

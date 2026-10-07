@@ -154,6 +154,32 @@ describe('interactive run worker', () => {
         expect(events.at(-1)?.type).toBe('run.completed');
     });
 
+    test('fails a detached run whose output stays cut off after recovery', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home, {
+            mode: 'detached',
+            task: 'initial task',
+        });
+        const adapter = new ControlledAdapter({ autoComplete: true, reason: 'length' });
+
+        await expect(
+            workerFor(home, stored.id, adapter).execute({
+                environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+            })
+        ).resolves.toBe(1);
+
+        expect(adapter.prompts).toHaveLength(2);
+        expect(await new RunStore(home).read(stored.id)).toMatchObject({
+            status: 'failed',
+            exit_code: 1,
+        });
+        const events = await new RunStore(home).readEvents(stored.id);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: { code: 'output_truncated' },
+        });
+    });
+
     test('does not deliver an initial task after its client already cancelled', async () => {
         const home = await temporaryHome();
         const stored = await fixtureRun(home, {
@@ -918,6 +944,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
             deferSteeringDelivery?: boolean;
             autoComplete?: boolean;
             startAfter?: Promise<void>;
+            reason?: string;
         } = {}
     ) {
         let markPermissionRequested!: () => void;
@@ -1004,7 +1031,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
             }
         }
         await this.host?.emit({ type: 'output.text', data: { text: 'done' } });
-        return { reason: 'stop' };
+        return { reason: this.options.reason ?? 'stop' };
     }
 
     private async steer(input: RunnerInput) {
