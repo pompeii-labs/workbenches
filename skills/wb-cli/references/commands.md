@@ -7,7 +7,7 @@ Run `wb <command> --help` for the authoritative flags of your installed version.
 | Command | What it does |
 | --- | --- |
 | `wb list [SOURCE]` | With no source, saved aliases. With a local path, GitHub URL, or `owner/repo`, the packages under its `.workbenches/`. |
-| `wb add <SOURCE> [--as ALIAS] [--name PKG] [--ref REF] [-f]` | Save a registry `org/name`, a GitHub URL, or a local path. Remote packages are frozen snapshots; local paths stay live for new sessions. `-f` replaces a saved package that changed. |
+| `wb add <SOURCE> [--as ALIAS] [--name PKG] [--ref REF] [-f]` | Save a registry `org/name`, a GitHub URL, or a local path. Remote packages are frozen snapshots; local paths stay live: every new run reads the current files, so edits need no re-add. `-f` replaces a saved package that changed. |
 | `wb view <WORKBENCH> [--json]` | Resolved configuration, provenance, model routes and readiness, runtimes, requirements. |
 | `wb remove <ALIAS>` | Forget an alias. |
 | `wb upgrade [ALIAS]` | Refresh saved remote snapshots from their sources. |

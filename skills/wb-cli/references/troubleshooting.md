@@ -10,8 +10,8 @@ A headless run is almost always waiting on a permission prompt. Check `wb ps --j
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `wb: command not found` after install | The bin directory is not on `PATH`. Tell the person to add `~/.local/bin` (or the printed directory) to their shell profile. |
-| `Runner CLI is unavailable: opencode` | Install the runner on the host for `local`, or use a runtime whose image contains it. |
+| `wb: command not found` after install | The bin directory is not on `PATH`. For this shell run `export PATH="$HOME/.local/bin:$PATH"`; tell the person to add that line (or the printed directory) to their shell profile. |
+| `Runner CLI is unavailable: opencode` | Install the runner on the host for `local` (non-root install and `PATH` are in SKILL.md), or use a runtime whose image contains it. |
 | `Required CLI tool is unavailable: X` | A tool the Workbench declares is missing on the host or in the image. Install it, or use another declared runtime. |
 | `Docker CLI is unavailable on the host` | Install and start Docker, or use another runtime. |
 | `Workbench X does not declare runtime: Y` | Pick one of the listed runtimes. |
