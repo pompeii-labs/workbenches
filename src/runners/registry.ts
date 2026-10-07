@@ -1,12 +1,19 @@
 import { ActiveModelCatalog } from '../models/index.js';
 import type { ResolvedWorkbench } from '../types.js';
+import { ClaudeCodeConfigStaging } from './claude-code/config.js';
+import { ClaudeCodeRunner } from './claude-code/runner.js';
 import { RunnerContextStaging } from './context/stage.js';
 import { DiskRunnerFiles } from './files/disk.js';
 import { OpenCodeRunner } from './opencode/runner.js';
 import { OpenCodeSkillStaging } from './opencode/skills.js';
 import { PiConfigStaging } from './pi/config.js';
 import { PiRunner } from './pi/runner.js';
-import type { PreparedRunner, Runner } from './runner.js';
+import type {
+    PreparedRunner,
+    Runner,
+    RunnerAuthentication,
+    RunnerPrepareOptions,
+} from './runner.js';
 import {
     RUNNER_CAPABILITIES,
     type RunnerAdapterDeclaration,
@@ -43,6 +50,7 @@ export class RunnerRegistry {
                 catalog,
             }),
             new PiRunner(new PiConfigStaging(files, context), catalog),
+            new ClaudeCodeRunner(new ClaudeCodeConfigStaging(files, context), catalog),
         ]);
     }
 
@@ -52,13 +60,33 @@ export class RunnerRegistry {
         return runner;
     }
 
+    environmentNames(name: string): readonly string[] {
+        return this.resolve(name).authentication?.environmentNames ?? [];
+    }
+
+    displayName(name: string): string {
+        return this.resolve(name).displayName;
+    }
+
+    names(): string[] {
+        return [...this.#runners.keys()];
+    }
+
+    authentication(name: string): RunnerAuthentication {
+        const authentication = this.resolve(name).authentication;
+        if (!authentication) throw new Error(`Runner has no authentication: ${name}`);
+        return authentication;
+    }
+
     async prepare(
         workbench: ResolvedWorkbench,
-        environment: Record<string, string | undefined>
+        environment: Record<string, string | undefined>,
+        options?: RunnerPrepareOptions
     ): Promise<PreparedRunner> {
         return await this.resolve(workbench.manifest.runner).prepare(
             workbench,
-            environment
+            environment,
+            options
         );
     }
 

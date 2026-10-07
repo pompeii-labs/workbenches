@@ -12,6 +12,7 @@ import { runLabels } from '../remote/labels.js';
 import { RemoteRuntime, type RemoteRuntimeOptions } from '../remote/runtime.js';
 import { type ArchiveUpload, AssetStage } from '../remote/stage.js';
 import { definedEnvironment, quote, shellCommand } from '../staging/shell.js';
+import { SubprocessEnvironmentScrubbing } from '../subprocess-environment.js';
 import type { E2BClient, E2BSandbox } from './contracts.js';
 import { e2bPricingSource, estimateE2BCost } from './infrastructure.js';
 import { E2BOutcomeRecovery } from './recovery.js';
@@ -43,6 +44,7 @@ export class E2BRuntime extends RemoteRuntime<E2BSandbox, DiskAssetSnapshot> {
     readonly name = 'e2b';
     readonly nativeAuthentication: 'persistent' | 'unavailable';
     readonly preparation: E2BRuntimeOptions['preparation'];
+    subprocessEnvironmentScrubbing: boolean | undefined;
     protected declare readonly options: E2BRuntimeOptions;
     private recovery: E2BOutcomeRecovery | undefined;
     private outcomeFinalized = false;
@@ -64,7 +66,7 @@ export class E2BRuntime extends RemoteRuntime<E2BSandbox, DiskAssetSnapshot> {
         const names = [
             'git',
             'tar',
-            this.workbench.manifest.runner,
+            this.options.request.runnerCommand ?? this.workbench.manifest.runner,
             ...this.workbench.manifest.tools,
             ...(this.options.request.repository?.delivery === 'pr' ? ['gh'] : []),
         ];
@@ -95,7 +97,7 @@ export class E2BRuntime extends RemoteRuntime<E2BSandbox, DiskAssetSnapshot> {
         const runnerPath = paths[2];
         if (!runnerPath) {
             throw new Error(
-                `Runner CLI is unavailable in E2B image ${this.preparation.immutableReference}: ${this.workbench.manifest.runner}`
+                `Runner CLI is unavailable in E2B image ${this.preparation.immutableReference}: ${names[2]}`
             );
         }
         const tools = this.workbench.manifest.tools.map((name, index) => {
@@ -113,14 +115,36 @@ export class E2BRuntime extends RemoteRuntime<E2BSandbox, DiskAssetSnapshot> {
             );
         }
         await this.preflightAssets(sandbox);
+        const runnerVersion = await this.runnerVersion(sandbox);
+        this.subprocessEnvironmentScrubbing =
+            await new SubprocessEnvironmentScrubbing().check(
+                this.options.request.runnerAuthentication
+                    ?.subprocessEnvironmentScrubbing,
+                'linux',
+                (command) =>
+                    sandbox.run(shellCommand(command), {
+                        env: {},
+                        timeoutMilliseconds: 15_000,
+                    })
+            );
         this.ready = true;
         return {
-            runner: { name: this.workbench.manifest.runner, path: runnerPath },
+            runner: {
+                name: this.workbench.manifest.runner,
+                path: runnerPath,
+                ...(runnerVersion ? { version: runnerVersion } : {}),
+            },
             tools,
             workspaces: this.workspaces,
             requirements: this.options.requirements.check(
                 this.options.request.workbench
             ),
+            ...(this.subprocessEnvironmentScrubbing !== undefined
+                ? {
+                      subprocessEnvironmentScrubbing:
+                          this.subprocessEnvironmentScrubbing,
+                  }
+                : {}),
             ...configuration,
         };
     }

@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
 import type { RunnerContextStaging } from '../context/stage.js';
+import { copyPackageTree } from '../files/package-copy.js';
 import type { RunnerFiles } from '../types.js';
 
 /** Pi's staged config directory and context, and how to remove them. */
@@ -44,13 +45,26 @@ export class PiConfigStaging {
                 if (config.kind !== 'directory') {
                     throw new Error('Pi runner_config must be a directory');
                 }
-                await files.copy(workbench.runnerConfigPath, directory);
+                const warnings = await copyPackageTree(
+                    files,
+                    workbench.runnerConfigPath,
+                    directory,
+                    workbench.packageDirectory
+                );
+                if (warnings.length) throw new Error(warnings.join('\n'));
             }
             const skillsDirectory = join(directory, 'skills');
             await files.mkdir(skillsDirectory, { recursive: true });
             await Promise.all(
                 workbench.skills.map((skill) =>
-                    files.copy(skill.directory, join(skillsDirectory, skill.name))
+                    copyPackageTree(
+                        files,
+                        skill.directory,
+                        join(skillsDirectory, skill.name),
+                        workbench.packageDirectory
+                    ).then((warnings) => {
+                        if (warnings.length) throw new Error(warnings.join('\n'));
+                    })
                 )
             );
             const linkNativeCredentials = options.linkNativeCredentials ?? true;

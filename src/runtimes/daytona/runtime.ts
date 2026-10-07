@@ -13,7 +13,9 @@ import { RemoteProcess } from '../remote/process.js';
 import { RemoteRuntime, type RemoteRuntimeOptions } from '../remote/runtime.js';
 import { type ArchiveUpload, AssetStage } from '../remote/stage.js';
 import { needsRepositoryTools } from '../repository-tools.js';
+import { shellCommand } from '../staging/shell.js';
 import type { StagedAsset } from '../staging/transfer.js';
+import { SubprocessEnvironmentScrubbing } from '../subprocess-environment.js';
 import type {
     DaytonaClient,
     DaytonaClock,
@@ -75,6 +77,7 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
     readonly name = 'daytona';
     readonly nativeAuthentication = 'unavailable' as const;
     readonly preparation: RuntimePreparation;
+    subprocessEnvironmentScrubbing: boolean | undefined;
     protected declare readonly options: DaytonaRuntimeOptions;
     private preview: PreviewUrl | undefined;
     /** Set while a sandbox this runtime created could not be deleted. */
@@ -106,19 +109,45 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
         const { runnerPath, tools } = await new SandboxSetup(
             sandbox,
             this.options.image
-        ).inspect(this.workbench, {
-            repository: Boolean(this.options.request.repository),
-            pullRequests: this.options.request.repository?.delivery === 'pr',
-        });
+        ).inspect(
+            this.workbench,
+            {
+                repository: Boolean(this.options.request.repository),
+                pullRequests: this.options.request.repository?.delivery === 'pr',
+            },
+            this.options.request.runnerCommand
+        );
         await this.preflightAssets(sandbox);
+        const runnerVersion = await this.runnerVersion(sandbox);
+        this.subprocessEnvironmentScrubbing =
+            await new SubprocessEnvironmentScrubbing().check(
+                this.options.request.runnerAuthentication
+                    ?.subprocessEnvironmentScrubbing,
+                'linux',
+                (command) =>
+                    sandbox.run(shellCommand(command), {
+                        env: {},
+                        timeoutMilliseconds: 15_000,
+                    })
+            );
         this.ready = true;
         return {
-            runner: { name: this.workbench.manifest.runner, path: runnerPath },
+            runner: {
+                name: this.workbench.manifest.runner,
+                path: runnerPath,
+                ...(runnerVersion ? { version: runnerVersion } : {}),
+            },
             tools,
             workspaces: this.workspaces,
             requirements: this.options.requirements.check(
                 this.options.request.workbench
             ),
+            ...(this.subprocessEnvironmentScrubbing !== undefined
+                ? {
+                      subprocessEnvironmentScrubbing:
+                          this.subprocessEnvironmentScrubbing,
+                  }
+                : {}),
             ...configuration,
         };
     }

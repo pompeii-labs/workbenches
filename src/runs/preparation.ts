@@ -1,7 +1,9 @@
 import { join } from 'node:path';
 import { RunnerCredentialStore } from '../connections/credentials.js';
+import { withHostRunnerCredentials } from '../connections/environmentcredentials.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
 import { ConnectionInspector } from '../connections/inspector.js';
+import { configureRunnerRuntime } from '../connections/preparation.js';
 import {
     ConnectionStore,
     type RunnerConnectionSelection,
@@ -215,11 +217,32 @@ export class ExecutionPreparation {
                     publishRunOutcome(home, this.options.events, outcome, state),
             });
         }
+        if (home) {
+            environment = await withHostRunnerCredentials(
+                home,
+                runtimeName,
+                workbench.manifest.runner,
+                environment
+            );
+        }
         this.runner = await (
             this.dependencies.runners ?? RunnerRegistry.standard()
-        ).prepare(workbench, environment);
+        ).prepare(workbench, environment, {
+            workspaceDirectory,
+            ...(session ? { session } : {}),
+        });
         this.runtime = await this.dependencies.runtimes.resolve(runtimeName).prepare({
             workbench,
+            runnerAuthentication: runtimeAuthentication(this.runner),
+            ...(this.runner.nativeCommand
+                ? { runnerCommand: this.runner.nativeCommand }
+                : {}),
+            ...(this.runner.nativeVersion
+                ? { runnerVersion: this.runner.nativeVersion }
+                : {}),
+            runnerCredentialStore: RunnerRegistry.standard()
+                .authentication(this.runner.name)
+                .nativeCredentialStore(runtimeName),
             workspaceDirectory,
             environment,
             assets: [
@@ -249,6 +272,9 @@ export class ExecutionPreparation {
                               path: session.directory,
                               access: 'read-write' as const,
                               state: true,
+                              ...(this.runner.stateOverlay
+                                  ? { stateOverlay: this.runner.stateOverlay }
+                                  : {}),
                           },
                       ]
                     : []),
@@ -265,7 +291,11 @@ export class ExecutionPreparation {
                       },
                   }
                 : {}),
-            ...(runtimeName === 'e2b' && home
+            ...(runtimeName === 'e2b' &&
+            home &&
+            RunnerRegistry.standard()
+                .authentication(this.runner.name)
+                .nativeCredentialStore(runtimeName)
                 ? {
                       credentials: await new RunnerCredentialStore(home).prepare(
                           runtimeName,
@@ -290,6 +320,7 @@ export class ExecutionPreparation {
                   }
                 : {}),
         });
+        await configureRunnerRuntime(this.runner, this.runtime);
         const preflight = await this.runtime.preflight();
         const selection = await this.selectConnection(this.runner, this.runtime);
         return { runner: this.runner, runtime: this.runtime, preflight, ...selection };
@@ -337,7 +368,10 @@ export class ExecutionPreparation {
                     `Authentication is required for ${preferred.provider}. Start a foreground task run once to finish ${preferred.nativeProvider} sign-in.`
                 );
             }
-            if (workbench.manifest.runner !== 'opencode') {
+            if (
+                !RunnerRegistry.standard().authentication(runner.name)
+                    .inRunAuthentication
+            ) {
                 throw new Error(
                     `First-run authentication for ${workbench.manifest.runner} is not available inside a Workbench run yet`
                 );
@@ -356,28 +390,47 @@ export class ExecutionPreparation {
             );
         if (connection) {
             throw new AuthenticationRequiredError(
-                `Connection ${connection} is not authenticated for ${model} with ${workbench.manifest.runner} in the ${runtime.name} runtime. ${connectAdvice(connect)}.`
+                `Connection ${connection} is not authenticated for ${model} with ${workbench.manifest.runner} in the ${runtime.name} runtime. ${status?.instruction ?? connectAdvice(connect)}.`
             );
         }
         throw new AuthenticationRequiredError(
-            `No authenticated route is available for ${model}. ${connectAdvice(connect)}.`
+            `No authenticated route is available for ${model}. ${status?.instruction ?? connectAdvice(connect)}.`
         );
     }
 
     private async cleanupOnce(): Promise<void> {
         await this.preparation?.catch(() => undefined);
+        const runtime = await Promise.allSettled([
+            Promise.resolve().then(() => this.runtime?.cleanup()),
+        ]);
         const results = await Promise.allSettled([
-            Promise.resolve().then(async () => {
-                await this.runtime?.cleanup();
-            }),
             Promise.resolve().then(() => this.runner?.cleanup()),
             Promise.resolve().then(() => this.outcomes?.cleanup()),
         ]);
-        const failure = results.find(
+        const failure = [...runtime, ...results].find(
             (result): result is PromiseRejectedResult => result.status === 'rejected'
         );
         if (failure) throw failure.reason;
     }
+}
+
+function runtimeAuthentication(runner: PreparedRunner) {
+    const authentication =
+        runner.authentication ?? RunnerRegistry.standard().authentication(runner.name);
+    return {
+        environmentNames: authentication.environmentNames,
+        allowEnvironment: (name: string, runtime: string) =>
+            authentication.allowEnvironment(name, runtime),
+        ...(authentication.credentialEnvironment
+            ? { credentialEnvironment: authentication.credentialEnvironment }
+            : {}),
+        ...(authentication.subprocessEnvironmentScrubbing
+            ? {
+                  subprocessEnvironmentScrubbing:
+                      authentication.subprocessEnvironmentScrubbing,
+              }
+            : {}),
+    };
 }
 
 function matchesRequestedConnection(

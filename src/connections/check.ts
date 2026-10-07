@@ -4,7 +4,9 @@ import type { PreparedRuntime } from '../runtimes/contracts.js';
 import { RuntimeRegistry } from '../runtimes/registry.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { selectedRuntime } from '../workbench/runtimes.js';
+import { withHostRunnerCredentials } from './environmentcredentials.js';
 import { ConnectionInspector, type RunnerAuthenticationStatus } from './inspector.js';
+import { configureRunnerRuntime } from './preparation.js';
 import type { ConnectionStore, RunnerConnectionSelection } from './store.js';
 
 export interface ConnectionCheckOptions {
@@ -34,16 +36,35 @@ export class ConnectionCheck {
         let runner: PreparedRunner | undefined;
         let runtime: PreparedRuntime | undefined;
         try {
+            const runtimeName = selectedRuntime(workbench).name;
+            const environment = this.options.store
+                ? await withHostRunnerCredentials(
+                      this.options.store.home,
+                      runtimeName,
+                      workbench.manifest.runner,
+                      this.options.environment
+                  )
+                : this.options.environment;
             runner = await (this.options.runners ?? RunnerRegistry.standard()).prepare(
                 workbench,
-                this.options.environment
+                environment
             );
             runtime = await (this.options.runtimes ?? RuntimeRegistry.standard())
-                .resolve(selectedRuntime(workbench).name)
+                .resolve(runtimeName)
                 .prepare({
                     workbench,
+                    runnerAuthentication: runtimeAuthentication(runner),
+                    ...(runner.nativeCommand
+                        ? { runnerCommand: runner.nativeCommand }
+                        : {}),
+                    ...(runner.nativeVersion
+                        ? { runnerVersion: runner.nativeVersion }
+                        : {}),
+                    runnerCredentialStore: RunnerRegistry.standard()
+                        .authentication(runner.name)
+                        .nativeCredentialStore(runtimeName),
                     workspaceDirectory: this.options.workspaceDirectory,
-                    environment: this.options.environment,
+                    environment,
                     assets: [
                         // Connection work never changes the workspace.
                         { path: this.options.workspaceDirectory, access: 'read-only' },
@@ -55,6 +76,7 @@ export class ConnectionCheck {
                     // Connection work reads and writes credentials and runs no Workbench task.
                     allowUncheckedGpu: true,
                 });
+            await configureRunnerRuntime(runner, runtime);
             return await work(runtime, runner);
         } finally {
             await Promise.allSettled([runtime?.cleanup(), runner?.cleanup()]);
@@ -84,4 +106,23 @@ export class ConnectionCheck {
             });
         });
     }
+}
+
+function runtimeAuthentication(runner: PreparedRunner) {
+    const authentication =
+        runner.authentication ?? RunnerRegistry.standard().authentication(runner.name);
+    return {
+        environmentNames: authentication.environmentNames,
+        allowEnvironment: (name: string, runtime: string) =>
+            authentication.allowEnvironment(name, runtime),
+        ...(authentication.credentialEnvironment
+            ? { credentialEnvironment: authentication.credentialEnvironment }
+            : {}),
+        ...(authentication.subprocessEnvironmentScrubbing
+            ? {
+                  subprocessEnvironmentScrubbing:
+                      authentication.subprocessEnvironmentScrubbing,
+              }
+            : {}),
+    };
 }

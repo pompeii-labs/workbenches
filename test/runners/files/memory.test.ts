@@ -38,6 +38,17 @@ const backends: Array<[string, () => Promise<{ files: RunnerFiles; root: string 
 
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 
+test('memory realpath resolves links in parent directories', async () => {
+    const files = new MemoryRunnerFiles()
+        .directory('/workspace/real')
+        .file('/workspace/real/CLAUDE.md', '# Instructions');
+    await files.symlink('real', '/workspace/link');
+
+    expect(await files.realpath('/workspace/link/CLAUDE.md')).toBe(
+        '/workspace/real/CLAUDE.md'
+    );
+});
+
 for (const [name, create] of backends) {
     describe(`RunnerFiles on ${name}`, () => {
         test('writes, reads, and refuses to replace an exclusive file', async () => {

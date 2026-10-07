@@ -11,6 +11,7 @@ import { piRouteCandidates } from '../runners/pi/providers.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import type { PreparedRuntime } from '../runtimes/contracts.js';
 import type { ResolvedWorkbench } from '../types.js';
+import { hasSavedProviderCredential } from './environmentcredentials.js';
 import { AuthenticationRequiredError } from './error.js';
 import { ConnectionStore, type RunnerConnectionSelection } from './store.js';
 import { connectionProviderCapabilities } from './targets.js';
@@ -28,7 +29,10 @@ export interface RunnerAuthenticationStatus {
         }
     >;
     connectCommand: string;
+    instruction?: string;
     configuration?: ResolvedRunnerConfiguration;
+    method?: string;
+    warning?: string;
 }
 
 export interface ConnectionInspectorOptions {
@@ -63,23 +67,36 @@ export class ConnectionInspector {
 
     candidates(): AuthenticatedModelRoute[] {
         const routes = this.#router.routes(this.#workbench);
-        if (this.#workbench.manifest.runner === 'opencode') {
-            return routes.map((route) => ({
-                provider: route.provider,
-                nativeProvider: route.provider,
-                nativeModel: route.model,
-            }));
+        if (!this.#runner.connectionCandidates) {
+            if (this.#workbench.manifest.runner === 'opencode') {
+                return routes.map((route) => ({
+                    provider: route.provider,
+                    nativeProvider: route.provider,
+                    nativeModel: route.model,
+                }));
+            }
+            if (this.#workbench.manifest.runner === 'pi') {
+                const capabilities = connectionProviderCapabilities(
+                    'pi',
+                    this.#router.catalog
+                );
+                return uniqueAuthenticatedRoutes(
+                    routes.flatMap((route) => piRouteCandidates(route, capabilities))
+                );
+            }
         }
-        if (this.#workbench.manifest.runner === 'pi') {
-            const capabilities = connectionProviderCapabilities(
-                'pi',
-                this.#router.catalog
-            );
-            return uniqueAuthenticatedRoutes(
-                routes.flatMap((route) => piRouteCandidates(route, capabilities))
-            );
-        }
-        return unsupportedRunner(this.#workbench.manifest.runner);
+        return uniqueAuthenticatedRoutes(
+            routes.flatMap(
+                (route) =>
+                    this.#runner.connectionCandidates?.(route) ?? [
+                        {
+                            provider: route.provider,
+                            nativeProvider: route.provider,
+                            nativeModel: route.model,
+                        },
+                    ]
+            )
+        );
     }
 
     async inspect(
@@ -92,30 +109,37 @@ export class ConnectionInspector {
             ? { provider: options.connection, nativeProvider: options.connection }
             : storedPreference;
         const routes = this.#router.routes(this.#workbench);
-        const nativeOptions = {
-            workbench: this.#workbench,
-            runtime: this.#runtime,
-            runner: this.#runner,
-            ...(options.discoverConnections !== undefined
-                ? { discoverConnections: options.discoverConnections }
-                : {}),
-        };
-        const authenticatedRoutes =
-            this.#workbench.manifest.runner === 'opencode'
-                ? await inspectOpenCode(
-                      nativeOptions,
-                      routes,
-                      this.#router,
-                      discoveryPreference
-                  )
-                : this.#workbench.manifest.runner === 'pi'
-                  ? await inspectPi(
-                        nativeOptions,
-                        routes,
-                        this.#router,
-                        discoveryPreference
-                    )
-                  : unsupportedRunner(this.#workbench.manifest.runner);
+        const directlyReady = new Set(
+            providersFromEnvironment(routes, this.#runtime.environment, this.#router)
+        );
+        if (this.#workbench.runnerConfigPath) {
+            for (const route of routes) {
+                if (!this.#router.catalog.providers[route.provider]) {
+                    directlyReady.add(route.provider);
+                }
+            }
+        }
+        const directRoutes = this.candidates().flatMap((candidate) =>
+            directlyReady.has(candidate.provider)
+                ? [{ ...candidate, authenticationMethod: 'api' }]
+                : []
+        );
+        const inspectNative = this.#runner.inspectNativeConnections
+            ? () => this.#runner.inspectNativeConnections?.(this.#runtime) ?? []
+            : () => this.#inspectLegacyNativeConnections(routes);
+        const authenticatedRoutes = shouldInspectNativeConnections(
+            options.discoverConnections ?? false,
+            directRoutes,
+            discoveryPreference
+        )
+            ? uniqueAuthenticatedRoutes([
+                  ...directRoutes,
+                  ...(await Promise.resolve(inspectNative()).catch((error) => {
+                      if (directRoutes.length > 0) return [];
+                      throw error;
+                  })),
+              ])
+            : directRoutes;
         const requested = options.connection
             ? requestedConnection(authenticatedRoutes, options.connection)
             : undefined;
@@ -135,6 +159,28 @@ export class ConnectionInspector {
             requireAuthentication: false,
         });
         const selected = authenticatedRoutes.length > 0;
+        const selectedAuthentication = configuration
+            ? authenticatedRoutes.find(
+                  (route) =>
+                      route.provider === configuration.provider &&
+                      route.nativeProvider === configuration.nativeProvider &&
+                      (!configuration.authenticationMethod ||
+                          route.authenticationMethod ===
+                              configuration.authenticationMethod)
+              )
+            : undefined;
+        const warning = configuration
+            ? billingWarning(
+                  configuration.provider,
+                  selectedAuthentication?.authenticationMethod,
+                  this.#runtime.environment,
+                  hasSavedProviderCredential(
+                      this.#runtime.environment,
+                      configuration.provider
+                  ),
+                  this.#connectCommand()
+              )
+            : undefined;
         return {
             model: canonicalModel(this.#workbench),
             ready: selected,
@@ -157,7 +203,69 @@ export class ConnectionInspector {
             }),
             connectCommand: this.#connectCommand(),
             ...(selected ? { configuration } : {}),
+            ...(selectedAuthentication?.authenticationMethod
+                ? { method: selectedAuthentication.authenticationMethod }
+                : {}),
+            ...(warning ? { warning } : {}),
         };
+    }
+
+    async #inspectLegacyNativeConnections(
+        routes: ModelRoute[]
+    ): Promise<AuthenticatedModelRoute[]> {
+        if (this.#workbench.manifest.runner === 'opencode') {
+            const result = await this.#runtime.execute(
+                this.#runner.native(this.#runtime, ['opencode', 'auth', 'list']),
+                { network: 'none', readOnly: true }
+            );
+            if (result.code !== 0) {
+                throw new Error(
+                    diagnostic(result, 'OpenCode credentials could not be inspected')
+                );
+            }
+            const credentials = openCodeCredentials(result);
+            return routes.flatMap((route) => {
+                const method = credentials.get(normalizeProvider(route.provider));
+                return method
+                    ? [
+                          {
+                              provider: route.provider,
+                              nativeProvider: route.provider,
+                              nativeModel: route.model,
+                              authenticationMethod: method,
+                          },
+                      ]
+                    : [];
+            });
+        }
+        if (this.#workbench.manifest.runner === 'pi') {
+            const result = await this.#runtime.execute(
+                this.#runner.native(this.#runtime, [
+                    'pi',
+                    '--offline',
+                    '--list-models',
+                ]),
+                { network: 'none', readOnly: true }
+            );
+            if (result.code !== 0) {
+                throw new Error(
+                    diagnostic(result, 'Pi credentials could not be inspected')
+                );
+            }
+            const available = parsePiModels(`${result.stdout}\n${result.stderr}`);
+            const capabilities = connectionProviderCapabilities(
+                'pi',
+                this.#router.catalog
+            );
+            return routes.flatMap((route) =>
+                piRouteCandidates(route, capabilities).filter((candidate) =>
+                    available.has(
+                        `${candidate.nativeProvider}/${candidate.nativeModel}`
+                    )
+                )
+            );
+        }
+        return [];
     }
 
     async require(connection?: string): Promise<ResolvedRunnerConfiguration> {
@@ -167,7 +275,7 @@ export class ConnectionInspector {
         });
         if (status.ready && status.configuration) return status.configuration;
         throw new AuthenticationRequiredError(
-            `No authenticated route is available for ${canonicalModel(this.#workbench)}. ${connectAdvice(status.connectCommand)}.`
+            `No authenticated route is available for ${canonicalModel(this.#workbench)}. ${status.instruction ?? connectAdvice(status.connectCommand)}.`
         );
     }
 
@@ -234,125 +342,6 @@ function requestedConnection(
         : undefined;
 }
 
-async function inspectOpenCode(
-    options: {
-        workbench: ResolvedWorkbench;
-        runtime: PreparedRuntime;
-        runner: PreparedRunner;
-        discoverConnections?: boolean;
-    },
-    routes: ModelRoute[],
-    router: ModelRouter,
-    preferredConnection?: RunnerConnectionSelection
-): Promise<AuthenticatedModelRoute[]> {
-    const environmentProviders = providersFromEnvironment(
-        routes,
-        options.runtime.environment,
-        router
-    );
-    const configProviders = options.workbench.runnerConfigPath
-        ? routes
-              .filter((route) => !router.catalog.providers[route.provider])
-              .map((route) => route.provider)
-        : [];
-    const directlyReady = new Set([...environmentProviders, ...configProviders]);
-    const directRoutes = authenticatedRoutesForProviders(routes, directlyReady, 'api');
-    if (
-        !shouldInspectNativeConnections(
-            options.discoverConnections ?? false,
-            directRoutes,
-            preferredConnection
-        )
-    ) {
-        return directRoutes;
-    }
-    const base = options.runner.native(options.runtime, ['opencode', 'auth', 'list']);
-    const result = await options.runtime
-        .execute(base, {
-            network: 'none',
-            readOnly: true,
-        })
-        .catch((error) => {
-            if (directlyReady.size > 0) return undefined;
-            throw error;
-        });
-    if (!result) {
-        return authenticatedRoutesForProviders(routes, directlyReady, 'api');
-    }
-    if (result.code !== 0) {
-        if (directlyReady.size > 0) {
-            return authenticatedRoutesForProviders(routes, directlyReady, 'api');
-        }
-        throw new Error(
-            diagnostic(result, 'OpenCode credentials could not be inspected')
-        );
-    }
-    const credentials = openCodeCredentials(result);
-    return uniqueAuthenticatedRoutes([
-        ...authenticatedRoutesForProviders(routes, directlyReady, 'api'),
-        ...routes.flatMap((route) => {
-            const method = credentials.get(normalizeProvider(route.provider));
-            return method
-                ? [
-                      {
-                          provider: route.provider,
-                          nativeProvider: route.provider,
-                          nativeModel: route.model,
-                          authenticationMethod: method,
-                      },
-                  ]
-                : [];
-        }),
-    ]);
-}
-
-async function inspectPi(
-    options: {
-        workbench: ResolvedWorkbench;
-        runtime: PreparedRuntime;
-        runner: PreparedRunner;
-        discoverConnections?: boolean;
-    },
-    routes: ModelRoute[],
-    router: ModelRouter,
-    preferredConnection?: RunnerConnectionSelection
-): Promise<AuthenticatedModelRoute[]> {
-    const directRoutes = authenticatedRoutesForProviders(
-        routes,
-        new Set(providersFromEnvironment(routes, options.runtime.environment, router)),
-        'api'
-    );
-    if (
-        !shouldInspectNativeConnections(
-            options.discoverConnections ?? false,
-            directRoutes,
-            preferredConnection
-        )
-    ) {
-        return directRoutes;
-    }
-    const base = options.runner.native(options.runtime, [
-        'pi',
-        '--offline',
-        '--list-models',
-    ]);
-    const result = await options.runtime.execute(base, {
-        network: 'none',
-        readOnly: true,
-    });
-    if (result.code !== 0) {
-        throw new Error(diagnostic(result, 'Pi credentials could not be inspected'));
-    }
-    const available = parsePiModels(`${result.stdout}\n${result.stderr}`);
-    const capabilities = connectionProviderCapabilities('pi', router.catalog);
-    const nativeRoutes = routes.flatMap((route) =>
-        piRouteCandidates(route, capabilities).filter((candidate) =>
-            available.has(`${candidate.nativeProvider}/${candidate.nativeModel}`)
-        )
-    );
-    return uniqueAuthenticatedRoutes([...directRoutes, ...nativeRoutes]);
-}
-
 function shouldInspectNativeConnections(
     discoverConnections: boolean,
     directRoutes: AuthenticatedModelRoute[],
@@ -381,25 +370,6 @@ function uniqueAuthenticatedRoutes(
                     candidate.nativeModel === route.nativeModel &&
                     candidate.authenticationMethod === route.authenticationMethod
             ) === index
-    );
-}
-
-function authenticatedRoutesForProviders(
-    routes: ModelRoute[],
-    providers: Set<string>,
-    authenticationMethod?: string
-): AuthenticatedModelRoute[] {
-    return routes.flatMap((route) =>
-        providers.has(route.provider)
-            ? [
-                  {
-                      provider: route.provider,
-                      nativeProvider: route.provider,
-                      nativeModel: route.model,
-                      ...(authenticationMethod ? { authenticationMethod } : {}),
-                  },
-              ]
-            : []
     );
 }
 
@@ -465,10 +435,25 @@ function diagnostic(
     return detail ? `${fallback}: ${detail.slice(0, 500)}` : fallback;
 }
 
-function canonicalModel(workbench: ResolvedWorkbench): string {
-    return workbench.manifest.model.id;
+function billingWarning(
+    provider: string,
+    method: string | undefined,
+    environment: Record<string, string | undefined>,
+    saved: boolean,
+    command: string
+): string | undefined {
+    if (method !== 'api') return undefined;
+    const variable = ActiveModelCatalog.current().providers[provider]?.env.find(
+        (name) => environment[name]?.trim()
+    );
+    if (variable) {
+        return `${variable} is used and billed. To stop using it, unset ${variable}.`;
+    }
+    return saved
+        ? `Saved credentials for ${provider} are used and billed. To stop using them, run ${command} --provider ${provider} --remove --method api-key.`
+        : undefined;
 }
 
-function unsupportedRunner(runner: string): never {
-    throw new Error(`Unsupported runner: ${runner}`);
+function canonicalModel(workbench: ResolvedWorkbench): string {
+    return workbench.manifest.model.id;
 }

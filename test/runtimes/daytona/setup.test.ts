@@ -46,7 +46,7 @@ describe('SandboxSetup', () => {
 
     test('names the missing tool when root access is unavailable', async () => {
         const client = new FakeClient();
-        client.sandbox.missingCommands.add('gh');
+        client.sandbox.availableCommands.delete('gh');
         client.sandbox.installResult = result(1, 'root access is required\n');
         const runtime = await daytonaProvider({ client }).prepare({
             ...request(await fixture()),
@@ -65,7 +65,7 @@ describe('SandboxSetup', () => {
 
     test('installs engine-managed Git tools as root for repository runs', async () => {
         const client = new FakeClient();
-        client.sandbox.missingCommands.add('git');
+        client.sandbox.availableCommands.delete('git');
         const runtime = await daytonaProvider({ client }).prepare({
             ...request(await fixture()),
             repository,

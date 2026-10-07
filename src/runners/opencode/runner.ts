@@ -1,5 +1,7 @@
 import {
+    type AuthenticatedModelRoute,
     type ModelCatalogSnapshot,
+    type ModelRoute,
     ModelRouter,
     type ResolvedRunnerConfiguration,
 } from '../../models/index.js';
@@ -11,6 +13,7 @@ import {
     type PreparedRunner,
     type PreparedRunnerSessionOptions,
     Runner,
+    type RunnerAuthentication,
     type RunnerEventNormalizer,
 } from '../runner.js';
 import { OpenCodeSessionAdapter, type OpenCodeSessionDependencies } from './adapter.js';
@@ -33,7 +36,11 @@ export interface OpenCodeRunnerDependencies {
 
 export class OpenCodeRunner extends Runner {
     readonly name = 'opencode';
+    override get displayName(): string {
+        return 'OpenCode';
+    }
     readonly session: OpenCodeSessionAdapter;
+    readonly authentication = openCodeAuthentication;
     private readonly skills: OpenCodeSkillStaging;
     private readonly catalog: ModelCatalogSnapshot;
 
@@ -59,6 +66,7 @@ export class OpenCodeRunner extends Runner {
 
 /** An OpenCode runner with its skills staged, ready to build invocations and start sessions. */
 export class PreparedOpenCodeRunner implements PreparedRunner {
+    readonly authentication = openCodeAuthentication;
     readonly name = 'opencode';
     readonly failureLabel = 'OpenCode';
     readonly assets: RuntimeAsset[];
@@ -92,6 +100,41 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
             staged: await skills.stage(workbench),
             session,
             catalog,
+        });
+    }
+
+    connectionCandidates(route: ModelRoute): AuthenticatedModelRoute[] {
+        return [
+            {
+                provider: route.provider,
+                nativeProvider: route.provider,
+                nativeModel: route.model,
+            },
+        ];
+    }
+
+    async inspectNativeConnections(
+        runtime: PreparedRuntime
+    ): Promise<AuthenticatedModelRoute[]> {
+        const result = await runtime.execute(
+            this.native(runtime, ['opencode', 'auth', 'list']),
+            { network: 'none', readOnly: true }
+        );
+        if (result.code !== 0)
+            throw new Error('OpenCode credentials could not be inspected');
+        const credentials = openCodeCredentials(`${result.stdout}\n${result.stderr}`);
+        return this.#router.routes(this.#workbench).flatMap((route) => {
+            const method = credentials.get(normalizeProvider(route.provider));
+            return method
+                ? [
+                      {
+                          provider: route.provider,
+                          nativeProvider: route.provider,
+                          nativeModel: route.model,
+                          authenticationMethod: method,
+                      },
+                  ]
+                : [];
         });
     }
 
@@ -196,4 +239,45 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
     cleanup(): Promise<void> {
         return this.#staged.cleanup();
     }
+}
+
+const openCodeAuthentication = {
+    environmentNames: [],
+    providerCapabilities: (catalog) =>
+        catalog.harnesses?.opencode?.versions['1.18.30']?.providers ??
+        Object.fromEntries(
+            Object.keys(catalog.providers).map((provider) => [
+                provider,
+                [{ native_provider: provider, auth: ['native'] }],
+            ])
+        ),
+    allowEnvironment: () => true,
+    nativeCredentialStore: (runtime) => runtime !== 'daytona',
+    inRunAuthentication: true,
+    supportsNativeAuthentication: (runtime) => runtime !== 'daytona',
+    localAdvice: (provider) => `Run opencode auth login --provider ${provider}`,
+    credentialEnvironment: (root) => ({ XDG_DATA_HOME: root }),
+} satisfies RunnerAuthentication;
+
+function openCodeCredentials(output: string): Map<string, string> {
+    const credentials = new Map<string, string>();
+    for (const line of stripTerminalControl(output)
+        .split(/\r?\n/)
+        .map((line) => line.trim())) {
+        if (!line.startsWith('●')) continue;
+        const parts = line.slice(1).trim().split(/\s+/);
+        const method = parts.pop()?.toLowerCase();
+        const provider = normalizeProvider(parts.join(' '));
+        if (provider && method) credentials.set(provider, method);
+    }
+    return credentials;
+}
+
+function stripTerminalControl(value: string): string {
+    // biome-ignore lint/complexity/useRegexLiterals: the literal form trips the control-character safeguard.
+    return value.replaceAll(new RegExp(String.raw`\u001b\[[0-?]*[ -/]*[@-~]`, 'g'), '');
+}
+
+function normalizeProvider(value: string): string {
+    return value.toLowerCase().replaceAll(/[^a-z0-9]/g, '');
 }

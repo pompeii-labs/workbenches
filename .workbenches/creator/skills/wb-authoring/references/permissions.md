@@ -2,7 +2,9 @@
 
 A headless run that hits a permission prompt stops and waits. To the person supervising it, that looks exactly like slow work. The package's `runner_config` decides which prompts happen, so get it right before anyone runs the Workbench detached.
 
-For OpenCode, ship `opencode.json` in the package and declare it:
+## OpenCode
+
+Ship `opencode.json` in the package and declare it:
 
 ```yaml
 runner_config: ./runner/opencode.json
@@ -49,6 +51,27 @@ runner_config: ./runner/opencode.json
 ```
 
 Check OpenCode's documentation for the version you pin; permission keys are the runner's, not the Workbench standard's.
+
+## Claude Code
+
+For `runner: claude-code`, `runner_config` is an optional JSON file, not a directory:
+
+```yaml
+runner_config: ./runner/claude-code.json
+```
+
+```json
+{
+  "permissions": {
+    "allow": ["Read", "Grep", "Bash(git status:*)"],
+    "deny": ["Bash(rm:*)"]
+  },
+  "max_turns": 12
+}
+```
+
+`permissions.allow` and `permissions.deny` are optional arrays of native Claude Code tool rules. `max_turns` is an optional positive integer. Unknown fields are rejected.
+
 
 ## Test it
 

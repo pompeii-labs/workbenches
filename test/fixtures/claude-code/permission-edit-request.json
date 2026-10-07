@@ -1,0 +1,28 @@
+{
+    "type": "control_request",
+    "request_id": "permission_edit_contract",
+    "request": {
+        "subtype": "can_use_tool",
+        "tool_name": "Edit",
+        "input": {
+            "file_path": "/outside/example.ts",
+            "old_string": "const oldValue = true;",
+            "new_string": "const newValue = false;"
+        },
+        "permission_suggestions": [
+            {
+                "type": "setMode",
+                "mode": "acceptEdits",
+                "destination": "session"
+            },
+            {
+                "type": "addDirectories",
+                "directories": ["/outside"],
+                "destination": "session"
+            }
+        ],
+        "tool_use_id": "tool_permission_edit",
+        "decision_reason": "The path is outside the working directory",
+        "blocked_path": "/outside/example.ts"
+    }
+}

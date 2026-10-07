@@ -1,3 +1,5 @@
+export const runtimeCredentialRoot = '/workbench-credentials';
+
 /**
  * Checks a path inside a runner credential store: lowercase relative segments
  * that cannot climb out of the store or carry shell syntax. Returns its segments.

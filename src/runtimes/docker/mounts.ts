@@ -147,10 +147,10 @@ export class DockerMountPlan {
                   }
                 : {}),
             ...Object.fromEntries(
-                DockerMountPlan.environmentNames(this.request.workbench).map((name) => [
-                    name,
-                    this.request.environment[name],
-                ])
+                DockerMountPlan.environmentNames(
+                    this.request.workbench,
+                    this.request.runnerAuthentication
+                ).map((name) => [name, this.request.environment[name]])
             ),
             ...(this.request.repository?.delivery === 'pr'
                 ? Object.fromEntries(
@@ -172,15 +172,20 @@ export class DockerMountPlan {
         };
     }
 
-    static environmentNames(workbench: ResolvedWorkbench): string[] {
-        return [
+    static environmentNames(
+        workbench: ResolvedWorkbench,
+        authentication?: RuntimePrepareRequest['runnerAuthentication']
+    ): string[] {
+        const names = [
             ...new Set([
                 ...Object.keys(workbench.manifest.env),
                 ...new ModelRouter(
                     ActiveModelCatalog.current()
                 ).providerEnvironmentNames(workbench),
             ]),
-        ];
+        ].filter((name) => authentication?.allowEnvironment(name, 'docker') ?? true);
+        names.push(...(authentication?.environmentNames ?? []));
+        return [...new Set(names)];
     }
 
     private repositoryPathFor(workbench: ResolvedWorkbench): string {

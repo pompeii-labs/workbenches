@@ -1,5 +1,7 @@
 import {
+    type AuthenticatedModelRoute,
     type ModelCatalogSnapshot,
+    type ModelRoute,
     ModelRouter,
     type ResolvedRunnerConfiguration,
 } from '../../models/index.js';
@@ -11,6 +13,7 @@ import {
     type PreparedRunner,
     type PreparedRunnerSessionOptions,
     Runner,
+    type RunnerAuthentication,
     type RunnerEventNormalizer,
 } from '../runner.js';
 import type { PiConfigStaging, StagedPiConfig } from './config.js';
@@ -20,11 +23,20 @@ import {
     piCredentialCommand,
     publicPiInvocation,
 } from './invocation.js';
+import {
+    PI_PACKAGE_VERSION,
+    PI_PROVIDER_CAPABILITIES,
+    piRouteCandidates,
+} from './providers.js';
 import { PiSessionAdapter, type SpawnedPi } from './session.js';
 
 export class PiRunner extends Runner {
     readonly name = 'pi';
+    override get displayName(): string {
+        return 'Pi';
+    }
     readonly session: PiSessionAdapter;
+    readonly authentication = piAuthentication;
 
     constructor(
         private readonly config: PiConfigStaging,
@@ -50,6 +62,7 @@ export class PiRunner extends Runner {
 }
 
 class PreparedPiRunner implements PreparedRunner {
+    readonly authentication = piAuthentication;
     readonly name = 'pi';
     readonly failureLabel = 'Pi';
     readonly assets: RuntimeAsset[];
@@ -87,6 +100,33 @@ class PreparedPiRunner implements PreparedRunner {
             session,
             catalog,
         });
+    }
+
+    connectionCandidates(route: ModelRoute): AuthenticatedModelRoute[] {
+        return piRouteCandidates(
+            route,
+            this.authentication.providerCapabilities(this.#router.catalog)
+        );
+    }
+
+    async inspectNativeConnections(
+        runtime: PreparedRuntime
+    ): Promise<AuthenticatedModelRoute[]> {
+        const result = await runtime.execute(
+            this.native(runtime, ['pi', '--offline', '--list-models']),
+            { network: 'none', readOnly: true }
+        );
+        if (result.code !== 0) throw new Error('Pi credentials could not be inspected');
+        const available = parsePiModels(`${result.stdout}\n${result.stderr}`);
+        return this.#router
+            .routes(this.#workbench)
+            .flatMap((route) =>
+                this.connectionCandidates(route).filter((candidate) =>
+                    available.has(
+                        `${candidate.nativeProvider}/${candidate.nativeModel}`
+                    )
+                )
+            );
     }
 
     build(
@@ -189,4 +229,30 @@ class PreparedPiRunner implements PreparedRunner {
     cleanup(): Promise<void> {
         return this.#staged.cleanup();
     }
+}
+
+const piAuthentication = {
+    environmentNames: [],
+    providerCapabilities: (catalog) =>
+        catalog.harnesses?.pi?.versions[PI_PACKAGE_VERSION]?.providers ??
+        PI_PROVIDER_CAPABILITIES,
+    allowEnvironment: () => true,
+    nativeCredentialStore: (runtime) => runtime !== 'daytona',
+    inRunAuthentication: false,
+    supportsNativeAuthentication: (runtime) => runtime !== 'daytona',
+    localAdvice: () => 'Run pi and sign in with /login',
+    credentialEnvironment: (root) => ({ WORKBENCH_CREDENTIALS_DIR: root }),
+    runnerConfigShape: 'directory',
+} satisfies RunnerAuthentication;
+
+function parsePiModels(value: string): Set<string> {
+    const models = new Set<string>();
+    for (const line of value.split(/\r?\n/)) {
+        const [provider, model] = line.trim().split(/\s+/);
+        if (!provider || !model || provider === 'provider') continue;
+        if (!/^[a-z0-9][a-z0-9._-]*$/i.test(provider)) continue;
+        if (!/^[a-z0-9][a-z0-9._:/-]*$/i.test(model)) continue;
+        models.add(`${provider}/${model}`);
+    }
+    return models;
 }

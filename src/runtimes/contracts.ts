@@ -27,6 +27,8 @@ export interface RuntimeAsset {
     access: 'read-only' | 'read-write';
     workspace?: string;
     state?: boolean;
+    /** Engine-owned paths refreshed from the host before remote state is staged. */
+    stateOverlay?: string[];
     git?: boolean;
 }
 
@@ -50,6 +52,18 @@ export interface RuntimeCredentialFiles {
 
 export interface RuntimePrepareRequest {
     workbench: ResolvedWorkbench;
+    runnerCommand?: string;
+    runnerVersion?: { minimum: string };
+    runnerCredentialStore?: boolean;
+    runnerAuthentication?: {
+        environmentNames: readonly string[];
+        allowEnvironment(name: string, runtime: string): boolean;
+        credentialEnvironment?(root: string): Record<string, string | undefined>;
+        subprocessEnvironmentScrubbing?: {
+            macos: boolean;
+            linuxProbe: string[];
+        };
+    };
     workspaceDirectory: string;
     environment: Record<string, string | undefined>;
     assets: RuntimeAsset[];
@@ -132,6 +146,8 @@ export interface PreparedRuntime {
      */
     readonly sandboxId?: string | undefined;
     readonly nativeAuthentication: 'persistent' | 'unavailable';
+    /** Whether the runner can isolate tool subprocess environments in this runtime. */
+    readonly subprocessEnvironmentScrubbing?: boolean | undefined;
     /** The runner credential store this runtime mounts, when the host can write it directly. */
     readonly credentials?: RuntimeCredentialFiles | undefined;
     pathFor(hostPath: string): string;

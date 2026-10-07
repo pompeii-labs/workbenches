@@ -15,7 +15,7 @@ import { ConnectionCheck } from '../src/connections/check.js';
 import { NativeCredentialFile } from '../src/connections/nativecredentials.js';
 import { ConnectionSetup } from '../src/connections/setup.js';
 import { OutcomeOutput } from '../src/outcomes/output.js';
-import type { RunnerRegistry } from '../src/runners/registry.js';
+import { RunnerRegistry } from '../src/runners/registry.js';
 import type { PreparedRunner } from '../src/runners/runner.js';
 import { RunEvents } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/index.js';
@@ -192,6 +192,114 @@ describe('Docker runtime provider', () => {
                 command: dockerMock([]),
             }).prepare(request(fixture))
         ).rejects.toThrow('Docker runtime requires an image or local image build');
+    });
+
+    test('checks Claude Code in the image and passes only its supported credentials', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/core:0.1.0' });
+        fixture.workbench.manifest.runner = 'claude-code';
+        fixture.workbench.manifest.model = { id: 'anthropic/claude-sonnet-4-5' };
+        fixture.workbench.manifest.env = {
+            CLAUDE_HOST_VALUE: { required: false },
+            ANTHROPIC_HOST_VALUE: { required: false },
+        };
+        const preflightEnvironments: Array<{ command: string[]; environment: string }> =
+            [];
+        const preflightTimeouts: number[] = [];
+        const provider = (version: string) => {
+            const mock = dockerMock([], {
+                runnerVersion: version,
+                available: ['git', 'tar', 'claude'],
+            });
+            return new DockerRuntimeProvider({
+                host: new NodeHost(),
+                findExecutable: () => '/usr/bin/docker',
+                command: async (command, options) => {
+                    if (command[1] === 'run') {
+                        const environmentIndex = command.indexOf('--env-file');
+                        const file =
+                            environmentIndex >= 0
+                                ? command[environmentIndex + 1]
+                                : undefined;
+                        if (file) {
+                            preflightEnvironments.push({
+                                command,
+                                environment: readFileSync(file, 'utf8'),
+                            });
+                        }
+                        if (
+                            command.at(-1) === '--version' ||
+                            command.includes('bwrap')
+                        ) {
+                            preflightTimeouts.push(options?.timeoutMilliseconds ?? 0);
+                        }
+                    }
+                    return mock(command);
+                },
+            });
+        };
+        const input = {
+            ...request(fixture, {
+                ANTHROPIC_API_KEY: 'anthropic-secret',
+                CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret',
+                CLAUDE_HOST_VALUE: 'host-claude-value',
+                ANTHROPIC_HOST_VALUE: 'host-anthropic-value',
+            }),
+            runnerCommand: 'claude',
+            runnerVersion: { minimum: '2.1.292' },
+            runnerAuthentication: runtimeAuthentication('claude-code'),
+        };
+        const runtime = await provider('2.1.292').prepare(input);
+        try {
+            await expect(runtime.preflight()).resolves.toMatchObject({
+                runner: { name: 'claude-code', version: '2.1.292' },
+            });
+            expect(runtime.environment).toMatchObject({
+                ANTHROPIC_API_KEY: 'anthropic-secret',
+            });
+            expect(runtime.environment).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+            expect(runtime.environment).not.toHaveProperty('CLAUDE_HOST_VALUE');
+            expect(runtime.environment).not.toHaveProperty('ANTHROPIC_HOST_VALUE');
+            expect(runtime.environment.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe(
+                '/workbench-credentials/claude-auth'
+            );
+            expect(runtime.nativeAuthentication).toBe('persistent');
+            const credentialFree = preflightEnvironments.filter(
+                ({ command }) =>
+                    command.at(-1) === '--version' || command.includes('bwrap')
+            );
+            expect(credentialFree).toHaveLength(2);
+            expect(preflightTimeouts).toEqual([15_000, 15_000]);
+            for (const { environment } of credentialFree) {
+                expect(environment).not.toContain('ANTHROPIC_API_KEY=');
+                expect(environment).not.toContain('CLAUDE_CODE_OAUTH_TOKEN=');
+            }
+        } finally {
+            await runtime.cleanup();
+        }
+
+        const old = await provider('2.1.291').prepare(input);
+        try {
+            await expect(old.preflight()).rejects.toThrow('claude 2.1.291 is too old');
+        } finally {
+            await old.cleanup();
+        }
+    });
+
+    test('preserves declared Anthropic environment for other runners', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/core:0.1.0' });
+        fixture.workbench.manifest.env = {
+            ANTHROPIC_BASE_URL: { required: false },
+        };
+        const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock([]),
+        }).prepare(request(fixture, { ANTHROPIC_BASE_URL: 'https://example.test' }));
+        try {
+            expect(runtime.environment.ANTHROPIC_BASE_URL).toBe('https://example.test');
+        } finally {
+            await runtime.cleanup();
+        }
     });
 
     test('requires authorization and preserves host paths for a host engine binding', async () => {
@@ -570,6 +678,26 @@ describe('Docker runtime provider', () => {
                 cwd: runtime.workspaceDirectory,
                 env: runtime.environment,
             }),
+            inspectNativeConnections: async (runtime) => {
+                const result = await runtime.execute(
+                    {
+                        command: ['opencode', 'auth', 'list'],
+                        cwd: '/workspace',
+                        env: runtime.environment,
+                    },
+                    { network: 'none', readOnly: true }
+                );
+                return result.stdout.includes('openrouter')
+                    ? [
+                          {
+                              provider: 'openrouter',
+                              nativeProvider: 'openrouter',
+                              nativeModel: 'openai/gpt-5.6-terra',
+                              authenticationMethod: 'api',
+                          },
+                      ]
+                    : [];
+            },
             publicInvocation: () => ({}),
             events: () => ({
                 consume: () => ({ events: [] }),
@@ -669,6 +797,26 @@ describe('Docker runtime provider', () => {
                 cwd: runtime.workspaceDirectory,
                 env: runtime.environment,
             }),
+            inspectNativeConnections: async (runtime) => {
+                const result = await runtime.execute(
+                    {
+                        command: ['opencode', 'auth', 'list'],
+                        cwd: '/workspace',
+                        env: runtime.environment,
+                    },
+                    { network: 'none', readOnly: true }
+                );
+                return result.stdout.includes('OpenRouter')
+                    ? [
+                          {
+                              provider: 'openrouter',
+                              nativeProvider: 'openrouter',
+                              nativeModel: 'openai/gpt-5.6-terra',
+                              authenticationMethod: 'api',
+                          },
+                      ]
+                    : [];
+            },
             publicInvocation: () => ({}),
             events: () => ({
                 consume: () => ({ events: [] }),
@@ -1346,6 +1494,8 @@ function dockerMock(
         inspectRepository?: () => boolean;
         imageUser?: string;
         onBuild?: (command: string[]) => void | Promise<void>;
+        runnerVersion?: string;
+        available?: string[];
     } = {}
 ) {
     return async (command: string[]): Promise<DockerCommandResult> => {
@@ -1386,11 +1536,31 @@ function dockerMock(
             return result(0, `${command[3] ?? ''}\n`);
         }
         if (command[1] === 'run') {
+            if (command.includes('claude') && command.at(-1) === '--version') {
+                return result(
+                    0,
+                    `${options.runnerVersion ?? '2.1.292'} (Claude Code)\n`
+                );
+            }
             const requested = command.at(-1);
             if (command.includes('command -v "$1" 2>/dev/null')) {
-                return requested === options.missing
-                    ? result(127, '', 'not found')
-                    : result(0, `/usr/local/bin/${requested}\n`);
+                const available = new Set(
+                    options.available ?? [
+                        'opencode',
+                        'pi',
+                        'claude',
+                        'git',
+                        'tar',
+                        'gh',
+                        'docker',
+                        'cargo',
+                        'lux',
+                        'fixture-tool',
+                    ]
+                );
+                return requested !== options.missing && available.has(requested ?? '')
+                    ? result(0, `/usr/local/bin/${requested}\n`)
+                    : result(127, '', 'not found');
             }
             return result(0);
         }
@@ -1481,6 +1651,10 @@ function request(
 ) {
     return {
         workbench: fixture.workbench,
+        runnerAuthentication: runtimeAuthentication(fixture.workbench.manifest.runner),
+        runnerCredentialStore: RunnerRegistry.standard()
+            .authentication(fixture.workbench.manifest.runner)
+            .nativeCredentialStore('docker'),
         workspaceDirectory: fixture.root,
         environment,
         assets: [
@@ -1490,6 +1664,23 @@ function request(
                 access: 'read-only' as const,
             },
         ],
+    };
+}
+
+function runtimeAuthentication(runner: string) {
+    const authentication = RunnerRegistry.standard().authentication(runner);
+    return {
+        environmentNames: authentication.environmentNames,
+        allowEnvironment: authentication.allowEnvironment,
+        ...(authentication.credentialEnvironment
+            ? { credentialEnvironment: authentication.credentialEnvironment }
+            : {}),
+        ...(authentication.subprocessEnvironmentScrubbing
+            ? {
+                  subprocessEnvironmentScrubbing:
+                      authentication.subprocessEnvironmentScrubbing,
+              }
+            : {}),
     };
 }
 

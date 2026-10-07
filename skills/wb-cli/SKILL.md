@@ -35,10 +35,11 @@ The CLI reports anonymous save and run counts, but only for registry Workbenches
 
 - `opencode`: as root, `npm install -g opencode-ai`. As a non-root user that fails on the global prefix; use `npm install -g --prefix ~/.local opencode-ai`, which installs to `~/.local/bin`.
 - `pi`: `npm install -g @earendil-works/pi-coding-agent` (as non-root, add `--prefix ~/.local`).
+- `claude-code`: `npm install -g @anthropic-ai/claude-code`. As a non-root user, use `npm install -g --prefix ~/.local @anthropic-ai/claude-code`.
 
 `wb` finds the runner by looking up its name on `PATH`, so a non-root install must put `~/.local/bin` on `PATH`, as above.
 
-Missing runner on the host: `Runner CLI is unavailable: opencode. Install opencode and rerun this command.` Missing tool: `Required CLI tool is unavailable: <tool>`.
+Missing runner on the host: `Runner CLI is unavailable: opencode. Install opencode and rerun this command.` (`claude` for Claude Code). Missing tool: `Required CLI tool is unavailable: <tool>`.
 
 ## First run, safely
 
@@ -65,9 +66,11 @@ A manifest names a model (`lab/model`) and optionally ordered provider `routes`.
 
 Keys come from the environment of the `wb` process, plus `--env-file FILE` and `--env NAME=value`. Each provider has fixed variable names, for example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY` or `GOOGLE_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, and `AI_GATEWAY_API_KEY` (Vercel). After a route is chosen, other providers' keys are stripped from the run. `wb view <alias>` shows each route and which one is ready.
 
+Every runner uses the same model catalog, route ordering, connection precedence, and inspection contracts. `wb connect` lists only the provider and subscription methods available for the selected runner and runtime.
+
 There is no single required provider. If a run asks for a key the person does not have, check `wb view` for the other routes; an OpenAI or Anthropic key is often enough where an example used OpenRouter. Details and every error text are in [references/connections.md](references/connections.md).
 
-`wb connect <alias> --runtime <runtime>` saves the default route for that runner and runtime, puts the provider credential into the store that runtime reads, and checks it. It ends with `Ready: <Provider> for <Runner> in <runtime>` (`Saved:` for `e2b`, which the first run confirms), or exits 3 naming what is missing and the one command that fixes it. Run it with the `--runtime` from the smoke or run hint. Unattended, the only way to give a key is standard input (`--stdin`); the hidden key prompt and a fresh subscription sign-in need a person at a terminal, so hand them over. `wb connect` never reads or copies the person's own runner sign-in. For a one-off run, `--env-file` works without connecting. Details are in [references/connections.md](references/connections.md).
+`wb connect <alias> --runtime <runtime>` saves the default route for that runner and runtime, puts the provider credential into the store that runtime reads, and checks it. It ends with `Ready: <Provider> for <Runner> in <runtime>` (`Saved:` when the first run confirms a remote store), or exits 3 naming what is missing and the one command that fixes it. Run it with the `--runtime` from the smoke or run hint. Unattended, the only way to give a key is standard input (`--stdin`); hidden key prompts and subscription sign-ins need a person at a terminal. `wb connect` never reads or copies the person's own runner sign-in. For a one-off run, `--env-file` works without connecting. Details are in [references/connections.md](references/connections.md).
 
 Never print, `cat`, or echo a key or an env file to check for it. Check by variable name only, for example `test -n "$OPENAI_API_KEY" && echo set`.
 
@@ -80,7 +83,7 @@ A Workbench declares the runtimes it supports; the first is the default. Choose 
 | `local` | The runner and tools on the host. Edits land in the working tree. |
 | `docker` | A Docker-compatible CLI and daemon. The image holds runner and tools. Edits land in the mounted workspace. |
 | `e2b` | `E2B_API_KEY`, or `wb connect --runtime e2b` once (masked prompt or `--stdin`). Edits come back as a pending outcome. |
-| `daytona` | `DAYTONA_API_KEY`, or `wb connect --runtime daytona`. Only the `linux` class runs today. Published images only. OpenCode only. Edits come back as a pending outcome. |
+| `daytona` | `DAYTONA_API_KEY`, or `wb connect --runtime daytona`. Only the `linux` class runs today. Published images only. OpenCode and Claude Code are supported; Pi is not. Edits come back as a pending outcome. |
 
 The environment variable always wins over a saved runtime key. Runtime keys never enter the sandbox. `wb connect --runtime <name> --status` checks one.
 

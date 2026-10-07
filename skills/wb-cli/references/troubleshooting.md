@@ -11,7 +11,7 @@ A headless run is almost always waiting on a permission prompt. Check `wb ps --j
 | Symptom | Cause and fix |
 | --- | --- |
 | `wb: command not found` after install | The bin directory is not on `PATH`. For this shell run `export PATH="$HOME/.local/bin:$PATH"`; tell the person to add that line (or the printed directory) to their shell profile. |
-| `Runner CLI is unavailable: opencode` | Install the runner on the host for `local` (non-root install and `PATH` are in SKILL.md), or use a runtime whose image contains it. |
+| `Runner CLI is unavailable: X. Install X and rerun this command.` | Install the Workbench's runner on the host for `local`, or use a runtime whose image contains it. Runner installation commands are in SKILL.md. |
 | `Required CLI tool is unavailable: X` | A tool the Workbench declares is missing on the host or in the image. Install it, or use another declared runtime. |
 | `Docker CLI is unavailable on the host` | Install and start Docker, or use another runtime. |
 | `Workbench X does not declare runtime: Y` | Pick one of the listed runtimes. |
@@ -23,6 +23,7 @@ A headless run is almost always waiting on a permission prompt. Check `wb ps --j
 | `wb run requires a task` | Pass `--task`, `--task-file`, or `--stdin`. |
 | `Session wb_... needs new input` | Use `wb send wb_... <task>` or pass `--task`, `--task-file`, or `--stdin` to `resume`. |
 | `wb create requires an authoring brief` | Pass `--task`, `--task-file`, or `--stdin`, or use `--from`. |
+| A runner reports no authenticated route | Run the shown `wb connect <workbench> --runtime <runtime>` command and choose one of the listed provider or subscription methods. |
 
 Credential errors are in `connections.md`.
 

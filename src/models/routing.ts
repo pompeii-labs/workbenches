@@ -37,6 +37,7 @@ export interface ResolvedRunnerConfiguration {
     provider: string;
     nativeProvider: string;
     nativeModel: string;
+    authenticationMethod?: string;
     routes: ModelRoute[];
     runnerConfigPath?: string;
     catalogVersion?: string;
@@ -146,6 +147,9 @@ export class ModelRouter {
             provider: selected.provider,
             nativeProvider,
             nativeModel,
+            ...(selectedAuthentication?.authenticationMethod
+                ? { authenticationMethod: selectedAuthentication.authenticationMethod }
+                : {}),
             routes,
             ...(options.workbench.runnerConfigPath
                 ? { runnerConfigPath: options.workbench.runnerConfigPath }

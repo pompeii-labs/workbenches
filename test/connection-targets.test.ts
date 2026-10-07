@@ -18,6 +18,54 @@ describe('runner connection targets', () => {
         ).toEqual(['openai', 'anthropic', 'openrouter', 'github-copilot', 'opencode']);
     });
 
+    test('offers documented Claude Code providers through the shared target flow', () => {
+        const catalog = structuredClone(modelCatalogFixture);
+        catalog.providers.vercel = { env: ['AI_GATEWAY_API_KEY'] };
+        const model = catalog.models['anthropic/claude-sonnet-4-5'];
+        if (!model) throw new Error('missing model fixture');
+        model.routes.vercel = 'anthropic/claude-sonnet-4-5';
+        expect(connectionProviders('claude-code', catalog).map(({ id }) => id)).toEqual(
+            ['anthropic', 'openrouter', 'vercel']
+        );
+        expect(
+            connectionAuthenticationMethods(
+                'local',
+                'claude-code',
+                'anthropic',
+                modelCatalogFixture
+            )
+        ).toContainEqual({
+            id: 'api-key',
+            label: 'Anthropic API key',
+            nativeProvider: 'anthropic',
+            authenticationMethod: 'api',
+        });
+        expect(
+            connectionAuthenticationMethods(
+                'local',
+                'claude-code',
+                'anthropic',
+                catalog
+            ).map(({ id }) => id)
+        ).toEqual(['api-key', 'subscription']);
+        expect(
+            connectionAuthenticationMethods(
+                'docker',
+                'claude-code',
+                'anthropic',
+                catalog
+            ).map(({ id }) => id)
+        ).toEqual(['api-key', 'subscription']);
+        expect(
+            connectionAuthenticationMethods(
+                'e2b',
+                'claude-code',
+                'anthropic',
+                catalog
+            ).map(({ id }) => id)
+        ).toEqual(['api-key']);
+    });
+
     test('intersects model providers with the selected harness capability map', () => {
         const catalog = structuredClone(modelCatalogFixture);
         catalog.providers['wafer.ai'] = { env: ['WAFER_API_KEY'] };

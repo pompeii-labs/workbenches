@@ -186,6 +186,92 @@ describe('native runner authentication', () => {
         );
     });
 
+    test('reports Claude Code API and native OAuth authentication', async () => {
+        const workbench = fixture('claude-code');
+        workbench.manifest.model = { id: 'anthropic/claude-sonnet-4-5' };
+        let inspected = false;
+        const api = await inspector(workbench, {
+            runner: runner('claude-code'),
+            runtime: runtime('', {
+                workbench,
+                environment: { ANTHROPIC_API_KEY: 'configured' },
+                execute: async () => {
+                    inspected = true;
+                    return { code: 1, stdout: '', stderr: '' };
+                },
+            }),
+        }).inspect();
+        expect(api).toMatchObject({
+            ready: true,
+            authenticatedProviders: ['anthropic'],
+            connections: [{ authenticationMethod: 'api' }],
+        });
+        expect(inspected).toBeFalse();
+
+        const oauth = await inspector(workbench, {
+            runner: runner('claude-code'),
+            runtime: runtime('{"loggedIn":true}', {
+                workbench,
+            }),
+        }).inspect();
+        expect(oauth.connections[0]?.authenticationMethod).toBe('oauth');
+
+        const remoteOauth = await inspector(workbench, {
+            runner: runner('claude-code'),
+            runtime: runtime('', {
+                name: 'e2b',
+                workbench,
+                environment: {},
+            }),
+        }).inspect();
+        expect(remoteOauth.ready).toBeFalse();
+        expect(remoteOauth.connections).toEqual([]);
+
+        const both = await inspector(workbench, {
+            runner: runner('claude-code'),
+            runtime: runtime('', {
+                workbench,
+                environment: {
+                    ANTHROPIC_API_KEY: 'configured',
+                },
+            }),
+        }).inspect();
+        expect(both.connections[0]?.authenticationMethod).toBe('api');
+    });
+
+    test('fails closed when Claude auth status is not ready', async () => {
+        const workbench = fixture('claude-code');
+        workbench.manifest.model = { id: 'anthropic/claude-sonnet-4-5' };
+        let inspected = false;
+        const status = await inspector(workbench, {
+            runner: runner('claude-code'),
+            runtime: runtime('', {
+                workbench,
+                environment: { CLAUDE_SECURESTORAGE_CONFIG_DIR: '' },
+                execute: async () => {
+                    inspected = true;
+                    return { code: 1, stdout: '', stderr: '' };
+                },
+            }),
+        }).inspect();
+
+        expect(inspected).toBeTrue();
+        expect(status.ready).toBeFalse();
+        expect(status.authenticatedProviders).toEqual([]);
+        expect(status.instruction).toBeUndefined();
+        expect(status.connectCommand).toBe('wb connect fixture --runtime local');
+    });
+
+    test('resolves Claude Code routes like OpenCode', () => {
+        const openCode = fixture('opencode');
+        const claudeCode = fixture('claude-code');
+        openCode.manifest.model = { id: 'anthropic/claude-sonnet-4-5' };
+        claudeCode.manifest.model = { id: 'anthropic/claude-sonnet-4-5' };
+        expect(inspector(claudeCode).candidates()).toEqual(
+            inspector(openCode).candidates()
+        );
+    });
+
     test('names a non-local runtime in the connect command so it fills that store', async () => {
         const workbench = fixture('opencode');
         const status = await inspector(workbench, {
@@ -220,7 +306,7 @@ function inspector(
     return new ConnectionInspector({ workbench, ...options });
 }
 
-function fixture(runnerName: 'opencode' | 'pi'): ResolvedWorkbench {
+function fixture(runnerName: 'opencode' | 'pi' | 'claude-code'): ResolvedWorkbench {
     return {
         manifestPath: '/repo/.workbenches/core/workbench.yml',
         packageDirectory: '/repo/.workbenches/core',
@@ -247,12 +333,84 @@ function fixture(runnerName: 'opencode' | 'pi'): ResolvedWorkbench {
 }
 
 function runner(name: string): PreparedRunner {
+    const candidateProviders = new Set<string>();
     return {
         name,
         failureLabel: name,
         assets: [],
         build: () => ({ command: [], cwd: '/repo', env: {} }),
         native: (_runtime, command) => ({ command, cwd: '/repo', env: {} }),
+        connectionCandidates: (route) => {
+            candidateProviders.add(route.provider);
+            return name === 'pi' && route.provider === 'openai'
+                ? [
+                      {
+                          provider: 'openai',
+                          nativeProvider: 'openai',
+                          nativeModel: route.model,
+                          authenticationMethod: 'api',
+                      },
+                      {
+                          provider: 'openai',
+                          nativeProvider: 'openai-codex',
+                          nativeModel: route.model,
+                          authenticationMethod: 'oauth',
+                      },
+                  ]
+                : [
+                      {
+                          provider: route.provider,
+                          nativeProvider: route.provider,
+                          nativeModel: route.model,
+                      },
+                  ];
+        },
+        inspectNativeConnections: async (prepared) => {
+            const result = await prepared.execute({
+                command: [],
+                cwd: '/repo',
+                env: {},
+            });
+            const output = `${result.stdout}\n${result.stderr}`;
+            if (name === 'opencode') {
+                return [...output.matchAll(/●\s+(OpenAI|OpenRouter)\s+(\w+)/g)]
+                    .map((match) => ({
+                        provider: match[1] === 'OpenAI' ? 'openai' : 'openrouter',
+                        nativeProvider: match[1] === 'OpenAI' ? 'openai' : 'openrouter',
+                        nativeModel:
+                            match[1] === 'OpenAI'
+                                ? 'gpt-5.6-terra'
+                                : 'openai/gpt-5.6-terra',
+                        authenticationMethod: match[2]?.toLowerCase() ?? 'native',
+                    }))
+                    .filter((route) => candidateProviders.has(route.provider));
+            }
+            if (name === 'pi' && output.includes('openai-codex')) {
+                return [
+                    {
+                        provider: 'openai',
+                        nativeProvider: 'openai-codex',
+                        nativeModel: 'gpt-5.6-terra',
+                        authenticationMethod: 'oauth',
+                    },
+                ];
+            }
+            if (
+                name === 'claude-code' &&
+                result.code === 0 &&
+                output.includes('loggedIn')
+            ) {
+                return [
+                    {
+                        provider: 'anthropic',
+                        nativeProvider: 'anthropic',
+                        nativeModel: 'claude-sonnet-4-5',
+                        authenticationMethod: 'oauth',
+                    },
+                ];
+            }
+            return [];
+        },
         publicInvocation: () => ({}),
         events: () => ({
             consume: () => ({ events: [] }),

@@ -538,6 +538,12 @@ class TrackingRunner extends Runner {
         this.calls.push('runner.prepare');
         return {
             name: prepared.name,
+            ...(prepared.nativeCommand
+                ? { nativeCommand: prepared.nativeCommand }
+                : {}),
+            ...(prepared.nativeVersion
+                ? { nativeVersion: prepared.nativeVersion }
+                : {}),
             failureLabel: prepared.failureLabel,
             assets: prepared.assets,
             build: (...args) => prepared.build(...args),

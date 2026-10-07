@@ -1,4 +1,5 @@
 import { ActiveModelCatalog, ModelRouter } from '../models/index.js';
+import { redactRunnerEnvironment } from '../runners/output.js';
 import type { RunnerEventNormalizer, RunnerSummary } from '../runners/runner.js';
 import type { ResolvedWorkbench, SpawnedRunner } from '../types.js';
 import type { RunEvents } from './events.js';
@@ -53,11 +54,10 @@ export class RunnerOutput {
         workbench: ResolvedWorkbench,
         environment: Record<string, string | undefined>
     ): string {
-        let result = source;
+        let result = redactRunnerEnvironment(source, environment);
         const catalog = ActiveModelCatalog.active();
         const names = new Set([
             ...Object.keys(workbench.manifest.env),
-            ...Object.keys(environment).filter(RunnerOutput.isCredentialName),
             ...(catalog
                 ? new ModelRouter(catalog).providerEnvironmentNames(workbench)
                 : []),
@@ -70,12 +70,6 @@ export class RunnerOutput {
             .toSorted((left, right) => right.length - left.length);
         for (const value of values) result = result.replaceAll(value, '[REDACTED]');
         return result;
-    }
-
-    private static isCredentialName(name: string): boolean {
-        return /(?:^|_)(?:API_?KEY|AUTH|CREDENTIALS?|PASSWORD|PRIVATE_?KEY|SECRET|TOKEN)(?:_|$)/i.test(
-            name
-        );
     }
 
     private async consumeEvents(

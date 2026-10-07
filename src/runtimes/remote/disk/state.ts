@@ -2,15 +2,18 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import {
     chmod,
+    cp,
     lstat,
     mkdir,
+    mkdtemp,
     readdir,
     readFile,
     rename,
     rm,
     writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { OutcomeStorageLease } from '../../../outcomes/lease.js';
 import type { SandboxArchive } from './archive.js';
 import { StateSelection } from './selection.js';
@@ -32,10 +35,11 @@ export class StateStore {
     constructor(
         private readonly archive: SandboxArchive,
         private readonly directory: string,
-        private readonly files?: readonly string[]
+        private readonly files?: readonly string[],
+        private readonly overlay?: readonly string[]
     ) {
         this.provider = archive.rules.provider;
-        for (const file of files ?? []) {
+        for (const file of [...(files ?? []), ...(overlay ?? [])]) {
             if (
                 !/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(file) ||
                 file.split('/').some((part) => part === '.' || part === '..')
@@ -51,9 +55,32 @@ export class StateStore {
 
     async withSource<T>(operation: (source: StateSource) => Promise<T>): Promise<T> {
         await this.prepare();
-        return new OutcomeStorageLease(this.root).exclusive(async () =>
-            operation(await this.sourceExclusive())
-        );
+        return new OutcomeStorageLease(this.root).exclusive(async () => {
+            const source = await this.sourceExclusive();
+            if (!this.overlay || source.directory === this.directory) {
+                return operation(source);
+            }
+            const merged = await mkdtemp(join(tmpdir(), 'workbench-state-overlay-'));
+            try {
+                await cp(source.directory, merged, { recursive: true });
+                for (const path of this.overlay) {
+                    const from = join(this.directory, path);
+                    const to = join(merged, path);
+                    if ((await lstat(to).catch(() => undefined))?.isDirectory()) {
+                        await privatize(to);
+                    }
+                    await rm(to, { recursive: true, force: true });
+                    if (await lstat(from).catch(() => undefined)) {
+                        await mkdir(dirname(to), { recursive: true });
+                        await cp(from, to, { recursive: true });
+                    }
+                }
+                return await operation({ ...source, directory: merged });
+            } finally {
+                await restoreCleanupPermissions(merged);
+                await rm(merged, { recursive: true, force: true });
+            }
+        });
     }
 
     async install(
@@ -138,7 +165,12 @@ export class StateStore {
         if (!details)
             return {
                 directory: this.directory,
-                version: await fingerprint(this.directory, this.provider, this.files),
+                version: await fingerprint(
+                    this.directory,
+                    this.provider,
+                    this.files,
+                    this.overlay
+                ),
             };
         if (!details.isFile() || details.isSymbolicLink() || details.size > 1_024) {
             throw new Error(`Invalid ${this.provider} native state pointer`);
@@ -193,6 +225,21 @@ async function privatize(directory: string): Promise<void> {
     }
 }
 
+async function restoreCleanupPermissions(path: string): Promise<void> {
+    const details = await lstat(path).catch(() => undefined);
+    if (!details || details.isSymbolicLink()) return;
+    if (details.isDirectory()) {
+        await chmod(path, 0o700).catch(() => {});
+        const entries = await readdir(path, { withFileTypes: true }).catch(() => []);
+        for (const entry of entries) {
+            if (entry.name === '.git' || entry.isSymbolicLink()) continue;
+            await restoreCleanupPermissions(join(path, entry.name));
+        }
+        return;
+    }
+    if (details.isFile()) await chmod(path, 0o600).catch(() => {});
+}
+
 async function retainFiles(
     directory: string,
     files: readonly string[],
@@ -211,7 +258,8 @@ async function retainFiles(
 async function fingerprint(
     directory: string,
     provider: string,
-    files?: readonly string[]
+    files?: readonly string[],
+    ignored?: readonly string[]
 ): Promise<string> {
     const hash = createHash('sha256');
     if (files) {
@@ -220,6 +268,7 @@ async function fingerprint(
             files,
             provider
         ).existing()) {
+            if (ignoredPath(file, ignored)) continue;
             hash.update(`${file}\0`);
             const digest = createHash('sha256');
             for await (const chunk of createReadStream(join(directory, file)))
@@ -234,6 +283,7 @@ async function fingerprint(
         )) {
             if (entry.name === stateName || entry.name === '.git') continue;
             const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+            if (ignoredPath(relative, ignored)) continue;
             const path = join(root, entry.name);
             hash.update(`${relative}\0`);
             if (entry.isDirectory()) await visit(path, relative);
@@ -249,4 +299,12 @@ async function fingerprint(
     };
     await visit(directory);
     return `sha256:${hash.digest('hex')}`;
+}
+
+function ignoredPath(path: string, ignored?: readonly string[]): boolean {
+    return Boolean(
+        ignored?.some(
+            (candidate) => path === candidate || path.startsWith(`${candidate}/`)
+        )
+    );
 }

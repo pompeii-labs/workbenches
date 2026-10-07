@@ -6,6 +6,7 @@ import { defineCommand } from 'citty';
 
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
 import { CatalogSnapshots } from '../catalog/snapshots.js';
+import { subscriptionLabel } from '../connections/targets.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import { SmokeReport } from '../runtimes/smokereport.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
@@ -230,6 +231,10 @@ class SmokeRun {
         const dockerEngine = result.dockerEngine
             ? `; docker-engine: ${result.dockerEngine}`
             : '';
+        const subprocessEnvironmentScrubbing =
+            result.subprocessEnvironmentScrubbing === undefined
+                ? ''
+                : `; subprocess-env-scrub=${result.subprocessEnvironmentScrubbing ? 'enabled' : 'disabled'}`;
         const requirements = [
             ...(result.requirements?.applied ?? []).map((entry) => `applied ${entry}`),
             ...(result.requirements?.unchecked ?? []).map(
@@ -239,16 +244,31 @@ class SmokeRun {
         const unchecked = requirements.length
             ? `; requirements: ${requirements.join(', ')}`
             : '';
+        const authenticationInstruction =
+            result.authentication.instruction ?? result.authentication.connectCommand;
+        const authenticationProvider =
+            result.authentication.configuration?.provider ?? 'environment';
+        const credential = result.authentication.method
+            ? {
+                  label:
+                      result.authentication.method === 'api'
+                          ? 'API key'
+                          : result.authentication.method === 'oauth'
+                            ? subscriptionLabel(authenticationProvider)
+                            : result.authentication.method,
+                  warning: result.authentication.warning,
+              }
+            : undefined;
         const authentication = result.authentication.ready
-            ? `; auth: ready (${result.authentication.configuration?.provider ?? 'environment'})`
-            : `; auth: required (${result.authentication.connectCommand})`;
+            ? `; auth: ready (${authenticationProvider}${credential ? `, ${credential.label}` : ''})`
+            : `; auth: required (${authenticationInstruction})`;
         const status = result.authentication.ready ? 'ready' : 'needs-auth';
         output.record({
             machine: [
                 status,
                 name,
                 `runner=${result.runner.path}`,
-                `tools=${result.tools.map((tool) => tool.path).join(',') || '-'}${authentication}${workspaces}${dockerEngine}${unchecked}${disabled}`,
+                `tools=${result.tools.map((tool) => tool.path).join(',') || '-'}${authentication}${workspaces}${dockerEngine}${subprocessEnvironmentScrubbing}${unchecked}${disabled}`,
             ],
             title: result.authentication.ready
                 ? `${name} is ready`
@@ -259,12 +279,18 @@ class SmokeRun {
                     ? `${result.tools.length} ${result.tools.length === 1 ? 'tool' : 'tools'}`
                     : 'no required tools',
                 result.authentication.ready
-                    ? `auth ${result.authentication.configuration?.provider ?? 'environment'}`
-                    : `${result.authentication.connectCommand} (or --env-file for one run)`,
+                    ? `auth ${authenticationProvider}${credential ? `, ${credential.label}` : ''}`
+                    : authenticationInstruction,
+                ...(result.subprocessEnvironmentScrubbing === undefined
+                    ? []
+                    : [
+                          `subprocess environment scrubbing ${result.subprocessEnvironmentScrubbing ? 'enabled' : 'disabled'}`,
+                      ]),
                 ...requirements,
             ],
             tone: result.authentication.ready ? 'success' : 'warning',
         });
+        if (credential?.warning) output.message(credential.warning, 'warning');
         return report;
     }
 

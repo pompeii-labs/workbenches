@@ -133,7 +133,7 @@ class SdkSandbox implements E2BSandbox {
                 ...(options.env ? { envs: options.env } : {}),
                 ...(options.onStdout ? { onStdout: options.onStdout } : {}),
                 ...(options.onStderr ? { onStderr: options.onStderr } : {}),
-                timeoutMs: 0,
+                timeoutMs: options.timeoutMilliseconds ?? 0,
             });
             return commandResult(result);
         } catch (error) {

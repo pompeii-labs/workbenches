@@ -6,7 +6,6 @@ import {
     type ConnectionAuthenticationMethod,
     type ConnectionTarget,
     connectionAuthenticationMethods,
-    connectionHarnesses,
     connectionProviders,
     connectionRuntimes,
     harnessLabel,
@@ -14,6 +13,7 @@ import {
 } from '../connections/targets.js';
 import { ModelCatalog } from '../models/catalog.js';
 import { ModelRouter } from '../models/routing.js';
+import { RunnerRegistry } from '../runners/registry.js';
 import { type RuntimeKeyProvider, RuntimeSecretStore } from '../runtimes/secrets.js';
 import { workbenchHome } from '../storage.js';
 import { selectedRuntime, WorkbenchResolver, withRuntime } from '../workbench/index.js';
@@ -42,7 +42,7 @@ export const connectCommand = defineCommand({
         },
         harness: {
             type: 'string',
-            description: 'Agent harness: opencode or pi',
+            description: 'Agent harness: opencode, pi, or claude-code',
         },
         provider: {
             type: 'string',
@@ -60,7 +60,7 @@ export const connectCommand = defineCommand({
         },
         status: {
             type: 'boolean',
-            description: 'Show runtime provider connection status',
+            description: 'Show model or runtime provider connection status',
             default: false,
         },
         remove: {
@@ -101,16 +101,16 @@ export const connectCommand = defineCommand({
             await connectRuntimeProvider(runtimeProvider, args, home, output);
             return;
         }
-        if (args.status) {
-            throw new Error('--status requires --runtime e2b or --runtime daytona');
-        }
-        if (args.stdin && !args.provider) {
+        if (args.stdin && !args.provider && !args.workbench) {
             throw new Error(
                 '--stdin reads a model key with --runtime and --provider, or a runtime key with --runtime e2b or --runtime daytona alone'
             );
         }
         if (args.remove && args.stdin) {
             throw new Error('--stdin and --remove cannot be combined');
+        }
+        if (args.status && (args.stdin || args.remove)) {
+            throw new Error('--status cannot be combined with --stdin or --remove');
         }
         await new ModelCatalog({ home }).refresh();
         let cleanup = async () => {};
@@ -152,6 +152,10 @@ export const connectCommand = defineCommand({
                 await connection(method).remove(
                     choice.method ? [choice.method] : choice.methods
                 );
+                return;
+            }
+            if (args.status) {
+                await connection(method).status();
                 return;
             }
             await connection(method).connect({ stdin: args.stdin });
@@ -276,7 +280,7 @@ async function connectionTargetForWorkbench(
         if (!connectionRuntimes.includes(runtime as ConnectionTarget['runtime'])) {
             throw new Error(`Unsupported connection runtime: ${runtime}`);
         }
-        if (!connectionHarnesses.includes(harness as ConnectionTarget['harness'])) {
+        if (!RunnerRegistry.standard().names().includes(harness)) {
             throw new Error(`Unsupported connection harness: ${harness}`);
         }
         const providers = [
@@ -325,6 +329,8 @@ async function selectConnectionTarget(
     chooseMethod: boolean
 ): Promise<ConnectionChoice> {
     const interactive = process.stdin.isTTY && process.stderr.isTTY;
+    const harnesses =
+        RunnerRegistry.standard().names() as ConnectionTarget['harness'][];
     const runtime = await chooseOption({
         ...(input.runtime ? { provided: input.runtime } : {}),
         values: [...connectionRuntimes],
@@ -343,11 +349,11 @@ async function selectConnectionTarget(
     });
     const harness = await chooseOption({
         ...(input.harness ? { provided: input.harness } : {}),
-        values: [...connectionHarnesses],
+        values: harnesses,
         interactive,
         message: 'Choose a harness',
         labels: Object.fromEntries(
-            connectionHarnesses.map((value) => [value, harnessLabel(value)])
+            harnesses.map((value) => [value, harnessLabel(value)])
         ),
         flag: '--harness',
     });

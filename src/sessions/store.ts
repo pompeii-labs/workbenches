@@ -1,4 +1,5 @@
 import {
+    chmod,
     lstat,
     mkdir,
     readdir,
@@ -191,6 +192,7 @@ export class SessionStore {
 
     async remove(id: string): Promise<void> {
         RunStore.validateId(id);
+        await restoreOwnerWrite(this.directory(id));
         await rm(this.directory(id), { recursive: true, force: true });
     }
 
@@ -337,6 +339,16 @@ export class SessionStore {
             entries.map((entry) => this.directorySize(join(path, entry)))
         );
         return sizes.reduce((total, size) => total + size, 0);
+    }
+}
+
+async function restoreOwnerWrite(path: string): Promise<void> {
+    const details = await lstat(path).catch(() => undefined);
+    if (!details) return;
+    if (!details.isDirectory()) return;
+    await chmod(path, details.mode | 0o700);
+    for (const entry of await readdir(path)) {
+        await restoreOwnerWrite(join(path, entry));
     }
 }
 

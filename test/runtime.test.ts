@@ -144,6 +144,89 @@ describe('local runtime provider contract', () => {
         await runtime.cleanup();
     });
 
+    test('reports the native runner version and rejects versions below the adapter minimum', async () => {
+        let reported = 'Claude Code 2.1.3';
+        const environments: Array<Record<string, string | undefined>> = [];
+        const runtime = await new LocalRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: (name) => `/bin/${name}`,
+            spawn: (_command, options) => {
+                environments.push(options.env);
+                return {
+                    exited: Promise.resolve(0),
+                    stdout: new Blob([reported]).stream(),
+                    stderr: new Blob([]).stream(),
+                    kill() {},
+                };
+            },
+        }).prepare({
+            ...request,
+            environment: {
+                ANTHROPIC_API_KEY: 'api-secret',
+                CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret',
+            },
+            runnerCommand: 'claude',
+            runnerVersion: { minimum: '2.1.0' },
+        });
+        expect((await runtime.preflight()).runner).toEqual({
+            name: 'opencode',
+            path: '/bin/claude',
+            version: '2.1.3',
+        });
+        expect(environments).not.toHaveLength(0);
+        for (const environment of environments) {
+            expect(environment).not.toHaveProperty('ANTHROPIC_API_KEY');
+            expect(environment).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+        }
+        await runtime.cleanup();
+
+        reported = '2.0.35 (Claude Code)';
+        const outdated = await new LocalRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: (name) => `/bin/${name}`,
+            spawn: () => ({
+                exited: Promise.resolve(0),
+                stdout: new Blob([reported]).stream(),
+                stderr: new Blob([]).stream(),
+                kill() {},
+            }),
+        }).prepare({
+            ...request,
+            runnerCommand: 'claude',
+            runnerVersion: { minimum: '2.1.0' },
+        });
+        await expect(outdated.preflight()).rejects.toThrow(
+            'claude 2.0.35 is too old; Workbench requires claude 2.1.0 or newer'
+        );
+        await outdated.cleanup();
+    });
+
+    test('times out a native runner version check', async () => {
+        let killed = false;
+        const runtime = await new LocalRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: (name) => `/bin/${name}`,
+            spawn: () => ({
+                exited: new Promise<number>(() => {}),
+                stdout: new ReadableStream<Uint8Array>(),
+                stderr: new ReadableStream<Uint8Array>(),
+                kill: () => {
+                    killed = true;
+                },
+            }),
+        }).prepare({
+            ...request,
+            runnerCommand: 'claude',
+            runnerVersion: { minimum: '2.1.0' },
+        });
+
+        await expect(runtime.preflight()).rejects.toThrow(
+            'Timed out reading claude version from claude --version'
+        );
+        expect(killed).toBeTrue();
+        await runtime.cleanup();
+    }, 7_000);
+
     test('launches session processes and loopback services on the host', async () => {
         let input: string | undefined;
         const runtime = await new LocalRuntimeProvider({

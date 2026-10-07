@@ -450,7 +450,10 @@ export class AuthoringOperation {
             home: this.home,
         }).check();
         if (!result.authentication.ready) {
-            throw new Error(result.authentication.connectCommand);
+            throw new Error(
+                result.authentication.instruction ??
+                    result.authentication.connectCommand
+            );
         }
     }
 

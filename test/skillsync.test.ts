@@ -28,4 +28,51 @@ describe('wb-authoring skill', () => {
             expect(actual.equals(expected), file).toBe(true);
         }
     });
+
+    test('documents the Claude Code runner contract', async () => {
+        const [
+            cli,
+            connections,
+            troubleshooting,
+            models,
+            runtimes,
+            permissions,
+            reference,
+            execution,
+        ] = await Promise.all([
+            readFile(join(root, 'skills', 'wb-cli', 'SKILL.md'), 'utf8'),
+            readFile(
+                join(root, 'skills', 'wb-cli', 'references', 'connections.md'),
+                'utf8'
+            ),
+            readFile(
+                join(root, 'skills', 'wb-cli', 'references', 'troubleshooting.md'),
+                'utf8'
+            ),
+            readFile(join(copy, 'references', 'models.md'), 'utf8'),
+            readFile(join(copy, 'references', 'runtimes.md'), 'utf8'),
+            readFile(join(copy, 'references', 'permissions.md'), 'utf8'),
+            readFile(join(root, 'docs', 'REFERENCE.md'), 'utf8'),
+            readFile(join(root, 'docs', 'EXECUTION.md'), 'utf8'),
+        ]);
+
+        expect(cli).toContain('npm install -g @anthropic-ai/claude-code');
+        expect(cli).toContain('Every runner uses the same model catalog');
+        expect(connections).toContain("the runner's documented login command");
+        expect(connections).toContain(
+            'Claude Code credentials are never copied to E2B or Daytona'
+        );
+        expect(troubleshooting).not.toContain('bubblewrap');
+        expect(models).toContain('For every runner');
+        expect(models).toContain('shared runner capability table');
+        expect(runtimes).toContain('@anthropic-ai/claude-code@');
+        expect(runtimes).toContain('CLAUDE_CODE_VERSION');
+        expect(permissions).toContain('"max_turns": 12');
+        expect(permissions).not.toContain('CLAUDE.md');
+        expect(reference).toContain('`claude auth status --json`');
+        expect(reference).toContain('Native credential persistence');
+        expect(execution).toContain(
+            'Environment-only runners require the selected provider variable'
+        );
+    });
 });

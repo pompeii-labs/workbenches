@@ -24,6 +24,7 @@ export interface E2BCommandOptions {
 
 export type E2BRunOptions = Omit<E2BCommandOptions, 'stdin'> & {
     user?: 'root';
+    timeoutMilliseconds?: number;
 };
 
 export interface E2BCommand {

@@ -20,13 +20,18 @@ export interface SmokeReportData {
         provider?: string;
         /** The selected native route, `provider/model`, when ready. */
         route?: string;
+        /** The selected runner authentication method when known. */
+        method?: string;
         authenticated_providers: string[];
         /** The command to run when authentication is required. */
         connect_command?: string;
+        /** Runner-specific authentication instructions when `wb connect` is unavailable. */
+        instruction?: string;
     };
     requirements?: { checked: string[]; applied: string[]; unchecked: string[] };
     workspaces: WorkbenchWorkspaceBinding[];
     docker_engine?: 'host';
+    subprocess_environment_scrubbing?: boolean;
     warnings: string[];
     error?: { code: string; message: string };
 }
@@ -58,8 +63,13 @@ export class SmokeReport {
                           ...(authentication.configuration
                               ? { route: authentication.configuration.model }
                               : {}),
+                          ...(authentication.method
+                              ? { method: authentication.method }
+                              : {}),
                       }
-                    : { connect_command: authentication.connectCommand }),
+                    : authentication.instruction
+                      ? { instruction: authentication.instruction }
+                      : { connect_command: authentication.connectCommand }),
                 authenticated_providers: authentication.authenticatedProviders,
             },
             requirements: {
@@ -69,9 +79,21 @@ export class SmokeReport {
             },
             workspaces: result.workspaces,
             ...(result.dockerEngine ? { docker_engine: result.dockerEngine } : {}),
+            ...(result.subprocessEnvironmentScrubbing !== undefined
+                ? {
+                      subprocess_environment_scrubbing:
+                          result.subprocessEnvironmentScrubbing,
+                  }
+                : {}),
             warnings: [
-                ...unchecked.map((entry) => `requirement not checked: ${entry}`),
-                ...result.disabledMcps.map((name) => `optional MCP disabled: ${name}`),
+                ...new Set([
+                    ...(result.warnings ?? []),
+                    ...unchecked.map((entry) => `requirement not checked: ${entry}`),
+                    ...result.disabledMcps.map(
+                        (name) => `optional MCP disabled: ${name}`
+                    ),
+                    ...(authentication.warning ? [authentication.warning] : []),
+                ]),
             ],
         });
     }

@@ -1,0 +1,11 @@
+{
+    "type": "control_response",
+    "response": {
+        "subtype": "success",
+        "request_id": "permission_contract_2",
+        "response": {
+            "behavior": "allow",
+            "updatedInput": { "command": "npm run test -- --watch=false" }
+        }
+    }
+}

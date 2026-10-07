@@ -36,7 +36,7 @@ describe('DaytonaRuntime', () => {
         const resolved = await fixture();
         resolved.manifest.tools = ['fixture-tool'];
         const client = new FakeClient();
-        client.sandbox.missingCommands.add('fixture-tool');
+        client.sandbox.availableCommands.delete('fixture-tool');
         const runtime = await daytonaProvider({ client }).prepare(request(resolved));
         try {
             await expect(runtime.preflight()).rejects.toThrow(
@@ -485,6 +485,62 @@ describe('DaytonaRuntime', () => {
             );
         } finally {
             await runtime.cleanup();
+        }
+    });
+
+    test('checks Claude Code in the image and passes only its supported credentials', async () => {
+        const resolved = await fixture();
+        resolved.manifest.runner = 'claude-code';
+        resolved.manifest.model = { id: 'anthropic/claude-sonnet-4-5' };
+        resolved.manifest.env = {
+            CLAUDE_HOST_VALUE: { required: false },
+            ANTHROPIC_HOST_VALUE: { required: false },
+        };
+        const client = new FakeClient();
+        client.sandbox.availableCommands = new Set(['git', 'tar', 'claude']);
+        const input = {
+            ...request(resolved),
+            environment: {
+                DAYTONA_API_KEY: 'daytona-secret',
+                ANTHROPIC_API_KEY: 'anthropic-secret',
+                CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret',
+                CLAUDE_HOST_VALUE: 'host-claude-value',
+                ANTHROPIC_HOST_VALUE: 'host-anthropic-value',
+            },
+            runnerCommand: 'claude',
+            runnerVersion: { minimum: '2.1.292' },
+        };
+        const runtime = await daytonaProvider({ client }).prepare(input);
+        try {
+            await expect(runtime.preflight()).resolves.toMatchObject({
+                runner: { name: 'claude-code', version: '2.1.292' },
+            });
+            expect(runtime.environment).toMatchObject({
+                ANTHROPIC_API_KEY: 'anthropic-secret',
+            });
+            expect(runtime.environment).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+            expect(runtime.environment).not.toHaveProperty('DAYTONA_API_KEY');
+            expect(runtime.environment).not.toHaveProperty('CLAUDE_HOST_VALUE');
+            expect(runtime.environment).not.toHaveProperty('ANTHROPIC_HOST_VALUE');
+            expect(
+                client.sandbox.runs.find(
+                    (call) => call.command === "'claude' '--version'"
+                )?.options
+            ).toMatchObject({ env: {}, timeoutMilliseconds: 15_000 });
+            expect(
+                client.sandbox.runs.find((call) => call.command.includes("'bwrap'"))
+                    ?.options
+            ).toMatchObject({ env: {}, timeoutMilliseconds: 15_000 });
+        } finally {
+            await runtime.cleanup();
+        }
+
+        client.sandbox.runnerVersion = '2.1.291';
+        const old = await daytonaProvider({ client }).prepare(input);
+        try {
+            await expect(old.preflight()).rejects.toThrow('claude 2.1.291 is too old');
+        } finally {
+            await old.cleanup();
         }
     });
 

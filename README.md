@@ -269,14 +269,14 @@ See [Returned results](docs/OUTCOMES.md) for the complete contract.
 
 | Surface         | Reference engine support                                |
 | --------------- | ------------------------------------------------------- |
-| Harnesses       | OpenCode and Pi                                         |
+| Harnesses       | OpenCode, Pi, and Claude Code                           |
 | Runtimes        | Local, Docker, E2B, and Daytona                         |
-| Interaction     | Terminal UI, one-shot, detached, and resumable sessions |
+| Interaction     | One-shot, detached, and resumable sessions              |
 | Inputs          | Text and supported image attachments                    |
 | Results         | Changesets, artifacts, and links                        |
 | Repository work | Isolated GitHub checkout with native `git` and `gh`     |
 
-OpenCode supports native permissions, questions, steering, and resume. Pi supports streaming, image input, steering at its next legal model boundary, follow-up input, cancellation, tool events, and resume. Workbench preserves the capabilities each harness actually exposes rather than inventing a common protocol they cannot honor.
+All runners use the same model catalog, route ordering, connection precedence, inspection shapes, and normalized execution protocol. See the [runner capability table](docs/REFERENCE.md#runner-capabilities) for native differences.
 
 ## Runtime boundaries
 
@@ -286,17 +286,17 @@ Local Workbenches run directly on the host in the selected directory. Declared a
 
 ### Docker
 
-Docker Workbenches run in their declared image. The package is read-only, the workspace is mounted with its declared access, and runner credentials live in a private volume. Host Docker access requires a manifest declaration and an explicit `--allow-host-docker` grant on every run.
+Docker Workbenches run in their declared image. The package is read-only, the workspace is mounted with its declared access, and supported native runner credentials live in a private volume. Host Docker access requires a manifest declaration and an explicit `--allow-host-docker` grant on every run.
 
 ### E2B
 
 E2B Workbenches use a reusable template built from the declared image and a fresh sandbox for each execution. Only declared assets are staged; secret-bearing files, dependency trees, and Git metadata are excluded from workspace upload. Remote changes return as pending outcomes instead of silently synchronizing back to the host.
 
-The E2B control key remains on the host. Harness credentials are staged only for the selected harness and synchronized back during orderly cleanup. Treat the sandbox provider and image as part of the credential trust boundary.
+The E2B control key remains on the host. Native credential stores are copied only for runners that support them and synchronized back during orderly cleanup. Treat the sandbox provider and image as part of the credential trust boundary.
 
 ### Daytona
 
-Daytona Workbenches get a fresh Daytona sandbox created from the entry's published `image` for each execution (`runtimes.daytona` requires `class`; `image` is optional in the schema, but the reference engine cannot prepare an entry without a published `image`, and there is no fallback to another runtime's image), using the same staging rules and pending outcomes as E2B. The `linux` class and OpenCode multi-turn sessions are supported; native authentication and sandbox recovery are not. Pi Workbenches cannot run on Daytona yet. The Daytona key stays on the host, and model credentials come from your environment.
+Daytona Workbenches get a fresh Daytona sandbox created from the entry's published `image` for each execution (`runtimes.daytona` requires `class`; `image` is optional in the schema, but the reference engine cannot prepare an entry without a published `image`, and there is no fallback to another runtime's image), using the same transfer rules and pending outcomes as E2B. The `linux` class is supported; native authentication and sandbox recovery are not. The Daytona key stays on the host.
 
 ## Command overview
 

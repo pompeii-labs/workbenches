@@ -156,6 +156,9 @@ export class DockerClient {
             stdin: options.input === undefined ? 'ignore' : new Blob([options.input]),
             stdout: 'pipe',
             stderr: 'pipe',
+            ...(options.timeoutMilliseconds
+                ? { timeout: options.timeoutMilliseconds }
+                : {}),
         });
         const [code, stdout, stderr] = await Promise.all([
             child.exited,

@@ -20,6 +20,7 @@ export interface DockerProcessOptions {
     env?: Record<string, string | undefined>;
     /** Written to standard input, so the content never appears in argv. */
     input?: string;
+    timeoutMilliseconds?: number;
 }
 
 export interface DockerSpawnOptions extends DockerProcessOptions {

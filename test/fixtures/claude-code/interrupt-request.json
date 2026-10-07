@@ -1,0 +1,5 @@
+{
+    "type": "control_request",
+    "request_id": "interrupt_contract",
+    "request": { "subtype": "interrupt", "cancel_queued": true }
+}

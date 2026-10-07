@@ -1,3 +1,15 @@
+export { claudeCodeCredentials } from './claude-code/authentication.js';
+export {
+    ClaudeCodeConfigStaging,
+    type ClaudeCodeRunnerConfig,
+    StagedClaudeCodeConfig,
+} from './claude-code/config.js';
+export { ClaudeCodeRunner } from './claude-code/runner.js';
+export {
+    CLAUDE_CODE_SESSION_DECLARATION,
+    ClaudeCodeSessionAdapter,
+    type ClaudeCodeSessionDependencies,
+} from './claude-code/session.js';
 export { RunnerContextStaging } from './context/stage.js';
 export { DiskRunnerFiles } from './files/disk.js';
 export { MemoryRunnerFiles } from './files/memory.js';

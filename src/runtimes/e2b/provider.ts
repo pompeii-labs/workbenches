@@ -27,6 +27,7 @@ export class E2BRuntimeProvider extends RemoteProvider {
     }
 
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
+        request = this.withoutRemoteSubscription(request);
         const paths = await this.bind(request);
         const client =
             this.dependencies.client ??

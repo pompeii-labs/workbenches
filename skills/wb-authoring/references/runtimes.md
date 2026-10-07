@@ -43,7 +43,7 @@ requirements:
 
 Every image used by `docker`, `e2b`, or `daytona` must:
 
-1. **Contain the runner** at a pinned version: `npm install -g opencode-ai@<version>` or `@earendil-works/pi-coding-agent@<version>`. Nothing can be installed at run time.
+1. **Contain the runner** at a pinned version: `npm install -g opencode-ai@<version>`, `npm install -g @earendil-works/pi-coding-agent@<version>`, or `npm install -g @anthropic-ai/claude-code@<version>`. Nothing can be installed at run time.
 2. **Contain every tool the manifest declares** in `tools`, on `PATH`.
 3. **Contain `git` and GNU `tar`** (with `--null` support) for `e2b` and `daytona`, which stage files with them. `--repo` runs also use `git` and `gh`.
 4. **Run as any numeric user.** The engine runs as the host's uid. Never rely on `USER`, a home directory, or files owned by root being writable.
@@ -78,6 +78,15 @@ WORKDIR /workspace
 ```
 
 Start from a base that already carries heavy dependencies when the work needs them (a browser automation image for UI work, a language toolchain image), and add the runner and tools on top.
+
+For Claude Code, replace the OpenCode runner block with a pinned install:
+
+```dockerfile
+ARG CLAUDE_CODE_VERSION=2.1.292
+
+# The runner. Keep this at or above Workbench's minimum supported version.
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+```
 
 ## Building and publishing images
 

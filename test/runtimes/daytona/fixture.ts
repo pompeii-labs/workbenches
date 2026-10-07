@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
+import { RunnerRegistry } from '../../../src/runners/registry.js';
 
 import type {
     DaytonaClient,
@@ -144,7 +145,14 @@ export class FakeSandbox implements DaytonaSandbox {
     readonly runs: Array<{ command: string; options: RemoteRunOptions }> = [];
     readonly previews: Array<{ port: number; ttlSeconds: number }> = [];
     readonly uploads = new Map<string, Uint8Array>();
-    readonly missingCommands = new Set<string>();
+    availableCommands = new Set([
+        'git',
+        'tar',
+        'gh',
+        'opencode',
+        'claude',
+        'fixture-tool',
+    ]);
     readonly ownedDirectories = new Set<string>();
     rootUnavailable = false;
     /** What the next preview URL requests answer, in order, before the default. */
@@ -163,6 +171,7 @@ export class FakeSandbox implements DaytonaSandbox {
     probes = 0;
     baselineFailure = false;
     input = '';
+    runnerVersion = '2.1.292';
 
     async run(command: string, options: RemoteRunOptions = {}) {
         this.runs.push({ command, options });
@@ -172,15 +181,15 @@ export class FakeSandbox implements DaytonaSandbox {
             return result;
         }
         if (command === probeRepositoryTools) {
-            const missing = ['git', 'gh'].filter((name) =>
-                this.missingCommands.has(name)
+            const missing = ['git', 'gh'].filter(
+                (name) => !this.availableCommands.has(name)
             );
             return missing.length > 0 ? result(1, `${missing.join(' ')}\n`) : result(0);
         }
         if (command === installRepositoryTools) {
             if (this.installResult) return this.installResult;
-            this.missingCommands.delete('git');
-            this.missingCommands.delete('gh');
+            this.availableCommands.add('git');
+            this.availableCommands.add('gh');
         }
         if (command === identityCommand) return result(0, '1000:1000');
         if (options.user === 'root' && command.includes('mkdir -p')) {
@@ -208,10 +217,14 @@ export class FakeSandbox implements DaytonaSandbox {
                 : result(1);
         }
         if (command === 'tar --help 2>&1') return result(0, '--null');
+        if (command === "'claude' '--version'") {
+            return result(0, `${this.runnerVersion} (Claude Code)\n`);
+        }
         if (command.startsWith('command -v')) {
             const name = command.match(/'([^']+)'/)?.[1] ?? 'tool';
-            if (this.missingCommands.has(name)) return result(1);
-            return result(0, `/usr/bin/${name}\n`);
+            return this.availableCommands.has(name)
+                ? result(0, `/usr/bin/${name}\n`)
+                : result(1);
         }
         if (command.includes('/dev/tcp') || command.includes('curl -s')) {
             this.probes += 1;
@@ -337,6 +350,9 @@ export async function fixture(
 export function request(workbench: ResolvedWorkbench) {
     return {
         workbench,
+        runnerAuthentication: RunnerRegistry.standard().authentication(
+            workbench.manifest.runner
+        ),
         workspaceDirectory: workbench.repositoryDirectory,
         environment: { OPENAI_API_KEY: 'fixture-key' },
         assets: [

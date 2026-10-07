@@ -1,0 +1,29 @@
+{
+    "type": "control_request",
+    "request_id": "question_contract",
+    "request": {
+        "subtype": "can_use_tool",
+        "tool_name": "AskUserQuestion",
+        "input": {
+            "questions": [
+                {
+                    "question": "Where should this deploy?",
+                    "header": "Target",
+                    "options": [
+                        { "label": "Production", "description": "Live environment" },
+                        { "label": "Staging", "description": "Test environment" }
+                    ],
+                    "multiSelect": false
+                },
+                {
+                    "question": "Which checks should run?",
+                    "header": "Checks",
+                    "options": [{ "label": "Unit" }, { "label": "Integration" }],
+                    "multiSelect": true
+                }
+            ]
+        },
+        "permission_suggestions": [],
+        "tool_use_id": "tool_question"
+    }
+}

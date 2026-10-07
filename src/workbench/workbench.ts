@@ -1,6 +1,6 @@
 import { lstat, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-
+import { RunnerRegistry } from '../runners/registry.js';
 import type {
     ResolvedWorkbench,
     ResolvedWorkbenchSkill,
@@ -90,11 +90,19 @@ export class Workbench implements ResolvedWorkbench {
             : undefined;
         if (runnerConfigPath) {
             await runnerConfiguration.validate(runnerConfigPath);
-            if (
-                manifest.runner === 'pi' &&
-                !(await lstat(runnerConfigPath)).isDirectory()
-            ) {
-                throw new Error('Pi runner_config must be a directory');
+            const shape = RunnerRegistry.standard().authentication(
+                manifest.runner
+            ).runnerConfigShape;
+            const metadata = await lstat(runnerConfigPath);
+            if (shape === 'directory' && !metadata.isDirectory()) {
+                throw new Error(
+                    `${RunnerRegistry.standard().displayName(manifest.runner)} runner_config must be a directory`
+                );
+            }
+            if (shape === 'file' && !metadata.isFile()) {
+                throw new Error(
+                    `${RunnerRegistry.standard().displayName(manifest.runner)} runner_config must be a JSON file`
+                );
             }
         }
 

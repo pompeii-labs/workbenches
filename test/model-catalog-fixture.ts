@@ -37,6 +37,21 @@ export const modelCatalogFixture: ModelCatalogSnapshot = {
         openrouter: { env: ['OPENROUTER_API_KEY'] },
     },
     harnesses: {
+        'claude-code': {
+            versions: {
+                '2.1.292': {
+                    providers: {
+                        anthropic: [
+                            {
+                                native_provider: 'anthropic',
+                                auth: ['api', 'oauth'],
+                            },
+                        ],
+                        openrouter: [{ native_provider: 'openrouter', auth: ['api'] }],
+                    },
+                },
+            },
+        },
         pi: {
             versions: {
                 '0.84.3': {

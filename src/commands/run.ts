@@ -266,7 +266,7 @@ export const runCommand = defineCommand({
                     }).check();
                     if (!smoke.authentication.ready) {
                         throw new AuthenticationRequiredError(
-                            `No authenticated route is available for ${smoke.authentication.model}. ${connectAdvice(smoke.authentication.connectCommand)}.`
+                            `No authenticated route is available for ${smoke.authentication.model}. ${smoke.authentication.instruction ?? connectAdvice(smoke.authentication.connectCommand)}.`
                         );
                     }
                 }

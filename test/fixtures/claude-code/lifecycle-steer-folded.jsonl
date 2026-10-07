@@ -1,0 +1,13 @@
+{"type":"command_lifecycle","command_uuid":"command-main","state":"queued","session_id":"session-1"}
+{"type":"command_lifecycle","command_uuid":"command-main","state":"started","session_id":"session-1"}
+{"type":"system","subtype":"init","cwd":"/workspace/project","session_id":"session-1"}
+{"type":"user","uuid":"command-main","session_id":"session-1","isReplay":true,"message":{"role":"user","content":"Start"}}
+{"type":"assistant","session_id":"session-1","message":{"id":"message-tool","content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"fixture command"}}],"stop_reason":null}}
+{"type":"command_lifecycle","command_uuid":"command-steer","state":"queued","session_id":"session-1"}
+{"type":"user","uuid":"tool-result-1","session_id":"session-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"complete"}]}}
+{"type":"user","uuid":"command-steer","session_id":"session-1","isReplay":true,"message":{"role":"user","content":"Change direction"}}
+{"type":"command_lifecycle","command_uuid":"command-steer","state":"started","session_id":"session-1"}
+{"type":"assistant","session_id":"session-1","message":{"id":"message-1","content":[{"type":"text","text":"STEERED"}],"stop_reason":"end_turn"}}
+{"type":"command_lifecycle","command_uuid":"command-steer","state":"completed","session_id":"session-1"}
+{"type":"result","subtype":"success","is_error":false,"session_id":"session-1","stop_reason":"end_turn","usage":{}}
+{"type":"command_lifecycle","command_uuid":"command-main","state":"completed","session_id":"session-1"}

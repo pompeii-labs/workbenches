@@ -24,19 +24,21 @@ export class DaytonaToolbox implements DaytonaSandbox {
         command: string,
         options: RemoteRunOptions = {}
     ): Promise<RuntimeCommandResult> {
+        const timeoutMilliseconds =
+            options.timeoutMilliseconds ?? this.transport.commandTimeoutMs;
         const reply = await this.transport.request(
             'POST',
             `${this.toolbox}/process/execute`,
             {
                 absolute: true,
-                timeoutMs: this.transport.commandTimeoutMs,
+                timeoutMs: timeoutMilliseconds,
                 json: {
                     // The toolbox returns one merged stream, so fold stderr in
                     // explicitly and keep failure detail in the result.
                     command: `{\n${this.asRoot(command, options.user)}\n} 2>&1`,
                     ...(options.cwd ? { cwd: options.cwd } : {}),
                     ...(options.env ? { envs: options.env } : {}),
-                    timeout: Math.ceil(this.transport.commandTimeoutMs / 1000),
+                    timeout: Math.ceil(timeoutMilliseconds / 1000),
                 },
             }
         );
@@ -63,6 +65,7 @@ export class DaytonaToolbox implements DaytonaSandbox {
                         command: this.subshell(command, options),
                         runAsync: true,
                         suppressInputEcho: true,
+                        ...(options.env ? { envs: options.env } : {}),
                     },
                 }
             );
@@ -190,9 +193,9 @@ export class DaytonaToolbox implements DaytonaSandbox {
         ].join('\n');
     }
 
-    /** A subshell that applies the environment and directory, then runs `command`. */
+    /** A subshell that applies the directory, then runs `command`. */
     private subshell(command: string, options: RemoteCommandOptions): string {
-        const exports = Object.entries(options.env ?? {}).map(([name, value]) => {
+        for (const name of Object.keys(options.env ?? {})) {
             if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
                 throw new RuntimeError(
                     'daytona',
@@ -200,12 +203,9 @@ export class DaytonaToolbox implements DaytonaSandbox {
                     `Invalid environment variable name: ${name}`
                 );
             }
-            return `export ${name}=${quote(value)}`;
-        });
-        return `(${[
-            ...exports,
-            ...(options.cwd ? [`cd ${quote(options.cwd)}`] : []),
-            command,
-        ].join(' && ')})`;
+        }
+        return `(${[...(options.cwd ? [`cd ${quote(options.cwd)}`] : []), command].join(
+            ' && '
+        )})`;
     }
 }

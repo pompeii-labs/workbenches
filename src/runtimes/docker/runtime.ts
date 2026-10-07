@@ -25,6 +25,8 @@ import type {
     RuntimeSessionOptions,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
+import { checkedRunnerVersion } from '../runner-version.js';
+import { SubprocessEnvironmentScrubbing } from '../subprocess-environment.js';
 import type { DockerClient } from './client.js';
 import { DockerManagedContainers } from './containers.js';
 import type {
@@ -57,6 +59,7 @@ export class DockerRuntime implements PreparedRuntime {
     readonly environment: Record<string, string | undefined>;
     readonly workspaces: WorkbenchWorkspaceBinding[];
     readonly preparation: DockerPreparation;
+    subprocessEnvironmentScrubbing: boolean | undefined;
     private readonly active = new Map<string, SpawnedRunner>();
     private readonly pendingRemovals = new Set<Promise<void>>();
     private readonly cleanupErrors: unknown[] = [];
@@ -115,7 +118,7 @@ export class DockerRuntime implements PreparedRuntime {
             environment: this.environment,
         }).checkConfiguration(this.workbench);
         const names = [
-            this.workbench.manifest.runner,
+            this.options.request.runnerCommand ?? this.workbench.manifest.runner,
             ...this.workbench.manifest.tools,
             ...(this.options.hostSocket ? ['docker'] : []),
             ...(this.options.request.repository?.delivery === 'pr' ? ['gh'] : []),
@@ -124,7 +127,7 @@ export class DockerRuntime implements PreparedRuntime {
         const runnerPath = paths[0];
         if (!runnerPath) {
             throw new Error(
-                `Runner CLI is unavailable in Docker image ${this.preparation.immutableReference}: ${this.workbench.manifest.runner}`
+                `Runner CLI is unavailable in Docker image ${this.preparation.immutableReference}: ${names[0]}`
             );
         }
         const tools = this.workbench.manifest.tools.map((name, index) => {
@@ -153,15 +156,57 @@ export class DockerRuntime implements PreparedRuntime {
             this.preflightAssets(),
             ...(this.options.hostSocket ? [this.preflightHostDocker()] : []),
         ]);
+        const runnerVersion =
+            this.options.request.runnerCommand && this.options.request.runnerVersion
+                ? checkedRunnerVersion(
+                      this.options.request.runnerCommand,
+                      this.options.request.runnerVersion.minimum,
+                      await this.runEphemeral(
+                          [this.options.request.runnerCommand, '--version'],
+                          {
+                              network: 'none',
+                              readOnly: true,
+                              timeoutMilliseconds: 15_000,
+                          },
+                          {}
+                      )
+                  )
+                : undefined;
+        this.subprocessEnvironmentScrubbing =
+            await new SubprocessEnvironmentScrubbing().check(
+                this.options.request.runnerAuthentication
+                    ?.subprocessEnvironmentScrubbing,
+                'linux',
+                (command) =>
+                    this.runEphemeral(
+                        command,
+                        {
+                            network: 'none',
+                            readOnly: true,
+                            timeoutMilliseconds: 15_000,
+                        },
+                        {}
+                    )
+            );
         this.ready = true;
         return {
-            runner: { name: this.workbench.manifest.runner, path: runnerPath },
+            runner: {
+                name: this.workbench.manifest.runner,
+                path: runnerPath,
+                ...(runnerVersion ? { version: runnerVersion } : {}),
+            },
             tools,
             workspaces: this.workspaces,
             requirements: this.options.requirements.check(
                 this.options.request.workbench
             ),
             ...(this.options.hostSocket ? { dockerEngine: 'host' as const } : {}),
+            ...(this.subprocessEnvironmentScrubbing !== undefined
+                ? {
+                      subprocessEnvironmentScrubbing:
+                          this.subprocessEnvironmentScrubbing,
+                  }
+                : {}),
             ...configuration,
         };
     }
@@ -419,7 +464,11 @@ export class DockerRuntime implements PreparedRuntime {
 
     private async runEphemeral(
         command: string[],
-        options: { network: 'none' | 'bridge'; readOnly: boolean },
+        options: {
+            network: 'none' | 'bridge';
+            readOnly: boolean;
+            timeoutMilliseconds?: number;
+        },
         environment = this.environment,
         workdir?: string
     ): Promise<DockerCommandResult> {
@@ -427,22 +476,27 @@ export class DockerRuntime implements PreparedRuntime {
         if (!entrypoint) throw new Error('Docker command is empty');
         const environmentFile = this.writeEnvironmentFile(environment);
         try {
-            return await this.options.client.run([
-                this.options.client.executable,
-                'run',
-                '--rm',
-                '--network',
-                options.network,
-                ...(options.readOnly ? ['--read-only'] : []),
-                ...this.containerArguments(),
-                '--env-file',
-                environmentFile,
-                ...(workdir ? ['--workdir', workdir] : []),
-                '--entrypoint',
-                entrypoint,
-                this.preparation.immutableReference,
-                ...args,
-            ]);
+            return await this.options.client.run(
+                [
+                    this.options.client.executable,
+                    'run',
+                    '--rm',
+                    '--network',
+                    options.network,
+                    ...(options.readOnly ? ['--read-only'] : []),
+                    ...this.containerArguments(),
+                    '--env-file',
+                    environmentFile,
+                    ...(workdir ? ['--workdir', workdir] : []),
+                    '--entrypoint',
+                    entrypoint,
+                    this.preparation.immutableReference,
+                    ...args,
+                ],
+                options.timeoutMilliseconds
+                    ? { timeoutMilliseconds: options.timeoutMilliseconds }
+                    : {}
+            );
         } finally {
             rmSync(environmentFile, { force: true });
         }

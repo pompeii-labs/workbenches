@@ -17,6 +17,7 @@ import {
     runtimeLabel,
 } from '../connections/targets.js';
 import { ActiveModelCatalog, connectCommand } from '../models/index.js';
+import { RunnerRegistry } from '../runners/registry.js';
 import type { CliPresenter } from './presenter.js';
 
 export interface ModelConnectionOptions {
@@ -71,12 +72,27 @@ export class ModelConnection {
      */
     async connect(flags: { stdin: boolean }): Promise<void> {
         const { target } = this.#options;
+        const authentication = RunnerRegistry.standard().authentication(target.harness);
         this.#validate(flags);
         if (target.runtime === 'local') {
             await this.#report(await this.#setup.verify(), this.#localAdvice());
             return;
         }
-        if (target.runtime === 'daytona') {
+        if (
+            authentication.loginArguments &&
+            authentication.supportsNativeAuthentication(
+                target.runtime,
+                target.provider,
+                target.method.authenticationMethod
+            )
+        ) {
+            await this.#report(
+                await this.#setup.signIn(),
+                `Try again with ${this.#command()}`
+            );
+            return;
+        }
+        if (!authentication.nativeCredentialStore(target.runtime)) {
             await this.#report(
                 await this.#setup.verify(),
                 `Set ${this.#variables() || 'the provider key'} where wb runs`
@@ -99,19 +115,35 @@ export class ModelConnection {
         );
     }
 
+    /** Reports whether the selected model credential is ready without changing it. */
+    async status(): Promise<void> {
+        const readiness = await this.#setup.verify();
+        const { target, output } = this.#options;
+        output.record({
+            machine: [
+                readiness.ready ? (readiness.saved ? 'saved' : 'ready') : 'absent',
+                target.runtime,
+                target.harness,
+                target.provider,
+            ],
+            title: readiness.ready
+                ? `${readiness.saved ? 'Saved' : 'Ready'}: ${this.#provider} for ${this.#runner} in ${this.#runtime}`
+                : (readiness.missing ?? `${this.#provider} is not connected`),
+            tone: readiness.ready ? 'success' : 'muted',
+        });
+    }
+
     /**
      * Removes the target provider's entries from the runtime's store, keeping
      * others, and drops the saved default when it pointed at this provider.
      */
     async remove(methods: ConnectionAuthenticationMethod[]): Promise<void> {
         const { target, output } = this.#options;
-        const removed = await this.#setup.remove([
-            ...new Set(methods.map((method) => method.nativeProvider)),
-        ]);
         await this.#store.forget(
             { runner: target.harness, runtime: target.runtime },
             target.provider
         );
+        const removed = await this.#setup.remove(methods);
         output.record({
             machine: [
                 removed ? 'removed' : 'absent',
@@ -245,9 +277,7 @@ export class ModelConnection {
         if (!workbench) {
             return `Name a Workbench so its runner can check its own sign-in: wb connect <workbench> --runtime local --provider ${target.provider} --method ${target.method.id}${variable}`;
         }
-        return target.harness === 'opencode'
-            ? `Run opencode auth login --provider ${target.method.nativeProvider}${variable}`
-            : `Run pi and sign in with /login${variable}`;
+        return `${RunnerRegistry.standard().authentication(target.harness).localAdvice(target.method.nativeProvider)}${variable}`;
     }
 
     /** The `wb connect` command for this target, plus `extra` flags. */

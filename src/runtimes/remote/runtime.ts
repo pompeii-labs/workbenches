@@ -24,6 +24,7 @@ import type {
     RuntimeSessionOptions,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
+import { checkedRunnerVersion } from '../runner-version.js';
 import type { TransferRules } from '../staging/rules.js';
 import { definedEnvironment, quote, shellCommand } from '../staging/shell.js';
 import type {
@@ -43,6 +44,7 @@ import {
 export interface RemoteRunOptions {
     cwd?: string;
     env?: Record<string, string>;
+    timeoutMilliseconds?: number;
     /** Run with root privileges. Used only to provision staging directories. */
     user?: 'root';
 }
@@ -302,6 +304,20 @@ export abstract class RemoteRuntime<S extends RemoteSandbox, A extends StagedAss
                 throw new Error(`Required runtime asset is unreadable: ${path}`);
             }
         }
+    }
+
+    protected async runnerVersion(sandbox: S): Promise<string | undefined> {
+        const command = this.options.request.runnerCommand;
+        const requirement = this.options.request.runnerVersion;
+        if (!command || !requirement) return undefined;
+        return checkedRunnerVersion(
+            command,
+            requirement.minimum,
+            await sandbox.run(shellCommand([command, '--version']), {
+                env: {},
+                timeoutMilliseconds: 15_000,
+            })
+        );
     }
 
     /** Seconds left of the lease, never less than a minute. */

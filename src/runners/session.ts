@@ -69,6 +69,15 @@ export interface RunnerInputDelivery {
     delivered: Promise<void>;
 }
 
+export class RunnerCapabilityUnsupportedError extends Error {
+    readonly code = 'capability_unsupported';
+
+    constructor(message: string) {
+        super(message);
+        this.name = 'RunnerCapabilityUnsupportedError';
+    }
+}
+
 export interface RunnerImageInput {
     data: string;
     mimeType: string;
@@ -166,6 +175,8 @@ export interface RunnerSessionHost {
         request: RunnerPermissionRequest
     ): Promise<RunnerPermissionDecision>;
     requestQuestion(request: RunnerQuestionRequest): Promise<RunnerQuestionResponse>;
+    withdrawPermission?(id: string): void;
+    withdrawQuestion?(id: string): void;
 }
 
 export interface RunnerSessionContext {
@@ -180,6 +191,7 @@ export interface RunnerSessionStartOptions {
     environment: Record<string, string | undefined>;
     configuration: ResolvedRunnerConfiguration;
     host: RunnerSessionHost;
+    answerRequests?: boolean;
     session?: RunnerSessionContext;
     authentication?: RunnerConnectionSelection;
 }

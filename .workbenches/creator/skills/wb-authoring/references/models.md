@@ -36,11 +36,10 @@ Rules:
 
 ## How consumers authenticate
 
-The engine uses the first authenticated route: an explicit `--connection`, the consumer's `wb connect` default, then a route whose key is in the environment (for example `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`), then the runner's own credential store. Keys for other providers are removed from the run. The package never contains keys; it declares names only.
+For every runner, the engine uses the first authenticated route: an explicit `--connection`, the consumer's `wb connect` default, then a route whose key is in the environment, then the runner's credential store. Keys for other providers are removed from the run. The package never contains keys; it declares names only.
 
 When writing the Workbench's description or README, name the providers it was trialed with, so consumers know which keys are proven.
 
 ## Runner choice
 
-- `opencode`: the default. Supports remote MCP servers, permission config in `opencode.json`, and OpenCode's own sign-in flows (including a ChatGPT subscription for OpenAI models).
-- `pi`: no MCP support (a Pi Workbench with `mcps` fails), needs a directory `runner_config`, and first-run sign-in inside a run is not available; give consumers env keys. Pi Workbenches cannot run on Daytona yet.
+Choose the runner whose native capabilities fit the task. The reference engine's shared runner capability table is the source of truth for runtimes, steering, MCP, subscription sign-in, `runner_config`, and minimum versions. Do not restate adapter internals in a Workbench package.

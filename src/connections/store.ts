@@ -57,6 +57,10 @@ export class ConnectionStore {
         this.#home = home;
     }
 
+    get home(): string {
+        return this.#home;
+    }
+
     static context(workbench: ResolvedWorkbench): RunnerConnectionContext {
         return {
             runner: workbench.manifest.runner,

@@ -51,13 +51,14 @@ export class SandboxSetup {
      */
     async inspect(
         workbench: ResolvedWorkbench,
-        needs: ImageNeeds
+        needs: ImageNeeds,
+        runnerCommand = workbench.manifest.runner
     ): Promise<ImageInspection> {
         const image = this.image;
         const names = [
             'git',
             'tar',
-            workbench.manifest.runner,
+            runnerCommand,
             ...workbench.manifest.tools,
             ...(needs.pullRequests ? ['gh'] : []),
         ];
@@ -86,7 +87,7 @@ export class SandboxSetup {
         const runnerPath = paths[2];
         if (!runnerPath) {
             throw this.failure(
-                `Runner CLI is unavailable in ${label} image ${image}: ${workbench.manifest.runner}`
+                `Runner CLI is unavailable in ${label} image ${image}: ${runnerCommand}`
             );
         }
         const tools = workbench.manifest.tools.map((name, index) => {

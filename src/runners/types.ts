@@ -31,6 +31,8 @@ export interface RunnerFiles {
      * nothing exists there.
      */
     stat(path: string): Promise<RunnerFileStat | undefined>;
+    /** Resolves every symbolic link in a path. */
+    realpath(path: string): Promise<string>;
     /** Creates a symbolic link at `path` pointing at `target`. */
     symlink(target: string, path: string): Promise<void>;
     /** Creates a fresh private temporary directory and returns its path. */

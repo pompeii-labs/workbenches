@@ -887,9 +887,9 @@ describe('CLI integration', () => {
             }
         );
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(AuthenticationRequiredError.exitCode);
         expect(result.stdout).toBe('');
-        expect(result.stderr).toBe('error: Executable not found in $PATH: "pi"\n');
+        expect(result.stderr).toContain('Pi in Local has no OpenAI credential');
         expect(await readdir(home)).not.toContain('connections.json');
     });
 
@@ -949,6 +949,41 @@ describe('CLI integration', () => {
         expect(verify.stderr).toContain(
             'No OpenRouter credential is saved for OpenCode in E2B. Pass the OpenRouter API key on standard input: wb connect --runtime e2b --harness opencode --provider openrouter --method native --stdin'
         );
+    });
+
+    test('does not store Claude Code API keys for local runs', async () => {
+        const fixture = await createFixture({ runner: 'claude-code' });
+        const home = await temporaryDirectory('workbench-connect-claude-');
+        const bin = await fakeBin();
+        const environment = withoutProviderKeys({
+            ...(await fakeUserHome()),
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        });
+        const target = [
+            'connect',
+            fixture.packageDirectory,
+            '--runtime',
+            'local',
+            '--provider',
+            'anthropic',
+            '--method',
+            'api-key',
+        ];
+        const connected = await connectCli(
+            [...target, '--stdin'],
+            environment,
+            'fixture-claude-key-not-for-output\n'
+        );
+
+        expect(connected).toMatchObject({
+            code: 1,
+            stdout: '',
+        });
+        expect(connected.stderr).toContain(
+            'The local runtime uses your own Claude Code sign-in'
+        );
+        expect(await readdir(home)).not.toContain('runtime-credentials');
     });
 
     test("never copies the runner's own sign-in from this machine", async () => {
@@ -1957,6 +1992,59 @@ describe('CLI integration', () => {
         await expect(stat(staged)).rejects.toThrow();
     });
 
+    test('view, smoke, and run never chmod a skill symlink target outside the package', async () => {
+        const fixture = await createFixture({ skill: true, runner: 'claude-code' });
+        const outside = join(fixture.root, 'outside.sh');
+        const link = join(
+            fixture.packageDirectory,
+            'skills',
+            'fixture-skill',
+            'outside.sh'
+        );
+        const bin = await fakeBin();
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            ANTHROPIC_API_KEY: 'fixture-key',
+            WORKBENCH_HOME: join(fixture.root, 'home'),
+        };
+        const added = await executeCli(
+            ['add', fixture.packageDirectory, '--as', 'fixture-symlink'],
+            environment,
+            fixture.root
+        );
+        expect(added.code).toBe(0);
+        await writeFile(outside, '#!/bin/sh\n', { mode: 0o755 });
+        await chmod(outside, 0o755);
+        await symlink(outside, link);
+
+        const viewed = await executeCli(
+            ['view', fixture.packageDirectory, '--json'],
+            environment,
+            fixture.root
+        );
+        expect(viewed.code).toBe(0);
+        expect(JSON.parse(viewed.stdout).warnings).toEqual([]);
+        expect((await stat(outside)).mode & 0o777).toBe(0o755);
+
+        const smoked = await executeCli(
+            ['smoke', fixture.packageDirectory, '--json'],
+            environment,
+            fixture.root
+        );
+        expect(smoked.code).toBe(1);
+        expect(`${smoked.stdout}\n${smoked.stderr}`).toContain('outside.sh');
+        expect((await stat(outside)).mode & 0o777).toBe(0o755);
+
+        const run = await executeCli(
+            ['run', 'fixture-symlink', '--task', 'inspect', '--json'],
+            environment,
+            fixture.root
+        );
+        expect(run.code).toBe(1);
+        expect(`${run.stdout}\n${run.stderr}`).toContain('symlink');
+        expect((await stat(outside)).mode & 0o777).toBe(0o755);
+    });
+
     test('dry-run validates and translates without spawning the runner', async () => {
         const fixture = await createFixture();
         const record = join(fixture.root, 'runner-was-called');
@@ -1976,6 +2064,329 @@ describe('CLI integration', () => {
             skills: [],
         });
         await expect(stat(record)).rejects.toThrow();
+    });
+
+    test('runs Claude Code final and JSON modes through the public CLI without the real binary', async () => {
+        const fixture = await createFixture({ runner: 'claude-code' });
+        const record = join(fixture.root, 'claude-runner');
+        const bin = await fakeBin();
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            ANTHROPIC_API_KEY: 'fixture-key',
+            WB_TEST_RECORD: record,
+            WORKBENCH_HOME: join(fixture.root, 'home'),
+        };
+        const final = await executeSavedCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--final'],
+            environment,
+            fixture.root
+        );
+        expect(final).toMatchObject({ code: 0, stdout: 'fixture response\n' });
+        expect(await readFile(`${record}.claude-args`, 'utf8')).toContain(
+            '--permission-prompts\nnone'
+        );
+        expect(
+            JSON.parse((await readFile(`${record}.claude-input`, 'utf8')).trim())
+        ).toMatchObject({ type: 'user', message: { role: 'user' } });
+
+        const json = await executeSavedCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--json'],
+            environment,
+            fixture.root
+        );
+        expect(json.code).toBe(0);
+        const events = json.stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                type: 'output.text',
+                data: expect.objectContaining({ text: 'fixture response' }),
+            })
+        );
+        expect(events.filter((event) => event.type === 'turn.completed')).toHaveLength(
+            1
+        );
+        expect(events.at(-1)?.type).toBe('run.completed');
+    });
+
+    test('does not accept a Claude Code OAuth token from an environment file', async () => {
+        const fixture = await createFixture({ runner: 'claude-code' });
+        const bin = await fakeBin();
+        const environmentFile = join(fixture.root, '.env.oauth');
+        const token = 'fixture-oauth-token-not-for-output';
+        await writeFile(environmentFile, `CLAUDE_CODE_OAUTH_TOKEN=${token}\n`);
+        const environment = withoutProviderKeys({
+            PATH: `${bin}:${process.env.PATH}`,
+            CLAUDE_CODE_OAUTH_TOKEN: '',
+            WORKBENCH_HOME: join(fixture.root, 'home'),
+        });
+
+        const smoked = await executeCli(
+            [
+                'smoke',
+                fixture.packageDirectory,
+                '--env-file',
+                environmentFile,
+                '--json',
+            ],
+            environment,
+            fixture.root
+        );
+        expect(smoked.code).toBe(AuthenticationRequiredError.exitCode);
+        expect(JSON.parse(smoked.stdout)).toMatchObject({
+            status: 'needs-auth',
+            authentication: { ready: false },
+        });
+
+        const run = await executeSavedCli(
+            [
+                'run',
+                fixture.packageDirectory,
+                '--task',
+                'inspect',
+                '--env-file',
+                environmentFile,
+                '--json',
+            ],
+            environment,
+            fixture.root
+        );
+        expect(run.code).toBe(AuthenticationRequiredError.exitCode);
+        expect(
+            `${smoked.stdout}\n${smoked.stderr}\n${run.stdout}\n${run.stderr}`
+        ).not.toContain(token);
+    });
+
+    test('reports the Claude Code API credential method and billing warning', async () => {
+        const fixture = await createFixture({ runner: 'claude-code' });
+        const bin = await fakeBin();
+        const base = withoutProviderKeys({
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: join(fixture.root, 'home'),
+        });
+        const api = await executeCli(
+            ['smoke', fixture.packageDirectory],
+            { ...base, ANTHROPIC_API_KEY: 'fixture-api-key' },
+            fixture.root
+        );
+        expect(api.code).toBe(0);
+        expect(api.stdout).toContain('auth: ready (anthropic, API key)');
+
+        const bothEnvironment = {
+            ...base,
+            ANTHROPIC_API_KEY: 'fixture-api-key',
+        };
+        const warning =
+            'ANTHROPIC_API_KEY is used and billed. To stop using it, unset ANTHROPIC_API_KEY.';
+        const both = await executeCli(
+            ['smoke', fixture.packageDirectory, '--json'],
+            bothEnvironment,
+            fixture.root
+        );
+        expect(both.code).toBe(0);
+        expect(JSON.parse(both.stdout)).toMatchObject({
+            authentication: { provider: 'anthropic', method: 'api' },
+            warnings: [warning],
+        });
+
+        const humanSmoke = await executeCli(
+            ['smoke', fixture.packageDirectory],
+            bothEnvironment,
+            fixture.root
+        );
+        expect(humanSmoke.stdout).toContain('auth: ready (anthropic, API key)');
+        expect(humanSmoke.stdout).toContain(warning);
+
+        const viewed = await executeCli(
+            ['view', fixture.packageDirectory, '--json'],
+            bothEnvironment,
+            fixture.root
+        );
+        expect(viewed.code).toBe(0);
+        expect(JSON.parse(viewed.stdout).runner_auth).toMatchObject({
+            status: 'ready',
+            provider: 'anthropic',
+            method: 'api',
+            warning,
+        });
+
+        const run = await executeSavedCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect'],
+            bothEnvironment,
+            fixture.root
+        );
+        expect(run.code).toBe(0);
+        expect(run.stdout).toContain(
+            'Claude Code · anthropic/claude-sonnet-4-5 · local'
+        );
+        expect(
+            `${api.stdout}${both.stdout}${humanSmoke.stdout}${viewed.stdout}${run.stdout}`
+        ).not.toContain('fixture-api-key');
+    });
+
+    test('gives Claude Code the shared connection instruction', async () => {
+        const fixture = await createFixture({ runner: 'claude-code' });
+        const bin = await fakeBin();
+        const environment = withoutProviderKeys({
+            PATH: `${bin}:${process.env.PATH}`,
+            CLAUDE_CODE_OAUTH_TOKEN: '',
+            WORKBENCH_HOME: join(fixture.root, 'home'),
+        });
+        const human = await executeCli(
+            ['smoke', fixture.packageDirectory],
+            environment,
+            fixture.root
+        );
+        expect(human.code).toBe(3);
+        expect(human.stdout).toContain('auth: required (wb connect');
+
+        const machine = await executeCli(
+            ['smoke', fixture.packageDirectory, '--json'],
+            environment,
+            fixture.root
+        );
+        expect(machine.code).toBe(3);
+        const report = JSON.parse(machine.stdout);
+        expect(report.authentication.instruction).toBeUndefined();
+        expect(report.authentication.connect_command).toContain('wb connect');
+
+        const run = await executeSavedCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--json'],
+            environment,
+            fixture.root
+        );
+        expect(run.code).toBe(3);
+        expect(`${run.stdout}\n${run.stderr}`).toContain('Run wb connect');
+        expect(`${run.stdout}\n${run.stderr}`).toContain(
+            'provider key for one run with --env-file'
+        );
+    });
+
+    test('translates and detaches Claude Code runs without invoking a model during dry-run', async () => {
+        const fixture = await createFixture({ runner: 'claude-code' });
+        const record = join(fixture.root, 'claude-runner');
+        const bin = await fakeBin();
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            ANTHROPIC_API_KEY: 'fixture-key',
+            WB_TEST_RECORD: record,
+            WORKBENCH_HOME: join(fixture.root, 'home'),
+            WORKBENCH_OUTPUT_DIR: undefined,
+        };
+        const validated = await executeCli(['validate', fixture.packageDirectory], {
+            PATH: environment.PATH,
+        });
+        expect(validated.code).toBe(0);
+        const viewed = await executeCli(
+            ['view', fixture.packageDirectory, '--json'],
+            environment,
+            fixture.root
+        );
+        expect(viewed.code).toBe(0);
+        expect(JSON.parse(viewed.stdout)).toMatchObject({
+            runner: 'claude-code',
+            runner_permissions: {
+                allow: [],
+                deny: [],
+            },
+        });
+        const smoked = await executeCli(
+            ['smoke', fixture.packageDirectory, '--json'],
+            environment,
+            fixture.root
+        );
+        expect(smoked.code).toBe(0);
+        expect(JSON.parse(smoked.stdout)).toMatchObject({
+            runner: { name: 'claude-code', version: '2.1.292' },
+            authentication: { ready: true },
+        });
+        const dryRun = await executeSavedCli(
+            ['run', fixture.packageDirectory, '--task', 'inspect', '--dry-run'],
+            environment,
+            fixture.root
+        );
+        expect(dryRun.code).toBe(0);
+        expect(JSON.parse(dryRun.stdout)).toMatchObject({
+            cwd: fixture.root,
+            claude_config_directory: expect.any(String),
+        });
+        await expect(stat(`${record}.claude-input`)).rejects.toThrow();
+
+        const detached = await executeSavedCli(
+            [
+                'run',
+                fixture.packageDirectory,
+                '--task',
+                'inspect detached',
+                '--detach',
+                '--json',
+            ],
+            environment,
+            fixture.root
+        );
+        expect(detached.code).toBe(0);
+        expect(JSON.parse(detached.stdout)).toMatchObject({
+            session_id: expect.stringMatching(/^wb_/),
+            run_id: expect.stringMatching(/^wb_/),
+        });
+        const detachedReceipt = JSON.parse(detached.stdout);
+        const completed = await executeCli(
+            ['wait', detachedReceipt.run_id, '--run', '--timeout', '20', '--json'],
+            environment,
+            fixture.root
+        );
+        expect(completed.code).toBe(0);
+        expect(JSON.parse(completed.stdout)).toMatchObject({
+            state: 'completed',
+            final: 'fixture response',
+        });
+        expect(await readFile(`${record}.claude-args`, 'utf8')).toContain(
+            '--permission-prompt-tool\nstdio'
+        );
+    });
+
+    test('shows Claude Code runtime permission rules in view', async () => {
+        const fixture = await createFixture({
+            runner: 'claude-code',
+            runtime: 'docker',
+            image: 'ghcr.io/example/claude-code:fixture',
+            workspaces: {
+                api: { required: true, access: 'read-write' },
+                docs: { required: true, access: 'read-only' },
+            },
+        });
+        const bin = await fakeBin();
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            ANTHROPIC_API_KEY: 'fixture-key',
+            WORKBENCH_HOME: join(fixture.root, 'home'),
+            WORKBENCH_OUTPUT_DIR: join(fixture.root, 'outbox'),
+            WORKBENCH_WORKSPACE_API: join(fixture.root, 'api'),
+            WORKBENCH_WORKSPACE_DOCS: join(fixture.root, 'docs'),
+        };
+
+        const viewed = await executeCli(
+            ['view', fixture.packageDirectory, '--json'],
+            environment,
+            fixture.root
+        );
+
+        expect(viewed.code).toBe(0);
+        const permissions = JSON.parse(viewed.stdout).runner_permissions;
+        expect(permissions.allow).toEqual(
+            expect.arrayContaining([
+                `Read(/${join(fixture.root, 'outbox')}/**)`,
+                `Edit(/${join(fixture.root, 'outbox')}/**)`,
+                `Read(/${join(fixture.root, 'api')}/**)`,
+                `Edit(/${join(fixture.root, 'api')}/**)`,
+                `Read(/${join(fixture.root, 'docs')}/**)`,
+            ])
+        );
+        expect(permissions.allow).not.toContain(
+            `Edit(/${join(fixture.root, 'docs')}/**)`
+        );
     });
 
     test('reports dry-run preflight failures instead of returning empty output', async () => {
@@ -2753,7 +3164,9 @@ describe('CLI exit 3 for missing credentials', () => {
             },
             requirements: { checked: [], applied: [], unchecked: [] },
             workspaces: [],
-            warnings: [],
+            warnings: [
+                'OPENROUTER_API_KEY is used and billed. To stop using it, unset OPENROUTER_API_KEY.',
+            ],
         });
         expect(report.authentication.connect_command).toBeUndefined();
         expect(report.error).toBeUndefined();
@@ -3282,7 +3695,7 @@ async function createFixture(
     options: {
         tools?: string[];
         skill?: boolean;
-        runner?: 'opencode' | 'pi';
+        runner?: 'opencode' | 'pi' | 'claude-code';
         runtime?: 'local' | 'docker';
         image?: string;
         localImage?: boolean;
@@ -3321,7 +3734,7 @@ async function createFixture(
             'name: fixture-core',
             `runner: ${options.runner ?? 'opencode'}`,
             'model:',
-            '  id: openai/gpt-5.6-terra',
+            `  id: ${options.runner === 'claude-code' ? 'anthropic/claude-sonnet-4-5' : 'openai/gpt-5.6-terra'}`,
             'instructions: ./instructions.md',
             ...(options.skill
                 ? ['skills:', '  - ./skills/fixture-skill']
@@ -3646,6 +4059,35 @@ async function fakeBin(
         ].join('\n')
     );
     await chmod(runner, 0o755);
+    const claude = join(directory, 'claude');
+    await writeFile(
+        claude,
+        [
+            '#!/usr/bin/env bun',
+            'const args = Bun.argv.slice(2);',
+            'if (args.join(" ") === "--version") { console.log("Claude Code 2.1.292"); process.exit(0); }',
+            'const record = process.env.WB_TEST_RECORD;',
+            'if (record) await Bun.write(record + ".claude-args", args.join("\\n") + "\\n");',
+            'for await (const line of console) {',
+            '  if (!line.trim()) continue;',
+            '  if (record) await Bun.write(record + ".claude-input", line + "\\n");',
+            '  const input = JSON.parse(line);',
+            '  const commandUuid = input.uuid;',
+            '  const sessionFlag = args.indexOf("--session-id");',
+            '  const resumeFlag = args.indexOf("--resume");',
+            '  const sessionId = (sessionFlag >= 0 ? args[sessionFlag + 1] : undefined) ?? (resumeFlag >= 0 ? args[resumeFlag + 1] : undefined) ?? "claude_fixture";',
+            '  console.log(JSON.stringify({ type: "command_lifecycle", command_uuid: commandUuid, state: "queued", session_id: sessionId }));',
+            '  console.log(JSON.stringify({ type: "command_lifecycle", command_uuid: commandUuid, state: "started", session_id: sessionId }));',
+            '  console.log(JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }));',
+            '  console.log(JSON.stringify({ ...input, session_id: sessionId, isReplay: true }));',
+            '  console.log(JSON.stringify({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { id: "msg_fixture", role: "assistant", content: [{ type: "text", text: "fixture response" }], stop_reason: null } }));',
+            '  console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, stop_reason: "end_turn", errors: [], session_id: sessionId, total_cost_usd: 0.0001, usage: { input_tokens: 4, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }));',
+            '  console.log(JSON.stringify({ type: "command_lifecycle", command_uuid: commandUuid, state: "completed", session_id: sessionId }));',
+            '}',
+            '',
+        ].join('\n')
+    );
+    await chmod(claude, 0o755);
     for (const tool of tools) {
         const path = join(directory, tool);
         await writeFile(path, '#!/bin/sh\nexit 0\n');

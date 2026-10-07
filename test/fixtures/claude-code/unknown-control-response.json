@@ -1,0 +1,8 @@
+{
+    "type": "control_response",
+    "response": {
+        "subtype": "error",
+        "request_id": "request-1",
+        "error": "Workbench does not handle Claude Code control request: future_request"
+    }
+}

@@ -1,11 +1,11 @@
 import type { RuntimeCredentialFiles } from '../contracts.js';
-import { credentialPathSegments } from '../credentialpath.js';
+import { credentialPathSegments, runtimeCredentialRoot } from '../credentialpath.js';
 import type { DockerClient } from './client.js';
 import { DockerManagedContainers } from './containers.js';
 import type { DockerUser } from './contracts.js';
 import { dockerCredentialVolume } from './identity.js';
 
-const credentialRoot = '/workbench-credentials';
+const credentialRoot = runtimeCredentialRoot;
 
 /**
  * The per-runner named volume that holds native credentials for Docker runs.
@@ -20,7 +20,10 @@ export class DockerCredentialVolume implements RuntimeCredentialFiles {
         private readonly client: DockerClient,
         private readonly image: string,
         readonly runner: string,
-        private readonly user: DockerUser | undefined
+        private readonly user: DockerUser | undefined,
+        private readonly credentialEnvironment?: (
+            root: string
+        ) => Record<string, string | undefined>
     ) {
         this.name = DockerCredentialVolume.nameFor(runner);
     }
@@ -99,12 +102,10 @@ export class DockerCredentialVolume implements RuntimeCredentialFiles {
     }
 
     environment(): Record<string, string | undefined> {
-        if (this.runner === 'opencode') {
-            return { XDG_DATA_HOME: credentialRoot };
-        }
-        if (this.runner === 'pi') {
-            return { WORKBENCH_CREDENTIALS_DIR: credentialRoot };
-        }
+        if (this.credentialEnvironment)
+            return this.credentialEnvironment(credentialRoot);
+        if (this.runner === 'opencode') return { XDG_DATA_HOME: credentialRoot };
+        if (this.runner === 'pi') return { WORKBENCH_CREDENTIALS_DIR: credentialRoot };
         return {};
     }
 

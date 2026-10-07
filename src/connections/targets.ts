@@ -2,16 +2,13 @@ import type {
     ModelCatalogHarnessProviderRoute,
     ModelCatalogSnapshot,
 } from '../models/snapshot.js';
-import {
-    PI_PACKAGE_VERSION,
-    PI_PROVIDER_CAPABILITIES,
-} from '../runners/pi/providers.js';
+import { RunnerRegistry } from '../runners/registry.js';
 
 export const connectionRuntimes = ['local', 'docker', 'e2b', 'daytona'] as const;
 export type ConnectionRuntime = (typeof connectionRuntimes)[number];
 
 export const connectionHarnesses = ['opencode', 'pi'] as const;
-export type ConnectionHarness = (typeof connectionHarnesses)[number];
+export type ConnectionHarness = (typeof connectionHarnesses)[number] | 'claude-code';
 
 export interface ConnectionProvider {
     id: string;
@@ -120,50 +117,59 @@ export function connectionAuthenticationMethods(
     const [capability] =
         connectionProviderCapabilities(harness, catalog)[provider] ?? [];
     if (!capability) return [];
-    if (capability.auth.length === 1 && capability.auth[0] === 'api') {
+    if (harness !== 'claude-code') {
         return [
             {
-                id: 'api-key',
-                label: `${providerLabel(provider)} credentials`,
+                id:
+                    capability.auth.length === 1 && capability.auth[0] === 'api'
+                        ? 'api-key'
+                        : 'native',
+                label:
+                    capability.auth.length === 1 && capability.auth[0] === 'api'
+                        ? `${providerLabel(provider)} credentials`
+                        : `${providerLabel(provider)} sign-in`,
                 nativeProvider: capability.native_provider,
-                authenticationMethod: 'api',
+                authenticationMethod:
+                    capability.auth.length === 1 && capability.auth[0] === 'api'
+                        ? 'api'
+                        : 'native',
             },
         ];
     }
-    return [
-        {
-            id: 'native',
-            label: `${providerLabel(provider)} sign-in`,
-            nativeProvider: capability.native_provider,
-            authenticationMethod: 'native',
-        },
-    ];
+    return capability.auth.flatMap((authenticationMethod) =>
+        authenticationMethod === 'oauth' &&
+        !RunnerRegistry.standard()
+            .authentication(harness)
+            .supportsNativeAuthentication(runtime, provider, authenticationMethod)
+            ? []
+            : [
+                  {
+                      id:
+                          authenticationMethod === 'api'
+                              ? 'api-key'
+                              : authenticationMethod === 'oauth'
+                                ? 'subscription'
+                                : 'native',
+                      label:
+                          authenticationMethod === 'api'
+                              ? `${providerLabel(provider)} API key`
+                              : authenticationMethod === 'oauth'
+                                ? subscriptionLabel(provider)
+                                : `${providerLabel(provider)} sign-in`,
+                      nativeProvider: capability.native_provider,
+                      authenticationMethod,
+                  },
+              ]
+    );
 }
 
 export function connectionProviderCapabilities(
     harness: ConnectionHarness,
     catalog: ModelCatalogSnapshot
 ): Record<string, ModelCatalogHarnessProviderRoute[]> {
-    if (harness === 'pi') {
-        return (
-            catalog.harnesses?.pi?.versions[PI_PACKAGE_VERSION]?.providers ??
-            PI_PROVIDER_CAPABILITIES
-        );
-    }
-    return (
-        catalog.harnesses?.opencode?.versions['1.18.30']?.providers ??
-        (Object.fromEntries(
-            Object.keys(catalog.providers).map((provider) => [
-                provider,
-                [
-                    {
-                        native_provider: provider,
-                        auth: ['native'],
-                    },
-                ],
-            ])
-        ) as Record<string, ModelCatalogHarnessProviderRoute[]>)
-    );
+    return RunnerRegistry.standard()
+        .authentication(harness)
+        .providerCapabilities(catalog);
 }
 
 export function connectionModel(
@@ -193,9 +199,11 @@ export function runtimeLabel(runtime: string): string {
 }
 
 export function harnessLabel(harness: string): string {
-    if (harness === 'opencode') return 'OpenCode';
-    if (harness === 'pi') return 'Pi';
-    return harness;
+    try {
+        return RunnerRegistry.standard().displayName(harness);
+    } catch {
+        return harness;
+    }
 }
 
 export function providerLabel(provider: string): string {
@@ -212,6 +220,12 @@ export function providerLabel(provider: string): string {
         .filter(Boolean)
         .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
         .join(' ');
+}
+
+export function subscriptionLabel(provider: string): string {
+    if (provider === 'openai') return 'ChatGPT subscription';
+    if (provider === 'anthropic') return 'Claude subscription';
+    return `${providerLabel(provider)} subscription`;
 }
 
 function providerRank(provider: string): number {

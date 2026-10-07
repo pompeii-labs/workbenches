@@ -17,7 +17,7 @@ A gate is the package's executable definition of done. It is the single most imp
 
 The shell's working directory is the target workspace, not the package. The agent loads the skill with the runner's skill tool, and loading reports the skill's own directory. It then runs the script by that absolute path through its interpreter and passes the workspace as the directory, for example `node <the skill's directory>/scripts/gate.mjs .`. Say exactly that in the instructions and in the skill's `SKILL.md`: "load the `<skill>` skill to get its path, then run `<interpreter> <that directory>/scripts/<gate> .`".
 
-That directory is a temporary, read-only, per-run staged copy of the skill, so never hard-code it and never write into it. The staged config directory is also exported to the runner as `OPENCODE_CONFIG_DIR` (OpenCode) or `PI_CODING_AGENT_DIR` (Pi), which helps when one script needs to locate another.
+That directory is a temporary, read-only, per-run staged copy of the skill, so never hard-code it and never write into it.
 
 ## The required look
 

@@ -142,6 +142,31 @@ export class MemoryRunnerFiles implements RunnerFiles, AssetSource {
         fail('ELOOP', `too many levels of symbolic links: ${path}`);
     }
 
+    async realpath(path: string): Promise<string> {
+        let target = normalize(path);
+        for (let hops = 0; hops < 40; hops++) {
+            const segments = target.split('/').filter(Boolean);
+            let current = '';
+            let followed = false;
+            for (const [index, segment] of segments.entries()) {
+                current = `${current}/${segment}`;
+                const entry = this.entries.get(current);
+                if (!entry) fail('ENOENT', `no such file or directory: ${path}`);
+                if (entry.kind !== 'symlink') continue;
+                const destination = entry.target.startsWith('/')
+                    ? entry.target
+                    : `${parent(current)}/${entry.target}`;
+                target = normalize(
+                    [destination, ...segments.slice(index + 1)].join('/')
+                );
+                followed = true;
+                break;
+            }
+            if (!followed) return target;
+        }
+        fail('ELOOP', `too many levels of symbolic links: ${path}`);
+    }
+
     /** As `readFile`, under the name `AssetSource` uses. */
     read(path: string): Promise<Uint8Array> {
         return this.readFile(path);

@@ -1,3 +1,4 @@
+import { platform } from 'node:os';
 import type { OutcomeSink, RuntimeOutcomeCollection } from '../outcomes/collection.js';
 import { HostOutcomeCapture } from '../outcomes/runtime.js';
 import type { RunnerInvocation, SpawnedRunner } from '../types.js';
@@ -16,6 +17,8 @@ import type {
     RuntimeSessionOptions,
 } from './contracts.js';
 import { RuntimeError } from './error.js';
+import { checkedRunnerVersion } from './runner-version.js';
+import { SubprocessEnvironmentScrubbing } from './subprocess-environment.js';
 
 export interface LocalRuntimeDependencies {
     findExecutable?: (name: string) => string | null;
@@ -99,13 +102,25 @@ export class LocalRuntime implements PreparedRuntime {
     readonly nativeAuthentication = 'persistent' as const;
     readonly workbench;
     readonly workspaceDirectory;
-    readonly environment;
+    readonly environment: Record<string, string | undefined>;
     readonly workspaces;
     readonly preparation = { kind: 'host' as const };
+    subprocessEnvironmentScrubbing: boolean | undefined;
     private ready = false;
     private cleaned = false;
     private readonly requiresGitHubCli;
     private readonly allowUncheckedGpu: boolean;
+    private readonly runnerCommand: string | undefined;
+    private readonly runnerVersion: { minimum: string } | undefined;
+    private readonly allowRunnerEnvironment:
+        | ((name: string, runtime: string) => boolean)
+        | undefined;
+    private readonly subprocessEnvironmentCapability:
+        | {
+              macos: boolean;
+              linuxProbe: string[];
+          }
+        | undefined;
 
     constructor(
         request: RuntimePrepareRequest,
@@ -114,6 +129,11 @@ export class LocalRuntime implements PreparedRuntime {
         private readonly outcome?: HostOutcomeCapture
     ) {
         this.allowUncheckedGpu = request.allowUncheckedGpu ?? false;
+        this.runnerCommand = request.runnerCommand;
+        this.runnerVersion = request.runnerVersion;
+        this.allowRunnerEnvironment = request.runnerAuthentication?.allowEnvironment;
+        this.subprocessEnvironmentCapability =
+            request.runnerAuthentication?.subprocessEnvironmentScrubbing;
         this.requiresGitHubCli = request.repository?.delivery === 'pr';
         this.workbench = request.workbench;
         this.workspaceDirectory = request.workspaceDirectory;
@@ -154,18 +174,95 @@ export class LocalRuntime implements PreparedRuntime {
                 throw new Error(
                     'GitHub CLI (gh) is required for authenticated repository runs'
                 );
-            const result = new WorkbenchPreflight({
+            let result = new WorkbenchPreflight({
                 environment: this.environment,
                 findExecutable: this.dependencies.findExecutable,
-            }).check(this.workbench);
+            }).check(this.workbench, this.runnerCommand);
+            if (this.runnerVersion && this.runnerCommand) {
+                const version = await this.checkRunnerVersion(
+                    this.runnerCommand,
+                    this.runnerVersion.minimum
+                );
+                result = { ...result, runner: { ...result.runner, version } };
+            }
+            this.subprocessEnvironmentScrubbing =
+                await new SubprocessEnvironmentScrubbing().check(
+                    this.subprocessEnvironmentCapability,
+                    platform() === 'darwin' ? 'macos' : platform(),
+                    (command) => this.probe(command)
+                );
             const requirements = this.requirementsPreflight.check(this.workbench, {
                 allowUncheckedGpu: this.allowUncheckedGpu,
             });
             this.ready = true;
-            return { ...result, workspaces: this.workspaces, requirements };
+            return {
+                ...result,
+                workspaces: this.workspaces,
+                requirements,
+                ...(this.subprocessEnvironmentScrubbing !== undefined
+                    ? {
+                          subprocessEnvironmentScrubbing:
+                              this.subprocessEnvironmentScrubbing,
+                      }
+                    : {}),
+            };
         } catch (error) {
             throw RuntimeError.from(this.name, 'preflight', error);
         }
+    }
+
+    private async checkRunnerVersion(
+        command: string,
+        minimum: string
+    ): Promise<string> {
+        const child = this.dependencies.spawn([command, '--version'], {
+            cwd: this.workspaceDirectory,
+            env: { PATH: this.environment.PATH },
+            stdin: 'ignore',
+            stdout: 'pipe',
+            stderr: 'pipe',
+        });
+        const [code, stdout, stderr] = await this.readPreflightProcess(
+            child,
+            `Timed out reading ${command} version from ${command} --version`
+        );
+        return checkedRunnerVersion(command, minimum, { code, stdout, stderr });
+    }
+
+    private async readPreflightProcess(
+        child: SpawnedRunner,
+        timeoutMessage: string
+    ): Promise<[number, string, string]> {
+        const result = Promise.all([
+            child.exited,
+            LocalRuntime.read(child.stdout),
+            LocalRuntime.read(child.stderr),
+        ]);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+                child.kill?.();
+                reject(new Error(timeoutMessage));
+            }, 5_000);
+        });
+        return Promise.race([result, timeout]).finally(() => {
+            if (timer) clearTimeout(timer);
+        });
+    }
+
+    private async probe(command: string[]): Promise<{ code: number }> {
+        const child = this.dependencies.spawn(command, {
+            cwd: this.workspaceDirectory,
+            env: preflightEnvironment(this.environment, this.allowRunnerEnvironment),
+            stdin: 'ignore',
+            stdout: 'pipe',
+            stderr: 'pipe',
+        });
+        const [code] = await this.readPreflightProcess(
+            child,
+            'Timed out checking runner subprocess environment isolation'
+        );
+        return { code };
     }
 
     async execute(invocation: RunnerInvocation): Promise<RuntimeCommandResult> {
@@ -314,4 +411,14 @@ export class LocalRuntime implements PreparedRuntime {
         if (!stream) return '';
         return new Response(stream).text();
     }
+}
+
+function preflightEnvironment(
+    environment: Record<string, string | undefined>,
+    allowEnvironment?: (name: string, runtime: string) => boolean
+): Record<string, string | undefined> {
+    if (!allowEnvironment) return environment;
+    return Object.fromEntries(
+        Object.entries(environment).filter(([name]) => allowEnvironment(name, 'local'))
+    );
 }

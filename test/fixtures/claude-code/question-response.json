@@ -1,0 +1,36 @@
+{
+    "type": "control_response",
+    "response": {
+        "subtype": "success",
+        "request_id": "question_contract",
+        "response": {
+            "behavior": "allow",
+            "updatedInput": {
+                "questions": [
+                    {
+                        "question": "Where should this deploy?",
+                        "header": "Target",
+                        "options": [
+                            {
+                                "label": "Production",
+                                "description": "Live environment"
+                            },
+                            { "label": "Staging", "description": "Test environment" }
+                        ],
+                        "multiSelect": false
+                    },
+                    {
+                        "question": "Which checks should run?",
+                        "header": "Checks",
+                        "options": [{ "label": "Unit" }, { "label": "Integration" }],
+                        "multiSelect": true
+                    }
+                ],
+                "answers": {
+                    "Where should this deploy?": "Production",
+                    "Which checks should run?": "Unit, Integration"
+                }
+            }
+        }
+    }
+}

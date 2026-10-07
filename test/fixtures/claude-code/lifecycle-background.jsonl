@@ -1,0 +1,10 @@
+{"type":"command_lifecycle","command_uuid":"command-main","state":"queued","session_id":"session-1"}
+{"type":"command_lifecycle","command_uuid":"command-main","state":"started","session_id":"session-1"}
+{"type":"system","subtype":"init","cwd":"/workspace/project","session_id":"session-1"}
+{"type":"result","subtype":"success","is_error":false,"session_id":"session-1","stop_reason":"end_turn","usage":{}}
+{"type":"command_lifecycle","command_uuid":"command-main","state":"completed","session_id":"session-1"}
+{"type":"system","subtype":"task_notification","session_id":"session-1","status":"completed"}
+{"type":"system","subtype":"background_tasks_changed","session_id":"session-1","tasks":[]}
+{"type":"system","subtype":"init","cwd":"/workspace/project","session_id":"session-1"}
+{"type":"assistant","session_id":"session-1","message":{"id":"message-background","content":[{"type":"text","text":"Background activity"}],"stop_reason":"end_turn"}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"session-1","stop_reason":"end_turn","usage":{},"origin":{"kind":"task-notification"}}

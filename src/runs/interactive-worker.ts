@@ -1,7 +1,10 @@
 import type { CatalogRegistryReference } from '../catalog/index.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
 import type { NormalizedRunnerInput } from '../runners/session.js';
-import { normalizeRunnerInput } from '../runners/session.js';
+import {
+    normalizeRunnerInput,
+    RunnerCapabilityUnsupportedError,
+} from '../runners/session.js';
 import { SessionStore } from '../sessions/index.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { withRuntime } from '../workbench/runtimes.js';
@@ -45,6 +48,7 @@ export class InteractiveRunWorker {
     private readonly promotingSteers = new Set<string>();
     private session: InteractiveRunSession | undefined;
     private sessionId: string | undefined;
+    private persistedNativeSessionId: string | undefined;
     private namingStarted = false;
     private activeTurn: Promise<void> | undefined;
     private termination: Promise<void> | undefined;
@@ -111,6 +115,8 @@ export class InteractiveRunWorker {
                 allowHostDocker: request.allow_host_docker ?? false,
                 allowUncheckedGpu: request.allow_unchecked_gpu ?? false,
                 interactive: metadata.mode === 'interactive',
+                answerRequests:
+                    metadata.mode === 'detached' || metadata.mode === 'interactive',
                 allowAuthentication: metadata.mode !== 'detached',
                 ...(request.connection ? { connection: request.connection } : {}),
                 ...(request.session_id
@@ -130,6 +136,12 @@ export class InteractiveRunWorker {
                 onPermission: (permission) =>
                     this.nativeRequests.waitForPermission(permission),
                 onQuestion: (question) => this.nativeRequests.waitForQuestion(question),
+                onWithdrawPermission: (id) => {
+                    this.nativeRequests.answerPermission(id, 'reject');
+                },
+                onWithdrawQuestion: (id) => {
+                    this.nativeRequests.answerQuestion(id, { outcome: 'rejected' });
+                },
                 dependencies: {
                     env: options.environment ?? process.env,
                     ...(this.dependencies.findExecutable
@@ -162,15 +174,7 @@ export class InteractiveRunWorker {
                 );
             }
             if (this.session.runnerSessionId) {
-                if (request.session_id) {
-                    await this.sessions.update(request.session_id, {
-                        native_session_id: this.session.runnerSessionId,
-                        latest_run_id: this.runId,
-                    });
-                }
-                await this.store.update(this.runId, {
-                    runner_session_id: this.session.runnerSessionId,
-                });
+                await this.persistNativeSessionId();
             }
             if (this.pendingShutdown) {
                 await this.finish(
@@ -237,7 +241,17 @@ export class InteractiveRunWorker {
             if (request.kind === 'close') return await this.close(request, false);
             await this.close(request, true);
         } catch (error) {
-            await this.reject(request, 'control_failed', errorMessage(error));
+            const idleSteer =
+                request.kind === 'steer' && this.session && !this.session.busy;
+            await this.reject(
+                request,
+                idleSteer
+                    ? 'turn_idle'
+                    : error instanceof RunnerCapabilityUnsupportedError
+                      ? error.code
+                      : 'control_failed',
+                errorMessage(error)
+            );
         }
     }
 
@@ -309,9 +323,9 @@ export class InteractiveRunWorker {
         if (!this.activeTurn || !session.busy) {
             return this.reject(request, 'turn_idle', 'No Workbench turn is active');
         }
+        const delivery = await session.steer(request.input);
         await this.accept(request);
         this.nameSessionFromInput(request);
-        const delivery = await session.steer(request.input);
         await session.recordInput('input.queued', this.eventData(request));
         await this.control.resolve(request, {
             outcome: 'accepted',
@@ -483,6 +497,7 @@ export class InteractiveRunWorker {
     private async finishTurn(turn: Promise<void>): Promise<void> {
         if (this.activeTurn !== turn) return;
         this.activeTurn = undefined;
+        await this.persistNativeSessionId();
         if (this.terminal || this.drainPaused) return;
         await this.deliverNext();
         await this.finishIfUnattended();
@@ -530,6 +545,8 @@ export class InteractiveRunWorker {
                 finished_at: new Date().toISOString(),
             });
             throw error;
+        } finally {
+            await this.persistNativeSessionId().catch(() => {});
         }
         const truncated = !cancelled && this.session?.outputTruncated === true;
         this.exitCode = cancelled ? 130 : truncated ? 1 : 0;
@@ -587,8 +604,31 @@ export class InteractiveRunWorker {
         }
     }
 
+    private async persistNativeSessionId(): Promise<void> {
+        const nativeSessionId = this.session?.runnerSessionId;
+        if (!nativeSessionId || nativeSessionId === this.persistedNativeSessionId) {
+            return;
+        }
+        if (this.sessionId) {
+            await this.sessions.update(this.sessionId, {
+                native_session_id: nativeSessionId,
+                latest_run_id: this.runId,
+            });
+        }
+        await this.store.update(this.runId, {
+            runner_session_id: nativeSessionId,
+        });
+        this.persistedNativeSessionId = nativeSessionId;
+    }
+
     private async fail(error: unknown): Promise<void> {
+        if (this.termination) return this.termination;
         if (this.terminal) return;
+        const termination = this.failNow(error);
+        this.termination = termination;
+        return termination;
+    }
+    private async failNow(error: unknown): Promise<void> {
         this.terminal = true;
         this.exitCode =
             error instanceof AuthenticationRequiredError ? error.exitCode : 1;
@@ -596,6 +636,7 @@ export class InteractiveRunWorker {
         this.nativeRequests.rejectAll();
         await this.rejectQueued('run_failed').catch(() => {});
         await this.session?.close().catch(() => {});
+        await this.persistNativeSessionId().catch(() => {});
         await this.recordFailure(error).catch(() => {});
         await this.store
             .update(this.runId, {
@@ -605,7 +646,6 @@ export class InteractiveRunWorker {
             })
             .catch(() => {});
     }
-
     private async recordFailure(error: unknown): Promise<void> {
         const run = await this.store.read(this.runId);
         const events = await this.store.readEvents(this.runId);

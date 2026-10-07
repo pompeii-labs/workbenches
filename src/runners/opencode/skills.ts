@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
 import type { RunnerContextStaging } from '../context/stage.js';
+import { copyPackageTree } from '../files/package-copy.js';
 import type { RunnerFiles } from '../types.js';
 
 /** OpenCode's staged skills, native config, and context, and how to remove them. */
@@ -45,13 +46,25 @@ export class OpenCodeSkillStaging {
         let nativeConfigFile: string | undefined;
         try {
             if (configDirectory) {
-                await files.copy(configDirectory, directory);
+                const warnings = await copyPackageTree(
+                    files,
+                    configDirectory,
+                    directory,
+                    workbench.packageDirectory
+                );
+                if (warnings.length) throw new Error(warnings.join('\n'));
             }
             if (config?.kind === 'file' && workbench.runnerConfigPath) {
                 // Native config loading can write schema metadata. Keep those writes
                 // out of the pinned package, and preserve package-relative references.
                 const native = join(directory, 'native');
-                await files.copy(workbench.packageDirectory, native);
+                const warnings = await copyPackageTree(
+                    files,
+                    workbench.packageDirectory,
+                    native,
+                    workbench.packageDirectory
+                );
+                if (warnings.length) throw new Error(warnings.join('\n'));
                 nativeConfigFile = join(
                     native,
                     relative(workbench.packageDirectory, workbench.runnerConfigPath)
@@ -60,7 +73,14 @@ export class OpenCodeSkillStaging {
             await files.mkdir(skillsDirectory, { recursive: true });
             await Promise.all(
                 workbench.skills.map((skill) =>
-                    files.copy(skill.directory, join(skillsDirectory, skill.name))
+                    copyPackageTree(
+                        files,
+                        skill.directory,
+                        join(skillsDirectory, skill.name),
+                        workbench.packageDirectory
+                    ).then((warnings) => {
+                        if (warnings.length) throw new Error(warnings.join('\n'));
+                    })
                 )
             );
             context = await this.context.stage({ directory, workbench });

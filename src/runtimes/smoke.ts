@@ -1,10 +1,13 @@
 import { RunnerCredentialStore } from '../connections/credentials.js';
+import { withHostRunnerCredentials } from '../connections/environmentcredentials.js';
 import {
     ConnectionInspector,
     type RunnerAuthenticationStatus,
 } from '../connections/inspector.js';
+import { configureRunnerRuntime } from '../connections/preparation.js';
 import { ConnectionStore } from '../connections/store.js';
 import { RunnerRegistry } from '../runners/registry.js';
+import type { PreparedRunner } from '../runners/runner.js';
 import { RunStore } from '../runs/store.js';
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
 import type { PreflightResult } from '../workbench/preflight.js';
@@ -15,6 +18,7 @@ import { RuntimeRegistry } from './registry.js';
 
 export interface WorkbenchSmokeResult extends PreflightResult {
     authentication: RunnerAuthenticationStatus;
+    warnings?: string[];
 }
 
 export interface RuntimeSmokeOptions {
@@ -39,7 +43,7 @@ export class RuntimeSmoke {
     constructor(private readonly options: RuntimeSmokeOptions) {}
 
     async check(): Promise<WorkbenchSmokeResult> {
-        const environment = this.options.environment ?? process.env;
+        let environment = this.options.environment ?? process.env;
         const workbench = withRuntime(this.options.workbench, this.options.runtime);
         const selected = selectedRuntime(workbench);
         const workspaceDirectory =
@@ -47,6 +51,14 @@ export class RuntimeSmoke {
         const workspaces = this.options.workspaces ?? [];
         await this.workspaceBindings.validate(workbench, workspaces);
         const registry = this.options.registry ?? RuntimeRegistry.standard();
+        if (this.options.home) {
+            environment = await withHostRunnerCredentials(
+                this.options.home,
+                selected.name,
+                workbench.manifest.runner,
+                environment
+            );
+        }
         registry.requirements.check(workbench, {
             ...(this.options.allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
         });
@@ -55,13 +67,25 @@ export class RuntimeSmoke {
                 'Host Docker authorization was supplied to a Workbench that does not declare docker.engine'
             );
         }
-        const runner = await RunnerRegistry.standard().prepare(workbench, environment);
+        const runner = await RunnerRegistry.standard().prepare(workbench, environment, {
+            workspaceDirectory,
+        });
         let runtime: PreparedRuntime | undefined;
         let result: WorkbenchSmokeResult | undefined;
         let operationError: unknown;
         try {
             runtime = await registry.resolve(selected.name).prepare({
                 workbench,
+                runnerAuthentication: runtimeAuthentication(runner),
+                ...(runner.nativeCommand
+                    ? { runnerCommand: runner.nativeCommand }
+                    : {}),
+                ...(runner.nativeVersion
+                    ? { runnerVersion: runner.nativeVersion }
+                    : {}),
+                runnerCredentialStore: RunnerRegistry.standard()
+                    .authentication(runner.name)
+                    .nativeCredentialStore(selected.name),
                 workspaceDirectory,
                 environment,
                 assets: [
@@ -81,7 +105,11 @@ export class RuntimeSmoke {
                     hostDocker: this.options.allowHostDocker ?? false,
                 },
                 allowUncheckedGpu: this.options.allowUncheckedGpu ?? false,
-                ...(selected.name === 'e2b' && this.options.home
+                ...(selected.name === 'e2b' &&
+                this.options.home &&
+                RunnerRegistry.standard()
+                    .authentication(runner.name)
+                    .nativeCredentialStore(selected.name)
                     ? {
                           credentials: await new RunnerCredentialStore(
                               this.options.home
@@ -97,6 +125,7 @@ export class RuntimeSmoke {
                       }
                     : {}),
             });
+            await configureRunnerRuntime(runner, runtime);
             const preflight = await runtime.preflight();
             const authentication = await new ConnectionInspector({
                 workbench,
@@ -114,14 +143,19 @@ export class RuntimeSmoke {
                     ? { connection: this.options.connection }
                     : {}),
             });
-            result = { ...preflight, authentication };
+            result = {
+                ...preflight,
+                authentication,
+                ...(runner.warnings ? { warnings: runner.warnings } : {}),
+            };
         } catch (error) {
             operationError = error;
         }
-        const cleanup = await Promise.allSettled([
-            runtime?.cleanup(),
-            runner.cleanup(),
-        ]);
+        const runtimeCleanup = await Promise.allSettled([runtime?.cleanup()]);
+        const cleanup = [
+            ...runtimeCleanup,
+            ...(await Promise.allSettled([runner.cleanup()])),
+        ];
         if (operationError) throw operationError;
         const cleanupFailure = cleanup.find(
             (entry): entry is PromiseRejectedResult => entry.status === 'rejected'
@@ -130,4 +164,23 @@ export class RuntimeSmoke {
         if (!result) throw new Error('Workbench smoke did not produce a result');
         return result;
     }
+}
+
+function runtimeAuthentication(runner: PreparedRunner) {
+    const authentication =
+        runner.authentication ?? RunnerRegistry.standard().authentication(runner.name);
+    return {
+        environmentNames: authentication.environmentNames,
+        allowEnvironment: (name: string, runtime: string) =>
+            authentication.allowEnvironment(name, runtime),
+        ...(authentication.credentialEnvironment
+            ? { credentialEnvironment: authentication.credentialEnvironment }
+            : {}),
+        ...(authentication.subprocessEnvironmentScrubbing
+            ? {
+                  subprocessEnvironmentScrubbing:
+                      authentication.subprocessEnvironmentScrubbing,
+              }
+            : {}),
+    };
 }

@@ -7,6 +7,7 @@ import {
     mkdtemp,
     readdir,
     readFile,
+    realpath,
     rm,
     stat,
     symlink,
@@ -48,6 +49,10 @@ export class DiskRunnerFiles implements RunnerFiles {
 
     stat(path: string): Promise<RunnerFileStat | undefined> {
         return this.describe(stat(path));
+    }
+
+    realpath(path: string): Promise<string> {
+        return realpath(path);
     }
 
     async symlink(target: string, path: string): Promise<void> {

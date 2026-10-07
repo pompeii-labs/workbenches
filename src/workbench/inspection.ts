@@ -2,10 +2,15 @@ import { basename } from 'node:path';
 import { WorkbenchPackage } from '../catalog/package.js';
 import { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import {
+    applyRuntimeCredentials,
+    withHostRunnerCredentials,
+} from '../connections/environmentcredentials.js';
+import {
     ConnectionInspector,
     ConnectionStore,
     type RunnerAuthenticationStatus,
 } from '../connections/index.js';
+import { subscriptionLabel } from '../connections/targets.js';
 import {
     ActiveModelCatalog,
     connectCommand,
@@ -80,7 +85,11 @@ export interface WorkbenchView {
         status: 'ready' | 'required' | 'unchecked' | 'unavailable';
         connect_command: string;
         provider?: string;
+        method?: string;
+        warning?: string;
     };
+    runner_permissions?: { allow: string[]; deny: string[] };
+    warnings: string[];
     /** The default runtime: the first declared. */
     runtime: string;
     image?: string;
@@ -112,6 +121,8 @@ interface WorkbenchInspectionOptions {
     environment?: Record<string, string | undefined>;
     reference?: string;
     authentication?: RunnerAuthenticationStatus | 'unavailable';
+    runnerPermissions?: { allow: string[]; deny: string[] };
+    warnings?: string[];
 }
 
 export class WorkbenchInspection {
@@ -137,6 +148,10 @@ export class WorkbenchInspection {
                 options.authentication
             ),
             runner_auth: WorkbenchInspection.runnerAuthentication(options),
+            ...(options.runnerPermissions
+                ? { runner_permissions: options.runnerPermissions }
+                : {}),
+            warnings: options.warnings ?? [],
             runtime: defaultRuntime.name,
             ...(defaultRuntime.image ? { image: defaultRuntime.image } : {}),
             ...(defaultRuntime.docker_engine
@@ -203,8 +218,23 @@ export class WorkbenchInspection {
         this.field(
             lines,
             'Runner auth',
-            `${view.runner_auth.status}${view.runner_auth.provider ? ` via ${view.runner_auth.provider}` : ''} · ${view.runner_auth.connect_command}`
+            `${view.runner_auth.status}${view.runner_auth.provider ? ` via ${view.runner_auth.provider}` : ''}${view.runner_auth.method ? ` (${authenticationMethodLabel(view.runner_auth.method, view.runner_auth.provider)})` : ''} · ${view.runner_auth.connect_command}`
         );
+        if (view.runner_auth.warning) {
+            this.field(lines, 'Warning', view.runner_auth.warning);
+        }
+        if (view.runner_permissions) {
+            this.field(
+                lines,
+                'Allowed',
+                view.runner_permissions.allow.join(', ') || 'none'
+            );
+            this.field(
+                lines,
+                'Denied',
+                view.runner_permissions.deny.join(', ') || 'none'
+            );
+        }
         for (const [label, value] of renderRuntimeFields(view)) {
             this.field(lines, label, value);
         }
@@ -212,6 +242,7 @@ export class WorkbenchInspection {
         this.field(lines, 'Instructions', view.instructions);
         this.field(lines, 'Skills', view.skills.join(', ') || 'none');
         this.field(lines, 'Tools', view.tools.join(', ') || 'none');
+        for (const warning of view.warnings) this.field(lines, 'Warning', warning);
         this.renderCollections(lines);
         return `${lines.join('\n')}\n`;
     }
@@ -319,8 +350,22 @@ export class WorkbenchInspection {
             ...(options.authentication.configuration
                 ? { provider: options.authentication.configuration.provider }
                 : {}),
+            ...(options.authentication.method
+                ? { method: options.authentication.method }
+                : {}),
+            ...(options.authentication.warning
+                ? { warning: options.authentication.warning }
+                : {}),
         };
     }
+}
+
+function authenticationMethodLabel(method: string, provider?: string): string {
+    if (method === 'api') return 'API key';
+    if (method === 'oauth') {
+        return subscriptionLabel(provider ?? 'Provider');
+    }
+    return method;
 }
 
 export class WorkbenchInspector {
@@ -388,19 +433,37 @@ export class WorkbenchInspector {
         reference: string,
         origin: WorkbenchOrigin
     ): Promise<WorkbenchInspection> {
-        if (selectedRuntime(workbench).name !== 'local') {
-            return WorkbenchInspection.describe({ workbench, reference, origin });
-        }
         let runner: PreparedRunner | undefined;
         let runtime: PreparedRuntime | undefined;
         try {
-            runner = await RunnerRegistry.standard().prepare(workbench, process.env);
+            const runtimeName = selectedRuntime(workbench).name;
+            const environment = await withHostRunnerCredentials(
+                this.home,
+                runtimeName,
+                workbench.manifest.runner,
+                process.env
+            );
+            runner = await RunnerRegistry.standard().prepare(workbench, environment, {
+                workspaceDirectory: workbench.repositoryDirectory,
+                includeRuntimeDirectories: runtimeName !== 'local',
+            });
+            if (runtimeName !== 'local') {
+                return WorkbenchInspection.describe({
+                    workbench,
+                    reference,
+                    origin,
+                    ...(runner.permissions
+                        ? { runnerPermissions: runner.permissions }
+                        : {}),
+                    ...(runner.warnings ? { warnings: runner.warnings } : {}),
+                });
+            }
             runtime = await RuntimeRegistry.standard()
                 .resolve('local')
                 .prepare({
                     workbench,
                     workspaceDirectory: workbench.repositoryDirectory,
-                    environment: process.env,
+                    environment,
                     assets: [
                         { path: workbench.repositoryDirectory, access: 'read-write' },
                         { path: workbench.packageDirectory, access: 'read-only' },
@@ -411,6 +474,8 @@ export class WorkbenchInspector {
                     // Inspection only reads authentication state and runs nothing.
                     allowUncheckedGpu: true,
                 });
+            await applyRuntimeCredentials(runtime, workbench.manifest.runner);
+            await runner.configureRuntime?.(runtime);
             const authentication = await new ConnectionInspector({
                 workbench,
                 runtime,
@@ -423,6 +488,10 @@ export class WorkbenchInspector {
                 reference,
                 origin,
                 authentication,
+                ...(runner.permissions
+                    ? { runnerPermissions: runner.permissions }
+                    : {}),
+                ...(runner.warnings ? { warnings: runner.warnings } : {}),
             });
         } catch {
             return WorkbenchInspection.describe({

@@ -4,6 +4,7 @@ import { parseEnv } from 'node:util';
 
 import { ModelCatalog } from '../models/catalog.js';
 import { ModelRouter } from '../models/routing.js';
+import { RunnerRegistry } from '../runners/registry.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { selectedRuntime } from './runtimes.js';
 
@@ -46,6 +47,7 @@ export class WorkbenchEnvironment {
             ...(catalog
                 ? new ModelRouter(catalog).providerEnvironmentNames(workbench)
                 : []),
+            ...RunnerRegistry.standard().environmentNames(workbench.manifest.runner),
         ]);
         for (const name of allowed) {
             if (Object.hasOwn(overrides.file, name)) {

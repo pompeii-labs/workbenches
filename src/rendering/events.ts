@@ -2,6 +2,7 @@ import { isAbsolute, relative } from 'node:path';
 
 import pc from 'picocolors';
 
+import { RunnerRegistry } from '../runners/registry.js';
 import type { WorkbenchEvent } from '../runs/index.js';
 import { TerminalMarkdownStream } from './markdown.js';
 
@@ -20,6 +21,7 @@ export interface EventRendererOptions {
     stderr?: (value: string) => void;
     color?: boolean;
     columns?: number;
+    authentication?: { provider: string; label: string; warning?: string };
 }
 
 export function createEventRenderer(options: EventRendererOptions): EventRenderer {
@@ -32,6 +34,7 @@ export function createEventRenderer(options: EventRendererOptions): EventRendere
     return new HumanEventRenderer(stdout, stderr, {
         colors: pc.createColors(options.color ?? defaultColorEnabled()),
         columns: options.columns ?? process.stdout.columns ?? 80,
+        ...(options.authentication ? { authentication: options.authentication } : {}),
     });
 }
 
@@ -95,11 +98,18 @@ class HumanEventRenderer implements EventRenderer {
     private inAnswer = false;
     private workspace = '';
     private deliveryFailed = false;
+    private readonly authentication:
+        | { provider: string; label: string; warning?: string }
+        | undefined;
 
     constructor(
         private readonly stdout: (value: string) => void,
         private readonly stderr: (value: string) => void,
-        options: { colors: Colors; columns: number }
+        options: {
+            colors: Colors;
+            columns: number;
+            authentication?: { provider: string; label: string; warning?: string };
+        }
     ) {
         this.colors = options.colors;
         this.markdown = new TerminalMarkdownStream(
@@ -107,6 +117,7 @@ class HumanEventRenderer implements EventRenderer {
             options.colors,
             options.columns
         );
+        this.authentication = options.authentication;
     }
 
     render(event: WorkbenchEvent): void {
@@ -117,8 +128,16 @@ class HumanEventRenderer implements EventRenderer {
             const model = text(event.data, 'model');
             const runtime = text(event.data, 'runtime');
             this.stdout(
-                `${colors.cyan('●')} ${colors.bold(name)}\n  ${colors.dim([humanName(event.runner), model, runtime].filter(Boolean).join(' · '))}\n`
+                `${colors.cyan('●')} ${colors.bold(name)}\n  ${colors.dim([runnerDisplayName(event.runner), model, runtime].filter(Boolean).join(' · '))}\n`
             );
+            if (this.authentication) {
+                this.stdout(
+                    `  ${colors.dim(`auth: ready (${this.authentication.provider}, ${this.authentication.label})`)}\n`
+                );
+                if (this.authentication.warning) {
+                    this.stdout(`  ${colors.yellow(this.authentication.warning)}\n`);
+                }
+            }
             return;
         }
         if (event.type === 'run.ready') {
@@ -370,9 +389,12 @@ function stringArray(value: unknown, key: string): string[] {
         : [];
 }
 
-function humanName(value: string): string {
-    if (value.toLowerCase() === 'opencode') return 'OpenCode';
-    return value;
+function runnerDisplayName(value: string): string {
+    try {
+        return RunnerRegistry.standard().displayName(value);
+    } catch {
+        return value;
+    }
 }
 
 function styledToolLabel(data: unknown, workspace: string, colors: Colors): string {

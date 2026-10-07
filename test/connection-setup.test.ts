@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
+    chmod,
     mkdir,
     mkdtemp,
     readdir,
@@ -15,6 +16,7 @@ import { ModelConnection } from '../src/commands/connection.js';
 import { CliPresenter } from '../src/commands/presenter.js';
 import type { ConnectionCheck } from '../src/connections/check.js';
 import { HostCredentialFiles } from '../src/connections/credentials.js';
+import { withHostRunnerCredentials } from '../src/connections/environmentcredentials.js';
 import { AuthenticationRequiredError } from '../src/connections/error.js';
 import type { RunnerAuthenticationStatus } from '../src/connections/inspector.js';
 import { NativeCredentialFile } from '../src/connections/nativecredentials.js';
@@ -75,6 +77,12 @@ describe('native credential files', () => {
         expect(() => openCode.apiKey('  ')).toThrow('The API key is empty');
         expect(openCode.serves({ type: 'oauth', value: {} }, 'api')).toBeFalse();
         expect(openCode.serves({ type: 'oauth', value: {} }, 'native')).toBeTrue();
+        const claudeCode = NativeCredentialFile.for('claude-code');
+        expect(claudeCode.path).toBe('provider-keys.json');
+        expect(claudeCode.apiKey('fixture').value).toEqual({
+            type: 'api',
+            key: 'fixture',
+        });
         expect(() => NativeCredentialFile.for('codex')).toThrow('Unsupported runner');
     });
 
@@ -107,6 +115,47 @@ describe('native credential files', () => {
 });
 
 describe('connection setup', () => {
+    test('does not create an engine credential store for local Claude Code', async () => {
+        const home = await temporary('workbench-setup-claude-');
+        const setup = new ConnectionSetup({
+            home,
+            target: claudeCode('local'),
+            environment: {},
+        });
+
+        await expect(
+            setup.save(NativeCredentialFile.for('claude-code').apiKey('fixture-key'))
+        ).rejects.toThrow('local runtime uses your own Claude Code sign-in');
+        await expect(stat(join(home, 'runtime-credentials'))).rejects.toThrow();
+    });
+
+    test('does not upload saved Claude Code credentials to E2B', async () => {
+        const home = await temporary('workbench-claude-environment-');
+        const setup = new ConnectionSetup({
+            home,
+            target: claudeCode('e2b'),
+            environment: {},
+        });
+        await expect(
+            setup.save(NativeCredentialFile.for('claude-code').apiKey('fixture-saved'))
+        ).rejects.toThrow('E2B has no runner credential store');
+
+        await expect(
+            withHostRunnerCredentials(home, 'e2b', 'claude-code', {
+                CLAUDE_CODE_OAUTH_TOKEN: 'fixture-oauth',
+            })
+        ).resolves.toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'fixture-oauth' });
+        await expect(
+            withHostRunnerCredentials(home, 'e2b', 'claude-code', {
+                ANTHROPIC_API_KEY: 'fixture-explicit',
+                CLAUDE_CODE_OAUTH_TOKEN: 'fixture-oauth',
+            })
+        ).resolves.toMatchObject({
+            ANTHROPIC_API_KEY: 'fixture-explicit',
+            CLAUDE_CODE_OAUTH_TOKEN: 'fixture-oauth',
+        });
+    });
+
     test('writes Docker credentials inside the prepared runtime and reports what the runner lists', async () => {
         const home = await temporary('workbench-setup-docker-');
         const volume = new MemoryFiles();
@@ -142,6 +191,45 @@ describe('connection setup', () => {
             ready: false,
             missing:
                 'OpenCode in Docker has no OpenRouter credential for OpenRouter sign-in',
+        });
+    });
+
+    test('writes a Claude Code key into the Docker store and injects it for inspection', async () => {
+        const home = await temporary('workbench-setup-claude-docker-');
+        const volume = new MemoryFiles();
+        const prepared = runtime(volume);
+        const setup = new ConnectionSetup({
+            home,
+            target: claudeCode('docker'),
+            environment: {},
+            workbench: workbench(),
+            check: () => ({
+                open: (work) => work(prepared, unusedRunner()),
+                inspect: async (options = {}) => {
+                    await options.before?.(prepared);
+                    return {
+                        ...status(Boolean(prepared.environment.ANTHROPIC_API_KEY)),
+                        connections: prepared.environment.ANTHROPIC_API_KEY
+                            ? [
+                                  {
+                                      provider: 'anthropic',
+                                      nativeProvider: 'anthropic',
+                                      nativeModel: 'claude-sonnet-4-5',
+                                      authenticationMethod: 'api',
+                                  },
+                              ]
+                            : [],
+                    };
+                },
+            }),
+        });
+
+        await expect(
+            setup.save(NativeCredentialFile.for('claude-code').apiKey('fixture-key'))
+        ).resolves.toEqual({ ready: true, saved: false, fromEnvironment: false });
+        expect(prepared.environment.ANTHROPIC_API_KEY).toBe('fixture-key');
+        expect(JSON.parse(volume.get('provider-keys.json'))).toEqual({
+            anthropic: { type: 'api', key: 'fixture-key' },
         });
     });
 
@@ -345,6 +433,41 @@ describe('model connection', () => {
         );
     });
 
+    test('directs environment-only runners to the provider variable', async () => {
+        const home = await temporary('workbench-connection-environment-');
+        const failure = await new ModelConnection({
+            home,
+            target: claudeCode('e2b'),
+            output: presenter([]),
+            environment: {},
+            interactive: false,
+        })
+            .connect({ stdin: false })
+            .catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(AuthenticationRequiredError);
+        expect((failure as Error).message).toContain(
+            'Set ANTHROPIC_API_KEY where wb runs'
+        );
+        expect(await readdir(home)).toEqual([]);
+
+        const lines: string[] = [];
+        await new ModelConnection({
+            home,
+            target: claudeCode('e2b'),
+            output: presenter(lines),
+            environment: { ANTHROPIC_API_KEY: 'fixture' },
+            interactive: false,
+        }).connect({ stdin: false });
+        expect(lines).toEqual(['ready\te2b\tclaude-code\tanthropic\n']);
+        expect(
+            await new ConnectionStore(home).find({
+                runner: 'claude-code',
+                runtime: 'e2b',
+            })
+        ).toMatchObject({ provider: 'anthropic', authenticationMethod: 'api' });
+    });
+
     test('rejects a piped value that is not a bare key', async () => {
         const home = await temporary('workbench-connection-key-');
         const connect = (value: string) =>
@@ -538,6 +661,76 @@ describe('model connection', () => {
 });
 
 describe('host sign-in', () => {
+    test('uses the normal Claude credential store with an empty secure-storage override', async () => {
+        const home = await temporary('workbench-claude-subscription-');
+        const binaryDirectory = await mkdirPrivate(join(home, 'bin'));
+        const userHome = await mkdirPrivate(join(home, 'user'));
+        const claudeHome = await mkdirPrivate(join(userHome, '.claude'));
+        const executable = join(binaryDirectory, 'claude');
+        const security = join(binaryDirectory, 'security');
+        const record = join(home, 'claude-calls.jsonl');
+        const securityRecord = join(home, 'security-calls.jsonl');
+        await writeFile(join(claudeHome, '.credentials.json'), '{}');
+        await writeFile(
+            security,
+            [
+                '#!/usr/bin/env bun',
+                `import { appendFile } from 'node:fs/promises';`,
+                'await appendFile(process.env.FAKE_SECURITY_RECORD ?? "", JSON.stringify(Bun.argv.slice(2)) + "\\n");',
+            ].join('\n')
+        );
+        await writeFile(
+            executable,
+            [
+                '#!/usr/bin/env bun',
+                `import { appendFile } from 'node:fs/promises';`,
+                'const args = Bun.argv.slice(2);',
+                'await appendFile(process.env.FAKE_CLAUDE_RECORD ?? "", JSON.stringify({ args, secure: process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR, config: process.env.CLAUDE_CONFIG_DIR }) + "\\n");',
+                'if (process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR === "") {',
+                '  Bun.spawnSync(["security", "find-generic-password", "-s", "Claude Code-credentials"]);',
+                '}',
+                'if (args.includes("status")) console.log(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", ignored: "not-read" }));',
+            ].join('\n')
+        );
+        await chmod(executable, 0o700);
+        await chmod(security, 0o700);
+        const environment = {
+            HOME: userHome,
+            PATH: `${binaryDirectory}:${process.env.PATH ?? ''}`,
+            FAKE_CLAUDE_RECORD: record,
+            FAKE_SECURITY_RECORD: securityRecord,
+            ANTHROPIC_API_KEY: 'must-be-removed',
+        };
+        const runtime = executableRuntime(home, environment);
+        const preparedRunner = unusedRunner({ executable, environment });
+        const setup = new ConnectionSetup({
+            home,
+            target: claudeCode('local', 'oauth'),
+            environment,
+            workbench: workbench('claude-code'),
+            check: () => ({
+                open: (work) => work(runtime, preparedRunner),
+                inspect: async () => status(true, 'oauth'),
+            }),
+        });
+        const connection = new ModelConnection({
+            home,
+            target: claudeCode('local', 'oauth'),
+            output: presenter([]),
+            environment,
+            interactive: true,
+            setup,
+        });
+
+        await expect(connection.connect({ stdin: false })).resolves.toBeUndefined();
+        await expect(
+            connection.remove([claudeCode('local', 'oauth').method])
+        ).resolves.toBeUndefined();
+        await expect(stat(record)).rejects.toThrow();
+        await expect(stat(securityRecord)).rejects.toThrow();
+        await expect(stat(join(home, 'runtime-credentials'))).rejects.toThrow();
+    });
+
     test('survives Ctrl-C during the login and still removes its temporary home', async () => {
         const root = await temporary('workbench-signin-signal-');
         const user = await mkdirPrivate(join(root, 'user'));
@@ -698,26 +891,71 @@ function chatgpt(runtime: ConnectionTarget['runtime']): ConnectionTarget {
     };
 }
 
-function workbench(): ConnectionWorkbench {
+function claudeCode(
+    runtime: ConnectionTarget['runtime'],
+    authenticationMethod: 'api' | 'oauth' = 'api'
+): ConnectionTarget {
     return {
-        workbench: {} as ResolvedWorkbench,
+        runtime,
+        harness: 'claude-code',
+        provider: 'anthropic',
+        method: {
+            id: authenticationMethod === 'api' ? 'api-key' : 'subscription',
+            label:
+                authenticationMethod === 'api'
+                    ? 'Anthropic credentials'
+                    : 'Claude subscription',
+            nativeProvider: 'anthropic',
+            authenticationMethod,
+        },
+    };
+}
+
+function workbench(runner = 'opencode'): ConnectionWorkbench {
+    return {
+        workbench: {
+            manifest: { runner },
+        } as ResolvedWorkbench,
         reference: 'fixture',
         workspaceDirectory: '/repo',
     };
 }
 
 function runtime(files: RuntimeCredentialFiles): PreparedRuntime {
-    return { name: 'docker', credentials: files } as unknown as PreparedRuntime;
+    return {
+        name: 'docker',
+        environment: {},
+        credentials: files,
+    } as unknown as PreparedRuntime;
 }
 
-function unusedRunner(): Parameters<Parameters<ConnectionCheck['open']>[0]>[1] {
-    return {} as Parameters<Parameters<ConnectionCheck['open']>[0]>[1];
+function unusedRunner(options?: {
+    executable: string;
+    environment: Record<string, string | undefined>;
+}): Parameters<Parameters<ConnectionCheck['open']>[0]>[1] {
+    return {
+        native: (_runtime: PreparedRuntime, command: string[]) => ({
+            command: options ? [options.executable, ...command.slice(1)] : command,
+            cwd: '/repo',
+            env: options?.environment ?? {},
+        }),
+    } as Parameters<Parameters<ConnectionCheck['open']>[0]>[1];
 }
 
 /** The fields of an inspection that readiness reads. */
-function status(listed: boolean): RunnerAuthenticationStatus {
+function status(
+    listed: boolean,
+    authenticationMethod?: string
+): RunnerAuthenticationStatus {
     const content = listed
-        ? [{ provider: 'openrouter', nativeProvider: 'openrouter', nativeModel: 'x' }]
+        ? [
+              {
+                  provider: authenticationMethod ? 'anthropic' : 'openrouter',
+                  nativeProvider: authenticationMethod ? 'anthropic' : 'openrouter',
+                  nativeModel: 'x',
+                  ...(authenticationMethod ? { authenticationMethod } : {}),
+              },
+          ]
         : [];
     return {
         model: 'openai/gpt-5.6-terra',
@@ -727,6 +965,38 @@ function status(listed: boolean): RunnerAuthenticationStatus {
         routes: [],
         connectCommand: 'wb connect fixture --runtime docker',
     };
+}
+
+function executableRuntime(
+    cwd: string,
+    environment: Record<string, string | undefined>
+): PreparedRuntime {
+    const invoke = async (invocation: {
+        command: string[];
+        env: Record<string, string | undefined>;
+    }) => {
+        const child = Bun.spawn(invocation.command, {
+            cwd,
+            env: invocation.env,
+            stdout: 'pipe',
+            stderr: 'pipe',
+        });
+        const [code, stdout, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+        ]);
+        return { code, stdout, stderr };
+    };
+    return {
+        name: 'local',
+        environment,
+        interact: async (invocation: {
+            command: string[];
+            env: Record<string, string | undefined>;
+        }) => (await invoke(invocation)).code,
+        execute: invoke,
+    } as unknown as PreparedRuntime;
 }
 
 function presenter(lines: string[]): CliPresenter {

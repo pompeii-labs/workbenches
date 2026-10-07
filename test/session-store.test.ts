@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+    chmod,
+    mkdir,
+    mkdtemp,
+    readFile,
+    rm,
+    stat,
+    symlink,
+    writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -112,6 +121,38 @@ describe('session storage', () => {
         await expect(store.read(session.id)).rejects.toThrow(
             'Workbench session does not exist'
         );
+    });
+
+    test('removes sessions containing runner-protected directories', async () => {
+        const home = await temporaryHome();
+        const store = new SessionStore(home);
+        const session = await store.create({
+            id: 'wb_protectedsession123456789',
+            workbench: 'creator',
+            workbench_version: '0.1.0',
+            runner: 'claude-code',
+            model: 'anthropic/claude-sonnet-4-5',
+            reference: 'creator',
+            workbench_path: '/repo/.workbenches/creator',
+            workspace: '/repo',
+            workspaces: [],
+            latest_run_id: 'wb_protectedsession123456789',
+        });
+        const skill = join(store.nativeDirectory(session.id), 'skills', 'review');
+        const outside = join(home, 'outside.sh');
+        await mkdir(skill, { recursive: true });
+        await writeFile(join(skill, 'SKILL.md'), '# Review\n', { mode: 0o444 });
+        await writeFile(outside, '#!/bin/sh\n', { mode: 0o755 });
+        await chmod(outside, 0o755);
+        await symlink(outside, join(skill, 'outside.sh'));
+        await chmod(skill, 0o555);
+
+        await store.remove(session.id);
+
+        expect(
+            await stat(join(home, 'sessions', session.id)).catch(() => undefined)
+        ).toBeUndefined();
+        expect((await stat(outside)).mode & 0o777).toBe(0o755);
     });
 
     test('persists a presentation-only session name without changing identity', async () => {

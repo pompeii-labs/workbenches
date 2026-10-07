@@ -12,6 +12,7 @@ export interface AssetBinding {
     access: 'read-only' | 'read-write';
     excludedHostPaths: string[];
     workspace?: string;
+    stateOverlay?: string[];
     kind:
         | 'workspace'
         | 'package'

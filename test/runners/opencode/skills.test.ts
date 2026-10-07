@@ -95,6 +95,19 @@ describe('OpenCode skill staging', () => {
         ).toEqual([]);
     });
 
+    test('refuses skill symlinks outside the package without chmodding the target', async () => {
+        const files = new MemoryRunnerFiles()
+            .file('/pkg/instructions.md', '# Authored behavior')
+            .file('/pkg/skills/review/SKILL.md', 'Review carefully.')
+            .file('/outside.sh', '#!/bin/sh\n', 0o755);
+        await files.symlink('/outside.sh', '/pkg/skills/review/outside.sh');
+
+        await expect(staging(files).stage(workbench())).rejects.toThrow(
+            'outside.sh was skipped'
+        );
+        expect(files.mode('/outside.sh')).toBe(0o755);
+    });
+
     test('refuses a runner config that does not exist', async () => {
         const files = new MemoryRunnerFiles();
 

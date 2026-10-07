@@ -1,0 +1,20 @@
+{
+    "type": "control_request",
+    "request_id": "permission_contract_1",
+    "request": {
+        "subtype": "can_use_tool",
+        "tool_name": "Bash",
+        "input": { "command": "npm run test -- --watch=false" },
+        "permission_suggestions": [
+            {
+                "type": "addRules",
+                "rules": [{ "toolName": "Bash", "ruleContent": "npm run *" }],
+                "behavior": "allow",
+                "destination": "localSettings"
+            }
+        ],
+        "tool_use_id": "tool_permission_1",
+        "decision_reason": "The command needs approval",
+        "blocked_path": "/workspace/package.json"
+    }
+}

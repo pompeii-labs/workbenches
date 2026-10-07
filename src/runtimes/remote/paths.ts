@@ -3,6 +3,7 @@ import { posix, relative, resolve, sep } from 'node:path';
 import { ActiveModelCatalog, ModelRouter } from '../../models/index.js';
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RuntimePrepareRequest } from '../contracts.js';
+import { runtimeCredentialRoot } from '../credentialpath.js';
 import type { TransferRules } from '../staging/rules.js';
 import type { AssetSource } from '../staging/source.js';
 import type { AssetBinding } from '../staging/transfer.js';
@@ -45,6 +46,9 @@ export class PathPlan {
                           access: asset.access,
                           excludedHostPaths: [],
                           kind: 'state',
+                          ...(asset.stateOverlay
+                              ? { stateOverlay: asset.stateOverlay }
+                              : {}),
                       }
                     : hostPath === workspace
                       ? {
@@ -100,7 +104,7 @@ export class PathPlan {
             }
             unique.set(hostPath, {
                 hostPath,
-                runtimePath: '/workbench-credentials',
+                runtimePath: runtimeCredentialRoot,
                 access: 'read-write',
                 excludedHostPaths: [],
                 kind: 'credentials',
@@ -202,11 +206,14 @@ export class PathPlan {
                       WORKBENCH_REPOSITORY_REVISION: this.request.repository.revision,
                   }
                 : {}),
-            ...(credentials && this.request.workbench.manifest.runner === 'opencode'
-                ? { XDG_DATA_HOME: credentials.runtimePath }
-                : {}),
-            ...(credentials && this.request.workbench.manifest.runner === 'pi'
-                ? { WORKBENCH_CREDENTIALS_DIR: credentials.runtimePath }
+            ...(credentials
+                ? (this.request.runnerAuthentication?.credentialEnvironment?.(
+                      credentials.runtimePath
+                  ) ??
+                  legacyCredentialEnvironment(
+                      this.request.workbench.manifest.runner,
+                      credentials.runtimePath
+                  ))
                 : {}),
             ...(this.request.outcome ? { WORKBENCH_OUTPUT_DIR: '/outbox' } : {}),
             ...Object.fromEntries(
@@ -242,14 +249,34 @@ export class PathPlan {
     private environmentNames(workbench: ResolvedWorkbench): string[] {
         const prefix = this.rules.provider.toUpperCase();
         const hostOnly = new Set([`${prefix}_API_KEY`, `${prefix}_API_URL`]);
-        return [
+        const names = [
             ...new Set([
                 ...Object.keys(workbench.manifest.env),
                 ...new ModelRouter(
                     ActiveModelCatalog.current()
                 ).providerEnvironmentNames(workbench),
             ]),
-        ].filter((name) => !hostOnly.has(name));
+        ].filter(
+            (name) =>
+                !hostOnly.has(name) &&
+                (this.request.runnerAuthentication?.allowEnvironment(
+                    name,
+                    this.rules.provider
+                ) ??
+                    true)
+        );
+        names.push(
+            ...(this.request.runnerAuthentication?.environmentNames ?? []).filter(
+                (name) =>
+                    !hostOnly.has(name) &&
+                    (this.request.runnerAuthentication?.allowEnvironment(
+                        name,
+                        this.rules.provider
+                    ) ??
+                        true)
+            )
+        );
+        return [...new Set(names)];
     }
 
     private repositoryPathFor(workbench: ResolvedWorkbench): string {
@@ -263,4 +290,13 @@ export class PathPlan {
         }
         return this.pathFor(workbench.packageDirectory);
     }
+}
+
+function legacyCredentialEnvironment(
+    runner: string,
+    root: string
+): Record<string, string> {
+    if (runner === 'opencode') return { XDG_DATA_HOME: root };
+    if (runner === 'pi') return { WORKBENCH_CREDENTIALS_DIR: root };
+    return {};
 }

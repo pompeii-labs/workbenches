@@ -103,6 +103,10 @@ export type {
     RepositoryRequest,
 } from './repositories/contracts.js';
 export {
+    CLAUDE_CODE_SESSION_DECLARATION,
+    ClaudeCodeRunner,
+    ClaudeCodeSessionAdapter,
+    type ClaudeCodeSessionDependencies,
     DiskRunnerFiles,
     MemoryRunnerFiles,
     type NormalizedRunnerInput,

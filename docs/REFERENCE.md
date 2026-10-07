@@ -94,7 +94,7 @@ The Workbench engine reads this file. The selected runner does not. The engine v
 
 This repository contains `workbench`, also available as `wb`: the TypeScript reference engine and command-line client for the standard.
 
-The spec 0 and spec 1 manifests, the OpenCode and Pi adapters, and local, Docker, E2B, and Daytona runtimes for one-shot, detached, and multi-turn execution are implemented. Daytona supports OpenCode but not Pi because it cannot yet close a runner's standard input. Other runners and remote runtime providers are not yet supported by the reference engine. See [Stability](#stability) for what the 1.0 CLI promises.
+The spec 0 and spec 1 manifests and the OpenCode, Pi, and Claude Code adapters are implemented. See [Runner capabilities](#runner-capabilities) for supported runtimes and native differences. Other runners and remote runtime providers are not supported by the reference engine. See [Stability](#stability) for what the 1.0 CLI promises.
 
 ### Install
 
@@ -270,24 +270,26 @@ wb connect
 wb run project-core --task "Review this migration"
 ```
 
-The model-provider path saves the preferred route for that runner and runtime, puts the provider credential into the store that runtime reads, and then checks it. It ends with `Ready: <Provider> for <Runner> in <runtime>`, or with exactly what is missing and the one command that fixes it, exiting 3. The default belongs to the runner and runtime, not a Workbench, and compatible Workbenches reuse it. Each runtime reads a different store:
+The model-provider path saves the preferred route only after it is ready. Depending on runner capabilities, it invokes the runner's native sign-in, writes the provider credential into the runtime's native store, or checks a provider variable supplied to `wb`. It ends with `Ready: <Provider> for <Runner> in <runtime>`, or with exactly what is missing and the one command that fixes it, exiting 3. The default belongs to the runner and runtime, not a Workbench, and compatible Workbenches reuse it. Each runtime uses a different credential boundary:
 
-| Runtime | Credential store | How `wb connect` fills it | How it is checked |
+| Runtime | Credential boundary | How `wb connect` handles it | How it is checked |
 | --- | --- | --- | --- |
-| `local` | The runner's own sign-in on this machine | It does not; sign in with the runner (`opencode auth login`) or set the provider variable | With a Workbench, the runner itself lists the provider; otherwise only the provider variable counts |
-| `docker` | A per-runner named volume mounted at `/workbench-credentials` | A short-lived helper container from the Workbench image, with no network and a read-only root, receives the file on standard input | The same inspection `wb smoke` runs, inside the container |
-| `e2b` | `~/.workbench/runtime-credentials/e2b/<runner>/`, synced into each sandbox | Written on the host, files `0600` in `0700` directories | The entry exists on the host; no sandbox is created, so the first run confirms it |
-| `daytona` | None; Daytona runs read provider variables only | It does not; set the provider variable or pass `--env-file` | The provider variable is set |
+| `local` | The runner's normal local credential store | Verifies an existing sign-in and never changes it | The runner reports the selected provider and method |
+| `docker` | A per-runner named volume mounted at `/workbench-credentials` | Opens a declared native login, or writes a runner-native entry through an isolated helper container | The same inspection `wb smoke` runs, inside the container |
+| `e2b` | A private native store for runners that permit transfer; environment only for Claude Code | Writes supported native stores on the host; environment-only runners receive no stored credential | A stored entry is checked without a sandbox; environment-only routes check the selected provider variable |
+| `daytona` | Environment only for model credentials | Does not store model credentials | Readiness checks the selected provider variable |
 
-Readiness respects the chosen method: a provider variable holds an API key, so it counts as ready for an API-key or native method (it takes precedence for a run) but never for a subscription. The default is saved only once the route is ready; a connect that exits 3 or is cancelled leaves the previous default in place, and `--remove` drops the default when it pointed at the removed provider. Flags that would have no effect, such as `--stdin` with a subscription method or on `local` and `daytona`, are rejected before anything is read or written. A piped key must be the bare value: one trailing newline is removed, and whitespace or a `NAME=` prefix is rejected. Every API-key method (OpenRouter, Anthropic, an OpenAI API key, and the E2B and Daytona runtime keys) takes a pasted key: a hidden prompt in a terminal (`OpenRouter API key for Docker runs (input hidden)`), or `--stdin` otherwise. A subscription method runs a fresh `opencode auth login` against a private temporary data home, then keeps only that provider's entry. `wb connect` never reads another tool's credential files, so your own runner sign-in is neither read nor copied. Only the selected provider's entry is written, merged into the store beside existing entries. Credential values are never printed, logged, passed in argv, or placed in a child process environment.
+Readiness respects the chosen method: a provider variable holds an API key, so it counts as ready for an API-key or native method (it takes precedence for a run) but never for a subscription. The default is saved only once the route is ready; a connect that exits 3 or is cancelled leaves the previous default in place, and `--remove` drops every method entry for the provider when no `--method` is given. Flags that would have no effect, such as `--stdin` with a subscription method or a key for an environment-only runner, are rejected before anything is read or written. A piped key must be the bare value: one trailing newline is removed, and whitespace or a `NAME=` prefix is rejected. API-key methods use a hidden prompt when Workbench owns the destination store, or the runner's documented native login command when the runner owns it. Subscription methods use the runner's documented login command. Credential values are never printed, logged, or passed in argv.
 
 ```sh
 wb connect my-expert --runtime docker
 printf '%s' "$OPENROUTER_API_KEY" | wb connect --runtime e2b --harness opencode --provider openrouter --stdin
 wb connect --runtime e2b --harness opencode --provider openrouter --remove
+wb connect claude-expert --runtime local --provider anthropic --method subscription
+wb connect --runtime daytona --harness claude-code --provider anthropic --status
 ```
 
-`--remove` with `--provider` deletes that provider's entry from that runtime's store and keeps the others. Docker writes and checks go through a Workbench image, so Docker needs a Workbench reference. Pi API keys use Pi's documented `auth.json` format. Pi has no command-line sign-in, so a Pi subscription cannot be connected for another runtime; use an API-key method there. Inherited provider variables and `--env-file` still take effect for a run, so a key passed with `--env-file` works for one run without connecting. Pi is the exception to that precedence: as Pi documents, an entry in its `auth.json` wins over the provider variable.
+`--remove` with `--provider` deletes that provider's entry from that runtime's store and keeps the others. `--status` checks the selected model credential without changing it. Docker writes and checks go through a Workbench image, so Docker needs a Workbench reference. Inherited provider variables and `--env-file` still take effect for a run, so a key passed with `--env-file` works for one run without connecting. Pi's native stored credential wins over the provider variable, as Pi documents.
 
 The E2B runtime-provider path saves its host-only API key once, without starting a sandbox or incurring E2B usage:
 
@@ -323,7 +325,7 @@ If the selected OpenCode credential is missing, the first foreground task run st
 
 The provider menu is the intersection of providers serving catalog models and the selected harness version's capability map; model availability alone never implies that a harness supports a provider. Versioned harness maps may be delivered with the verified model metadata, with an engine-bundled map for the pinned harness version as the offline and compatibility fallback. Runtime-specific constraints, such as browser versus headless authentication, remain enforced by the engine.
 
-Local Workbenches use the runner's normal local credential store. Docker keeps each runner's native credentials in a private named volume. E2B keeps each runner's native credentials beneath the private Workbench data directory, copies that store only into fresh E2B sandboxes using that runner, and synchronizes changes back during orderly cleanup. The E2B control key and native provider credentials are separate: `E2B_API_KEY` stays on the host, while the runner's provider credential must exist inside the sandbox so the runner can authenticate. Credentials are never written to the Workbench package, workspace, run records, normalized events, or artifacts.
+Local Workbenches use the runner's normal local credential store. Local `wb connect` only verifies readiness and local `--remove` only drops the saved Workbench default; neither command changes the runner's own sign-in. Claude Code checks local readiness with `claude auth status --json` while setting `CLAUDE_SECURESTORAGE_CONFIG_DIR` to the empty string, and directs a missing login to `claude auth login`. Docker keeps every runner's credentials in a private named volume; Claude Code signs in inside the container while OpenCode and Pi retain their documented native files. E2B transfers native credentials only for OpenCode and Pi. Claude Code provider keys reach E2B and Daytona through environment variables only; no Claude Code credential file is uploaded. Credentials are never written to the Workbench package, workspace, run records, normalized events, or artifacts.
 
 Environment-backed provider routes remain supported through inherited environment, `--env-file`, or `--env`. The CLI checks whether an allowed route is ready but does not interpret or rewrite provider tokens. Because some runners keep all provider logins in one native file, an E2B sandbox receives the native store for that runner rather than a parsed provider-specific subset. Treat the sandbox provider and Workbench image as part of the credential trust boundary.
 
@@ -596,7 +598,7 @@ wb send wb_... --task-file followup.txt --queue --json
 wb answer wb_... request_id allow --json
 ```
 
-Detached `run` and `resume` with `--json` return one launch receipt, not an event stream. `send` returns a receipt containing session/run/input IDs and an `after_sequence` cursor. Ordinary sends reject an active turn instead of silently queuing it. `--steer` requires an active execution; `--queue` explicitly requests a FIFO follow-up. Sending to a closed resumable session starts a fresh run from its saved native context. `--task-file` and `--stdin` are explicit alternatives to text, not implicit fallbacks.
+Detached `run` and `resume` with `--json` return one launch receipt, not an event stream. `send` returns a receipt containing session/run/input IDs and an `after_sequence` cursor. Ordinary sends reject an active turn instead of silently queuing it. `--steer` requires an active execution; `--queue` explicitly requests a FIFO follow-up. A control request for a capability the selected runner or runtime does not support is rejected with `capability_unsupported`. Sending to a closed resumable session starts a fresh run from its saved native context. `--task-file` and `--stdin` are explicit alternatives to text, not implicit fallbacks.
 
 Waiting with a session ID selects its latest run. A linked run ID selects that exact execution. The session and its first run share an ID, so use `--run` to explicitly pin any run, including the first. Sequence cursors belong to a single run; use the receipt's `run_id` with `--run --after` when observing a submitted input, even if the session is continued again:
 
@@ -612,9 +614,19 @@ Run and session data is never removed by `wb clean` until `--apply` is passed. T
 
 Durable Docker runner containers and E2B sandboxes carry Workbench ownership metadata scoped to the current data directory. Normal exits destroy them. `wb clean` detects scoped resources whose run is terminal. It also detects Docker containers whose run is missing and paused E2B sandboxes whose run is missing. Removal still requires `--apply`. It does not remove images, build caches, E2B templates, runner credential volumes, or unrelated runtime resources.
 
+### Runner capabilities
+
+All runners use the same model catalog, `ModelRouter`, manifest route semantics, connection precedence, `wb view` and `wb smoke` contracts, and normalized event protocol. This table is the single list of runner-specific behavior:
+
+| Runner | Native interface | Runtimes | Mid-turn steering | MCP | Provider authentication | Credential precedence | In-run authentication | Native `wb connect` sign-in | Native credential persistence | Subprocess scrubbing | `runner_config` | Verified with |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| OpenCode | Server API | Local, Docker, E2B, Daytona | Local, Docker, E2B, Daytona | Supported | Native provider methods; OpenAI browser login on Local and headless login elsewhere | Shared explicit/default/manifest precedence across environment and native methods | Foreground Local, Docker, and E2B | Local verifies only; runner-supported methods on Docker and E2B | `opencode/auth.json`; runner store on Local, named volume on Docker, transferred store on E2B, none on Daytona | Not declared | JSON file | 1.18.30 |
+| Pi | RPC | Local, Docker, E2B | Next legal model boundary on Local, Docker, and E2B | Unsupported by Pi's native protocol | Versioned provider map, including API keys and native OAuth entries such as `openai-codex`; no CLI sign-in | Native `auth.json` entry before environment | Not supported | Local verifies only; no command-line sign-in | `auth.json`; runner store on Local, named volume on Docker, transferred store on E2B | Not declared | Directory | 0.84.3 |
+| Claude Code | Stream JSON with `command_lifecycle` | Local, Docker, E2B, Daytona | Local and Docker; E2B and Daytona accept queued follow-ups | Supported | Anthropic API or subscription; OpenRouter and Vercel API routes | Shared explicit/default/manifest precedence; only the selected API credential is forwarded, and subscription selection removes `ANTHROPIC_API_KEY` | Not supported | Local verifies only; `claude auth login` runs in Docker | Person's sign-in on Local, named volume on Docker, no credential transfer to E2B or Daytona | macOS native boundary; Linux when bubblewrap is available | JSON file | 2.1.292 |
+
 ### Agent-driven sessions
 
-The calling agent drives multi-turn work through `wait`, `send`, `answer`, and `attach`. `wb run <name>` requires an initial task, and `wb resume <id>` requires new input. The OpenCode adapter supports multi-turn context, streaming, image input, cancellation, tool events, explicit permission decisions, native questions, and native mid-turn steering in local, Docker, and E2B runtimes. The Pi adapter supports multi-turn context, streaming, image input, steering at Pi's next legal model boundary, follow-up input, cancellation, and tool events. Pi does not provide native question or permission request protocols, or native MCP transport.
+The calling agent drives multi-turn work through `wait`, `send`, `answer`, and `attach`. `wb run <name>` requires an initial task, and `wb resume <id>` requires new input. The selected runner's declared capabilities determine which control operations are available.
 
 Questions use one runner-neutral contract for choices, free-form answers, and multi-select prompts when the selected runner exposes a native question protocol. `wait` reports the normalized request and `answer` returns the response through that native protocol. The raw answer control message remains transient and is not written as event data. A runner can still reference the answer in later assistant output. OpenCode can submit a batch of prompts and multi-select choices.
 
@@ -631,7 +643,7 @@ Changes apply only to future runs. Every session resumes from the package bytes 
 
 Session-capable runs use one background session worker in foreground and detached modes. Normalized events survive a caller disconnect, and `wb attach` observes the same live or retained event stream without taking control. An active turn and queued follow-ups continue after a foreground observer exits, then the unattended worker closes while its native context remains resumable. User prompts, permission decisions, and question answers are transient control messages, not durable run history.
 
-Supported sessions continue through `wb send` or task-bearing `wb resume <session-or-run-id>`. An active session is reused instead of duplicated. A closed session creates a new durable run linked to the same stable session. The selected runner remains the source of truth for model context: OpenCode resumes from its session database and Pi resumes from its session file. Docker mounts native state into each new container. E2B copies native state into each new sandbox and synchronizes it back on orderly cleanup. A session remains locked to its original Workbench version, runner, model, runtime, workspace, and workspace bindings. Docker credentials remain in the runner's private named volume. E2B runner credentials persist in private runtime storage independently of native session state. A Workbench that declares host Docker access must be explicitly reauthorized with `--allow-host-docker` for each resumed run.
+Supported sessions continue through `wb send` or task-bearing `wb resume <session-or-run-id>`. An active session is reused instead of duplicated. A closed session creates a new durable run linked to the same stable session. The selected runner's native state remains the source of truth for model context. Docker mounts native state into each new container. E2B and Daytona copy native state into each fresh sandbox and synchronize it back on orderly cleanup. A session remains locked to its original Workbench version, runner, model, runtime, workspace, and workspace bindings. A Workbench that declares host Docker access must be explicitly reauthorized with `--allow-host-docker` for each resumed run.
 
 ### Registry organizations
 
@@ -699,6 +711,8 @@ Before the first report, the CLI prints once: "Workbench reports anonymous save 
 
 These are the exact fields of the stable `--json` results. Additive fields may appear in minor versions; existing fields keep their meaning.
 
+**`wb view --json`** includes `runner_permissions` when the selected runner exposes generated permission rules. The additive field is `{allow: string[], deny: string[]}` on every runtime because inspection computes it without launching the runtime. `warnings` lists safe staging omissions discovered during inspection. When runner authentication is ready and its method is known, `runner_auth.method` is `api`, `oauth`, or another runner-defined authentication method. `runner_auth.warning` reports credential-selection warnings.
+
 **`wb wait --json`** prints one object:
 
 - `session_id`, `run_id`, `state`, `sequence`, `final`, `usage`, `usage_total`, and `pending_requests` are always present.
@@ -711,10 +725,10 @@ These are the exact fields of the stable `--json` results. Additive fields may a
 
 **Detached `wb run --json` and `wb resume --json`** print `{session_id, run_id, input_id, after_sequence}`. A resume may also include `receipt`.
 
-**`wb smoke --json`** prints one NDJSON line per package: `{status, workbench, version, runtime, runner?, tools, authentication?, requirements?, workspaces, docker_engine?, warnings, error?}`.
+**`wb smoke --json`** prints one NDJSON line per package: `{status, workbench, version, runtime, runner?, tools, authentication?, requirements?, workspaces, docker_engine?, subprocess_environment_scrubbing?, warnings, error?}`.
 
 - `status` is `ready`, `needs-auth`, or `failed`.
-- `authentication` is `{ready, model, provider?, route?, authenticated_providers, connect_command?}`.
+- `authentication` is `{ready, model, provider?, route?, method?, authenticated_providers, connect_command?, instruction?}`. `instruction` replaces `connect_command` when authentication needs more detail than one command.
 - `requirements` is `{checked, applied, unchecked}`.
 - `error` is `{code, message}`.
 

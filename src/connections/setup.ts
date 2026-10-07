@@ -1,14 +1,17 @@
 import { ActiveModelCatalog, type AuthenticatedModelRoute } from '../models/index.js';
+import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRuntime, RuntimeCredentialFiles } from '../runtimes/contracts.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { ConnectionCheck, type ConnectionCheckOptions } from './check.js';
 import { HostCredentialFiles, RunnerCredentialStore } from './credentials.js';
+import { applyRuntimeCredentials } from './environmentcredentials.js';
 import {
     type NativeCredentialEntry,
     NativeCredentialFile,
 } from './nativecredentials.js';
 import type { ConnectionStore } from './store.js';
 import {
+    type ConnectionAuthenticationMethod,
     type ConnectionTarget,
     harnessLabel,
     providerLabel,
@@ -65,11 +68,22 @@ export class ConnectionSetup {
     /** Refuses runtimes whose store Workbench does not write: `local` and `daytona`. */
     requireStore(): void {
         const { target } = this.#options;
-        if (target.runtime === 'docker' || target.runtime === 'e2b') return;
+        if (target.runtime === 'local' || target.runtime === 'daytona') {
+            throw new Error(
+                target.runtime === 'local'
+                    ? `The local runtime uses your own ${harnessLabel(target.harness)} sign-in; Workbench neither writes nor removes it`
+                    : `${runtimeLabel(target.runtime)} has no runner credential store; provider keys reach it only from the environment`
+            );
+        }
+        if (
+            RunnerRegistry.standard()
+                .authentication(target.harness)
+                .nativeCredentialStore(target.runtime)
+        ) {
+            return;
+        }
         throw new Error(
-            target.runtime === 'local'
-                ? `The local runtime uses your own ${harnessLabel(target.harness)} sign-in; Workbench neither writes nor removes it`
-                : `${runtimeLabel(target.runtime)} has no runner credential store; provider keys reach it only from the environment`
+            `${runtimeLabel(target.runtime)} has no runner credential store; provider keys reach it only from the environment`
         );
     }
 
@@ -97,15 +111,70 @@ export class ConnectionSetup {
         return this.verify();
     }
 
+    async signIn(): Promise<ConnectionReadiness> {
+        const { target } = this.#options;
+        const authentication = RunnerRegistry.standard().authentication(target.harness);
+        const command = authentication.loginArguments?.(
+            target.method.nativeProvider,
+            target.method.authenticationMethod
+        );
+        if (!command) throw new Error('The selected connection has no native sign-in');
+        const signedIn = await this.#check().open(async (runtime, runner) => {
+            const invocation = runner.native(runtime, command);
+            return (
+                (await runtime.interact({
+                    ...invocation,
+                    env:
+                        authentication.invocationEnvironment?.(
+                            runtime.name,
+                            invocation.env
+                        ) ?? invocation.env,
+                })) === 0
+            );
+        });
+        if (!signedIn) {
+            return this.#missing(
+                `${this.#runner} sign-in did not complete for ${this.#provider}`
+            );
+        }
+        return this.verify();
+    }
+
     /** Checks readiness without writing anything. */
     async verify(): Promise<ConnectionReadiness> {
         const { target, workbench } = this.#options;
+        if (
+            RunnerRegistry.standard().authentication(target.harness).loginArguments &&
+            RunnerRegistry.standard()
+                .authentication(target.harness)
+                .supportsNativeAuthentication(
+                    target.runtime,
+                    target.provider,
+                    target.method.authenticationMethod
+                )
+        ) {
+            if (!workbench) {
+                return this.#missing(
+                    `A Workbench is required to check ${this.#runner} sign-in`
+                );
+            }
+            return this.#inspect().then((status) => status);
+        }
         if (target.runtime === 'docker') {
             return this.#inspect(async (runtime) =>
                 this.file.find(
                     this.#runtimeFiles(runtime),
                     target.method.nativeProvider
                 )
+            );
+        }
+        if (
+            RunnerRegistry.standard().authentication(target.harness)
+                .credentialFormat === 'provider'
+        ) {
+            if (this.#environmentServes()) return ready({ fromEnvironment: true });
+            return this.#missing(
+                `${this.#runner} in ${runtimeLabel(target.runtime)} reads ${this.#provider} keys only from the environment`
             );
         }
         // The runner itself reports its own sign-in; Workbench never reads its files.
@@ -145,16 +214,32 @@ export class ConnectionSetup {
     }
 
     /** Removes the providers' entries from the target runtime's store, keeping others. */
-    async remove(nativeProviders: string[]): Promise<boolean> {
-        this.requireStore();
+    async remove(
+        requested: ConnectionAuthenticationMethod[] | string[]
+    ): Promise<boolean> {
+        const { target } = this.#options;
+        const methods: ConnectionAuthenticationMethod[] = requested.map((method) =>
+            typeof method === 'string'
+                ? { ...target.method, nativeProvider: method }
+                : method
+        );
+        const authentication = RunnerRegistry.standard().authentication(target.harness);
+        if (!authentication.nativeCredentialStore(target.runtime)) {
+            if (target.runtime === 'local' || target.harness === 'claude-code') {
+                return false;
+            }
+            this.requireStore();
+        }
         const remove = async (files: RuntimeCredentialFiles) => {
             let removed = false;
-            for (const provider of nativeProviders) {
+            for (const provider of new Set(
+                methods.map((method) => method.nativeProvider)
+            )) {
                 removed = (await this.file.remove(files, provider)) || removed;
             }
             return removed;
         };
-        const { target, home } = this.#options;
+        const { home } = this.#options;
         if (target.runtime === 'docker') {
             return this.#check().open((runtime) => remove(this.#runtimeFiles(runtime)));
         }
@@ -187,6 +272,7 @@ export class ConnectionSetup {
                 ? {
                       before: async (runtime: PreparedRuntime) => {
                           entry = await stored(runtime);
+                          await applyRuntimeCredentials(runtime, target.harness);
                       },
                   }
                 : {}),

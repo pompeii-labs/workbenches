@@ -28,6 +28,9 @@ export class NativeCredentialFile {
         }
         if (runner === 'pi')
             return new NativeCredentialFile('pi', 'auth.json', 'api_key');
+        if (runner === 'claude-code') {
+            return new NativeCredentialFile('claude-code', 'provider-keys.json', 'api');
+        }
         throw new Error(`Unsupported runner: ${runner}`);
     }
 

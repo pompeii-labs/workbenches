@@ -66,7 +66,10 @@ export class DockerRuntimeProvider implements RuntimeProvider {
         const client = new DockerClient(
             executable,
             this.dependencies,
-            DockerMountPlan.environmentNames(request.workbench)
+            DockerMountPlan.environmentNames(
+                request.workbench,
+                request.runnerAuthentication
+            )
         );
         await client.require(
             [executable, 'version', '--format', '{{.Server.Version}}'],
@@ -96,13 +99,14 @@ export class DockerRuntimeProvider implements RuntimeProvider {
         let outcome: HostOutcomeCapture | undefined;
         try {
             const credentials =
-                request.purpose === 'build'
+                request.purpose === 'build' || request.runnerCredentialStore === false
                     ? undefined
                     : new DockerCredentialVolume(
                           client,
                           image.preparation.immutableReference,
                           request.workbench.manifest.runner,
-                          client.user
+                          client.user,
+                          request.runnerAuthentication?.credentialEnvironment
                       );
             await credentials?.prepare();
             const mounts = new DockerMountPlan(request, hostSocket);

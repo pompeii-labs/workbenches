@@ -49,9 +49,8 @@ describe('SessionProcess', () => {
         const exec = requests.find((request) => request.url.pathname.endsWith('/exec'));
         const body = JSON.parse(String(exec?.body));
         expect(body.runAsync).toBe(true);
-        expect(body.command).toBe(
-            `(export TOKEN='it'"'"'s' && cd '/workspace' && opencode serve)`
-        );
+        expect(body.command).toBe(`(cd '/workspace' && opencode serve)`);
+        expect(body.envs).toEqual({ TOKEN: "it's" });
         // The session is removed once the command ends.
         expect(requests.at(-1)?.method).toBe('DELETE');
     });

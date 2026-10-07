@@ -1,0 +1,13 @@
+{"type":"command_lifecycle","command_uuid":"command-1","state":"queued","session_id":"session-1"}
+{"type":"command_lifecycle","command_uuid":"command-1","state":"started","session_id":"session-1"}
+{"type":"system","subtype":"init","cwd":"/workspace/project","session_id":"session-1"}
+{"type":"user","uuid":"command-1","session_id":"session-1","isReplay":true,"message":{"role":"user","content":"ONE"}}
+{"type":"assistant","session_id":"session-1","message":{"id":"message-1","content":[{"type":"text","text":"ONE"}],"stop_reason":"end_turn"}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"session-1","stop_reason":"end_turn","usage":{}}
+{"type":"command_lifecycle","command_uuid":"command-1","state":"completed","session_id":"session-1"}
+{"type":"command_lifecycle","command_uuid":"command-2","state":"queued","session_id":"session-1"}
+{"type":"command_lifecycle","command_uuid":"command-2","state":"started","session_id":"session-1"}
+{"type":"system","subtype":"init","cwd":"/workspace/project","session_id":"session-1"}
+{"type":"user","uuid":"command-2","session_id":"session-1","isReplay":true,"message":{"role":"user","content":"TWO"}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"session-1","stop_reason":"end_turn","usage":{}}
+{"type":"command_lifecycle","command_uuid":"command-2","state":"completed","session_id":"session-1"}

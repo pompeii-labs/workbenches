@@ -151,7 +151,7 @@ describe('runner-neutral interactive host', () => {
             expect(session.busy).toBeFalse();
             expect(adapter.closes).toBe(0);
         } finally {
-            await session.cancel();
+            await session.cancel().catch(() => undefined);
             await rm(home, { recursive: true, force: true });
         }
     });
@@ -313,6 +313,77 @@ describe('runner-neutral interactive host', () => {
             data: { message: 'native transport failed' },
         });
         expect(adapter.closes).toBe(1);
+    });
+
+    test('redacts Claude credentials from session failure events', async () => {
+        const events: WorkbenchEvent[] = [];
+        const apiKey = 'fixture-anthropic-secret';
+        const oauth = 'fixture-claude-oauth-secret';
+        const adapter = new FakeAdapter({
+            failure: new Error(`credentials ${apiKey} ${oauth}`),
+        });
+        const session = await InteractiveRun.start({
+            resolved: reference(),
+            onEvent: (event) => {
+                events.push(event);
+            },
+            dependencies: dependencies(adapter, {
+                ANTHROPIC_API_KEY: apiKey,
+                CLAUDE_CODE_OAUTH_TOKEN: oauth,
+            }),
+        });
+
+        await expect(session.send('fail')).rejects.toThrow(apiKey);
+        expect(JSON.stringify(events)).not.toContain(apiKey);
+        expect(JSON.stringify(events)).not.toContain(oauth);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: { message: 'credentials [REDACTED] [REDACTED]' },
+        });
+    });
+
+    test('redacts Claude credentials from outcome failure events', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'interactive-redaction-'));
+        const events: WorkbenchEvent[] = [];
+        const apiKey = 'fixture-anthropic-secret';
+        const oauth = 'fixture-claude-oauth-secret';
+        const adapter = new FakeAdapter();
+        const provider = new CapturingRuntimeProvider({
+            collectionFailure: new Error(`credentials ${apiKey} ${oauth}`),
+        });
+        const resolved = reference();
+        resolved.workbench.manifest.runtime = 'docker';
+        try {
+            const session = await InteractiveRun.start({
+                home,
+                resolved,
+                onEvent: (event) => {
+                    events.push(event);
+                },
+                dependencies: {
+                    ...dependencies(adapter, {
+                        ANTHROPIC_API_KEY: apiKey,
+                        CLAUDE_CODE_OAUTH_TOKEN: oauth,
+                    }),
+                    runtimeRegistry: new RuntimeRegistry([provider]),
+                },
+            });
+            await session.send('collect');
+            expect(JSON.stringify(events)).not.toContain(apiKey);
+            expect(JSON.stringify(events)).not.toContain(oauth);
+            expect(events).toContainEqual(
+                expect.objectContaining({
+                    type: 'outcome.failed',
+                    data: expect.objectContaining({
+                        message:
+                            'Could not save returned results: credentials [REDACTED] [REDACTED]',
+                    }),
+                })
+            );
+            await session.cancel().catch(() => undefined);
+        } finally {
+            await rm(home, { recursive: true, force: true });
+        }
     });
 
     test('close failures terminate the Workbench run truthfully', async () => {
@@ -570,6 +641,7 @@ class CapturingRuntimeProvider implements RuntimeProvider {
         private readonly options: {
             preflightFailure?: Error;
             cleanupFailure?: Error;
+            collectionFailure?: Error;
         } = {}
     ) {}
 
@@ -610,9 +682,30 @@ class CapturingRuntimeProvider implements RuntimeProvider {
                 resolveUrl: async (url) => url,
             }),
             cancel: () => {},
+            snapshotRepository: async () => {
+                if (this.options.collectionFailure) {
+                    throw this.options.collectionFailure;
+                }
+                return {
+                    application_state: 'present',
+                    artifacts: [],
+                    links: [],
+                    changesets: [],
+                    warnings: [],
+                };
+            },
+            collectOutput: async () => {
+                if (this.options.collectionFailure) {
+                    throw this.options.collectionFailure;
+                }
+                return { artifacts: [], links: [] };
+            },
             collectOutcome: async () => {
                 expect(this.cleanupCount).toBe(0);
                 this.collectionCount += 1;
+                if (this.options.collectionFailure) {
+                    throw this.options.collectionFailure;
+                }
                 return {
                     application_state: 'present',
                     summary: 'Startup diagnostics',
@@ -642,9 +735,12 @@ class CapturingRuntimeProvider implements RuntimeProvider {
     }
 }
 
-function dependencies(adapter: RunnerSessionAdapter) {
+function dependencies(
+    adapter: RunnerSessionAdapter,
+    environment: Record<string, string> = {}
+) {
     return {
-        env: { OPENROUTER_API_KEY: 'fixture-openrouter-key' },
+        env: { OPENROUTER_API_KEY: 'fixture-openrouter-key', ...environment },
         findExecutable: (name: string) => `/bin/${name}`,
         registry: new RunnerRegistry([new InteractiveTestRunner(adapter)]),
         now: () => new Date('2026-08-18T12:00:00.000Z'),

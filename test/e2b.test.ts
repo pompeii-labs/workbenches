@@ -4,6 +4,12 @@ import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 
 import { OutcomeStore } from '../src/outcomes/index.js';
+import { ClaudeCodeConfigStaging } from '../src/runners/claude-code/config.js';
+import { ClaudeCodeRunner } from '../src/runners/claude-code/runner.js';
+import { RunnerContextStaging } from '../src/runners/context/stage.js';
+import { DiskRunnerFiles } from '../src/runners/files/disk.js';
+import { RunnerRegistry } from '../src/runners/registry.js';
+import type { RunnerSessionHost } from '../src/runners/session.js';
 import type {
     E2BClient,
     E2BCommand,
@@ -20,15 +26,23 @@ import { E2BManagedSandboxes } from '../src/runtimes/e2b/managed.js';
 import { E2BRuntimeProvider } from '../src/runtimes/e2b/provider.js';
 import { RuntimeRegistry } from '../src/runtimes/index.js';
 import { identityCommand } from '../src/runtimes/remote/directories.js';
+import { SandboxArchive } from '../src/runtimes/remote/disk/archive.js';
 import { DiskAssetSnapshot } from '../src/runtimes/remote/disk/snapshot.js';
+import { StateStore } from '../src/runtimes/remote/disk/state.js';
 import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
 import { TransferRules } from '../src/runtimes/staging/rules.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { modelCatalogFixture } from './model-catalog-fixture.js';
+import {
+    claudeCodeConfiguration,
+    FakeClaudeCode,
+} from './runners/claude-code/fixture.js';
 import { runtimeProviderContract } from './runtime-provider-contract.js';
 
 const diskAssetSource = new DiskAssetSource();
 const disk = { assets: diskAssetSource, local: diskAssetSource };
 const sources = { ...disk, rules: new TransferRules('E2B') };
+const archives = new SandboxArchive(sources.rules);
 
 const temporaryDirectories: string[] = [];
 
@@ -57,6 +71,184 @@ describe('E2B runtime provider', () => {
                 environment: { WORKBENCH_HOME: home },
             })
         ).rejects.toThrow('E2B_API_KEY is required for the E2B runtime');
+    });
+
+    test('checks Claude Code in the image and passes only its supported credentials', async () => {
+        const resolved = await fixture();
+        resolved.manifest.runner = 'claude-code';
+        resolved.manifest.model = { id: 'anthropic/claude-sonnet-4-5' };
+        resolved.manifest.env = {
+            CLAUDE_HOST_VALUE: { required: false },
+            ANTHROPIC_HOST_VALUE: { required: false },
+        };
+        const client = new FakeClient();
+        client.sandbox.availableCommands = new Set(['git', 'tar', 'claude']);
+        const input = {
+            ...request(resolved),
+            environment: {
+                ANTHROPIC_API_KEY: 'anthropic-secret',
+                CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret',
+                CLAUDE_HOST_VALUE: 'host-claude-value',
+                ANTHROPIC_HOST_VALUE: 'host-anthropic-value',
+            },
+            runnerCommand: 'claude',
+            runnerVersion: { minimum: '2.1.292' },
+        };
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare(
+            input
+        );
+        try {
+            await expect(runtime.preflight()).resolves.toMatchObject({
+                runner: { name: 'claude-code', version: '2.1.292' },
+            });
+            expect(runtime.environment).toMatchObject({
+                ANTHROPIC_API_KEY: 'anthropic-secret',
+            });
+            expect(runtime.environment).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+            expect(runtime.environment).not.toHaveProperty('CLAUDE_HOST_VALUE');
+            expect(runtime.environment).not.toHaveProperty('ANTHROPIC_HOST_VALUE');
+            expect(
+                client.sandbox.runs.find(
+                    (call) => call.command === "'claude' '--version'"
+                )?.options
+            ).toMatchObject({ env: {}, timeoutMilliseconds: 15_000 });
+            expect(
+                client.sandbox.runs.find((call) => call.command.includes("'bwrap'"))
+                    ?.options
+            ).toMatchObject({ env: {}, timeoutMilliseconds: 15_000 });
+        } finally {
+            await runtime.cleanup();
+        }
+
+        client.sandbox.runnerVersion = '2.1.291';
+        const old = await new E2BRuntimeProvider({ ...disk, client }).prepare(input);
+        try {
+            await expect(old.preflight()).rejects.toThrow('claude 2.1.291 is too old');
+        } finally {
+            await old.cleanup();
+        }
+    });
+
+    test('activates Claude Code transcripts after initial and resumed executions', async () => {
+        const resolved = await fixture();
+        resolved.manifest.runner = 'claude-code';
+        resolved.manifest.model = { id: 'anthropic/claude-sonnet-4-5' };
+        resolved.manifest.runner_config = './runner.json';
+        resolved.runnerConfigPath = join(resolved.packageDirectory, 'runner.json');
+        await writeFile(resolved.runnerConfigPath, '{}\n');
+        const sessionDirectory = await mkdtemp(
+            join(tmpdir(), 'workbench-e2b-claude-state-')
+        );
+        temporaryDirectories.push(sessionDirectory);
+        const native = new FakeClaudeCode();
+        const host: RunnerSessionHost = {
+            emit: () => Promise.resolve(),
+            requestPermission: async () => 'allow_once',
+            requestQuestion: async () => ({ outcome: 'rejected' }),
+        };
+        let nativeSessionId: string | undefined;
+
+        for (const [task, transcript] of [
+            ['initial turn', 'initial transcript'],
+            ['resumed turn', 'resumed transcript'],
+        ] as const) {
+            const files = new DiskRunnerFiles();
+            const runner = new ClaudeCodeRunner(
+                new ClaudeCodeConfigStaging(files, new RunnerContextStaging(files)),
+                modelCatalogFixture
+            );
+            const sessionContext = {
+                id: 'wb_e2bclaudestate123456789',
+                directory: sessionDirectory,
+                ...(nativeSessionId ? { nativeSessionId } : {}),
+            };
+            const prepared = await runner.prepare(
+                resolved,
+                { ANTHROPIC_API_KEY: 'fixture-anthropic-key' },
+                {
+                    session: sessionContext,
+                    workspaceDirectory: resolved.repositoryDirectory,
+                }
+            );
+            const client = new FakeClient();
+            client.sandbox.claude = native;
+            const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare({
+                ...request(resolved),
+                environment: { ANTHROPIC_API_KEY: 'fixture-anthropic-key' },
+                ...(prepared.nativeCommand
+                    ? { runnerCommand: prepared.nativeCommand }
+                    : {}),
+                ...(prepared.nativeVersion
+                    ? { runnerVersion: prepared.nativeVersion }
+                    : {}),
+                assets: [
+                    { path: resolved.repositoryDirectory, access: 'read-write' },
+                    { path: resolved.packageDirectory, access: 'read-only' },
+                    ...prepared.assets,
+                    {
+                        path: sessionDirectory,
+                        access: 'read-write',
+                        state: true,
+                        ...(prepared.stateOverlay
+                            ? { stateOverlay: prepared.stateOverlay }
+                            : {}),
+                    },
+                ],
+            });
+            await prepared.configureRuntime?.(runtime);
+            await runtime.preflight();
+            const session = await prepared.startSession(runtime, {
+                configuration: claudeCodeConfiguration(resolved),
+                host,
+                session: {
+                    ...sessionContext,
+                    directory: runtime.pathFor(sessionDirectory),
+                },
+            });
+            expect(await session.prompt(task)).toEqual({ reason: 'end_turn' });
+            nativeSessionId = session.id;
+            client.sandbox.outputDownload = await claudeStateBytes(transcript);
+            await session.close();
+            await runtime.cleanup();
+            await prepared.cleanup();
+
+            const active = await new StateStore(archives, sessionDirectory).source();
+            expect(
+                await readFile(
+                    join(
+                        active.directory,
+                        'claude-code-config',
+                        'projects',
+                        'workspace',
+                        'session.jsonl'
+                    ),
+                    'utf8'
+                )
+            ).toBe(transcript);
+        }
+
+        expect(native.invocations).toHaveLength(2);
+        expect(native.invocations[1]?.command).toContain('--resume');
+    });
+
+    test('preserves declared Anthropic environment for other runners', async () => {
+        const resolved = await fixture();
+        resolved.manifest.env = { ANTHROPIC_BASE_URL: { required: false } };
+        const runtime = await new E2BRuntimeProvider({
+            ...disk,
+            client: new FakeClient(),
+        }).prepare({
+            ...request(resolved),
+            environment: {
+                E2B_API_KEY: 'e2b-secret',
+                ANTHROPIC_BASE_URL: 'https://example.test',
+            },
+        });
+        try {
+            expect(runtime.environment.ANTHROPIC_BASE_URL).toBe('https://example.test');
+        } finally {
+            await runtime.cleanup();
+        }
     });
 
     test('prepares a deterministic image template and labels the sandbox', async () => {
@@ -419,7 +611,7 @@ describe('E2B runtime provider', () => {
         const resolved = await fixture();
         resolved.manifest.tools = ['fixture-tool'];
         const client = new FakeClient();
-        client.sandbox.missingCommands.add('fixture-tool');
+        client.sandbox.availableCommands.delete('fixture-tool');
         const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare(
             request(resolved)
         );
@@ -832,10 +1024,20 @@ class FakeSandbox implements E2BSandbox {
     infoFailure: Error | undefined;
     uploadFailure: Error | undefined;
     startFailure: Error | undefined;
-    readonly missingCommands = new Set<string>();
+    availableCommands = new Set([
+        'git',
+        'tar',
+        'gh',
+        'opencode',
+        'pi',
+        'claude',
+        'fixture-tool',
+    ]);
     directoriesOwned = false;
     rootUnavailable = false;
     readonly preOwned = new Set<string>();
+    runnerVersion = '2.1.292';
+    claude: FakeClaudeCode | undefined;
 
     async run(
         command: string,
@@ -866,10 +1068,14 @@ class FakeSandbox implements E2BSandbox {
         if (command === 'tar --help 2>&1') {
             return result(0, 'Usage: tar [OPTION...]\n      --null');
         }
+        if (command === "'claude' '--version'") {
+            return result(0, `${this.runnerVersion} (Claude Code)\n`);
+        }
         if (command.startsWith('command -v')) {
             const name = command.match(/'([^']+)'/)?.[1] ?? 'tool';
-            if (this.missingCommands.has(name)) return result(1);
-            return result(0, `/usr/bin/${name}\n`);
+            return this.availableCommands.has(name)
+                ? result(0, `/usr/bin/${name}\n`)
+                : result(1);
         }
         if (command.includes('git -C') && command.includes('rev-parse HEAD')) {
             return result(0, `${'a'.repeat(40)}\n`);
@@ -880,6 +1086,9 @@ class FakeSandbox implements E2BSandbox {
     async start(command: string, options: E2BCommandOptions = {}): Promise<E2BCommand> {
         if (this.startFailure) throw this.startFailure;
         this.started.push({ command, options });
+        if (this.claude && command.includes("'claude'")) {
+            return this.startClaude(command, options, this.claude);
+        }
         await options.onStdout?.('streamed output');
         return {
             pid: 10,
@@ -954,6 +1163,85 @@ class FakeSandbox implements E2BSandbox {
     async kill(): Promise<void> {
         this.killed = true;
     }
+
+    private async startClaude(
+        command: string,
+        options: E2BCommandOptions,
+        claude: FakeClaudeCode
+    ): Promise<E2BCommand> {
+        const resume = /'--resume' '([^']+)'/.exec(command)?.[1];
+        const session = /'--session-id' '([^']+)'/.exec(command)?.[1];
+        const nativeCommand = [
+            'claude',
+            ...(resume
+                ? ['--resume', resume]
+                : session
+                  ? ['--session-id', session]
+                  : []),
+        ];
+        const spawned = claude.spawn({
+            command: nativeCommand,
+            env: options.env ?? {},
+        });
+        const output = async (
+            stream: ReadableStream<Uint8Array> | undefined,
+            consume: ((data: string) => void | Promise<void>) | undefined
+        ) => {
+            if (!stream || !consume) return;
+            for await (const chunk of stream) {
+                await consume(new TextDecoder().decode(chunk));
+            }
+        };
+        const stdout = output(spawned.stdout, options.onStdout);
+        const stderr = output(spawned.stderr, options.onStderr);
+        return {
+            pid: 12,
+            wait: async () => {
+                const code = await spawned.exited;
+                await Promise.all([stdout, stderr]);
+                return result(code);
+            },
+            sendStdin: async (value) => {
+                await spawned.stdin?.write(value);
+            },
+            closeStdin: async () => {
+                await spawned.stdin?.end?.();
+            },
+            kill: async () => {
+                await spawned.kill?.();
+            },
+        };
+    }
+}
+
+async function claudeStateBytes(transcript: string): Promise<Uint8Array> {
+    const root = await mkdtemp(join(tmpdir(), 'workbench-e2b-claude-remote-'));
+    temporaryDirectories.push(root);
+    await mkdir(join(root, 'claude-code-config', 'projects', 'workspace'), {
+        recursive: true,
+    });
+    await writeFile(join(root, 'claude-code-config', 'settings.json'), '{}\n');
+    await writeFile(
+        join(root, 'claude-code-config', 'projects', 'workspace', 'session.jsonl'),
+        transcript
+    );
+    const snapshot = await DiskAssetSnapshot.create(
+        {
+            hostPath: root,
+            runtimePath: '/state',
+            access: 'read-write',
+            kind: 'outcome',
+            excludedHostPaths: [],
+        },
+        1_024 * 1_024,
+        undefined,
+        sources
+    );
+    try {
+        return await snapshot.archiveBytes();
+    } finally {
+        await snapshot.cleanup();
+    }
 }
 
 async function fixture(): Promise<ResolvedWorkbench> {
@@ -992,6 +1280,9 @@ async function fixture(): Promise<ResolvedWorkbench> {
 function request(workbench: ResolvedWorkbench) {
     return {
         workbench,
+        runnerAuthentication: RunnerRegistry.standard().authentication(
+            workbench.manifest.runner
+        ),
         workspaceDirectory: workbench.repositoryDirectory,
         environment: { OPENAI_API_KEY: 'fixture-key' },
         assets: [

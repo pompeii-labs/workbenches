@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,7 @@ import { RunnerRegistry } from '../src/runners/registry.js';
 import { type PreparedRunner, Runner } from '../src/runners/runner.js';
 import {
     normalizeRunnerInput,
+    RunnerCapabilityUnsupportedError,
     type RunnerInput,
     type RunnerQuestionResponse,
     type RunnerSession,
@@ -71,6 +72,30 @@ describe('interactive run worker', () => {
             nativeMethod: 'ChatGPT Pro/Plus (headless)',
         });
         expect(adapter.prompts).toEqual(['authenticated task']);
+        expect(adapter.answerRequests).toBeFalse();
+    });
+
+    test('keeps native prompting disabled for a legacy run without a mode', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home, {
+            mode: 'foreground',
+            task: 'legacy task',
+        });
+        const metadataPath = join(home, 'runs', stored.id, 'run.json');
+        const source = await readFile(metadataPath, 'utf8');
+        expect(source).toContain('"mode": "foreground"');
+        await writeFile(
+            metadataPath,
+            source.replace(/^\s*"mode": "foreground",\n/m, '')
+        );
+        const adapter = new ControlledAdapter({ autoComplete: true });
+
+        await expect(
+            workerFor(home, stored.id, adapter).execute({
+                environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+            })
+        ).resolves.toBe(0);
+        expect(adapter.answerRequests).toBeFalse();
     });
 
     test('does not start an invisible authentication flow for a detached run', async () => {
@@ -127,6 +152,7 @@ describe('interactive run worker', () => {
         expect(run).toMatchObject({ status: 'completed', exit_code: 0 });
         expect(adapter.prompts).toEqual(['initial task']);
         expect(adapter.starts).toBe(1);
+        expect(adapter.answerRequests).toBeTrue();
         expect(run.runner_session_id).toBe('native-session-1');
         const events = await new RunStore(home).readEvents(stored.id);
         const started = events.find((event) => event.type === 'turn.started');
@@ -390,6 +416,115 @@ describe('interactive run worker', () => {
         await expect(execution).resolves.toBe(0);
     });
 
+    test('persists a native session id that rotates after cancellation', async () => {
+        const home = await temporaryHome();
+        const sessionId = 'wb_workerrotation1234567890';
+        const sessions = new SessionStore(home);
+        await sessions.create({
+            id: sessionId,
+            workbench: 'fixture-core',
+            workbench_version: '0.1.0',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            runtime: 'local',
+            reference: 'fixture-core',
+            workbench_path: '/repo/.workbenches/core',
+            workspace: '/workspace',
+            workspaces: [],
+            latest_run_id: sessionId,
+        });
+        const stored = await new RunStore(home).create({
+            metadata: {
+                workbench: 'fixture-core',
+                workbench_version: '0.1.0',
+                runner: 'opencode',
+                model: 'openai/gpt-5.6-terra',
+                workspace: '/workspace',
+                mode: 'interactive',
+                session_id: sessionId,
+            },
+            request: {
+                workbench_path: '/repo/.workbenches/core',
+                workspace: '/workspace',
+                task: '',
+                session_id: sessionId,
+            },
+        });
+        const adapter = new ControlledAdapter({ rotateSessionOnCancel: true });
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+
+        await handle.send('first');
+        await adapter.waitForPrompts(1);
+        await handle.cancelTurn();
+        await handle.send('second');
+        await adapter.waitForPrompts(2);
+
+        expect((await sessions.read(sessionId)).native_session_id).toBe(
+            'native-session-2'
+        );
+        await handle.close();
+        await execution;
+    });
+
+    for (const terminal of ['failure', 'kill'] as const) {
+        test(`persists a native session id that rotates on ${terminal}`, async () => {
+            const home = await temporaryHome();
+            const stored = await fixtureRun(home, { session: true });
+            const adapter = new ControlledAdapter({
+                ...(terminal === 'failure'
+                    ? { rotateSessionOnFailure: true }
+                    : { rotateSessionOnClose: true }),
+            });
+            const execution = workerFor(home, stored.id, adapter).execute({
+                environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+            });
+            const handle = new StoredRunHandle(home, stored.id);
+            await waitForReady(home, stored.id);
+            if (terminal === 'failure') {
+                await handle.send('fail after session rotation');
+            } else {
+                await handle.cancel('stop after session rotation');
+            }
+            await execution;
+
+            expect(
+                (await new SessionStore(home).read(stored.id)).native_session_id
+            ).toBe('native-session-2');
+            expect((await new RunStore(home).read(stored.id)).runner_session_id).toBe(
+                'native-session-2'
+            );
+        });
+    }
+
+    test('does not rewrite a stable native session id between turns', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const adapter = new ControlledAdapter();
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+        await handle.send('first');
+        await adapter.waitForPrompts(1);
+        await handle.followUp('second');
+        const metadataPath = join(home, 'runs', stored.id, 'run.json');
+        const before = (await stat(metadataPath)).mtimeMs;
+        await Bun.sleep(20);
+
+        adapter.completeFirst();
+        await adapter.waitForPrompts(2);
+
+        expect((await stat(metadataPath)).mtimeMs).toBe(before);
+        await handle.cancelTurn();
+        await handle.close();
+        await execution;
+    });
+
     test('names an unnamed resumed session from its first CLI input', async () => {
         const home = await temporaryHome();
         const sessionId = 'wb_workername123456789012';
@@ -564,6 +699,64 @@ describe('interactive run worker', () => {
                 }),
             })
         );
+    });
+
+    test('reports unsupported steering with the capability error code', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const adapter = new ControlledAdapter({ steeringUnsupported: true });
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+        await handle.send('first turn');
+        await adapter.waitForPrompts(1);
+
+        try {
+            await handle.steer('unsupported here');
+            throw new Error('Expected steering to be rejected');
+        } catch (error) {
+            expect(error).toMatchObject({
+                receipt: {
+                    outcome: 'rejected',
+                    error: { code: 'capability_unsupported' },
+                },
+            });
+        }
+
+        await handle.cancelTurn();
+        await handle.close();
+        await execution;
+        const events = await collect(handle.events);
+        expect(eventIndex(events, 'input.accepted', 'steer')).toBe(-1);
+        expect(eventIndex(events, 'input.rejected', 'steer')).toBeGreaterThan(-1);
+    });
+
+    test('reports turn_idle when a supported steering turn ends during admission', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home);
+        const adapter = new ControlledAdapter({ finishBeforeSteerError: true });
+        const execution = workerFor(home, stored.id, adapter).execute({
+            environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+        });
+        const handle = new StoredRunHandle(home, stored.id);
+        await waitForReady(home, stored.id);
+        await handle.send('first turn');
+        await adapter.waitForPrompts(1);
+
+        try {
+            await handle.steer('too late');
+            throw new Error('Expected steering to be rejected');
+        } catch (error) {
+            expect(error).toMatchObject({
+                receipt: { outcome: 'rejected', error: { code: 'turn_idle' } },
+            });
+        }
+        await handle.close();
+        await execution;
+        const events = await collect(handle.events);
+        expect(eventIndex(events, 'input.accepted', 'steer')).toBe(-1);
     });
 
     test('reports steering as queued until the runner consumes it', async () => {
@@ -925,6 +1118,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
     starts = 0;
     session: RunnerSessionStartOptions['session'];
     authentication: RunnerSessionStartOptions['authentication'];
+    answerRequests: RunnerSessionStartOptions['answerRequests'];
     private host?: RunnerSessionStartOptions['host'];
     private releaseFirst?: () => void;
     private readonly promptWaiters: Array<() => void> = [];
@@ -936,6 +1130,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
     private readonly steeringDelivery: Promise<void>;
     private readonly resolveSteeringDelivery: () => void;
     private readonly rejectSteeringDelivery: (reason?: unknown) => void;
+    private nativeSessionId = 'native-session-1';
 
     constructor(
         private readonly options: {
@@ -945,6 +1140,11 @@ class ControlledAdapter implements RunnerSessionAdapter {
             autoComplete?: boolean;
             startAfter?: Promise<void>;
             reason?: string;
+            rotateSessionOnCancel?: boolean;
+            rotateSessionOnFailure?: boolean;
+            rotateSessionOnClose?: boolean;
+            steeringUnsupported?: boolean;
+            finishBeforeSteerError?: boolean;
         } = {}
     ) {
         let markPermissionRequested!: () => void;
@@ -972,13 +1172,21 @@ class ControlledAdapter implements RunnerSessionAdapter {
         this.host = options.host;
         this.session = options.session;
         this.authentication = options.authentication;
+        this.answerRequests = options.answerRequests;
         await this.options.startAfter;
+        const adapter = this;
         return {
-            id: 'native-session-1',
+            get id() {
+                return adapter.nativeSessionId;
+            },
             prompt: (input) => this.prompt(input),
             steer: (input) => this.steer(input),
             cancelTurn: () => this.cancelTurn(),
-            close: async () => {},
+            close: async () => {
+                if (this.options.rotateSessionOnClose) {
+                    this.nativeSessionId = 'native-session-2';
+                }
+            },
         };
     }
 
@@ -999,6 +1207,10 @@ class ControlledAdapter implements RunnerSessionAdapter {
     private async prompt(input: RunnerInput) {
         this.prompts.push(normalizeRunnerInput(input).text);
         for (const resolve of this.promptWaiters.splice(0)) resolve();
+        if (this.options.rotateSessionOnFailure) {
+            this.nativeSessionId = 'native-session-2';
+            throw new Error('fixture turn failed');
+        }
         if (this.prompts.length === 1) {
             if (this.options.requestPermission) {
                 this.markPermissionRequested();
@@ -1035,6 +1247,16 @@ class ControlledAdapter implements RunnerSessionAdapter {
     }
 
     private async steer(input: RunnerInput) {
+        if (this.options.finishBeforeSteerError) {
+            this.releaseFirst?.();
+            await Bun.sleep(20);
+            throw new RunnerCapabilityUnsupportedError('Turn already ended');
+        }
+        if (this.options.steeringUnsupported) {
+            throw new RunnerCapabilityUnsupportedError(
+                'Runner steering is not supported on this runtime'
+            );
+        }
         this.steers.push(normalizeRunnerInput(input).text);
         return {
             delivered: this.options.deferSteeringDelivery
@@ -1045,6 +1267,9 @@ class ControlledAdapter implements RunnerSessionAdapter {
 
     private async cancelTurn(): Promise<void> {
         this.cancellations += 1;
+        if (this.options.rotateSessionOnCancel) {
+            this.nativeSessionId = 'native-session-2';
+        }
         if (this.options.deferSteeringDelivery) {
             this.rejectSteeringDelivery(new Error('Steering interrupted'));
         }
@@ -1084,6 +1309,9 @@ class InteractiveWorkerTestRunner extends Runner {
                         ? { authentication: options.authentication }
                         : {}),
                     host: options.host,
+                    ...(options.answerRequests !== undefined
+                        ? { answerRequests: options.answerRequests }
+                        : {}),
                     ...(options.session ? { session: options.session } : {}),
                 }),
             cleanup: () => prepared.cleanup(),
@@ -1126,15 +1354,33 @@ async function temporaryHome(): Promise<string> {
     return directory;
 }
 
-function fixtureRun(
+async function fixtureRun(
     home: string,
     options: {
         mode?: 'foreground' | 'detached' | 'interactive';
         task?: string;
         registry?: boolean;
+        session?: boolean;
     } = {}
 ): Promise<StoredRun> {
+    const id = RunStore.createId();
+    if (options.session) {
+        await new SessionStore(home).create({
+            id,
+            workbench: 'fixture-core',
+            workbench_version: '0.1.0',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            runtime: 'local',
+            reference: 'fixture-core',
+            workbench_path: '/repo/.workbenches/core',
+            workspace: '/workspace',
+            workspaces: [],
+            latest_run_id: id,
+        });
+    }
     return new RunStore(home).create({
+        id,
         metadata: {
             workbench: 'fixture-core',
             workbench_version: '0.1.0',
@@ -1143,6 +1389,7 @@ function fixtureRun(
             workspace: '/workspace',
             mode: options.mode ?? 'interactive',
             execution: 'session',
+            ...(options.session ? { session_id: id } : {}),
             ...(options.registry
                 ? {
                       registry: {
@@ -1159,6 +1406,7 @@ function fixtureRun(
             workbench_path: '/repo/.workbenches/core',
             workspace: '/workspace',
             task: options.task ?? '',
+            ...(options.session ? { session_id: id } : {}),
         },
     });
 }

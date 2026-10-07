@@ -4,6 +4,7 @@ import type { RepositoryBinding } from '../repositories/contracts.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import {
     normalizeRunnerInput,
+    RunnerCapabilityUnsupportedError,
     type RunnerInput,
     type RunnerInputDelivery,
     type RunnerPermissionDecision,
@@ -26,6 +27,7 @@ import {
 } from '../workbench/index.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
 import { ExecutionPreparation } from './preparation.js';
+import { RunnerOutput } from './runner-output.js';
 import { RunStore } from './store.js';
 
 export interface InteractiveRunSession {
@@ -67,12 +69,15 @@ export interface InteractiveRunOptions {
     onQuestion?: (
         request: RunnerQuestionRequest
     ) => Promise<RunnerQuestionResponse> | RunnerQuestionResponse;
+    onWithdrawPermission?: (id: string) => void;
+    onWithdrawQuestion?: (id: string) => void;
     dependencies?: InteractiveRunDependencies;
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
     allowUncheckedGpu?: boolean;
     session?: RunnerSessionContext;
     interactive?: boolean;
+    answerRequests?: boolean;
     connection?: string;
     allowAuthentication?: boolean;
 }
@@ -160,7 +165,10 @@ export class InteractiveRun {
                         this.requestPermission(emitter, request),
                     requestQuestion: (request) =>
                         this.requestQuestion(emitter, request),
+                    withdrawPermission: (id) => this.options.onWithdrawPermission?.(id),
+                    withdrawQuestion: (id) => this.options.onWithdrawQuestion?.(id),
                 },
+                answerRequests: this.options.answerRequests ?? true,
                 ...(this.options.session
                     ? {
                           session: {
@@ -191,7 +199,8 @@ export class InteractiveRun {
                 async () => {
                     await preparation.cleanup();
                     return preparation.infrastructure();
-                }
+                },
+                (value) => RunnerOutput.redact(value, workbench, environment)
             );
         } catch (error) {
             await session?.close().catch(() => undefined);
@@ -205,7 +214,11 @@ export class InteractiveRun {
                 .catch(() => undefined);
             await emitter
                 .emit('run.failed', {
-                    message: InteractiveRun.errorMessage(error),
+                    message: RunnerOutput.redact(
+                        InteractiveRun.errorMessage(error),
+                        workbench,
+                        environment
+                    ),
                     ...AuthenticationRequiredError.failure(error),
                     ...(outcomeId ? { outcome_id: outcomeId } : {}),
                     ...(infrastructure ? { infrastructure } : {}),
@@ -316,7 +329,8 @@ class HostedInteractiveSession implements InteractiveRunSession {
         ) => Promise<RunOutcome | undefined> | undefined,
         private readonly cleanup: () => Promise<
             RuntimeInfrastructureMetadata | undefined
-        >
+        >,
+        private readonly redact: (value: string) => string
     ) {
         this.runner = runner;
         this.emitter = emitter;
@@ -369,8 +383,13 @@ class HostedInteractiveSession implements InteractiveRunSession {
 
     async steer(task: RunnerInput): Promise<RunnerInputDelivery> {
         const normalized = normalizeRunnerInput(task);
-        if (!this.busy || !this.runner.steer) {
-            throw new Error('Runner does not accept steering for this turn');
+        if (!this.busy) {
+            throw new Error('No Workbench turn is active');
+        }
+        if (!this.runner.steer) {
+            throw new RunnerCapabilityUnsupportedError(
+                'Runner does not accept steering for this turn'
+            );
         }
         return this.runner.steer(normalized);
     }
@@ -438,7 +457,9 @@ class HostedInteractiveSession implements InteractiveRunSession {
                 } catch (error) {
                     await this.emitter.emit('outcome.failed', {
                         turn_index: turn,
-                        message: `Could not save returned results: ${error instanceof Error ? error.message : String(error)}`,
+                        message: this.redact(
+                            `Could not save returned results: ${error instanceof Error ? error.message : String(error)}`
+                        ),
                     });
                 }
             }
@@ -464,7 +485,9 @@ class HostedInteractiveSession implements InteractiveRunSession {
                 () => undefined
             );
             await this.emitter.emit('run.failed', {
-                message: error instanceof Error ? error.message : String(error),
+                message: this.redact(
+                    error instanceof Error ? error.message : String(error)
+                ),
                 ...(released?.outcomeId ? { outcome_id: released.outcomeId } : {}),
                 ...(released?.infrastructure
                     ? { infrastructure: released.infrastructure }
@@ -500,7 +523,9 @@ class HostedInteractiveSession implements InteractiveRunSession {
             if (!this.terminal) {
                 this.terminal = true;
                 await this.emitter.emit('run.failed', {
-                    message: error instanceof Error ? error.message : String(error),
+                    message: this.redact(
+                        error instanceof Error ? error.message : String(error)
+                    ),
                 });
             }
             throw error;

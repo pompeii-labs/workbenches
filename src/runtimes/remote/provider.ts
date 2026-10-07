@@ -28,6 +28,24 @@ export abstract class RemoteProvider implements RuntimeProvider {
 
     abstract prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime>;
 
+    /** Runner-declared host-only credentials never enter remote runtimes. */
+    protected withoutRemoteSubscription(
+        request: RuntimePrepareRequest
+    ): RuntimePrepareRequest {
+        return {
+            ...request,
+            environment: Object.fromEntries(
+                Object.entries(request.environment).filter(
+                    ([name]) =>
+                        request.runnerAuthentication?.allowEnvironment(
+                            name,
+                            this.name
+                        ) ?? true
+                )
+            ),
+        };
+    }
+
     /** Checks the request and plans where its assets go in the sandbox. */
     protected async bind(request: RuntimePrepareRequest): Promise<PathPlan> {
         try {

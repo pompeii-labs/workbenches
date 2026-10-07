@@ -40,6 +40,21 @@ describe('Workbench smoke preflight', () => {
         expect(result.runner).toEqual({ name: 'codex', path: '/bin/codex' });
     });
 
+    test('uses an adapter native command while reporting the manifest runner', () => {
+        const fixture = workbench();
+        fixture.manifest.runner = 'claude-code';
+
+        const result = new WorkbenchPreflight({
+            environment: { LUX_TOKEN: 'bound' },
+            findExecutable: (name) => `/bin/${name}`,
+        }).check(fixture, 'claude');
+
+        expect(result.runner).toEqual({
+            name: 'claude-code',
+            path: '/bin/claude',
+        });
+    });
+
     test('rejects unsupported execution contracts before executable checks', () => {
         const fixture = workbench();
         fixture.manifest.runtime = 'docker';

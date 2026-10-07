@@ -3,13 +3,14 @@ import type { RequirementsReport } from './requirements.js';
 import { selectedRuntime } from './runtimes.js';
 
 export interface PreflightResult {
-    runner: { name: string; path: string };
+    runner: { name: string; path: string; version?: string };
     tools: Array<{ name: string; path: string }>;
     enabledMcps: string[];
     disabledMcps: string[];
     optionalEnvironment: string[];
     workspaces: WorkbenchWorkspaceBinding[];
     dockerEngine?: 'host';
+    subprocessEnvironmentScrubbing?: boolean;
     requirements?: RequirementsReport;
 }
 
@@ -42,7 +43,7 @@ export class WorkbenchPreflight {
         return (this.locate ?? Bun.which)(name);
     }
 
-    check(workbench: ResolvedWorkbench): PreflightResult {
+    check(workbench: ResolvedWorkbench, runnerCommand?: string): PreflightResult {
         const runtime = selectedRuntime(workbench);
         if (runtime.name !== 'local') {
             throw new Error(`Unsupported runtime: ${runtime.name}`);
@@ -51,10 +52,11 @@ export class WorkbenchPreflight {
             throw new Error('image is not supported with the local runtime');
         }
 
-        const runnerPath = this.findExecutable(workbench.manifest.runner);
+        const command = runnerCommand ?? workbench.manifest.runner;
+        const runnerPath = this.findExecutable(command);
         if (!runnerPath) {
             throw new Error(
-                `Runner CLI is unavailable: ${workbench.manifest.runner}. Install ${workbench.manifest.runner} and rerun this command.`
+                `Runner CLI is unavailable: ${command}. Install ${command} and rerun this command.`
             );
         }
 
