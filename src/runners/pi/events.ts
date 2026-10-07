@@ -1,4 +1,5 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
+import { completionReason } from '../session.js';
 import { describeTool, type ToolDescription } from '../tool.js';
 
 export interface PiAdapterResult {
@@ -196,7 +197,8 @@ function usageData(usage: Record<string, unknown> | undefined) {
 }
 
 function messageReason(message: Record<string, unknown> | undefined) {
-    return string(message?.stopReason) ?? string(message?.reason);
+    const reason = string(message?.stopReason) ?? string(message?.reason);
+    return reason ? completionReason(reason) : undefined;
 }
 
 function changedFile(name: string, target: string | undefined) {

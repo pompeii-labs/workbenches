@@ -292,6 +292,43 @@ describe('local run lifecycle', () => {
         expect(events.at(-1)).toMatchObject({ type: 'run.completed' });
     });
 
+    test('fails a run whose final response the output limit cut off', async () => {
+        const fixture = await createFixture();
+        const events: WorkbenchEvent[] = [];
+        const stdout = `${JSON.stringify({
+            type: 'step_finish',
+            part: { reason: 'length' },
+        })}\n`;
+
+        const code = await WorkbenchRun.execute(
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'inspect',
+                onEvent(event) {
+                    events.push(event);
+                },
+            },
+            {
+                env: TEST_ENVIRONMENT,
+                findExecutable: () => '/bin/opencode',
+                spawn() {
+                    return {
+                        exited: Promise.resolve(0),
+                        stdout: new Response(stdout).body as ReadableStream<Uint8Array>,
+                        stderr: new Response('').body as ReadableStream<Uint8Array>,
+                    };
+                },
+            }
+        );
+
+        expect(code).toBe(1);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: { code: 'output_truncated', exit_code: 1 },
+        });
+        expect(events.some((event) => event.type === 'run.completed')).toBe(false);
+    });
+
     test('reports the safe error carried by a failed OpenCode event', async () => {
         const fixture = await createFixture();
         const events: WorkbenchEvent[] = [];

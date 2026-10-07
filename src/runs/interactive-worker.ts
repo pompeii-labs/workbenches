@@ -531,9 +531,10 @@ export class InteractiveRunWorker {
             });
             throw error;
         }
-        this.exitCode = cancelled ? 130 : 0;
+        const truncated = !cancelled && this.session?.outputTruncated === true;
+        this.exitCode = cancelled ? 130 : truncated ? 1 : 0;
         await this.store.update(this.runId, {
-            status: cancelled ? 'cancelled' : 'completed',
+            status: cancelled ? 'cancelled' : truncated ? 'failed' : 'completed',
             exit_code: this.exitCode,
             finished_at: new Date().toISOString(),
         });

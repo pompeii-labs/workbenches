@@ -3,6 +3,16 @@ import { describe, expect, test } from 'bun:test';
 import { PiEventAdapter } from '../src/runners/pi/events.js';
 
 describe('Pi JSON event normalization', () => {
+    test('reports every provider spelling of the output limit as length', () => {
+        for (const stopReason of ['length', 'max_tokens']) {
+            const adapter = new PiEventAdapter();
+            expect(
+                adapter.consume({ type: 'turn_end', message: { stopReason } }).events
+            ).toEqual([{ type: 'turn.completed', data: { reason: 'length' } }]);
+            expect(adapter.summary().completionReason).toBe('length');
+        }
+    });
+
     test('streams text while withholding thinking and native snapshots', () => {
         const adapter = new PiEventAdapter();
         const thinking = adapter.consume({

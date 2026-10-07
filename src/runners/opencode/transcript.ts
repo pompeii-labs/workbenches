@@ -1,3 +1,4 @@
+import { completionReason } from '../session.js';
 import { record, string } from './json.js';
 
 /**
@@ -44,7 +45,11 @@ function turnEnd(last: Record<string, unknown>): TurnEnd | undefined {
         typeof record(last.time)?.completed === 'number' &&
         string(last.finish) !== 'tool-calls'
     ) {
-        return { kind: 'completed', finish: string(last.finish) };
+        const finish = string(last.finish);
+        return {
+            kind: 'completed',
+            finish: finish ? completionReason(finish) : undefined,
+        };
     }
     return undefined;
 }

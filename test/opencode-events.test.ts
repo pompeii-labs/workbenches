@@ -3,6 +3,15 @@ import { describe, expect, test } from 'bun:test';
 import { OpenCodeEventAdapter } from '../src/runners/opencode/events.js';
 
 describe('OpenCode event adapter', () => {
+    test('reports a response cut off by the output limit as length', () => {
+        const adapter = new OpenCodeEventAdapter();
+        expect(
+            adapter.consume({ type: 'step_finish', part: { reason: 'max_tokens' } })
+                .events
+        ).toEqual([{ type: 'turn.completed', data: { reason: 'length' } }]);
+        expect(adapter.summary().completionReason).toBe('length');
+    });
+
     test('counts an identified step only once and retains cost without token metadata', () => {
         const adapter = new OpenCodeEventAdapter();
         const step = {
