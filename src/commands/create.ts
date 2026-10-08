@@ -4,13 +4,7 @@ import { WorkbenchAuthoring } from '../authoring/index.js';
 import { AuthoringJob } from '../authoring/job.js';
 import { RunStore } from '../runs/store.js';
 import { workbenchHome } from '../storage.js';
-import { assertWorkbenchTuiSupported, launchWorkbenchTui } from '../tui.js';
-import {
-    selectedRuntime,
-    WorkbenchEnvironment,
-    WorkbenchPreflight,
-    WorkbenchWorkspaces,
-} from '../workbench/index.js';
+import { WorkbenchEnvironment, WorkbenchWorkspaces } from '../workbench/index.js';
 import { CliInput } from './input.js';
 import { CliWait } from './waiting.js';
 
@@ -41,7 +35,7 @@ export const createCommand = defineCommand({
         task: {
             type: 'string',
             alias: 't',
-            description: 'Authoring brief for non-interactive use',
+            description: 'Authoring brief',
         },
         'task-file': {
             type: 'string',
@@ -100,11 +94,9 @@ export const createCommand = defineCommand({
     async run({ args, rawArgs }) {
         const hasInput =
             args.task !== undefined || args['task-file'] !== undefined || args.stdin;
-        const headless = hasInput || args.detach || args.json;
-        if (!headless) assertWorkbenchTuiSupported();
-        if (headless && !hasInput && !args.from)
+        if (!hasInput && !args.from)
             throw new Error(
-                'Headless authoring requires --task, --task-file, or --stdin; --from can infer improvements from session evidence'
+                'wb create requires an authoring brief. Pass --task, --task-file, or --stdin, or use --from to improve a previous session.'
             );
         const brief = hasInput
             ? await new CliInput().read({
@@ -135,44 +127,28 @@ export const createCommand = defineCommand({
             ...(args.from ? { from: args.from } : {}),
             ...(args.feedback ? { feedback: args.feedback } : {}),
         });
-        if (headless) {
-            try {
-                const prompt = [launch.prompt, brief].filter(Boolean).join('\n\n');
-                const job = await new AuthoringJob(home).start(launch, prompt, {
-                    detached: args.detach,
-                });
-                if (args.detach) {
-                    process.stdout.write(
-                        args.json
-                            ? `${JSON.stringify({ session_id: job.session_id, run_id: job.run_id, operation_id: job.operation_id, input_id: `input_${job.run_id}`, after_sequence: 0 })}\n`
-                            : `${job.session_id}\n`
-                    );
-                } else {
-                    await new CliWait().execute(
-                        home,
-                        await new RunStore(home).read(job.run_id),
-                        { json: args.json }
-                    );
-                }
-            } finally {
-                await launch.resolved.cleanup();
+        try {
+            const prompt = [launch.prompt, brief].filter(Boolean).join('\n\n');
+            const job = await new AuthoringJob(home).start(launch, prompt, {
+                detached: args.detach,
+            });
+            if (args.detach) {
+                process.stdout.write(
+                    args.json
+                        ? `${JSON.stringify({ session_id: job.session_id, run_id: job.run_id, operation_id: job.operation_id, input_id: `input_${job.run_id}`, after_sequence: 0 })}\n`
+                        : `${job.session_id}\n`
+                );
+            } else {
+                await new CliWait().execute(
+                    home,
+                    await new RunStore(home).read(job.run_id),
+                    {
+                        json: args.json,
+                    }
+                );
             }
-            return;
+        } finally {
+            await launch.resolved.cleanup();
         }
-        if (selectedRuntime(launch.resolved.workbench).name === 'local') {
-            new WorkbenchPreflight({ environment: launch.environment }).check(
-                launch.resolved.workbench
-            );
-        }
-        await launchWorkbenchTui({
-            initial: {
-                alias: launch.alias,
-                resolved: launch.resolved,
-                ...(launch.prompt ? { prompt: launch.prompt } : {}),
-                operation: launch.operation,
-                environment: launch.environment,
-            },
-            environment: process.env,
-        });
     },
 });

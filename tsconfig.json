@@ -6,8 +6,6 @@
         "lib": ["ES2023"],
         "types": ["bun"],
         "strict": true,
-        "jsx": "preserve",
-        "jsxImportSource": "@opentui/solid",
         "noUncheckedIndexedAccess": true,
         "exactOptionalPropertyTypes": true,
         "resolveJsonModule": true,
@@ -15,5 +13,5 @@
         "verbatimModuleSyntax": true,
         "skipLibCheck": true
     },
-    "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx"]
+    "include": ["src/**/*.ts", "test/**/*.ts"]
 }

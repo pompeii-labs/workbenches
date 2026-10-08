@@ -7,7 +7,7 @@ import { CliReceipt } from './receipt.js';
 export const answerCommand = defineCommand({
     meta: {
         name: 'answer',
-        description: 'Answer a pending permission or question without attaching a TUI.',
+        description: 'Answer a pending permission or question.',
     },
     args: {
         session: {

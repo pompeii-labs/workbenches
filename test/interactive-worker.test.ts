@@ -100,7 +100,7 @@ describe('interactive run worker', () => {
                 type: 'run.failed',
                 data: {
                     message:
-                        'Authentication is required for openai. Start this Workbench interactively once to finish openai sign-in.',
+                        'Authentication is required for openai. Start a foreground task run once to finish openai sign-in.',
                     code: 'authentication_required',
                     exit_code: 3,
                 },

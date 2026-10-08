@@ -334,7 +334,7 @@ export class ExecutionPreparation {
         if (preferred && matchesRequestedConnection(preferred, connection)) {
             if (!this.options.allowAuthentication) {
                 throw new AuthenticationRequiredError(
-                    `Authentication is required for ${preferred.provider}. Start this Workbench interactively once to finish ${preferred.nativeProvider} sign-in.`
+                    `Authentication is required for ${preferred.provider}. Start a foreground task run once to finish ${preferred.nativeProvider} sign-in.`
                 );
             }
             if (workbench.manifest.runner !== 'opencode') {

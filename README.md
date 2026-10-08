@@ -90,9 +90,9 @@ From the project directory you want the agent to inspect, run:
 wb run creator --task "Inspect this repository and recommend one focused Workbench to create. Do not change files." --final
 ```
 
-This starts a real model run and prints its final recommendation. It uses your provider credentials and billing. To have a multi-turn conversation instead, run `wb run creator` without a task; that opens the terminal interface. Bare `wb` displays command help.
+This starts a real model run and prints its final recommendation. It uses your provider credentials and billing. For multi-turn work, start with `--detach`, observe with `wb wait`, and continue with `wb send`. Bare `wb` displays command help.
 
-When you are ready to author the package, use `wb create core`; see [Create a Workbench](#create-a-workbench) below.
+When you are ready to author the package, use `wb create core --task "Create a focused expert for this repository"`; see [Create a Workbench](#create-a-workbench) below.
 
 Runtime credentials are configured separately. For example, save an E2B API key once with:
 
@@ -234,10 +234,10 @@ The other skills are `wb-cli`, `wb-authoring`, and `wb-publishing`; `npx skills 
 Run the official creator from the repository you want the expert to understand:
 
 ```sh
-wb create core
+wb create core --task "Create a focused expert for this repository"
 ```
 
-The creator inspects the repository, writes `.workbenches/core/workbench.yml` and its supporting files, then validates and smoke-tests the package before finishing. Run the same command again to edit an existing local package.
+The creator inspects the repository, writes `.workbenches/core/workbench.yml` and its supporting files, then validates and smoke-tests the package before finishing. Run the same target with a new brief to edit an existing local package.
 
 For deterministic scaffolding without a model run:
 
@@ -296,7 +296,7 @@ The E2B control key remains on the host. Harness credentials are staged only for
 
 ### Daytona
 
-Daytona Workbenches get a fresh Daytona sandbox created from the entry's published `image` for each execution (`runtimes.daytona` requires `class`; `image` is optional in the schema, but the reference engine cannot prepare an entry without a published `image`, and there is no fallback to another runtime's image), using the same staging rules and pending outcomes as E2B. The `linux` class is supported; there is no interactive terminal or sandbox recovery yet. Pi Workbenches cannot run on Daytona yet. The Daytona key stays on the host, and model credentials come from your environment.
+Daytona Workbenches get a fresh Daytona sandbox created from the entry's published `image` for each execution (`runtimes.daytona` requires `class`; `image` is optional in the schema, but the reference engine cannot prepare an entry without a published `image`, and there is no fallback to another runtime's image), using the same staging rules and pending outcomes as E2B. The `linux` class and OpenCode multi-turn sessions are supported; native authentication and sandbox recovery are not. Pi Workbenches cannot run on Daytona yet. The Daytona key stays on the host, and model credentials come from your environment.
 
 ## Command overview
 
@@ -306,10 +306,11 @@ wb list                    # list saved Workbenches
 wb view project-core       # inspect configuration and readiness
 wb validate project-core   # validate a package
 wb smoke project-core      # preflight, no model request
-wb run project-core        # open an interactive session
+wb run project-core --task "Review this project"
 wb ps                      # list active and resumable sessions
 wb status                  # live progress of active and recent runs
-wb resume wb_...           # reopen a session
+wb send wb_... "Check the rollback too"
+wb resume wb_... --task "Run the checks"
 wb outcome wbo_...         # inspect returned results
 wb upgrade                 # update saved Workbench packages
 wb update                  # update the CLI

@@ -20,8 +20,9 @@ A headless run is almost always waiting on a permission prompt. Check `wb ps --j
 | `Use a registry publisher/name, full HTTPS GitHub URL, or an explicit local path.` from `wb add` | A bare name is not a registry reference. Use `publisher/name`, a full HTTPS GitHub URL, or a path. |
 | `Registry Workbench does not exist: org/name. Internal workbenches need a key for their organization` | Have the person run `wb login --org <org>`. |
 | `Saved Workbench X has changed. Rerun with --force to replace it.` | Rerun `wb add` with `-f` after confirming the change is wanted. |
-| `The Workbench TUI requires an interactive terminal` | Pass `--task`, `--task-file`, or `--stdin` for a one-shot run. |
-| `This run mode requires a non-empty task` | `--dry-run`, `--json`, `--final`, and `--detach` all need a task. |
+| `wb run requires a task` | Pass `--task`, `--task-file`, or `--stdin`. |
+| `Session wb_... needs new input` | Use `wb send wb_... <task>` or pass `--task`, `--task-file`, or `--stdin` to `resume`. |
+| `wb create requires an authoring brief` | Pass `--task`, `--task-file`, or `--stdin`, or use `--from`. |
 
 Credential errors are in `connections.md`.
 

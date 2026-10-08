@@ -76,9 +76,9 @@
         "prepare": "husky",
         "release:package": "bun scripts/package-release.ts",
         "release:verify": "bun scripts/verify-release.ts",
-        "run": "bun --preload @opentui/solid/preload src/cli.ts",
-        "test": "bun test --preload @opentui/solid/preload --preload ./test/setup.ts",
-        "test:coverage": "bun test --preload @opentui/solid/preload --preload ./test/setup.ts --coverage",
+        "run": "bun src/cli.ts",
+        "test": "bun test --preload ./test/setup.ts",
+        "test:coverage": "bun test --preload ./test/setup.ts --coverage",
         "test:daytona": "DAYTONA_E2E=1 bun test --preload ./test/setup.ts test/live/daytona.test.ts",
         "test:docker": "WORKBENCH_DOCKER_E2E=1 bun test --preload ./test/setup.ts test/docker.e2e.test.ts",
         "test:docker:sessions": "WORKBENCH_DOCKER_SESSION_E2E=1 bun test --preload ./test/setup.ts test/docker.e2e.test.ts",
@@ -101,19 +101,15 @@
     },
     "dependencies": {
         "@clack/prompts": "^1.5.1",
-        "@opentui/solid": "^0.5.4",
         "citty": "^0.2.2",
         "e2b": "2.51.0",
         "marked": "^18.0.7",
         "picocolors": "^1.1.1",
-        "solid-js": "1.9.12",
         "tar-stream": "^3.2.0"
     },
     "overrides": {
         "@babel/core": "7.29.7",
         "fast-uri": "3.1.8",
-        "js-yaml": "4.3.2",
-        "seroval": "1.6.8",
-        "seroval-plugins": "1.6.8"
+        "js-yaml": "4.3.2"
     }
 }

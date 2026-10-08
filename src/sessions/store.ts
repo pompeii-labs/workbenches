@@ -204,11 +204,6 @@ export class SessionStore {
         return join(this.directory(id), 'native');
     }
 
-    transcriptPath(id: string): string {
-        RunStore.validateId(id);
-        return join(this.directory(id), 'transcript.json');
-    }
-
     private get root(): string {
         return join(this.home, 'sessions');
     }

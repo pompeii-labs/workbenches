@@ -22,7 +22,7 @@ export interface HostSignInDependencies {
  * Runs a runner's documented command-line login on this host against a private
  * temporary data home, then keeps only the target provider's entry. The
  * user's own runner sign-in is never touched. Only OpenCode has a
- * command-line login; Pi signs in from inside its interactive session.
+ * command-line login; Pi must be configured separately.
  */
 export class HostSignIn {
     readonly #which: NonNullable<HostSignInDependencies['which']>;

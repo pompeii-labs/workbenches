@@ -49,7 +49,6 @@ import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
 import { RunWorker } from './runs/index.js';
 import { workbenchHome } from './storage.js';
-import { assertWorkbenchTuiSupported } from './tui.js';
 
 let bareInvocation = import.meta.main && process.argv.length === 2;
 
@@ -143,14 +142,6 @@ if (import.meta.main) {
         const explicitHelp = invocation.args.some(
             (argument) => argument === '--help' || argument === '-h'
         );
-        const headlessCreate = invocation.args.some((argument) =>
-            /^(--task(?:=|$)|-t$|--task-file(?:=|$)|--stdin$|--detach$|-d$|--json$)/.test(
-                argument
-            )
-        );
-        if (!explicitHelp && invocation.args[0] === 'create' && !headlessCreate) {
-            assertWorkbenchTuiSupported();
-        }
         if (usesModelCatalog(invocation.args)) {
             await new ModelCatalog({ home: workbenchHome() }).refresh();
         }

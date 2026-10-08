@@ -94,7 +94,7 @@ The Workbench engine reads this file. The selected runner does not. The engine v
 
 This repository contains `workbench`, also available as `wb`: the TypeScript reference engine and command-line client for the standard.
 
-The spec 0 and spec 1 manifests, the OpenCode and Pi adapters, and local, Docker, E2B, and Daytona runtimes for one-shot and detached execution are implemented, with interactive execution on local, Docker, and E2B. Daytona has no interactive terminal yet. Other runners and remote runtime providers are not yet supported by the reference engine. See [Stability](#stability) for what the 1.0 CLI promises.
+The spec 0 and spec 1 manifests, the OpenCode and Pi adapters, and local, Docker, E2B, and Daytona runtimes for one-shot, detached, and multi-turn execution are implemented. Daytona supports OpenCode but not Pi because it cannot yet close a runner's standard input. Other runners and remote runtime providers are not yet supported by the reference engine. See [Stability](#stability) for what the 1.0 CLI promises.
 
 ### Install
 
@@ -119,15 +119,15 @@ The installer verifies the release's published SHA-256 checksum, installs `workb
 
 ### Author a Workbench
 
-Run the official creator from a repository root for a native, interactive authoring session:
+Run the official creator from a repository root with an authoring brief:
 
 ```sh
-wb create migrations
+wb create migrations --task "Create a focused migration review expert"
 ```
 
-The creator inspects the target repository and authors the complete package in `.workbenches/`. It receives the exact `wb` CLI build that opened the authoring session instead of another globally installed version. If `migrations` already exists in the current repository, the same command opens it for editing instead. The engine resolves and verifies the official creator through the Workbench registry and keeps its cache separate from the user's saved Workbenches.
+The creator inspects the target repository and authors the complete package in `.workbenches/`. It receives the exact `wb` CLI build that started authoring instead of another globally installed version. If `migrations` already exists in the current repository, the same target edits it instead. The engine resolves and verifies the official creator through the Workbench registry and keeps its cache separate from the user's saved Workbenches.
 
-Finish an idle authoring session with `/quit` or `Ctrl+C`. The engine validates the candidate, checks its version and package scope, and runs `wb smoke` before closing the creator. A failed check leaves the creator open with the concrete error so it can repair the package. An active creator turn must be cancelled or allowed to finish before authoring can be completed.
+After the creator execution finishes, the engine validates the candidate, checks its version and package scope, and runs `wb smoke`. A failed check makes the authoring result fail with the concrete error.
 
 Candidates that declare environment values, named workspaces, or host Docker access can be verified with the same `--env-file`, repeatable `--env`, repeatable `--workspace`, and `--allow-host-docker` options accepted by `smoke` and `run`. Their values are used only for the final smoke and are never written to the authoring record or improvement evidence. `--runtime <name>` chooses which declared runtime of the candidate the final smoke checks, and `--allow-unchecked-gpu` accepts a GPU requirement the runtime cannot verify.
 
@@ -152,7 +152,7 @@ wb init core
 wb init migrations --runner opencode --model openai/gpt-5.6-terra
 ```
 
-Agents can use that same command without opening the terminal client. Supply exactly one brief as text, a UTF-8 file, or explicit stdin:
+Supply exactly one brief as text, a UTF-8 file, or explicit stdin:
 
 ```sh
 wb create migrations --task "Create a focused migration review expert" --json
@@ -164,7 +164,7 @@ printf '%s\n' "Check failure cleanup more carefully" | \
 
 Without `--detach`, headless authoring waits for execution and engine-owned verification, then prints one result. With `--detach`, it prints a correlated session/run/operation receipt while a separate supervisor verifies the package after the creator finishes. `wb wait` waits for that verification too. Its `authoring` result reports package selectors and paths, changed files, and the improvement evidence path when applicable. A completed creator turn alone is not authoring success: invalid packages, out-of-scope edits, missing version increments, and failed smoke checks produce a failed result and nonzero exit.
 
-`--from` can infer improvements from stored session evidence without a brief. Other headless authoring calls require one. If the creator needs permission, `wait` reports the pending request with exit 2; answer it explicitly through `wb answer`, then wait again. Bare `wb create` keeps its interactive behavior. The creator remains a normal published Workbench, but running it directly does not provide the `create` command's scope and verification contract.
+`--from` can infer improvements from stored session evidence without a brief. Other authoring calls require one. If the creator needs permission, `wait` reports the pending request with exit 2; answer it explicitly through `wb answer`, then wait again. The creator remains a normal published Workbench, but running it directly does not provide the `create` command's scope and verification contract.
 
 ### Discover and save Workbenches
 
@@ -251,9 +251,9 @@ Workbench authors do not need to declare or install `git` or `gh`. For Docker an
 
 Repository runs pass `GH_TOKEN` into the runner and configure Git to use `gh` for HTTPS authentication. The engine resolves the authenticated GitHub account and configures commits with that account's GitHub no-reply identity, without exposing its private email. The agent can use ordinary `git` and `gh` commands to commit, push, open or update a PR, and inspect CI. There is no Workbench-specific GitHub tool or automatic PR publication when a turn ends. The token retains its actual GitHub permissions; repository mode is not a technical restriction to PR operations. Use a suitably scoped token. Docker and E2B do not mount your GitHub CLI configuration or SSH agent. A local run can still access credentials already available on the host; local execution is not a security sandbox.
 
-`wait --json` includes repository provenance and any saved outcome. The TUI shows repository preparation separately from model work. From the home search, select any saved or published Workbench to choose its run target: the current directory, another local directory with path completion, or a GitHub repository. The repository choice asks for an optional base ref and uses your available GitHub credential. In the non-interactive CLI, the target remains the current directory unless `--dir` or `--repo` is passed.
+`wait --json` includes repository provenance and any saved outcome. The target remains the current directory unless `--dir` or `--repo` is passed; `--ref` selects an optional repository base revision.
 
-Repository sessions keep the target, base branch, and GitHub authentication status visible above the conversation. If the agent records a confirmed PR URL as a `pull_request` outcome link, `/pr`, `/checks`, `/logs` or Ctrl+G can inspect that PR without another model turn or sandbox launch. Refresh with `r`, toggle 30-second watching with `w`, open the PR with `o`, or select a job with arrows and press Enter for its logs (`v` opens the job on GitHub). CI is an observed snapshot, not a live guarantee. Watching stops when the panel closes. The panel also offers `d` to inspect the saved diff. Outcome dialogs offer the same diff view; diff and CI log display are bounded to 128 KiB and indicate truncation.
+If the agent records a confirmed PR URL as a `pull_request` outcome link, it is available through the outcome result without another model turn or sandbox launch. CI remains an observed snapshot, not a live guarantee.
 
 Resume retains the managed checkout and runner Git state. The agent decides when and whether to push, open a PR, update it, or take any other GitHub action allowed by the credential. Workbench never does those actions automatically.
 
@@ -319,7 +319,7 @@ wb run project-core --connection openrouter --task "Review this migration"
 
 An override must match one of the provider routes allowed by the Workbench. Resolution order is the explicit `--connection` override, the runner/runtime default, then the first allowed authenticated route in manifest order. Connection defaults, including the selected authentication method, are stored in `~/.workbench/connections.json`. No login command is injected into a Workbench conversation, and no Workbench package or model is modified by selecting a default.
 
-If the selected OpenCode credential is missing, the first foreground or TUI run starts the real execution runtime, asks OpenCode for the configured browser or headless authorization flow, displays its URL and instructions, waits for completion, and then continues that same run. Detached execution refuses to start an invisible first-time login and directs the user to run interactively once. First-run Pi login and API-key entry during a run are not implemented; connect the key with `wb connect` or pass it with `--env-file`.
+If the selected OpenCode credential is missing, the first foreground task run starts the real execution runtime, asks OpenCode for the configured browser or headless authorization flow, displays its URL and instructions, waits for completion, and then continues that same run. Detached execution refuses to start an invisible first-time login and directs the user to run a foreground task once. First-run Pi login and API-key entry during a run are not implemented; connect the key with `wb connect` or pass it with `--env-file`.
 
 The provider menu is the intersection of providers serving catalog models and the selected harness version's capability map; model availability alone never implies that a harness supports a provider. Versioned harness maps may be delivered with the verified model metadata, with an engine-bundled map for the pinned harness version as the offline and compatibility fallback. Runtime-specific constraints, such as browser versus headless authentication, remain enforced by the engine.
 
@@ -342,7 +342,7 @@ wb run project-core --dir ./app --workspace api=../api \
 
 Required bindings fail before runner launch. Inside a local run, the resolved paths are exposed as `WORKBENCH_WORKSPACE_API` and `WORKBENCH_WORKSPACE_SCHEMAS`. Docker and E2B use the same names with deterministic paths such as `/workspaces/api`. Docker enforces read-only declarations at the mount boundary. E2B stages isolated copies and returns declared read-write changes as pending outcomes for explicit acceptance. Local access declarations are preflight checks, not an operating-system sandbox.
 
-Use `--dry-run` to inspect the translated runner invocation without executing it. An interactive terminal shows a concise summary; `--json` or piped output returns the complete translation:
+Use `--dry-run` to inspect the translated runner invocation without executing it. A terminal shows a concise summary; `--json` or piped output returns the complete translation:
 
 ```sh
 wb run project-core --task "Review this migration" --dry-run
@@ -443,7 +443,7 @@ Published tags are pulled and execution uses the resolved repository digest. Loc
 
 The reference binaries currently support macOS and Linux. On platforms that expose a numeric host user and group, containers run under that identity so workspace writes retain host ownership. Docker Desktop still mediates bind mounts through its virtual machine, so filesystem performance and permission details can differ from native Linux. Images must tolerate a read-only root and write caches beneath the provided temporary `HOME`.
 
-Interactive Docker sessions keep the runner inside the container. Pi uses its native stdin RPC transport. OpenCode's native HTTP service listens inside the container and is published only to a dynamically assigned host loopback port. Native session files live in the Workbench session's private host directory and are mounted read-write so a later container can resume the same native context.
+Multi-turn Docker sessions keep the runner inside the container. Pi uses its native stdin RPC transport. OpenCode's native HTTP service listens inside the container and is published only to a dynamically assigned host loopback port. Native session files live in the Workbench session's private host directory and are mounted read-write so a later container can resume the same native context.
 
 If the Workbench itself must use the host Docker engine, it must declare that high-risk requirement:
 
@@ -490,7 +490,7 @@ The image can be a public OCI reference or a Workbench-local Dockerfile. The ref
 
 Before launch, the engine snapshots only the declared runtime assets. The primary workspace is staged at `/workspace`, named workspaces at `/workspaces/<name>`, and the Workbench package at `/workbench`. Gitignored workspace files, repository metadata, common credential stores, dependency trees, and common secret-bearing files such as `.env` are excluded. Read-only assets are copied into the sandbox and are never synchronized back. A separately staged asset nested beneath a writable directory is excluded from that parent snapshot. Remote edits, additions, modes, and deletions are collected against the original baseline as durable pending changesets, never automatically applied to the host. Read-write single-file assets are rejected.
 
-Input and output transfers each have a 512 MiB safety limit, enforced against uncompressed content. The saved E2B key, or an overriding `E2B_API_KEY`, is used only by the host control plane and is never sent to the sandbox. The sandbox receives manifest-declared environment values for allowed model routes and the private native credential store for its selected runner. Connecting E2B saves the key but performs no E2B work; the separate model-provider connection path does not require the key. If a configured OpenCode credential is missing, the first real foreground or TUI run performs the headless ChatGPT authorization inside the sandbox that was created for that run, then continues the run after authorization succeeds.
+Input and output transfers each have a 512 MiB safety limit, enforced against uncompressed content. The saved E2B key, or an overriding `E2B_API_KEY`, is used only by the host control plane and is never sent to the sandbox. The sandbox receives manifest-declared environment values for allowed model routes and the private native credential store for its selected runner. Connecting E2B saves the key but performs no E2B work; the separate model-provider connection path does not require the key. If a configured OpenCode credential is missing, the first real foreground task run performs the headless ChatGPT authorization inside the sandbox that was created for that run, then continues the run after authorization succeeds.
 
 E2B runner credentials live beneath `~/.workbench/runtime-credentials/e2b/<runner>`, with private directory permissions. They are staged separately from packages and workspaces, then synchronized back before the disposable sandbox is destroyed. Existing local credentials are not modified if staging or startup fails. A host process crash before cleanup can lose a newly completed remote login.
 
@@ -525,7 +525,7 @@ The engine creates a fresh Daytona sandbox from the image for each execution and
 
 Staging, exclusions, pending outcomes, and the default 512 MiB transfer limits match E2B: `/workspace`, `/workspaces/<name>`, and `/workbench` hold isolated copies, and remote changes return as pending outcomes that only `wb outcome <id> --apply` applies. `cpu`, `memory_gb`, and `disk_gb` requirements become the sandbox's resources. The sandbox has a 60 minute lifetime: the engine sets Daytona's wall-clock TTL, which destroys the sandbox that long after creation in any state, even if the CLI process dies. It carries the labels `dev.workbenches.managed`, `dev.workbenches.run`, and `dev.workbenches.scope`.
 
-Daytona currently has no interactive terminal, no pause or recovery, and no cost estimate. Model credentials come from the environment or `--env-file`, because there is no native credential store for interactive login. See the [Daytona provider contract](EXECUTION.md#reference-daytona-provider) for the full list of limits.
+Daytona currently has no native authentication flow, pause or recovery, or cost estimate. Model credentials come from the environment or `--env-file`. See the [Daytona provider contract](EXECUTION.md#reference-daytona-provider) for the full list of limits.
 
 ### Returned results
 
@@ -540,7 +540,7 @@ wb outcome wbo_... --apply
 
 Apply checks the producing run's workspace bindings and original fingerprints before changing any file. Conflicts leave host files untouched. Export creates a self-contained bundle and refuses an existing destination. Neither action requires another model turn, harness login, or runtime key.
 
-A Workbench can write reports, screenshots, images, or other files beneath `WORKBENCH_OUTPUT_DIR` with its harness's existing tools. An optional top-level `outcome.json` adds summary, artifact metadata, and HTTP/HTTPS links. Original artifact bytes are preserved without image resizing or transcoding. The CLI and TUI link to local files rather than rendering images inline; `/outcome` inspects results from chat. A PR link is returned data, not permission for the engine to publish a branch or open a PR automatically.
+A Workbench can write reports, screenshots, images, or other files beneath `WORKBENCH_OUTPUT_DIR` with its harness's existing tools. An optional top-level `outcome.json` adds summary, artifact metadata, and HTTP/HTTPS links. Original artifact bytes are preserved without image resizing or transcoding. The CLI points to local files rather than rendering images inline; `wb outcome` inspects collected results. A PR link is returned data, not permission for the engine to publish a branch or open a PR automatically.
 
 The result store enforces per-file, per-outcome, and aggregate storage limits before copying bytes. Quota failures do not silently remove retained outcomes. See [OUTCOMES.md](OUTCOMES.md) for the versioned contract, outbox JSON, receipt states, recovery limits, and explicit cleanup behavior.
 
@@ -556,17 +556,16 @@ wb attach wb_... --json
 wb ps                  # active and resumable sessions
 wb ps --all            # all session history
 wb kill wb_...
-wb resume wb_...       # open or attach the terminal client
 wb resume wb_... "Review the latest change"
 wb resume wb_... --task "Run the checks" --detach
-wb resume wb_... --allow-host-docker # reauthorize a declared host engine
+wb resume wb_... --task "Continue" --allow-host-docker # reauthorize a declared host engine
 wb clean                            # preview terminal history older than 30 days
 wb clean --older-than 7d --apply
 ```
 
-Every execution belongs to one stable Workbench session. The first run shares its `wb_...` ID with the session; later resumes create internal runs while the session ID stays fixed. Detachment only controls whether the current terminal is watching the active run. A session can also have a user-defined display name. Names make interactive surfaces easier to scan, but the stable ID remains the only automation and resume key.
+Every execution belongs to one stable Workbench session. The first run shares its `wb_...` ID with the session; later resumes create internal runs while the session ID stays fixed. Detachment only controls whether the current process is watching the active run. A session can also have a display name, but the stable ID remains the only automation and resume key.
 
-Attaching observes or replays the latest run without taking control or starting model work. Resuming without a task opens the terminal client. If the latest run is active, the terminal attaches to that exact runner process. If it is closed, Workbench starts a new internal run from the runner's saved native context.
+Attaching observes or replays the latest run without taking control or starting model work. Resuming requires new input and either joins an active run's follow-up queue or starts a new internal run from saved native context. Use `wb send` for ordinary agent-driven continuation.
 
 Resuming with a task sends one non-interactive continuation through the same session. It joins an active run's follow-up queue or starts a linked internal run when the previous one is closed. `--detach` returns the stable session ID while that continuation runs in the background. Killing cooperatively terminates the active run without deleting the session or its resumable context.
 
@@ -613,25 +612,15 @@ Run and session data is never removed by `wb clean` until `--apply` is passed. T
 
 Durable Docker runner containers and E2B sandboxes carry Workbench ownership metadata scoped to the current data directory. Normal exits destroy them. `wb clean` detects scoped resources whose run is terminal. It also detects Docker containers whose run is missing and paused E2B sandboxes whose run is missing. Removal still requires `--apply`. It does not remove images, build caches, E2B templates, runner credential volumes, or unrelated runtime resources.
 
-### Interactive client
+### Agent-driven sessions
 
-Running `wb run <name>` without a task opens the terminal client. `wb` and `workbench` show command help.
+The calling agent drives multi-turn work through `wait`, `send`, `answer`, and `attach`. `wb run <name>` requires an initial task, and `wb resume <id>` requires new input. The OpenCode adapter supports multi-turn context, streaming, image input, cancellation, tool events, explicit permission decisions, native questions, and native mid-turn steering in local, Docker, and E2B runtimes. The Pi adapter supports multi-turn context, streaming, image input, steering at Pi's next legal model boundary, follow-up input, cancellation, and tool events. Pi does not provide native question or permission request protocols, or native MCP transport.
 
-```sh
-wb run project-core
-```
+Questions use one runner-neutral contract for choices, free-form answers, and multi-select prompts when the selected runner exposes a native question protocol. `wait` reports the normalized request and `answer` returns the response through that native protocol. The raw answer control message remains transient and is not written as event data. A runner can still reference the answer in later assistant output. OpenCode can submit a batch of prompts and multi-select choices.
 
-The OpenCode interactive adapter currently supports multi-turn context, streaming, image input, cancellation, tool events, explicit permission decisions, native questions, and native mid-turn steering in local, Docker, and E2B runtimes. The Pi adapter supports multi-turn context, streaming, image input, steering at Pi's next legal model boundary, follow-up input, cancellation, and tool events. Pi does not provide native question or permission request protocols, or native MCP transport.
+`send --steer` changes an active turn, while `send --queue` explicitly schedules a follow-up. The receipt and normalized input lifecycle show when the runner accepts and delivers it. `kill` cancels the active execution. Image generation and normalized image output are not implemented yet.
 
-Questions use one runner-neutral contract for choices, free-form answers, and multi-select prompts when the selected runner exposes a native question protocol. The terminal client pauses on a normalized question and returns the response through that native protocol. Question prompts are part of the normalized event stream. The raw answer control message remains transient and is not written as event data. A runner can still reference the answer in later assistant output. OpenCode can submit a batch of prompts and multi-select choices.
-
-While a response is active, submitting another message steers the current turn. The message stays visibly queued until the runner confirms delivery. `Ctrl+C` cancels an active turn without closing the session. For image-capable runners, drag a PNG, JPEG, GIF, or WebP file into the composer, or paste its local path. Attachment bytes remain transient and are not copied into normalized events. Image generation and normalized image output are not implemented yet.
-
-Type `/` or press `Ctrl+K` to browse local terminal commands. The initial command set covers Workbench, runtime, model, capability, session, and staged attachment details; attachment and transcript clearing; turn cancellation; themes; and clean exit. Commands are handled by Workbench and are never sent to the runner as prompts. `/theme` includes the Workbench default, Flexoki, GitHub, Catppuccin, and Night Owl themes. The adapted themes are attributed in `NOTICE`.
-
-Use `/rename <name>` to give the current session a durable display name. The name appears in `/resume`, the active chat header, and `wb ps` without changing the Workbench package, native runner session, or stable `wb_...` ID. When the terminal client exits a native resumable session, it restores the terminal and prints the stable ID with a copyable `wb resume <id>` command. It does not print a resume handoff for a failed start or a runner without native resume support.
-
-Use `/improve [feedback]` from an idle local Workbench session to open the official creator with bounded, normalized evidence from that session. Feedback is optional. With plain `/improve`, the creator diagnoses improvements from the conversation, tool activity, and run outcome, and you can steer it normally in the creator session. The creator edits the source package, not the immutable package already loaded by the active run. Run evidence is treated as untrusted data, and the authoring record captures the creator version and digest, source session, package digests, and changed files. The same flow is available outside the terminal client:
+Use `wb create --from` to improve a Workbench from bounded, normalized session evidence. Feedback is optional. The creator edits the source package, not the immutable package already loaded by the source session. Run evidence is treated as untrusted data, and the authoring record captures the creator version and digest, source session, package digests, and changed files:
 
 ```sh
 wb create --from wb_... \
@@ -640,9 +629,9 @@ wb create --from wb_... \
 
 Changes apply only to future runs. Every session resumes from the package bytes it captured at start, regardless of later source edits.
 
-Session-capable runs use one background session worker whether they begin in the terminal client, foreground CLI output, or detached mode. Normalized events survive a client disconnect. Another terminal client can take control of the same live runner, while `wb attach` can observe it without taking control. Exiting the terminal client detaches it; an active turn and queued follow-ups continue, then the unattended worker closes while its native context remains resumable. User prompts, permission decisions, and question answers are transient control messages, not durable run history.
+Session-capable runs use one background session worker in foreground and detached modes. Normalized events survive a caller disconnect, and `wb attach` observes the same live or retained event stream without taking control. An active turn and queued follow-ups continue after a foreground observer exits, then the unattended worker closes while its native context remains resumable. User prompts, permission decisions, and question answers are transient control messages, not durable run history.
 
-Supported sessions can be reopened with `wb resume <session-or-run-id>` or from the TUI's `/resume` browser. The browser is scoped to the active workspace. On a bare invocation that is the current working directory; a directory selected in the TUI, an explicit `--dir`, or a resumed session uses its recorded workspace. An active session is reattached instead of duplicated. A closed session creates a new durable run linked to the same stable session. Workbench keeps a small private session index and a disposable transcript presentation cache. The selected runner remains the source of truth for model context: OpenCode resumes from its session database and Pi resumes from its session file. Docker mounts native state into each new container. E2B copies native state into each new sandbox and synchronizes it back on orderly cleanup. A session remains locked to its original Workbench version, runner, model, runtime, workspace, and workspace bindings. Docker credentials remain in the runner's private named volume. E2B runner credentials persist in private runtime storage independently of native session state. A Workbench that declares host Docker access must be explicitly reauthorized with `--allow-host-docker` for each resumed run.
+Supported sessions continue through `wb send` or task-bearing `wb resume <session-or-run-id>`. An active session is reused instead of duplicated. A closed session creates a new durable run linked to the same stable session. The selected runner remains the source of truth for model context: OpenCode resumes from its session database and Pi resumes from its session file. Docker mounts native state into each new container. E2B copies native state into each new sandbox and synchronizes it back on orderly cleanup. A session remains locked to its original Workbench version, runner, model, runtime, workspace, and workspace bindings. Docker credentials remain in the runner's private named volume. E2B runner credentials persist in private runtime storage independently of native session state. A Workbench that declares host Docker access must be explicitly reauthorized with `--allow-host-docker` for each resumed run.
 
 ### Registry organizations
 

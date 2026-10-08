@@ -135,9 +135,9 @@ The engine prepares the bundle before exclusively claiming its destination; anot
 
 ## Collection, cleanup, and recovery
 
-Interactive sessions also snapshot finished outbox files and links after each completed, non-cancelled turn. These immutable results are available while the session is still open, without ending the sandbox or collecting workspace diffs. Unchanged results do not produce repeated notifications. Revising an attachment produces a new snapshot; earlier links still open the earlier bytes. Producers must finish writing before ending a turn, using atomic rename for background writers. Collection is not a filesystem transaction across concurrent writers.
+Multi-turn sessions also snapshot finished outbox files and links after each completed, non-cancelled turn. These immutable results are available while the session is still open, without ending the sandbox or collecting workspace diffs. Unchanged results do not produce repeated notifications. Revising an attachment produces a new snapshot; earlier links still open the earlier bytes. Producers must finish writing before ending a turn, using atomic rename for background writers. Collection is not a filesystem transaction across concurrent writers.
 
-Turn snapshots have a positive `turn_index`, `partial` completeness (execution is ongoing), no changesets, and a `present` receipt. Their files are already retained locally, including results from Docker and E2B. They do not apply or overwrite any host workspace. The TUI shows command-clickable file and web links on each snapshot card. `/outcome` opens the latest result without model work.
+Turn snapshots have a positive `turn_index`, `partial` completeness (execution is ongoing), no changesets, and a `present` receipt. Their files are already retained locally, including results from Docker and E2B. They do not apply or overwrite any host workspace. `wb outcome` inspects the latest retained result without model work.
 
 The final outcome collects workspace changes and the current outbox after execution stops. The engine commits validated metadata and content before publishing `outcome.available` and destroying disposable runtime resources. The event contains the outcome ID, optional `turn_index`, completeness, initial receipt state, and counts of changesets, artifacts, links, and warnings, plus an optional summary. Artifact bytes and arbitrary tool results do not enter the event log.
 
@@ -169,7 +169,7 @@ Workspace baselines and E2B and Daytona uncompressed input/output transfers have
 
 History cleanup removes outcomes belonging to selected terminal runs and then reclaims shared blobs only when no retained outcome references them. Active captures and pending recovery checkpoints are protected. Cleanup does not claim reclaimed bytes for shared content still needed by another outcome.
 
-The human CLI and TUI show outcome identity, receipt state, completeness, changeset counts, warnings, and follow-up inspect/apply/export commands. Artifact names link to local original-byte files; PR and preview links retain their declared type and label. The TUI's `/outcome` dialog inspects collected results. It does not render images inline or automatically apply or publish work.
+The human CLI shows outcome identity, receipt state, completeness, changeset counts, warnings, and follow-up inspect/apply/export commands. Artifact names point to local original-byte files; PR and preview links retain their declared type and label. It does not render images inline or automatically apply or publish work.
 
 An outcome is a portable data contract, not permission to execute the returned content. Treat a package, its runtime image, and its generated outputs according to the trust and authorization boundaries of the task.
 
