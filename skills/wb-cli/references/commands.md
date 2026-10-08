@@ -80,9 +80,9 @@ The CLI reports anonymous save and run counts only for registry Workbenches publ
 | `catalog.json`, `packages/` | Saved aliases and package snapshots. |
 | `sessions/`, `runs/`, `outcomes/` | Sessions, runs, and durable results. |
 | `connections.json` | `wb connect` defaults. No secrets. |
-| `credentials.json` | Registry organization keys (mode 0600). |
-| `runtime.secrets.json` | E2B and Daytona keys (mode 0600). |
 | `metadata/models/` | The cached model catalog, refreshed every 6 hours. |
+
+Registry organization keys and runtime keys live in owner-only files in the same directory. Never open them: check them with `wb whoami` and `wb connect --runtime <name> --status`.
 
 ## Environment the CLI reads
 
