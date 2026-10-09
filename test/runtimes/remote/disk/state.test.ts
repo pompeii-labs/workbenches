@@ -124,7 +124,7 @@ describe('E2B managed native state', () => {
             (await legacy.source()).version,
             1_024
         );
-        const store = new StateStore(archives, root, nativeCredentialPaths);
+        const store = new StateStore(archives, root, nativeCredentialPaths());
         const baseline = await store.source();
         await writeFile(
             join(baseline.directory, 'opencode', 'opencode.db'),
@@ -162,7 +162,7 @@ describe('E2B managed native state', () => {
 
     test('persists auth alone while still rejecting conflicting credential refreshes', async () => {
         const root = await directory();
-        const store = new StateStore(archives, root, nativeCredentialPaths);
+        const store = new StateStore(archives, root, nativeCredentialPaths());
         const baseline = await store.source();
         await store.install(
             await archive('first auth', 'cache'),
@@ -203,7 +203,7 @@ describe('E2B managed native state', () => {
         await writeFile(join(outside, 'auth.json'), 'outside');
         await symlink(outside, join(root, 'opencode'));
         await expect(
-            new StateStore(archives, root, nativeCredentialPaths).source()
+            new StateStore(archives, root, nativeCredentialPaths()).source()
         ).rejects.toThrow('non-regular file');
     });
 

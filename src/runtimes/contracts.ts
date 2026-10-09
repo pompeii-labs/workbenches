@@ -48,16 +48,43 @@ export interface RuntimeCredentialFiles {
     write(path: string, contents: string): Promise<void>;
 }
 
-export interface RuntimePrepareRequest {
+/** The only facts a runtime knows about the runner it launches. */
+export interface RuntimeRunnerContract {
+    /** The runner holds its session open over piped standard input. */
+    standardInput: boolean;
+    /** The environment that points the runner at a mounted credential root. */
+    credentialEnvironment?(root: string): Record<string, string>;
+}
+
+/**
+ * What a runtime prepares. An image build never launches the runner, so it
+ * carries neither the runner contract nor credential storage.
+ */
+export type RuntimePrepareRequest = RuntimeBuildRequest | RuntimeExecutionRequest;
+
+/** Preparation that only builds the runtime image. */
+export interface RuntimeBuildRequest extends RuntimePrepareFields {
+    purpose: 'build';
+    runner?: never;
+    credentials?: never;
+}
+
+/** Preparation for launching the Workbench's runner. Without a purpose, it is a run. */
+export interface RuntimeExecutionRequest extends RuntimePrepareFields {
+    purpose?: 'connect' | 'run';
+    /** What the runtime needs to know about the Workbench's runner. */
+    runner: RuntimeRunnerContract;
+    credentials?: RuntimeCredentialBinding;
+}
+
+interface RuntimePrepareFields {
     workbench: ResolvedWorkbench;
     workspaceDirectory: string;
     environment: Record<string, string | undefined>;
     assets: RuntimeAsset[];
-    credentials?: RuntimeCredentialBinding;
     authorizations?: { hostDocker: boolean };
     /** The caller accepted a GPU requirement the runtime cannot verify. */
     allowUncheckedGpu?: boolean;
-    purpose?: 'build' | 'connect' | 'run';
     run?: { id: string; scope: string };
     outcome?: { directory: string; home?: string };
     repository?: { name: string; revision: string; delivery: 'none' | 'pr' };

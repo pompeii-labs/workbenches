@@ -1,4 +1,4 @@
-import type { RuntimeCredentialFiles } from '../contracts.js';
+import type { RuntimeCredentialFiles, RuntimeRunnerContract } from '../contracts.js';
 import { credentialPathSegments } from '../credentialpath.js';
 import type { DockerClient } from './client.js';
 import { DockerManagedContainers } from './containers.js';
@@ -20,6 +20,8 @@ export class DockerCredentialVolume implements RuntimeCredentialFiles {
         private readonly client: DockerClient,
         private readonly image: string,
         readonly runner: string,
+        /** How the runner finds its credentials once the volume is mounted. */
+        private readonly contract: RuntimeRunnerContract,
         private readonly user: DockerUser | undefined
     ) {
         this.name = DockerCredentialVolume.nameFor(runner);
@@ -98,14 +100,9 @@ export class DockerCredentialVolume implements RuntimeCredentialFiles {
         return ['--volume', `${this.name}:${credentialRoot}`];
     }
 
+    /** Points the runner at this volume, as its contract declares. */
     environment(): Record<string, string | undefined> {
-        if (this.runner === 'opencode') {
-            return { XDG_DATA_HOME: credentialRoot };
-        }
-        if (this.runner === 'pi') {
-            return { WORKBENCH_CREDENTIALS_DIR: credentialRoot };
-        }
-        return {};
+        return this.contract.credentialEnvironment?.(credentialRoot) ?? {};
     }
 
     private helper(input: boolean, script: string, path: string): string[] {

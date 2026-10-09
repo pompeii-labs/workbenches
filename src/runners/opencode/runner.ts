@@ -14,6 +14,7 @@ import {
     type RunnerEventNormalizer,
 } from '../runner.js';
 import { OpenCodeSessionAdapter, type OpenCodeSessionDependencies } from './adapter.js';
+import { openCodeConnection } from './connection.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeInvocation, publicInvocation } from './invocation.js';
 import type { OpenCodeSkillStaging, StagedOpenCodeSkills } from './skills.js';
@@ -27,15 +28,26 @@ export interface OpenCodeRunnerDependencies {
     skills: OpenCodeSkillStaging;
     /** The session driver's own dependencies: `fetch`, the server password, timeouts. */
     session?: Omit<OpenCodeSessionDependencies, 'skills'>;
-    /** The model catalog snapshot routes are resolved against. */
-    catalog: ModelCatalogSnapshot;
+    /** Reads the model catalog snapshot routes are resolved against, when preparing. */
+    catalog: () => ModelCatalogSnapshot;
 }
 
 export class OpenCodeRunner extends Runner {
     readonly name = 'opencode';
+    readonly displayName = 'OpenCode';
     readonly session: OpenCodeSessionAdapter;
+    readonly runnerConfig = 'either';
+    readonly standardInput = false;
+    /** OpenCode keeps its credential file under its data home. */
+    readonly credentials = {
+        file: 'opencode/auth.json',
+        apiKeyEntryType: 'api',
+        storeFirst: false,
+        environment: (root: string) => ({ XDG_DATA_HOME: root }),
+    };
+    readonly connection = openCodeConnection;
     private readonly skills: OpenCodeSkillStaging;
-    private readonly catalog: ModelCatalogSnapshot;
+    private readonly catalog: () => ModelCatalogSnapshot;
 
     constructor(dependencies: OpenCodeRunnerDependencies) {
         super();
@@ -52,7 +64,7 @@ export class OpenCodeRunner extends Runner {
             workbench,
             this.session,
             this.skills,
-            this.catalog
+            this.catalog()
         );
     }
 }

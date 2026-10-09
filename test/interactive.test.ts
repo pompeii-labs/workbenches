@@ -653,7 +653,12 @@ function dependencies(adapter: RunnerSessionAdapter) {
 
 class InteractiveTestRunner extends Runner {
     readonly name = 'opencode';
+    readonly displayName = 'OpenCode';
     readonly session: RunnerSessionAdapter;
+    readonly runnerConfig = 'either';
+    readonly standardInput = false;
+    readonly credentials = RunnerRegistry.standard().resolve('opencode').credentials;
+    readonly connection = RunnerRegistry.standard().resolve('opencode').connection;
 
     constructor(session: RunnerSessionAdapter) {
         super();

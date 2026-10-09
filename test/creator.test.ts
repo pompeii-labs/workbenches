@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { RunnerRegistry } from '../src/runners/index.js';
 import { Workbench } from '../src/workbench/index.js';
 
 const root = process.cwd();
@@ -10,7 +11,7 @@ const references = join(creator, 'skills', 'wb-authoring', 'references');
 
 describe('published Workbench creator', () => {
     test('resolves as a valid package', async () => {
-        const workbench = await Workbench.load(creator);
+        const workbench = await Workbench.load(creator, RunnerRegistry.standard());
 
         expect(workbench.manifest).toMatchObject({
             name: 'workbench-creator',

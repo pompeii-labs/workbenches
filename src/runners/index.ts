@@ -22,7 +22,13 @@ export { RunnerRegistry } from './registry.js';
 export {
     type PreparedRunner,
     Runner,
+    type RunnerConnection,
+    type RunnerCredentialProbe,
+    type RunnerCredentials,
     type RunnerEventNormalizer,
+    type RunnerHostSignIn,
+    type RunnerProviderAccess,
+    type RunnerSignIn,
     type RunnerSummary,
 } from './runner.js';
 export {

@@ -6,6 +6,7 @@ import type { ValidateFunction } from 'ajv';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { fullFormats } from 'ajv-formats/dist/formats.js';
 
+import { RunnerRegistry } from '../src/runners/index.js';
 import type { ResolvedWorkbench, WorkbenchManifest } from '../src/types.js';
 import {
     declaredRuntimeNames,
@@ -540,7 +541,7 @@ describe('runtimes on disk', () => {
                 '',
             ].join('\n')
         );
-        return Workbench.load(packageDirectory);
+        return Workbench.load(packageDirectory, RunnerRegistry.standard());
     }
 
     test('loads a runtimes manifest with requirements from YAML', async () => {

@@ -7,11 +7,13 @@ import { SavedWorkbenchCatalog, WorkbenchPackage } from '../src/catalog/index.js
 import { CliPresenter } from '../src/commands/presenter.js';
 import { presentPushed } from '../src/commands/push.js';
 import { RegistryAccountStore, RegistryClient } from '../src/registry/index.js';
+import { RunnerRegistry } from '../src/runners/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
 import { SessionResolver, SessionStore } from '../src/sessions/index.js';
 import { Workbench, WorkbenchResolver } from '../src/workbench/index.js';
 import { seedModelCatalogFixture } from './model-catalog-fixture.js';
 
+const runners = RunnerRegistry.standard();
 const roots: string[] = [];
 afterEach(async () => {
     await Promise.all(
@@ -25,7 +27,7 @@ describe('saved-source contract', () => {
         const catalog = new SavedWorkbenchCatalog(home);
         await catalog.addLocal({
             alias: 'custom-expert',
-            workbench: await Workbench.load(path),
+            workbench: await Workbench.load(path, runners),
         });
         const creator = {
             version: '0.1.4',
@@ -56,7 +58,7 @@ describe('saved-source contract', () => {
         const other = await fixture();
         await catalog.addLocal({
             alias: 'expert',
-            workbench: await Workbench.load(other.path),
+            workbench: await Workbench.load(other.path, runners),
         });
         await catalog.remove('custom-expert');
         const collision = await AuthoringOperation.prepare(
@@ -87,7 +89,7 @@ describe('saved-source contract', () => {
         const entry = await catalog.add({
             alias: 'expert',
             source: root,
-            workbench: await Workbench.load(path),
+            workbench: await Workbench.load(path, runners),
         });
         const id = RunStore.createId();
         await new SessionStore(home).create({
@@ -114,7 +116,7 @@ describe('saved-source contract', () => {
         await rm(entry.packagePath, { recursive: true });
         await catalog.addLocal({
             alias: 'expert',
-            workbench: await Workbench.load(path),
+            workbench: await Workbench.load(path, runners),
         });
         await expect(new SessionResolver(home).resolve(id)).rejects.toThrow();
     });
@@ -205,7 +207,7 @@ describe('saved-source contract', () => {
     test('each session owns package bytes through edits, removal, and deleted local sources', async () => {
         const { root, home, path } = await fixture();
         const catalog = new SavedWorkbenchCatalog(home);
-        await catalog.addLocal({ workbench: await Workbench.load(path) });
+        await catalog.addLocal({ workbench: await Workbench.load(path, runners) });
         await writeFile(join(root, 'workspace-only.txt'), 'Never package me');
         const resolver = new WorkbenchResolver();
         const dispatcher = new RunDispatcher(home);
@@ -265,7 +267,7 @@ describe('saved-source contract', () => {
 
     test('remote additions are idempotent, require explicit upgrade, and preserve session bytes', async () => {
         const { root, home, path } = await fixture();
-        const workbench = await Workbench.load(path);
+        const workbench = await Workbench.load(path, runners);
         const remote = {
             source: 'https://github.com/example/project',
             revision: 'a'.repeat(40),
@@ -547,7 +549,7 @@ describe('push, publish, and unpublish', () => {
         const { root, home, path } = await fixture('repo-engineer');
         await new SavedWorkbenchCatalog(home).addLocal({
             alias: 'local-expert',
-            workbench: await Workbench.load(path),
+            workbench: await Workbench.load(path, runners),
         });
         const result = await cli(
             home,
@@ -772,7 +774,9 @@ describe('push, publish, and unpublish', () => {
 
 /** A registry that stores versions, resolves them, and accepts submissions. */
 async function lifecycleRegistry(packagePath: string) {
-    const files = await new WorkbenchPackage(await Workbench.load(packagePath)).files();
+    const files = await new WorkbenchPackage(
+        await Workbench.load(packagePath, runners)
+    ).files();
     const digest = WorkbenchPackage.digest(files).slice('sha256:'.length);
     const state = {
         digest,
@@ -869,7 +873,9 @@ async function lifecycleRegistry(packagePath: string) {
 
 /** A registry whose only workbench is private to the organization `example`. */
 async function privateRegistry(packagePath: string) {
-    const files = await new WorkbenchPackage(await Workbench.load(packagePath)).files();
+    const files = await new WorkbenchPackage(
+        await Workbench.load(packagePath, runners)
+    ).files();
     const digest = WorkbenchPackage.digest(files).slice('sha256:'.length);
     const seen: Array<{ path: string; authorization: string }> = [];
     const server = Bun.serve({

@@ -7,13 +7,12 @@ import {
     ModelRouter,
     type ResolvedRunnerConfiguration,
 } from '../models/index.js';
-import { piRouteCandidates } from '../runners/pi/providers.js';
-import type { PreparedRunner } from '../runners/runner.js';
+import { RunnerRegistry } from '../runners/registry.js';
+import type { PreparedRunner, Runner, RunnerConnection } from '../runners/runner.js';
 import type { PreparedRuntime } from '../runtimes/contracts.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { AuthenticationRequiredError } from './error.js';
 import { ConnectionStore, type RunnerConnectionSelection } from './store.js';
-import { connectionProviderCapabilities } from './targets.js';
 
 export interface RunnerAuthenticationStatus {
     model: string;
@@ -37,6 +36,8 @@ export interface ConnectionInspectorOptions {
     runner: PreparedRunner;
     reference?: string;
     store?: ConnectionStore;
+    /** The runners the Workbench's runner is resolved from. */
+    runners?: Pick<RunnerRegistry, 'resolve'>;
 }
 
 export interface InspectConnectionOptions {
@@ -52,6 +53,7 @@ export class ConnectionInspector {
     readonly #reference: string;
     readonly #store: ConnectionStore | undefined;
     readonly #router = new ModelRouter(ActiveModelCatalog.current());
+    readonly #runners: Pick<RunnerRegistry, 'resolve'>;
 
     constructor(options: ConnectionInspectorOptions) {
         this.#workbench = options.workbench;
@@ -59,27 +61,19 @@ export class ConnectionInspector {
         this.#runner = options.runner;
         this.#reference = options.reference ?? options.workbench.manifest.name;
         this.#store = options.store;
+        this.#runners = options.runners ?? RunnerRegistry.standard();
     }
 
     candidates(): AuthenticatedModelRoute[] {
         const routes = this.#router.routes(this.#workbench);
-        if (this.#workbench.manifest.runner === 'opencode') {
-            return routes.map((route) => ({
-                provider: route.provider,
-                nativeProvider: route.provider,
-                nativeModel: route.model,
-            }));
-        }
-        if (this.#workbench.manifest.runner === 'pi') {
-            const capabilities = connectionProviderCapabilities(
-                'pi',
-                this.#router.catalog
-            );
-            return uniqueAuthenticatedRoutes(
-                routes.flatMap((route) => piRouteCandidates(route, capabilities))
-            );
-        }
-        return unsupportedRunner(this.#workbench.manifest.runner);
+        return uniqueAuthenticatedRoutes(
+            nativeCandidates(this.#harness().connection, routes, this.#router)
+        );
+    }
+
+    /** The registered runner the Workbench names. */
+    #harness(): Runner {
+        return this.#runners.resolve(this.#workbench.manifest.runner);
     }
 
     async inspect(
@@ -100,22 +94,13 @@ export class ConnectionInspector {
                 ? { discoverConnections: options.discoverConnections }
                 : {}),
         };
-        const authenticatedRoutes =
-            this.#workbench.manifest.runner === 'opencode'
-                ? await inspectOpenCode(
-                      nativeOptions,
-                      routes,
-                      this.#router,
-                      discoveryPreference
-                  )
-                : this.#workbench.manifest.runner === 'pi'
-                  ? await inspectPi(
-                        nativeOptions,
-                        routes,
-                        this.#router,
-                        discoveryPreference
-                    )
-                  : unsupportedRunner(this.#workbench.manifest.runner);
+        const authenticatedRoutes = await inspectNative(
+            nativeOptions,
+            this.#harness(),
+            routes,
+            this.#router,
+            discoveryPreference
+        );
         const requested = options.connection
             ? requestedConnection(authenticatedRoutes, options.connection)
             : undefined;
@@ -234,92 +219,38 @@ function requestedConnection(
         : undefined;
 }
 
-async function inspectOpenCode(
+/**
+ * Routes ready from provider variables, or from a packaged runner config that
+ * defines its own providers, plus the routes the runner's credential listing
+ * authenticates. The listing runs only when direct routes do not settle it.
+ */
+async function inspectNative(
     options: {
         workbench: ResolvedWorkbench;
         runtime: PreparedRuntime;
         runner: PreparedRunner;
         discoverConnections?: boolean;
     },
+    harness: Runner,
     routes: ModelRoute[],
     router: ModelRouter,
     preferredConnection?: RunnerConnectionSelection
 ): Promise<AuthenticatedModelRoute[]> {
+    const { connection } = harness;
     const environmentProviders = providersFromEnvironment(
         routes,
         options.runtime.environment,
         router
     );
-    const configProviders = options.workbench.runnerConfigPath
-        ? routes
-              .filter((route) => !router.catalog.providers[route.provider])
-              .map((route) => route.provider)
-        : [];
-    const directlyReady = new Set([...environmentProviders, ...configProviders]);
-    const directRoutes = authenticatedRoutesForProviders(routes, directlyReady, 'api');
-    if (
-        !shouldInspectNativeConnections(
-            options.discoverConnections ?? false,
-            directRoutes,
-            preferredConnection
-        )
-    ) {
-        return directRoutes;
-    }
-    const base = options.runner.native(options.runtime, ['opencode', 'auth', 'list']);
-    const result = await options.runtime
-        .execute(base, {
-            network: 'none',
-            readOnly: true,
-        })
-        .catch((error) => {
-            if (directlyReady.size > 0) return undefined;
-            throw error;
-        });
-    if (!result) {
-        return authenticatedRoutesForProviders(routes, directlyReady, 'api');
-    }
-    if (result.code !== 0) {
-        if (directlyReady.size > 0) {
-            return authenticatedRoutesForProviders(routes, directlyReady, 'api');
-        }
-        throw new Error(
-            diagnostic(result, 'OpenCode credentials could not be inspected')
-        );
-    }
-    const credentials = openCodeCredentials(result);
-    return uniqueAuthenticatedRoutes([
-        ...authenticatedRoutesForProviders(routes, directlyReady, 'api'),
-        ...routes.flatMap((route) => {
-            const method = credentials.get(normalizeProvider(route.provider));
-            return method
-                ? [
-                      {
-                          provider: route.provider,
-                          nativeProvider: route.provider,
-                          nativeModel: route.model,
-                          authenticationMethod: method,
-                      },
-                  ]
-                : [];
-        }),
-    ]);
-}
-
-async function inspectPi(
-    options: {
-        workbench: ResolvedWorkbench;
-        runtime: PreparedRuntime;
-        runner: PreparedRunner;
-        discoverConnections?: boolean;
-    },
-    routes: ModelRoute[],
-    router: ModelRouter,
-    preferredConnection?: RunnerConnectionSelection
-): Promise<AuthenticatedModelRoute[]> {
+    const packagedProviders =
+        connection.packagedProviders && options.workbench.runnerConfigPath
+            ? routes
+                  .filter((route) => !router.catalog.providers[route.provider])
+                  .map((route) => route.provider)
+            : [];
     const directRoutes = authenticatedRoutesForProviders(
         routes,
-        new Set(providersFromEnvironment(routes, options.runtime.environment, router)),
+        new Set([...environmentProviders, ...packagedProviders]),
         'api'
     );
     if (
@@ -331,26 +262,43 @@ async function inspectPi(
     ) {
         return directRoutes;
     }
-    const base = options.runner.native(options.runtime, [
-        'pi',
-        '--offline',
-        '--list-models',
-    ]);
-    const result = await options.runtime.execute(base, {
-        network: 'none',
-        readOnly: true,
-    });
+    // Unless the listing fails closed, ready direct routes stand when it fails.
+    const directRoutesStand = !connection.probe.failsClosed && directRoutes.length > 0;
+    const base = options.runner.native(options.runtime, connection.probe.command);
+    const result = await options.runtime
+        .execute(base, {
+            network: 'none',
+            readOnly: true,
+        })
+        .catch((error) => {
+            if (directRoutesStand) return undefined;
+            throw error;
+        });
+    if (!result) return directRoutes;
     if (result.code !== 0) {
-        throw new Error(diagnostic(result, 'Pi credentials could not be inspected'));
+        if (directRoutesStand) return directRoutes;
+        throw new Error(
+            diagnostic(
+                result,
+                `${harness.displayName} credentials could not be inspected`
+            )
+        );
     }
-    const available = parsePiModels(`${result.stdout}\n${result.stderr}`);
-    const capabilities = connectionProviderCapabilities('pi', router.catalog);
-    const nativeRoutes = routes.flatMap((route) =>
-        piRouteCandidates(route, capabilities).filter((candidate) =>
-            available.has(`${candidate.nativeProvider}/${candidate.nativeModel}`)
-        )
-    );
-    return uniqueAuthenticatedRoutes([...directRoutes, ...nativeRoutes]);
+    return uniqueAuthenticatedRoutes([
+        ...directRoutes,
+        ...connection.probe.authenticated(
+            stripTerminalControl(`${result.stdout}\n${result.stderr}`),
+            nativeCandidates(connection, routes, router)
+        ),
+    ]);
+}
+
+function nativeCandidates(
+    connection: RunnerConnection,
+    routes: ModelRoute[],
+    router: ModelRouter
+): AuthenticatedModelRoute[] {
+    return routes.flatMap((route) => connection.candidates(route, router.catalog));
 }
 
 function shouldInspectNativeConnections(
@@ -416,39 +364,6 @@ function providersFromEnvironment(
     });
 }
 
-function openCodeCredentials(result: {
-    stdout: string;
-    stderr: string;
-}): Map<string, string> {
-    const credentials = new Map<string, string>();
-    for (const line of `${result.stdout}\n${result.stderr}`
-        .split(/\r?\n/)
-        .map((line) => stripTerminalControl(line).trim())
-        .filter((line) => line.startsWith('●'))) {
-        const parts = line.slice(1).trim().split(/\s+/);
-        const method = parts.pop()?.toLowerCase();
-        const provider = normalizeProvider(parts.join(' '));
-        if (provider && method) credentials.set(provider, method);
-    }
-    return credentials;
-}
-
-function parsePiModels(value: string): Set<string> {
-    const models = new Set<string>();
-    for (const line of stripTerminalControl(value).split(/\r?\n/)) {
-        const [provider, model] = line.trim().split(/\s+/);
-        if (!provider || !model || provider === 'provider') continue;
-        if (!/^[a-z0-9][a-z0-9._-]*$/i.test(provider)) continue;
-        if (!/^[a-z0-9][a-z0-9._:/-]*$/i.test(model)) continue;
-        models.add(`${provider}/${model}`);
-    }
-    return models;
-}
-
-function normalizeProvider(value: string): string {
-    return value.toLowerCase().replaceAll(/[^a-z0-9]/g, '');
-}
-
 function stripTerminalControl(value: string): string {
     // biome-ignore lint/complexity/useRegexLiterals: the literal form trips the control-character safeguard.
     return value.replaceAll(new RegExp(String.raw`\u001b\[[0-?]*[ -/]*[@-~]`, 'g'), '');
@@ -467,8 +382,4 @@ function diagnostic(
 
 function canonicalModel(workbench: ResolvedWorkbench): string {
     return workbench.manifest.model.id;
-}
-
-function unsupportedRunner(runner: string): never {
-    throw new Error(`Unsupported runner: ${runner}`);
 }

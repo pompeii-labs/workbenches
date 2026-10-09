@@ -1,3 +1,8 @@
+export {
+    type ConnectionAuthenticationMethod,
+    type ConnectionRuntime,
+    connectionRuntimes,
+} from './contracts.js';
 export { nativeCredentialPaths, RunnerCredentialStore } from './credentials.js';
 export {
     ConnectionInspector,
@@ -12,15 +17,11 @@ export {
     type StoredRunnerConnection,
 } from './store.js';
 export {
-    type ConnectionAuthenticationMethod,
-    type ConnectionHarness,
-    type ConnectionRuntime,
     type ConnectionTarget,
     connectionAuthenticationMethods,
     connectionHarnesses,
     connectionModel,
     connectionProviders,
-    connectionRuntimes,
     harnessLabel,
     providerLabel,
     runtimeLabel,

@@ -1054,6 +1054,11 @@ class ControlledAdapter implements RunnerSessionAdapter {
 
 class InteractiveWorkerTestRunner extends Runner {
     readonly name = 'opencode';
+    readonly displayName = 'OpenCode';
+    readonly runnerConfig = 'either';
+    readonly standardInput = false;
+    readonly credentials = RunnerRegistry.standard().resolve('opencode').credentials;
+    readonly connection = RunnerRegistry.standard().resolve('opencode').connection;
 
     constructor(readonly session: RunnerSessionAdapter) {
         super();

@@ -34,6 +34,8 @@ Adapters translate native runner behavior; they do not create runner features. A
 
 An adapter cannot be registered without a verified native version, a named native interface, and an outcome for every capability. A declaration is evidence about the listed native versions and interfaces only. It is not a claim that untested future runner releases conform.
 
+A registered runner also declares what the rest of the engine needs to know about it, and the engine reaches it only through `RunnerRegistry`, never by name. The `Runner` contract carries its display name, the shape its `runner_config` must have (a file, a directory, or either), whether it reads piped standard input, and its native credential file: the file's path inside a credential store, the entry type an API key is stored as, whether a stored entry is read before provider variables, and the environment that points the runner at a mounted store. A runner that supports `wb connect` also declares its connection: provider capabilities from the catalog or its own, the native routes a manifest route can use, the read-only command that lists the credentials it holds and how to read that listing, provider-specific authentication methods, either a command-line sign-in on the host or what the user does in the runner instead, and whether a first-run sign-in can finish inside a run. `runtimeContract()` is the part a runtime provider receives.
+
 The shared runner conformance suite exercises streamed text, tool and file lifecycle, usage, explicit permission decisions, questions, multi-turn continuity, steering, image input, cancellation, failures, and unknown native events through the normalized session boundary. It also injects reasoning, credentials, shell commands, tool output, image data, and arbitrary future payloads and asserts that none cross that boundary. Unknown native events become a minimal `runner.event` marker containing only their native type.
 
 ## Runtime provider contract
@@ -51,7 +53,15 @@ interface RuntimeProvider {
     prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime>;
 }
 
-interface RuntimePrepareRequest {
+type RuntimePrepareRequest =
+    | (RuntimePrepareFields & { purpose: "build" })
+    | (RuntimePrepareFields & {
+          purpose?: "connect" | "run";
+          runner: RuntimeRunnerContract;
+          credentials?: { runtime: string; runner: string; directory: string };
+      });
+
+interface RuntimePrepareFields {
     workbench: ResolvedWorkbench;
     workspaceDirectory: string;
     environment: Record<string, string | undefined>;
@@ -61,6 +71,11 @@ interface RuntimePrepareRequest {
         workspace?: string;
     }>;
     outcome?: { directory: string; home?: string };
+}
+
+interface RuntimeRunnerContract {
+    standardInput: boolean;
+    credentialEnvironment?(root: string): Record<string, string>;
 }
 
 interface PreparedRuntime {
@@ -98,6 +113,8 @@ interface PreparedRuntime {
 ```
 
 `prepare` provisions or selects the environment, makes the workspace, Workbench package, instructions, skills, named workspaces, and runner assets available, binds the environment, and returns their runtime-visible locations. The primary workspace is read-write; immutable package assets are read-only, and each named workspace has its manifest-declared access. Generated runner state can be a separate writable ephemeral asset. Local execution uses host paths unchanged. Isolated providers mount or copy only the declared assets and return remapped paths.
+
+An image build (`purpose: "build"`) never launches the runner, so its request carries no runner contract and no credential storage. Every other request carries `runner`, the only facts a provider knows about the runner it launches: whether the runner holds its session open over piped standard input, and the environment that points it at a mounted credential store. A provider never branches on a runner's name.
 
 Providers that mount host paths, local and Docker, never read file contents and need nothing beyond the host filesystem. Providers that copy bytes into a remote sandbox, E2B and Daytona, read the package, workspace, and named workspace files through an asset source: a small interface that stats, lists, and reads files and may report Git state. The provider's dependencies take it as `assets`. The reference CLI passes the local disk, and an embedding host can pass any store that answers the same calls. The Daytona provider also takes a `RemoteTransfer`, which packs the files into archives and collects what comes back, so a host without a filesystem supplies `MemoryTransfer` and the CLI supplies `DiskTransfer`. The asset source changes where bytes come from, not which bytes are sent: selection, exclusions, size limits, and symlink rules are applied identically. The runner adapter's staging of skills and native config follows the same idea: the OpenCode runner takes a staging object built over its own `RunnerFiles` interface.
 

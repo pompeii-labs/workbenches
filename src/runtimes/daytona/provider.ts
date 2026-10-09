@@ -13,8 +13,6 @@ import { DaytonaRuntime } from './runtime.js';
 
 const defaultMaximumTransferBytes = 512 * 1_024 * 1_024;
 const defaultLeaseMilliseconds = 60 * 60 * 1_000;
-/** Runners that launch their session with piped standard input. Pi does. */
-const runnersReadingStandardInput = new Set<string>(['pi']);
 
 export class DaytonaRuntimeProvider extends RemoteProvider {
     readonly name = 'daytona';
@@ -107,7 +105,7 @@ export class DaytonaRuntimeProvider extends RemoteProvider {
         }
         // The toolbox can write to a command's input but cannot close it, so a
         // runner that holds a session open over standard input would hang.
-        if (runnersReadingStandardInput.has(request.workbench.manifest.runner)) {
+        if (request.purpose !== 'build' && request.runner.standardInput) {
             fail(
                 'The daytona runtime does not support runners that read from standard input yet'
             );

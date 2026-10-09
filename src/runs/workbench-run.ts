@@ -2,6 +2,7 @@ import { AuthenticationRequiredError } from '../connections/error.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
 import type { OutcomeCompleteness } from '../outcomes/contracts.js';
 import type { RepositoryBinding } from '../repositories/contracts.js';
+import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import { TRUNCATED_FAILURE, TRUNCATED_REASON } from '../runners/session.js';
 import {
@@ -97,7 +98,7 @@ export class WorkbenchRun {
 
     async execute(): Promise<number> {
         const workbench = withRuntime(
-            await Workbench.load(this.options.workbenchPath),
+            await Workbench.load(this.options.workbenchPath, RunnerRegistry.standard()),
             this.options.runtime
         );
         const workspaces = this.options.workspaces ?? [];

@@ -4,12 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConnectionStore } from '../../src/connections/store.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
+import { RunnerRegistry } from '../../src/runners/registry.js';
 import { StoredRunHandle } from '../../src/runs/handle.js';
 import { RunStore } from '../../src/runs/store.js';
 import type { SessionInputResult } from '../../src/sessions/control.js';
 import type { SessionSnapshot } from '../../src/sessions/supervision.js';
 import { workbenchHome } from '../../src/storage.js';
 import { Workbench } from '../../src/workbench/workbench.js';
+
+const runners = RunnerRegistry.standard();
 
 test.skipIf(process.env.WORKBENCH_AUTHORING_E2E !== '1')(
     'official creator authors, edits, uses, and improves a real expert through the headless CLI',
@@ -151,7 +154,7 @@ test.skipIf(process.env.WORKBENCH_AUTHORING_E2E !== '1')(
                 'completed'
             );
             const packagePath = join(project, '.workbenches', 'lifecycle');
-            const original = await Workbench.load(packagePath);
+            const original = await Workbench.load(packagePath, runners);
             const brief = join(root, 'edit.txt');
             await writeFile(
                 brief,
@@ -169,9 +172,9 @@ test.skipIf(process.env.WORKBENCH_AUTHORING_E2E !== '1')(
             expect((await finish(edited.result.session_id)).authoring?.status).toBe(
                 'completed'
             );
-            expect((await Workbench.load(packagePath)).manifest.version).not.toBe(
-                original.manifest.version
-            );
+            expect(
+                (await Workbench.load(packagePath, runners)).manifest.version
+            ).not.toBe(original.manifest.version);
             const launched = await invoke<SessionInputResult>([
                 'run',
                 packagePath,
@@ -198,8 +201,8 @@ test.skipIf(process.env.WORKBENCH_AUTHORING_E2E !== '1')(
             );
             expect(report).toContain('fixture.ts');
             expect(report.toLowerCase()).toContain('cleanup');
-            const beforeImprovement = (await Workbench.load(packagePath)).manifest
-                .version;
+            const beforeImprovement = (await Workbench.load(packagePath, runners))
+                .manifest.version;
             const improved = await invoke<SessionInputResult>(
                 [
                     'create',
@@ -215,9 +218,9 @@ test.skipIf(process.env.WORKBENCH_AUTHORING_E2E !== '1')(
             const verified = await finish(improved.result.session_id);
             expect(verified.authoring?.status).toBe('completed');
             expect(verified.authoring?.result?.evidence_path).toBeDefined();
-            expect((await Workbench.load(packagePath)).manifest.version).not.toBe(
-                beforeImprovement
-            );
+            expect(
+                (await Workbench.load(packagePath, runners)).manifest.version
+            ).not.toBe(beforeImprovement);
             const reused = await invoke<SessionInputResult>([
                 'run',
                 packagePath,

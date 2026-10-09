@@ -102,6 +102,7 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                           client,
                           image.preparation.immutableReference,
                           request.workbench.manifest.runner,
+                          request.runner,
                           client.user
                       );
             await credentials?.prepare();

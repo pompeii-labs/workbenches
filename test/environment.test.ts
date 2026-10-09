@@ -102,6 +102,7 @@ describe('Workbench environment overrides', () => {
                     workbench,
                     workspaceDirectory: '/repo',
                     environment: bound,
+                    runner: { standardInput: false },
                     assets: [],
                 },
                 new TransferRules('E2B')

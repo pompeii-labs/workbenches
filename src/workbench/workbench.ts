@@ -1,6 +1,7 @@
 import { lstat, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
+import type { Runner } from '../runners/runner.js';
 import type {
     ResolvedWorkbench,
     ResolvedWorkbenchSkill,
@@ -9,6 +10,11 @@ import type {
 import { WorkbenchManifestParser } from './manifest.js';
 import { RunnerConfiguration } from './runner-configuration.js';
 import { declaredRuntimes } from './runtimes.js';
+
+/** The `runner_config` shape each runner requires, by runner name. `RunnerRegistry` provides it. */
+export interface RunnerConfigShapes {
+    find(runner: string): Pick<Runner, 'displayName' | 'runnerConfig'> | undefined;
+}
 
 export class Workbench implements ResolvedWorkbench {
     readonly runnerConfigPath?: string;
@@ -25,8 +31,10 @@ export class Workbench implements ResolvedWorkbench {
         if (runnerConfigPath) this.runnerConfigPath = runnerConfigPath;
     }
 
+    /** Loads and validates a package. A `runner_config` must have the shape its runner declares. */
     static async load(
         inputPath: string,
+        runners: RunnerConfigShapes,
         parser = new WorkbenchManifestParser(),
         runnerConfiguration = new RunnerConfiguration()
     ): Promise<Workbench> {
@@ -90,11 +98,16 @@ export class Workbench implements ResolvedWorkbench {
             : undefined;
         if (runnerConfigPath) {
             await runnerConfiguration.validate(runnerConfigPath);
-            if (
-                manifest.runner === 'pi' &&
-                !(await lstat(runnerConfigPath)).isDirectory()
-            ) {
-                throw new Error('Pi runner_config must be a directory');
+            const runner = runners.find(manifest.runner);
+            if (runner && runner.runnerConfig !== 'either') {
+                const shape = (await lstat(runnerConfigPath)).isDirectory()
+                    ? 'directory'
+                    : 'file';
+                if (shape !== runner.runnerConfig) {
+                    throw new Error(
+                        `${runner.displayName} runner_config must be a ${runner.runnerConfig}`
+                    );
+                }
             }
         }
 

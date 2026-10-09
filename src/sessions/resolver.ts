@@ -1,3 +1,4 @@
+import { RunnerRegistry } from '../runners/registry.js';
 import type { ResolvedWorkbenchReference } from '../workbench/resolver.js';
 import { withRuntime } from '../workbench/runtimes.js';
 import { Workbench } from '../workbench/workbench.js';
@@ -25,7 +26,7 @@ export class SessionResolver {
             );
         }
         const workbench = withRuntime(
-            await Workbench.load(session.workbench_path),
+            await Workbench.load(session.workbench_path, RunnerRegistry.standard()),
             session.runtime
         );
         if (

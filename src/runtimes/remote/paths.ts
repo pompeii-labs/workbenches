@@ -202,11 +202,9 @@ export class PathPlan {
                       WORKBENCH_REPOSITORY_REVISION: this.request.repository.revision,
                   }
                 : {}),
-            ...(credentials && this.request.workbench.manifest.runner === 'opencode'
-                ? { XDG_DATA_HOME: credentials.runtimePath }
-                : {}),
-            ...(credentials && this.request.workbench.manifest.runner === 'pi'
-                ? { WORKBENCH_CREDENTIALS_DIR: credentials.runtimePath }
+            // Only an execution request carries credential storage and its runner.
+            ...(credentials && this.request.purpose !== 'build'
+                ? this.request.runner.credentialEnvironment?.(credentials.runtimePath)
                 : {}),
             ...(this.request.outcome ? { WORKBENCH_OUTPUT_DIR: '/outbox' } : {}),
             ...Object.fromEntries(

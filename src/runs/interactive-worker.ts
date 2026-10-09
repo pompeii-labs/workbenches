@@ -1,5 +1,6 @@
 import type { CatalogRegistryReference } from '../catalog/index.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
+import { RunnerRegistry } from '../runners/registry.js';
 import type { NormalizedRunnerInput } from '../runners/session.js';
 import { normalizeRunnerInput } from '../runners/session.js';
 import { SessionStore } from '../sessions/index.js';
@@ -93,7 +94,10 @@ export class InteractiveRunWorker {
             const workbench = withRuntime(
                 this.dependencies.loadWorkbench
                     ? await this.dependencies.loadWorkbench(request.workbench_path)
-                    : await Workbench.load(request.workbench_path),
+                    : await Workbench.load(
+                          request.workbench_path,
+                          this.dependencies.registry ?? RunnerRegistry.standard()
+                      ),
                 request.runtime
             );
             this.session = await InteractiveRun.start({

@@ -7,6 +7,7 @@ import {
     WorkbenchPackage,
 } from '../catalog/index.js';
 import { SemanticVersion } from '../releases/index.js';
+import { RunnerRegistry } from '../runners/index.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import {
@@ -247,11 +248,13 @@ export class AuthoringOperation {
         const candidates = this.candidateSelectors(after, changedFiles);
         const validation = this.validateCandidate(after, changedFiles, candidates);
         let error = validation instanceof Error ? validation.message : validation;
+        const runners = RunnerRegistry.standard();
         if (!error) {
             for (const selector of candidates) {
                 try {
                     const workbench = await Workbench.load(
-                        join(this.record.repository, '.workbenches', selector)
+                        join(this.record.repository, '.workbenches', selector),
+                        runners
                     );
                     await this.#smoke(
                         workbench,
@@ -281,7 +284,7 @@ export class AuthoringOperation {
             const path = join(this.record.repository, '.workbenches', selector);
             try {
                 await new SavedWorkbenchCatalog(this.home).addLocal({
-                    workbench: await Workbench.load(path),
+                    workbench: await Workbench.load(path, runners),
                 });
             } catch (cause) {
                 warnings.push(
@@ -486,7 +489,7 @@ export class AuthoringOperation {
         let workbench: Workbench | undefined;
         let validationError: string | undefined;
         try {
-            workbench = await Workbench.load(directory);
+            workbench = await Workbench.load(directory, RunnerRegistry.standard());
         } catch (error) {
             validationError = error instanceof Error ? error.message : String(error);
         }

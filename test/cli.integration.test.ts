@@ -1993,6 +1993,27 @@ describe('CLI integration', () => {
         );
     });
 
+    test('builds the image of a Workbench whose runner the engine does not register', async () => {
+        const fixture = await createFixture({
+            runtime: 'docker',
+            localImage: true,
+            runner: 'foo',
+        });
+        const docker = await fakeDocker();
+
+        const built = await executeCli(['build', fixture.packageDirectory, '--json'], {
+            PATH: `${docker.bin}:${process.env.PATH}`,
+            WB_DOCKER_RECORD: docker.record,
+            WB_DOCKER_STATE: docker.state,
+        });
+        expect(built.stderr).toBe('');
+        expect(built.code).toBe(0);
+        expect(JSON.parse(built.stdout)).toMatchObject({
+            kind: 'image',
+            action: 'built',
+        });
+    });
+
     test('builds and reuses a Workbench-local Docker image', async () => {
         const fixture = await createFixture({ runtime: 'docker', localImage: true });
         const docker = await fakeDocker();
@@ -2320,6 +2341,33 @@ describe('CLI integration', () => {
         expect(removed.code).toBe(0);
         expect(removed.stdout).toContain('removed\tfixture-saved');
         expect((await executeCli(['list'], environment)).stdout).toBe('');
+    });
+
+    test('lists a Pi Workbench with a runner_config directory before model metadata loads', async () => {
+        const fixture = await createFixture({ runner: 'pi' });
+        const manifestPath = join(fixture.packageDirectory, 'workbench.yml');
+        await mkdir(join(fixture.packageDirectory, 'pi'));
+        await writeFile(join(fixture.packageDirectory, 'pi', 'settings.json'), '{}\n');
+        await writeFile(
+            manifestPath,
+            `${await readFile(manifestPath, 'utf8')}runner_config: ./pi\n`
+        );
+        const environment = {
+            WORKBENCH_HOME: await temporaryDirectory('workbench-home-'),
+        };
+
+        const listed = await executeCli(['list', fixture.root], environment);
+        expect(listed.code).toBe(0);
+        expect(listed.stdout).toContain('core\tfixture-core@0.1.0');
+
+        const added = await executeCli(
+            ['add', fixture.root, '--name', 'core', '--as', 'fixture-pi'],
+            environment
+        );
+        expect(added.code).toBe(0);
+        const saved = await executeCli(['list'], environment);
+        expect(saved.stdout).toContain('fixture-pi\tfixture-core@0.1.0');
+        expect(saved.stdout).not.toContain('unavailable');
     });
 
     test('initializes .workbenches/name in the selected repository', async () => {
@@ -3282,7 +3330,7 @@ async function createFixture(
     options: {
         tools?: string[];
         skill?: boolean;
-        runner?: 'opencode' | 'pi';
+        runner?: string;
         runtime?: 'local' | 'docker';
         image?: string;
         localImage?: boolean;

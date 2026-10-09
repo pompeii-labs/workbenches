@@ -374,6 +374,30 @@ describe('shared execution preparation', () => {
             });
         }
     }
+
+    test('refuses first-run authentication in a run for a runner that cannot finish it there', async () => {
+        const fixture = await createFixture({
+            runner: 'pi',
+            mode: 'session',
+            allowAuthentication: true,
+            unauthenticated: true,
+        });
+        await new ConnectionStore(fixture.home).save(
+            ConnectionStore.context(fixture.workbench),
+            {
+                provider: 'openai',
+                nativeProvider: 'openai-codex',
+                authenticationMethod: 'oauth',
+            }
+        );
+        try {
+            await expect(fixture.preparation.prepare()).rejects.toThrow(
+                'First-run authentication for pi is not available inside a Workbench run yet'
+            );
+        } finally {
+            await fixture.preparation.cleanup();
+        }
+    });
 });
 
 interface FixtureOptions {
@@ -519,22 +543,31 @@ async function createFixture(options: FixtureOptions = {}) {
 }
 
 class TrackingRunner extends Runner {
+    readonly displayName;
     readonly session;
+    readonly runnerConfig;
+    readonly standardInput;
+    readonly credentials;
+    readonly connection;
+    private readonly runner: Runner;
     constructor(
         readonly name: string,
         private readonly calls: string[]
     ) {
         super();
-        this.session = RunnerRegistry.standard().resolve(name).session;
+        this.runner = RunnerRegistry.standard().resolve(name);
+        this.displayName = this.runner.displayName;
+        this.session = this.runner.session;
+        this.runnerConfig = this.runner.runnerConfig;
+        this.standardInput = this.runner.standardInput;
+        this.credentials = this.runner.credentials;
+        this.connection = this.runner.connection;
     }
     async prepare(
         workbench: ResolvedWorkbench,
         environment: Record<string, string | undefined>
     ): Promise<PreparedRunner> {
-        const prepared = await RunnerRegistry.standard().prepare(
-            workbench,
-            environment
-        );
+        const prepared = await this.runner.prepare(workbench, environment);
         this.calls.push('runner.prepare');
         return {
             name: prepared.name,

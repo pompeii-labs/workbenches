@@ -14,7 +14,7 @@ export interface ConnectionCheckOptions {
     reference: string;
     environment: Record<string, string | undefined>;
     store?: ConnectionStore;
-    runners?: Pick<RunnerRegistry, 'prepare'>;
+    runners?: Pick<RunnerRegistry, 'resolve'>;
     runtimes?: Pick<RuntimeRegistry, 'resolve'>;
 }
 
@@ -24,7 +24,11 @@ export interface ConnectionCheckOptions {
  * runtime's credential store. It runs no tool or workspace preflight.
  */
 export class ConnectionCheck {
-    constructor(private readonly options: ConnectionCheckOptions) {}
+    readonly #runners: Pick<RunnerRegistry, 'resolve'>;
+
+    constructor(private readonly options: ConnectionCheckOptions) {
+        this.#runners = options.runners ?? RunnerRegistry.standard();
+    }
 
     /** Runs `work` against the prepared runtime, then cleans both up. */
     async open<T>(
@@ -34,16 +38,15 @@ export class ConnectionCheck {
         let runner: PreparedRunner | undefined;
         let runtime: PreparedRuntime | undefined;
         try {
-            runner = await (this.options.runners ?? RunnerRegistry.standard()).prepare(
-                workbench,
-                this.options.environment
-            );
+            const harness = this.#runners.resolve(workbench.manifest.runner);
+            runner = await harness.prepare(workbench, this.options.environment);
             runtime = await (this.options.runtimes ?? RuntimeRegistry.standard())
                 .resolve(selectedRuntime(workbench).name)
                 .prepare({
                     workbench,
                     workspaceDirectory: this.options.workspaceDirectory,
                     environment: this.options.environment,
+                    runner: harness.runtimeContract(),
                     assets: [
                         // Connection work never changes the workspace.
                         { path: this.options.workspaceDirectory, access: 'read-only' },
@@ -76,6 +79,7 @@ export class ConnectionCheck {
                 runner,
                 reference: this.options.reference,
                 ...(this.options.store ? { store: this.options.store } : {}),
+                runners: this.#runners,
             }).inspect({
                 discoverConnections: true,
                 ...(options.selection

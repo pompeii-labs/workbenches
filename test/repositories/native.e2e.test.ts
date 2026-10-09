@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RepositoryWorkspace } from '../../src/repositories/workspace.js';
+import { RunnerRegistry } from '../../src/runners/registry.js';
 import { DockerRuntimeProvider } from '../../src/runtimes/docker/provider.js';
 import { E2BRuntimeProvider } from '../../src/runtimes/e2b/provider.js';
 import { DiskAssetSource } from '../../src/runtimes/staging/disk.js';
@@ -80,6 +81,9 @@ describe.skipIf(process.env.WORKBENCH_REPOSITORY_NATIVE_E2E !== '1')(
                 const runtime = await provider.prepare({
                     workbench,
                     workspaceDirectory: workspace.directory,
+                    runner: RunnerRegistry.standard()
+                        .resolve(workbench.manifest.runner)
+                        .runtimeContract(),
                     environment: {
                         ...identityEnvironment(identity),
                         E2B_API_KEY: process.env.E2B_API_KEY,
@@ -206,6 +210,9 @@ describe.skipIf(process.env.WORKBENCH_REPOSITORY_DOCKER_E2E !== '1')(
                     workbench,
                     workspaceDirectory: workspace.directory,
                     environment: identityEnvironment(identity),
+                    runner: RunnerRegistry.standard()
+                        .resolve(workbench.manifest.runner)
+                        .runtimeContract(),
                     assets: [
                         { path: workspace.directory, access: 'read-write' },
                         {

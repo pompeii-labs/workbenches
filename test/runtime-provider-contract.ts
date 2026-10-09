@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { RunnerRegistry } from '../src/runners/index.js';
 import { RunDispatcher } from '../src/runs/dispatcher.js';
 import {
     type RuntimePrepareRequest,
@@ -56,7 +57,7 @@ export function runtimeProviderContract(options: {
             );
             const run = await new RunDispatcher(home).prepare({
                 resolved: {
-                    workbench: await Workbench.load(source),
+                    workbench: await Workbench.load(source, RunnerRegistry.standard()),
                     workspaceDirectory: workspace,
                     source: 'local',
                     cleanup: async () => {},

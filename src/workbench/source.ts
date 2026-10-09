@@ -1,9 +1,10 @@
 import { readdir, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
+import { RunnerRegistry } from '../runners/registry.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
 import type { ResolvedWorkbench } from '../types.js';
-import { Workbench } from './workbench.js';
+import { type RunnerConfigShapes, Workbench } from './workbench.js';
 
 export interface LocalWorkbenchSource {
     directory: string;
@@ -19,7 +20,10 @@ export interface WorkbenchReference {
 export class WorkbenchSource {
     readonly #github = new GitHubWorkbenchSource();
 
-    constructor(private readonly cwd = process.cwd()) {}
+    constructor(
+        private readonly cwd = process.cwd(),
+        private readonly runners: RunnerConfigShapes = RunnerRegistry.standard()
+    ) {}
 
     parse(value: string): WorkbenchReference {
         const marker = value.lastIndexOf('#');
@@ -59,7 +63,7 @@ export class WorkbenchSource {
     async discover(sourceDirectory: string): Promise<ResolvedWorkbench[]> {
         const details = await stat(sourceDirectory);
         if (details.isFile() || (await this.isManifestDirectory(sourceDirectory))) {
-            return [await Workbench.load(sourceDirectory)];
+            return [await Workbench.load(sourceDirectory, this.runners)];
         }
 
         const root = join(sourceDirectory, '.workbenches');
@@ -70,7 +74,9 @@ export class WorkbenchSource {
             .filter((entry) => entry.isDirectory())
             .map((entry) => entry.name)
             .sort();
-        return Promise.all(directories.map((name) => Workbench.load(join(root, name))));
+        return Promise.all(
+            directories.map((name) => Workbench.load(join(root, name), this.runners))
+        );
     }
 
     async select(
@@ -86,7 +92,7 @@ export class WorkbenchSource {
         ) {
             const packageDirectory = join(sourceDirectory, '.workbenches', selector);
             if ((await stat(packageDirectory).catch(() => null))?.isDirectory()) {
-                return Workbench.load(packageDirectory);
+                return Workbench.load(packageDirectory, this.runners);
             }
         }
         const workbenches = await this.discover(sourceDirectory);

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join, relative } from 'node:path';
+import { RunnerRegistry } from '../src/runners/registry.js';
 import { importCycles, valueImports } from './architecture/imports.js';
 
 const root = join(import.meta.dir, '..');
@@ -41,6 +42,52 @@ describe('engine architecture', () => {
             }
         }
         expect(violations).toEqual([]);
+    });
+
+    test('keeps runner names out of shared code', async () => {
+        const registered = RunnerRegistry.standard().list();
+        const folders = registered.map((runner) => `src/runners/${runner.name}/`);
+        // A runner is named by its name or by its display name.
+        const names = registered.flatMap((runner) => [runner.name, runner.displayName]);
+        // Each entry is a deliberate exception, matched by its exact line. Shared
+        // code otherwise reaches runners through RunnerRegistry and the members
+        // they declare.
+        const allowed = [
+            // The public configureOpenCode helper builds an OpenCode configuration.
+            { path: 'src/models/routing.ts', line: "runner: 'opencode'," },
+            // A new Workbench records the OpenCode runner unless told otherwise.
+            { path: 'src/commands/init.ts', line: "default: 'opencode'," },
+            // The label of the OpenCode model provider, which shares the runner's name.
+            { path: 'src/connections/targets.ts', line: "opencode: 'OpenCode'," },
+        ];
+        const used = new Set<(typeof allowed)[number]>();
+        const violations: string[] = [];
+        for (const file of await sourceFiles(source)) {
+            const path = relative(root, file);
+            // A runner's own folder names it freely.
+            if (folders.some((folder) => path.startsWith(folder))) continue;
+            // The registry and the domain entrypoint import each concrete runner.
+            const registers =
+                path === 'src/runners/registry.ts' || path === 'src/runners/index.ts';
+            const lines = (await readFile(file, 'utf8')).split('\n');
+            for (const [index, line] of lines.entries()) {
+                const named = runnerNames(line, names, registers);
+                if (named.length === 0) continue;
+                const exception = allowed.find(
+                    (entry) => entry.path === path && entry.line === line.trim()
+                );
+                if (exception) {
+                    used.add(exception);
+                    continue;
+                }
+                violations.push(
+                    `${path}:${index + 1} names runner ${named.join(', ')}; shared code must reach runners through RunnerRegistry`
+                );
+            }
+        }
+        expect(violations).toEqual([]);
+        // An exception that no longer matches its line must be removed, not kept.
+        expect(allowed.filter((entry) => !used.has(entry))).toEqual([]);
     });
 
     test('distinguishes type-only edges from executable imports and barrel exports', () => {
@@ -104,6 +151,26 @@ describe('engine architecture', () => {
         ).toBe(false);
     });
 });
+
+/**
+ * The runner names a line's string literals contain, as the whole literal or
+ * as one of its path segments, such as `'pi'`, `case 'opencode':`, or
+ * `'opencode/auth.json'`. Prose that mentions a runner inside a longer string
+ * is not a name. With `skipImports`, module specifiers are ignored.
+ */
+function runnerNames(line: string, runners: string[], skipImports: boolean): string[] {
+    const names = new Set<string>();
+    for (const literal of line.matchAll(
+        /'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/gu
+    )) {
+        const before = line.slice(0, literal.index);
+        if (skipImports && /\b(?:from|import)\s*\(?\s*$/u.test(before)) continue;
+        for (const segment of literal[0].slice(1, -1).split('/')) {
+            if (runners.includes(segment)) names.add(segment);
+        }
+    }
+    return [...names];
+}
 
 async function sourceFiles(directory: string): Promise<string[]> {
     const files: string[] = [];
