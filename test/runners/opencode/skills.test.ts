@@ -3,6 +3,10 @@ import { describe, expect, test } from 'bun:test';
 import { RunnerContextStaging } from '../../../src/runners/context/stage.js';
 import { MemoryRunnerFiles } from '../../../src/runners/files/memory.js';
 import { OpenCodeSkillStaging } from '../../../src/runners/opencode/skills.js';
+import {
+    todoReminderPlugin,
+    todoReminderPluginPath,
+} from '../../../src/runners/opencode/todo-reminder.js';
 import type { ResolvedWorkbench } from '../../../src/types.js';
 
 function workbench(runnerConfigPath?: string): ResolvedWorkbench {
@@ -52,6 +56,9 @@ describe('OpenCode skill staging', () => {
             'Review carefully.'
         );
         expect(files.text(staged.context.prefix)).toContain('# Authored behavior');
+        expect(files.text(`${staged.directory}/${todoReminderPluginPath}`)).toBe(
+            todoReminderPlugin
+        );
         expect(files.mode(staged.context.prefix)).toBe(0o444);
         expect(files.mode(staged.directory)).toBe(0o555);
 
