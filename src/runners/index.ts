@@ -1,3 +1,9 @@
+export { CLAUDE_CODE_SESSION_DECLARATION } from './claude-code/capabilities.js';
+export { ClaudeCodeRunner } from './claude-code/runner.js';
+export {
+    ClaudeCodeSessionAdapter,
+    type ClaudeCodeSessionDependencies,
+} from './claude-code/session.js';
 export { RunnerContextStaging } from './context/stage.js';
 export { DiskRunnerFiles } from './files/disk.js';
 export { MemoryRunnerFiles } from './files/memory.js';

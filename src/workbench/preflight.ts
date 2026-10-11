@@ -42,7 +42,11 @@ export class WorkbenchPreflight {
         return (this.locate ?? Bun.which)(name);
     }
 
-    check(workbench: ResolvedWorkbench): PreflightResult {
+    /** Checks the host. `executable` is the runner CLI, by default named like the runner. */
+    check(
+        workbench: ResolvedWorkbench,
+        executable = workbench.manifest.runner
+    ): PreflightResult {
         const runtime = selectedRuntime(workbench);
         if (runtime.name !== 'local') {
             throw new Error(`Unsupported runtime: ${runtime.name}`);
@@ -51,10 +55,10 @@ export class WorkbenchPreflight {
             throw new Error('image is not supported with the local runtime');
         }
 
-        const runnerPath = this.findExecutable(workbench.manifest.runner);
+        const runnerPath = this.findExecutable(executable);
         if (!runnerPath) {
             throw new Error(
-                `Runner CLI is unavailable: ${workbench.manifest.runner}. Install ${workbench.manifest.runner} and rerun this command.`
+                `Runner CLI is unavailable: ${executable}. Install ${executable} and rerun this command.`
             );
         }
 

@@ -14,10 +14,13 @@ describe('runner connection targets', () => {
     test('enumerates engine runtimes and harnesses independently of saved Workbenches', () => {
         const runners = RunnerRegistry.standard();
         expect(connectionRuntimes).toEqual(['local', 'docker', 'e2b', 'daytona']);
-        expect(connectionHarnesses(runners)).toEqual(['opencode', 'pi']);
+        expect(connectionHarnesses(runners)).toEqual(['opencode', 'pi', 'claude-code']);
         expect(
             connectionProviders('pi', modelCatalogFixture).map(({ id }) => id)
         ).toEqual(['openai', 'anthropic', 'openrouter', 'github-copilot', 'opencode']);
+        expect(
+            connectionProviders('claude-code', modelCatalogFixture).map(({ id }) => id)
+        ).toEqual(['anthropic', 'openrouter']);
     });
 
     test('intersects model providers with the selected harness capability map', () => {

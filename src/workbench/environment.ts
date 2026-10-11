@@ -4,6 +4,7 @@ import { parseEnv } from 'node:util';
 
 import { ModelCatalog } from '../models/catalog.js';
 import { ModelRouter } from '../models/routing.js';
+import { RunnerRegistry } from '../runners/registry.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { selectedRuntime } from './runtimes.js';
 
@@ -14,7 +15,12 @@ export interface EnvironmentOverrides {
     explicit: Map<string, string>;
 }
 
+/** The runner a package names, for its native credential variables. `RunnerRegistry` provides it. */
+type RunnerLookup = Pick<RunnerRegistry, 'find'>;
+
 export class WorkbenchEnvironment {
+    constructor(private readonly runners: RunnerLookup = RunnerRegistry.standard()) {}
+
     async load(options: {
         envFile?: string;
         rawArgs?: string[];
@@ -46,6 +52,8 @@ export class WorkbenchEnvironment {
             ...(catalog
                 ? new ModelRouter(catalog).providerEnvironmentNames(workbench)
                 : []),
+            ...(this.runners.find(workbench.manifest.runner)
+                ?.nativeCredentialVariables ?? []),
         ]);
         for (const name of allowed) {
             if (Object.hasOwn(overrides.file, name)) {

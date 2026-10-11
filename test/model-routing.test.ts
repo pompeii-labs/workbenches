@@ -78,6 +78,27 @@ describe('locked model routing', () => {
         });
     });
 
+    test('carries the selected route authentication method, and only that one', () => {
+        const fixture = workbench({ id: 'openai/gpt-fixture' });
+        const route = {
+            provider: 'openai',
+            nativeProvider: 'openai',
+            nativeModel: 'gpt-fixture',
+        };
+        expect(
+            router.resolve({
+                workbench: fixture,
+                authenticatedRoutes: [{ ...route, authenticationMethod: 'api' }],
+            }).authenticationMethod
+        ).toBe('api');
+        expect(
+            router.resolve({ workbench: fixture, authenticatedRoutes: [route] })
+        ).not.toHaveProperty('authenticationMethod');
+        expect(router.resolve({ workbench: fixture })).not.toHaveProperty(
+            'authenticationMethod'
+        );
+    });
+
     test('honors an exact native connection preference without changing the model', () => {
         const fixture = workbench({ id: 'openai/gpt-fixture' });
         const configuration = router.resolve({

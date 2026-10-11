@@ -134,6 +134,7 @@ class FakeRunner extends Runner {
     readonly name: string;
     readonly displayName: string;
     readonly session: RunnerSessionAdapter;
+    readonly executable = 'fake';
     readonly runnerConfig = 'either';
     readonly standardInput = false;
     /** Any declared connection: these tests never connect. */

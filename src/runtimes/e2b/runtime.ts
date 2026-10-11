@@ -11,6 +11,7 @@ import type { DiskTransfer } from '../remote/disk/transfer.js';
 import { runLabels } from '../remote/labels.js';
 import { RemoteRuntime, type RemoteRuntimeOptions } from '../remote/runtime.js';
 import { type ArchiveUpload, AssetStage } from '../remote/stage.js';
+import { runnerExecutable } from '../runner.js';
 import { definedEnvironment, quote, shellCommand } from '../staging/shell.js';
 import type { E2BClient, E2BSandbox } from './contracts.js';
 import { e2bPricingSource, estimateE2BCost } from './infrastructure.js';
@@ -61,10 +62,11 @@ export class E2BRuntime extends RemoteRuntime<E2BSandbox, DiskAssetSnapshot> {
         const configuration = new WorkbenchPreflight({
             environment: this.environment,
         }).checkConfiguration(this.workbench);
+        const executable = runnerExecutable(this.options.request);
         const names = [
             'git',
             'tar',
-            this.workbench.manifest.runner,
+            executable,
             ...this.workbench.manifest.tools,
             ...(this.options.request.repository?.delivery === 'pr' ? ['gh'] : []),
         ];
@@ -95,7 +97,7 @@ export class E2BRuntime extends RemoteRuntime<E2BSandbox, DiskAssetSnapshot> {
         const runnerPath = paths[2];
         if (!runnerPath) {
             throw new Error(
-                `Runner CLI is unavailable in E2B image ${this.preparation.immutableReference}: ${this.workbench.manifest.runner}`
+                `Runner CLI is unavailable in E2B image ${this.preparation.immutableReference}: ${executable}`
             );
         }
         const tools = this.workbench.manifest.tools.map((name, index) => {

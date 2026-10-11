@@ -67,6 +67,8 @@ export interface InteractiveRunOptions {
     onQuestion?: (
         request: RunnerQuestionRequest
     ) => Promise<RunnerQuestionResponse> | RunnerQuestionResponse;
+    /** The runner withdrew a pending permission or question, so it is no longer offered. */
+    onWithdraw?: (id: string) => void;
     dependencies?: InteractiveRunDependencies;
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
@@ -77,8 +79,13 @@ export interface InteractiveRunOptions {
     allowAuthentication?: boolean;
 }
 
+/** The disposition code of a permission or question the runner withdrew. */
+const WITHDRAWN = 'request_withdrawn';
+
 export class InteractiveRun {
     private readonly dependencies: InteractiveRunDependencies;
+    /** Pending permissions and questions, each settled early when the runner withdraws it. */
+    private readonly withdrawals = new Map<string, () => void>();
 
     private constructor(private readonly options: InteractiveRunOptions) {
         this.dependencies = options.dependencies ?? {};
@@ -160,6 +167,7 @@ export class InteractiveRun {
                         this.requestPermission(emitter, request),
                     requestQuestion: (request) =>
                         this.requestQuestion(emitter, request),
+                    withdrawRequest: async (id) => this.withdrawRequest(id),
                 },
                 ...(this.options.session
                     ? {
@@ -219,50 +227,84 @@ export class InteractiveRun {
         emitter: RunEvents,
         request: RunnerPermissionRequest
     ): Promise<RunnerPermissionDecision> {
+        const { withdrawn, release } = this.watchWithdrawal(request.id);
         const decision = this.options.onPermission
             ? this.options.onPermission(request)
             : Promise.resolve('reject' as const);
-        await emitter.emit('input.requested', {
-            id: request.id,
-            kind: 'permission',
-            action: request.action,
-            resources: request.resources,
-            message: request.message,
-            options: [
-                'allow_once',
-                ...(request.allowAlways ? ['allow_always'] : []),
-                'reject',
-            ],
-        });
-        await decision;
+        let settled: RunnerPermissionDecision | typeof WITHDRAWN;
+        try {
+            await emitter.emit('input.requested', {
+                id: request.id,
+                kind: 'permission',
+                action: request.action,
+                resources: request.resources,
+                message: request.message,
+                options: [
+                    'allow_once',
+                    ...(request.allowAlways ? ['allow_always'] : []),
+                    'reject',
+                ],
+            });
+            // Withdrawn goes first: a withdrawal that landed during the emit
+            // has also rejected the decision, and the first settled entry wins.
+            settled = await Promise.race([withdrawn, decision]);
+        } finally {
+            release();
+        }
+        if (settled === WITHDRAWN) {
+            await emitter.emit('input.rejected', {
+                id: request.id,
+                kind: 'permission',
+                code: WITHDRAWN,
+            });
+            return 'reject';
+        }
         await emitter.emit('input.accepted', {
             id: request.id,
             kind: 'permission',
         });
-        return decision;
+        return settled;
     }
 
     private async requestQuestion(
         emitter: RunEvents,
         request: RunnerQuestionRequest
     ): Promise<RunnerQuestionResponse> {
+        const { withdrawn, release } = this.watchWithdrawal(request.id);
         const response = this.options.onQuestion
             ? this.options.onQuestion(request)
             : Promise.resolve({ outcome: 'rejected' as const });
-        await emitter.emit('question.requested', {
-            id: request.id,
-            questions: request.questions.map((question) => ({
-                question: question.question,
-                ...(question.header ? { header: question.header } : {}),
-                options: question.options.map((option) => ({
-                    label: option.label,
-                    ...(option.description ? { description: option.description } : {}),
+        let settled: RunnerQuestionResponse | typeof WITHDRAWN;
+        try {
+            await emitter.emit('question.requested', {
+                id: request.id,
+                questions: request.questions.map((question) => ({
+                    question: question.question,
+                    ...(question.header ? { header: question.header } : {}),
+                    options: question.options.map((option) => ({
+                        label: option.label,
+                        ...(option.description
+                            ? { description: option.description }
+                            : {}),
+                    })),
+                    multiple: question.multiple,
+                    custom: question.custom,
                 })),
-                multiple: question.multiple,
-                custom: question.custom,
-            })),
-        });
-        const resolved = await response;
+            });
+            // Withdrawn goes first: a withdrawal that landed during the emit
+            // has also rejected the response, and the first settled entry wins.
+            settled = await Promise.race([withdrawn, response]);
+        } finally {
+            release();
+        }
+        if (settled === WITHDRAWN) {
+            await emitter.emit('question.rejected', {
+                id: request.id,
+                code: WITHDRAWN,
+            });
+            return { outcome: 'rejected' };
+        }
+        const resolved = settled;
         await emitter.emit(
             resolved.outcome === 'answered' ? 'question.answered' : 'question.rejected',
             resolved.outcome === 'answered'
@@ -270,6 +312,38 @@ export class InteractiveRun {
                 : { id: request.id }
         );
         return resolved;
+    }
+
+    /** Settles once the runner withdraws request `id`. */
+    private watchWithdrawal(id: string): {
+        withdrawn: Promise<typeof WITHDRAWN>;
+        release: () => void;
+    } {
+        let resolver!: () => void;
+        const withdrawn = new Promise<typeof WITHDRAWN>((resolve) => {
+            resolver = () => resolve(WITHDRAWN);
+        });
+        this.withdrawals.set(id, resolver);
+        return {
+            withdrawn,
+            // Leaves a newer request that reused the id alone.
+            release: () => {
+                if (this.withdrawals.get(id) === resolver) this.withdrawals.delete(id);
+            },
+        };
+    }
+
+    /**
+     * Settles a pending request the runner withdrew before telling whoever was
+     * asked, so the requester records it as withdrawn even if that also
+     * rejects the pending answer.
+     */
+    private withdrawRequest(id: string): void {
+        const withdraw = this.withdrawals.get(id);
+        if (!withdraw) return;
+        this.withdrawals.delete(id);
+        withdraw();
+        this.options.onWithdraw?.(id);
     }
 
     private static errorMessage(error: unknown): string {

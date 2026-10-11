@@ -40,6 +40,25 @@ describe('Workbench smoke preflight', () => {
         expect(result.runner).toEqual({ name: 'codex', path: '/bin/codex' });
     });
 
+    test("checks the runner's declared executable under the runner's name", () => {
+        const fixture = workbench();
+        fixture.manifest.runner = 'claude-code';
+        const found = new WorkbenchPreflight({
+            environment: { LUX_TOKEN: 'bound' },
+            findExecutable: (name) => `/bin/${name}`,
+        }).check(fixture, 'claude');
+        expect(found.runner).toEqual({ name: 'claude-code', path: '/bin/claude' });
+
+        expect(() =>
+            new WorkbenchPreflight({
+                environment: { LUX_TOKEN: 'bound' },
+                findExecutable: (name) => (name === 'claude' ? null : `/bin/${name}`),
+            }).check(fixture, 'claude')
+        ).toThrow(
+            'Runner CLI is unavailable: claude. Install claude and rerun this command.'
+        );
+    });
+
     test('rejects unsupported execution contracts before executable checks', () => {
         const fixture = workbench();
         fixture.manifest.runtime = 'docker';

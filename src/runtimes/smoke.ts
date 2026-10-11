@@ -57,6 +57,7 @@ export class RuntimeSmoke {
         }
         const runners = RunnerRegistry.standard();
         const harness = runners.resolve(workbench.manifest.runner);
+        const contract = harness.runtimeContract();
         const runner = await harness.prepare(workbench, environment);
         let runtime: PreparedRuntime | undefined;
         let result: WorkbenchSmokeResult | undefined;
@@ -66,7 +67,7 @@ export class RuntimeSmoke {
                 workbench,
                 workspaceDirectory,
                 environment,
-                runner: harness.runtimeContract(),
+                runner: contract,
                 assets: [
                     { path: workspaceDirectory, access: 'read-write' },
                     {
@@ -84,7 +85,9 @@ export class RuntimeSmoke {
                     hostDocker: this.options.allowHostDocker ?? false,
                 },
                 allowUncheckedGpu: this.options.allowUncheckedGpu ?? false,
-                ...(selected.name === 'e2b' && this.options.home
+                ...(selected.name === 'e2b' &&
+                this.options.home &&
+                contract.credentialEnvironment
                     ? {
                           credentials: await new RunnerCredentialStore(
                               this.options.home

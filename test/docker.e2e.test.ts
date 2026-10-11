@@ -57,7 +57,10 @@ describe('Docker runtime end-to-end', () => {
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
-                runner: { standardInput: false },
+                runner: {
+                    executable: fixture.workbench.manifest.runner,
+                    standardInput: false,
+                },
                 assets: [
                     { path: fixture.root, access: 'read-write' },
                     { path: fixture.packageDirectory, access: 'read-only' },
@@ -232,7 +235,10 @@ describe('Docker runtime end-to-end', () => {
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
-                runner: { standardInput: false },
+                runner: {
+                    executable: fixture.workbench.manifest.runner,
+                    standardInput: false,
+                },
                 assets: [
                     { path: fixture.root, access: 'read-write' },
                     { path: fixture.packageDirectory, access: 'read-only' },
@@ -321,7 +327,10 @@ describe('Docker runtime end-to-end', () => {
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
-                runner: { standardInput: false },
+                runner: {
+                    executable: fixture.workbench.manifest.runner,
+                    standardInput: false,
+                },
                 authorizations: { hostDocker: true },
                 assets: [
                     { path: fixture.root, access: 'read-write' },
@@ -378,7 +387,10 @@ describe('Docker runtime end-to-end', () => {
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
-                runner: { standardInput: false },
+                runner: {
+                    executable: fixture.workbench.manifest.runner,
+                    standardInput: false,
+                },
                 assets: [
                     { path: fixture.root, access: 'read-write' },
                     { path: fixture.packageDirectory, access: 'read-only' },
@@ -404,7 +416,10 @@ describe('Docker runtime end-to-end', () => {
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
-                runner: { standardInput: false },
+                runner: {
+                    executable: fixture.workbench.manifest.runner,
+                    standardInput: false,
+                },
                 assets: [
                     { path: fixture.root, access: 'read-write' },
                     { path: fixture.packageDirectory, access: 'read-only' },

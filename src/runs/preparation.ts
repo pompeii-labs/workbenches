@@ -217,12 +217,13 @@ export class ExecutionPreparation {
         }
         const runners = this.dependencies.runners ?? RunnerRegistry.standard();
         const harness = runners.resolve(workbench.manifest.runner);
+        const contract = harness.runtimeContract();
         this.runner = await harness.prepare(workbench, environment);
         this.runtime = await this.dependencies.runtimes.resolve(runtimeName).prepare({
             workbench,
             workspaceDirectory,
             environment,
-            runner: harness.runtimeContract(),
+            runner: contract,
             assets: [
                 { path: workspaceDirectory, access: 'read-write' },
                 ...(this.repository
@@ -266,7 +267,8 @@ export class ExecutionPreparation {
                       },
                   }
                 : {}),
-            ...(runtimeName === 'e2b' && home
+            // Only a runner with a credential file has a store to sync.
+            ...(runtimeName === 'e2b' && home && contract.credentialEnvironment
                 ? {
                       credentials: await new RunnerCredentialStore(home).prepare(
                           runtimeName,

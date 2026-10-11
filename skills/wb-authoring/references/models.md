@@ -44,3 +44,4 @@ When writing the Workbench's description or README, name the providers it was tr
 
 - `opencode`: the default. Supports remote MCP servers, permission config in `opencode.json`, and OpenCode's own sign-in flows (including a ChatGPT subscription for OpenAI models).
 - `pi`: no MCP support (a Pi Workbench with `mcps` fails), needs a directory `runner_config`, and first-run sign-in inside a run is not available; give consumers env keys. Pi Workbenches cannot run on Daytona yet.
+- `claude-code`: the same `lab/model` ids and catalog as every runner, routed through Anthropic, OpenRouter, or Vercel AI Gateway. Supports remote MCP servers, mid-turn steering, and a JSON-file `runner_config` (see `permissions.md`). A Claude subscription works on `local` (the consumer's own Claude Code login) and on `docker` and `e2b` through the consumer's own `CLAUDE_CODE_OAUTH_TOKEN`, which comes from their environment and is never stored. Claude Code Workbenches cannot run on Daytona yet.

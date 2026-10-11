@@ -54,38 +54,68 @@ export interface ConnectionSetupOptions {
  * container, so it needs a Workbench. `e2b` writes the host store synced into
  * each sandbox and is confirmed by the first run, because checking it would
  * create a billable sandbox. `daytona` has no runner credential store and
- * reads provider variables only.
+ * reads provider variables only. A runner without a credential file has no
+ * store anywhere: Docker is checked by the runner itself, and E2B reads
+ * provider variables only.
  */
 export class ConnectionSetup {
-    readonly file: NativeCredentialFile;
+    /** The runner's native credential file, or undefined for a runner Workbench keeps no credentials for. */
+    readonly file: NativeCredentialFile | undefined;
     readonly #options: ConnectionSetupOptions;
     readonly #runners: Pick<RunnerRegistry, 'find' | 'resolve'>;
 
     constructor(options: ConnectionSetupOptions) {
         this.#options = options;
         this.#runners = options.runners ?? RunnerRegistry.standard();
-        this.file = NativeCredentialFile.for(options.target.harness, this.#runners);
+        const runner = this.#runners.find(options.target.harness);
+        this.file =
+            runner && !runner.credentials
+                ? undefined
+                : NativeCredentialFile.for(options.target.harness, this.#runners);
     }
 
-    /** Refuses runtimes whose store Workbench does not write: `local` and `daytona`. */
+    /** Whether the target runtime has a store Workbench writes for this runner. */
+    get storesCredentials(): boolean {
+        const { runtime } = this.#options.target;
+        return Boolean(this.file) && (runtime === 'docker' || runtime === 'e2b');
+    }
+
+    /**
+     * Refuses runtimes whose store Workbench does not write: `local`, `daytona`,
+     * and any runtime for a runner without a credential file.
+     */
     requireStore(): void {
+        if (this.storesCredentials) return;
         const { target } = this.#options;
-        if (target.runtime === 'docker' || target.runtime === 'e2b') return;
         throw new Error(
             target.runtime === 'local'
                 ? `The local runtime uses your own ${this.#runner} sign-in; Workbench neither writes nor removes it`
-                : `${runtimeLabel(target.runtime)} has no runner credential store; provider keys reach it only from the environment`
+                : target.runtime === 'docker' || target.runtime === 'e2b'
+                  ? `${this.#runner} has no credential store Workbench writes; ${this.#provider} keys reach it only from the environment or --env-file`
+                  : `${runtimeLabel(target.runtime)} has no runner credential store; provider keys reach it only from the environment`
         );
+    }
+
+    /** The file of the store Workbench writes, after refusing a target without one. */
+    #file(): NativeCredentialFile {
+        this.requireStore();
+        if (!this.file) throw new Error(`${this.#runner} has no credential file`);
+        return this.file;
+    }
+
+    /** The store entry for an API key, in the runner's own format. */
+    apiKey(key: string): NativeCredentialEntry {
+        return this.#file().apiKey(key);
     }
 
     /** Writes `entry` into the store the target runtime reads, then checks readiness. */
     async save(entry: NativeCredentialEntry): Promise<ConnectionReadiness> {
-        this.requireStore();
+        const file = this.#file();
         const provider = this.#options.target.method.nativeProvider;
         if (this.#options.target.runtime === 'docker') {
             return this.#inspect(async (runtime) => {
                 const files = this.#runtimeFiles(runtime);
-                await this.file.save(files, provider, entry);
+                await file.save(files, provider, entry);
                 return entry;
             });
         }
@@ -94,38 +124,35 @@ export class ConnectionSetup {
             target.runtime,
             target.harness
         );
-        await this.file.save(
-            new HostCredentialFiles(binding.directory),
-            provider,
-            entry
-        );
+        await file.save(new HostCredentialFiles(binding.directory), provider, entry);
         return this.verify();
     }
 
     /** Checks readiness without writing anything. */
     async verify(): Promise<ConnectionReadiness> {
         const { target, workbench } = this.#options;
+        const file = this.file;
         if (target.runtime === 'docker') {
+            if (!file) return this.#inspect();
             return this.#inspect(async (runtime) =>
-                this.file.find(
-                    this.#runtimeFiles(runtime),
-                    target.method.nativeProvider
-                )
+                file.find(this.#runtimeFiles(runtime), target.method.nativeProvider)
             );
         }
         // The runner itself reports its own sign-in; Workbench never reads its files.
         if (target.runtime === 'local' && workbench) return this.#inspect();
-        if (target.runtime !== 'e2b') {
+        if (target.runtime !== 'e2b' || !file) {
             return this.#environmentServes()
                 ? ready({ fromEnvironment: true })
                 : this.#missing(
                       target.runtime === 'local'
                           ? `Without a Workbench, wb cannot ask ${this.#runner} which providers it is signed in to, and no ${this.#provider} key is in the environment`
-                          : `Daytona has no runner credential store, so ${this.#runner} there reads ${this.#provider} keys only from the environment`
+                          : target.runtime === 'e2b'
+                            ? `${this.#runner} has no credential store Workbench writes, so in E2B it reads ${this.#provider} keys only from the environment or --env-file`
+                            : `Daytona has no runner credential store, so ${this.#runner} there reads ${this.#provider} keys only from the environment`
                   );
         }
         // Reading must not create the store, so this skips the private-directory setup.
-        const entry = await this.file.find(
+        const entry = await file.find(
             new HostCredentialFiles(
                 new RunnerCredentialStore(this.#options.home).binding(
                     target.runtime,
@@ -135,7 +162,7 @@ export class ConnectionSetup {
             target.method.nativeProvider
         );
         // A runner that reads its credential file before the environment lets a stored entry decide alone.
-        if (entry && this.file.storeFirst) {
+        if (entry && file.storeFirst) {
             return this.#serves(entry)
                 ? ready({ saved: true })
                 : this.#missing(this.#mismatch(entry));
@@ -149,13 +176,18 @@ export class ConnectionSetup {
         );
     }
 
-    /** Removes the providers' entries from the target runtime's store, keeping others. */
+    /**
+     * Removes the providers' entries from the target runtime's store, keeping
+     * others. A runner without a credential file has nothing saved to remove.
+     */
     async remove(nativeProviders: string[]): Promise<boolean> {
-        this.requireStore();
+        const { runtime } = this.#options.target;
+        if (!this.file && (runtime === 'docker' || runtime === 'e2b')) return false;
+        const file = this.#file();
         const remove = async (files: RuntimeCredentialFiles) => {
             let removed = false;
             for (const provider of nativeProviders) {
-                removed = (await this.file.remove(files, provider)) || removed;
+                removed = (await file.remove(files, provider)) || removed;
             }
             return removed;
         };
@@ -196,7 +228,7 @@ export class ConnectionSetup {
                   }
                 : {}),
         });
-        if (entry && this.file.storeFirst && !this.#serves(entry)) {
+        if (entry && this.file?.storeFirst && !this.#serves(entry)) {
             return this.#missing(this.#mismatch(entry));
         }
         const route = status.connections.find((connection) =>
@@ -227,10 +259,13 @@ export class ConnectionSetup {
         );
     }
 
+    /** Whether a stored entry serves the chosen method. Only a runner with a credential file has entries. */
     #serves(entry: NativeCredentialEntry): boolean {
-        return this.file.serves(
-            entry,
-            this.#options.target.method.authenticationMethod
+        return (
+            this.file?.serves(
+                entry,
+                this.#options.target.method.authenticationMethod
+            ) ?? false
         );
     }
 

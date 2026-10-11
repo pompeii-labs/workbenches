@@ -133,7 +133,7 @@ describe('asset sources', () => {
                 workbench,
                 workspaceDirectory: '/virtual/ws',
                 environment: {},
-                runner: { standardInput: false },
+                runner: { executable: 'opencode', standardInput: false },
                 assets: [
                     { path: '/virtual/ws', access: 'read-write' },
                     { path: '/virtual/pkg', access: 'read-only' },
@@ -184,7 +184,7 @@ describe('asset sources', () => {
             workbench,
             workspaceDirectory: '/virtual/ws',
             environment: { OPENAI_API_KEY: 'fixture-key' },
-            runner: { standardInput: false },
+            runner: { executable: 'opencode', standardInput: false },
             assets: [
                 { path: '/virtual/ws', access: 'read-write' },
                 { path: '/virtual/pkg', access: 'read-only' },

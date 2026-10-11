@@ -25,6 +25,7 @@ import type {
     RuntimeSessionOptions,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
+import { runnerExecutable } from '../runner.js';
 import type { DockerClient } from './client.js';
 import { DockerManagedContainers } from './containers.js';
 import type {
@@ -114,8 +115,9 @@ export class DockerRuntime implements PreparedRuntime {
         const configuration = new WorkbenchPreflight({
             environment: this.environment,
         }).checkConfiguration(this.workbench);
+        const executable = runnerExecutable(this.options.request);
         const names = [
-            this.workbench.manifest.runner,
+            executable,
             ...this.workbench.manifest.tools,
             ...(this.options.hostSocket ? ['docker'] : []),
             ...(this.options.request.repository?.delivery === 'pr' ? ['gh'] : []),
@@ -124,7 +126,7 @@ export class DockerRuntime implements PreparedRuntime {
         const runnerPath = paths[0];
         if (!runnerPath) {
             throw new Error(
-                `Runner CLI is unavailable in Docker image ${this.preparation.immutableReference}: ${this.workbench.manifest.runner}`
+                `Runner CLI is unavailable in Docker image ${this.preparation.immutableReference}: ${executable}`
             );
         }
         const tools = this.workbench.manifest.tools.map((name, index) => {

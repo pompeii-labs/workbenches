@@ -23,14 +23,16 @@ Common provider variables:
 | `mistral` | `MISTRAL_API_KEY` |
 | `vercel` | `AI_GATEWAY_API_KEY` |
 
-Where keys come from, per run: the `wb` process environment, then `--env-file FILE`, then `--env NAME=value`. `--env-file` silently ignores names that are not provider keys or declared by the Workbench; `--env` rejects them. Prefer `--env-file` or the inherited environment over `--env`, which lands in shell history.
+Where keys come from, per run: the `wb` process environment, then `--env-file FILE`, then `--env NAME=value`. `--env-file` silently ignores names that are not provider keys, credential variables the runner reads itself (such as `CLAUDE_CODE_OAUTH_TOKEN`), or declared by the Workbench; `--env` rejects them. Prefer `--env-file` or the inherited environment over `--env`, which lands in shell history.
 
 Runner credential stores, one per runtime:
 
-- `local`: the runner's own sign-in on the host (`opencode auth login`, or `pi` with `/login`). `wb connect <alias> --runtime local` asks the runner whether it is signed in; it never reads, writes, or copies the runner's files.
-- `docker`: a per-runner volume, written by `wb connect <alias> --runtime docker` through the Workbench image.
-- `e2b`: a store under `~/.workbench/runtime-credentials/e2b/`, written by `wb connect` and synced into each sandbox.
+- `local`: the runner's own sign-in on the host (`opencode auth login`, `pi` with `/login`, or `claude auth login`). `wb connect <alias> --runtime local` asks the runner whether it is signed in; it never reads, writes, or copies the runner's files.
+- `docker`: a per-runner volume, written by `wb connect <alias> --runtime docker` through the Workbench image, for runners that keep one (`opencode`, `pi`).
+- `e2b`: a store under `~/.workbench/runtime-credentials/e2b/`, written by `wb connect` and synced into each sandbox, for runners that keep one (`opencode`, `pi`).
 - `daytona`: no store. Environment keys only, so `wb connect` only checks that the provider variable is set.
+
+`claude-code` keeps no store on any runtime. On `local` it uses the person's Claude Code login (`claude auth login`). On every runtime it also takes `ANTHROPIC_API_KEY`, or your own subscription token from `claude setup-token` as `CLAUDE_CODE_OAUTH_TOKEN`, through the environment or `--env-file`; Workbench never stores the token and passes it only into that run. An OpenRouter or Vercel key also works. Daytona cannot run Claude Code yet. `wb connect` checks readiness and says what is missing, and stores nothing. On `docker` and `e2b`, `--method api-key` checks `ANTHROPIC_API_KEY` and `--method setup-token` checks `CLAUDE_CODE_OAUTH_TOKEN`. On `local`, a Console login (`claude auth login --console`) reports its metered cost and a claude.ai subscription reports none.
 
 ## wb connect
 
@@ -40,7 +42,7 @@ Where the credential comes from, in order:
 
 1. `--stdin`: an API key on standard input, the bare value only (not a `NAME=value` line). The only unattended way to give a key. Never put a key in argv.
 2. Any API-key method in a terminal: a hidden paste prompt, such as `OpenRouter API key for Docker runs (input hidden)`.
-3. A subscription method: a fresh `opencode auth login` runs on the host against a private temporary directory, and only that provider's entry is kept. It needs a person at a terminal. Pi has no command-line sign-in, so a Pi subscription cannot be connected for another runtime; use an API-key method.
+3. A subscription method: the runner's command-line sign-in (`opencode auth login`) runs fresh on the host against a private temporary directory, and only that provider's entry is kept. It needs a person at a terminal. A runner without a command-line sign-in or a store (`pi`, `claude-code`) cannot connect a subscription for another runtime; use an API-key method, or the environment as above.
 
 `wb connect` never reads another tool's credential files, so the person's own runner sign-in is never copied.
 
@@ -48,7 +50,7 @@ The last line is `Ready: <Provider> for <Runner> in <runtime>` after the runner 
 
 `wb connect --runtime e2b --harness opencode --provider openrouter --remove` removes that provider's entry from that store, keeps the others, and drops the saved default if it pointed at that provider (`docker` needs the Workbench reference). Plain `wb connect --runtime e2b --remove` still removes the saved E2B key.
 
-An environment variable for the provider, or `--env-file`, wins over a stored entry and works for one run without connecting. Pi is the exception: as Pi documents, an entry in its `auth.json` wins over the provider variable.
+An environment variable for the provider, or `--env-file`, works for one run without connecting. It wins over a stored entry for `opencode`; for `pi`, a stored entry wins over the provider variable.
 
 ## Errors and fixes
 
@@ -58,7 +60,9 @@ An environment variable for the provider, or `--env-file`, wins over a stored en
 | `Connection X is not authenticated for <model> with <runner> in the <runtime> runtime. Run wb connect ...` | The `--connection` provider has no credential in this runtime. Drop the flag, supply that provider's key, or connect it for that runtime. |
 | `wb connect` exits 3 with `Pass the <Provider> API key on standard input: ...` | No key was given and no terminal is attached. Pipe the key with `--stdin`, or have the person run the command in a terminal. |
 | `wb connect` exits 3 with `... in a terminal with OpenCode installed` | A subscription needs a fresh sign-in. Hand the command to the person, or start one foreground task run so Workbench can present the sign-in flow. |
-| `Docker keeps <Runner> credentials in a volume that is written and checked through a Workbench image` | Rerun with a Workbench reference: `wb connect <alias> --runtime docker`. |
+| `Docker keeps <Runner> credentials in a volume that is written and checked through a Workbench image`, or `<Runner> in Docker is checked through a Workbench image` | Rerun with a Workbench reference: `wb connect <alias> --runtime docker`. |
+| `<Runner> has no credential store Workbench writes; <Provider> keys reach it only from the environment or --env-file` | Nothing can be saved for that runner. Set the provider variable where `wb` runs, or pass `--env-file` on each run. |
+| `Claude Code on the <runtime> runtime needs ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN` | Pass either with `--env-file` or the environment, choose an OpenRouter or Vercel route, or run on `local`. |
 | `Daytona has no runner credential store...` | Set the provider variable where `wb` runs, or pass `--env-file` on each run. |
 | `Authentication is required for <provider>. Start a foreground task run once to finish <provider> sign-in.` | The saved default is an OAuth or native sign-in that has not finished. Run once without `--detach`, or switch to an API key. |
 | `First-run authentication for pi is not available inside a Workbench run yet` | Connect the key first with `wb connect <alias> --runtime <runtime> --stdin`, or pass an env key. |

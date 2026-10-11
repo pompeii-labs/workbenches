@@ -13,6 +13,7 @@ import { RemoteProcess } from '../remote/process.js';
 import { RemoteRuntime, type RemoteRuntimeOptions } from '../remote/runtime.js';
 import { type ArchiveUpload, AssetStage } from '../remote/stage.js';
 import { needsRepositoryTools } from '../repository-tools.js';
+import { runnerExecutable } from '../runner.js';
 import type { StagedAsset } from '../staging/transfer.js';
 import type {
     DaytonaClient,
@@ -107,6 +108,7 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
             sandbox,
             this.options.image
         ).inspect(this.workbench, {
+            runner: runnerExecutable(this.options.request),
             repository: Boolean(this.options.request.repository),
             pullRequests: this.options.request.repository?.delivery === 'pr',
         });

@@ -12,6 +12,8 @@ export interface ImageInspection {
 
 /** What a run needs from the sandbox's image, beyond the Workbench's own tools. */
 export interface ImageNeeds {
+    /** The runner CLI. */
+    runner: string;
     /** The run works on a repository checkout, which needs Git. */
     repository: boolean;
     /** The run delivers a pull request, which needs the GitHub CLI. */
@@ -57,7 +59,7 @@ export class SandboxSetup {
         const names = [
             'git',
             'tar',
-            workbench.manifest.runner,
+            needs.runner,
             ...workbench.manifest.tools,
             ...(needs.pullRequests ? ['gh'] : []),
         ];
@@ -86,7 +88,7 @@ export class SandboxSetup {
         const runnerPath = paths[2];
         if (!runnerPath) {
             throw this.failure(
-                `Runner CLI is unavailable in ${label} image ${image}: ${workbench.manifest.runner}`
+                `Runner CLI is unavailable in ${label} image ${image}: ${needs.runner}`
             );
         }
         const tools = workbench.manifest.tools.map((name, index) => {

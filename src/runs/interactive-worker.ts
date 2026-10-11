@@ -134,6 +134,7 @@ export class InteractiveRunWorker {
                 onPermission: (permission) =>
                     this.nativeRequests.waitForPermission(permission),
                 onQuestion: (question) => this.nativeRequests.waitForQuestion(question),
+                onWithdraw: (id) => this.nativeRequests.withdraw(id),
                 dependencies: {
                     env: options.environment ?? process.env,
                     ...(this.dependencies.findExecutable
@@ -591,9 +592,18 @@ export class InteractiveRunWorker {
         }
     }
 
-    private async fail(error: unknown): Promise<void> {
-        if (this.terminal) return;
+    /**
+     * Ends the run as failed. The failure becomes the termination, so the
+     * worker records it before its process exits.
+     */
+    private fail(error: unknown): Promise<void> {
+        if (this.terminal) return Promise.resolve();
         this.terminal = true;
+        this.termination = this.failNow(error);
+        return this.termination;
+    }
+
+    private async failNow(error: unknown): Promise<void> {
         this.exitCode =
             error instanceof AuthenticationRequiredError ? error.exitCode : 1;
         this.receiveAbort.abort();

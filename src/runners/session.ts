@@ -166,6 +166,12 @@ export interface RunnerSessionHost {
         request: RunnerPermissionRequest
     ): Promise<RunnerPermissionDecision>;
     requestQuestion(request: RunnerQuestionRequest): Promise<RunnerQuestionResponse>;
+    /**
+     * Withdraws a pending permission or question the runner no longer needs
+     * answered. The host stops offering it and records it as rejected; its
+     * pending promise settles as a rejection. An unknown or settled id is ignored.
+     */
+    withdrawRequest?(id: string): Promise<void>;
 }
 
 export interface RunnerSessionContext {

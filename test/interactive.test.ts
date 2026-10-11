@@ -185,6 +185,67 @@ describe('runner-neutral interactive host', () => {
         });
     });
 
+    test('records a permission withdrawn while its request is still being emitted', async () => {
+        const events: WorkbenchEvent[] = [];
+        const adapter = new FakeAdapter({ requestPermission: true });
+        let rejectDecision!: (error: Error) => void;
+        const session = await InteractiveRun.start({
+            resolved: reference(),
+            onEvent: async (event) => {
+                events.push(event);
+                if (event.type === 'input.requested') {
+                    await adapter.withdraw('permission-1');
+                }
+            },
+            onPermission: () =>
+                new Promise((_resolve, reject) => {
+                    rejectDecision = reject;
+                }),
+            onWithdraw: () => rejectDecision(new Error('withdrawn')),
+            dependencies: dependencies(adapter),
+        });
+
+        await session.send('inspect');
+        await session.close();
+
+        expect(adapter.permissionDecisions).toEqual(['reject']);
+        expect(events.find((event) => event.type === 'input.rejected')).toMatchObject({
+            data: { id: 'permission-1', kind: 'permission', code: 'request_withdrawn' },
+        });
+        expect(events.some((event) => event.type === 'input.accepted')).toBe(false);
+    });
+
+    test('records a question withdrawn while its request is still being emitted', async () => {
+        const events: WorkbenchEvent[] = [];
+        const adapter = new FakeAdapter({ requestQuestion: true });
+        let rejectResponse!: (error: Error) => void;
+        const session = await InteractiveRun.start({
+            resolved: reference(),
+            onEvent: async (event) => {
+                events.push(event);
+                if (event.type === 'question.requested') {
+                    await adapter.withdraw('question-1');
+                }
+            },
+            onQuestion: () =>
+                new Promise((_resolve, reject) => {
+                    rejectResponse = reject;
+                }),
+            onWithdraw: () => rejectResponse(new Error('withdrawn')),
+            dependencies: dependencies(adapter),
+        });
+
+        await session.send('inspect');
+        await session.close();
+
+        expect(adapter.questionResponses).toEqual([{ outcome: 'rejected' }]);
+        expect(
+            events.find((event) => event.type === 'question.rejected')
+        ).toMatchObject({
+            data: { id: 'question-1', code: 'request_withdrawn' },
+        });
+    });
+
     test('rejects a permission safely when no interactive handler exists', async () => {
         const adapter = new FakeAdapter({ requestPermission: true });
         const session = await InteractiveRun.start({
@@ -547,6 +608,10 @@ class FakeAdapter implements RunnerSessionAdapter {
         return { reason: this.options.reasons?.[this.prompts.length - 1] ?? 'stop' };
     }
 
+    async withdraw(id: string) {
+        await this.host?.withdrawRequest?.(id);
+    }
+
     private async cancelTurn() {
         this.cancellations += 1;
         this.release?.();
@@ -655,6 +720,7 @@ class InteractiveTestRunner extends Runner {
     readonly name = 'opencode';
     readonly displayName = 'OpenCode';
     readonly session: RunnerSessionAdapter;
+    readonly executable = 'opencode';
     readonly runnerConfig = 'either';
     readonly standardInput = false;
     readonly credentials = RunnerRegistry.standard().resolve('opencode').credentials;

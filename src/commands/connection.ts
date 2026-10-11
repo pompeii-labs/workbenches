@@ -83,10 +83,11 @@ export class ModelConnection {
             await this.#report(await this.#setup.verify(), this.#localAdvice());
             return;
         }
-        if (target.runtime === 'daytona') {
+        // Daytona, or a runner Workbench keeps no credentials for, reads keys from the environment.
+        if (target.runtime === 'daytona' || !this.#setup.storesCredentials) {
             await this.#report(
                 await this.#setup.verify(),
-                `Set ${this.#variables() || 'the provider key'} where wb runs`
+                `Set ${this.#methodVariables() || 'the provider key'} where wb runs`
             );
             return;
         }
@@ -152,7 +153,7 @@ export class ModelConnection {
     async #source(flags: { stdin: boolean }): Promise<CredentialSource> {
         const { target } = this.#options;
         if (flags.stdin) {
-            return { entry: this.#setup.file.apiKey(await this.#stdinKey()) };
+            return { entry: this.#setup.apiKey(await this.#stdinKey()) };
         }
         if (target.method.authenticationMethod === 'oauth') {
             const signIn =
@@ -178,7 +179,7 @@ export class ModelConnection {
                 value?.trim() ? undefined : `Paste your ${this.#provider} API key`,
         });
         if (typeof key === 'symbol') throw new Error('Connection setup cancelled');
-        return { entry: this.#setup.file.apiKey(key) };
+        return { entry: this.#setup.apiKey(key) };
     }
 
     /** The piped key, with one trailing newline removed and nothing else forgiven. */
@@ -245,6 +246,18 @@ export class ModelConnection {
             ActiveModelCatalog.current().providers[this.#options.target.provider]
                 ?.env ?? []
         ).join(' or ');
+    }
+
+    /**
+     * The variables that serve the chosen method: for a subscription, the
+     * runner's own credential variables when it reads any, else the provider's keys.
+     */
+    #methodVariables(): string {
+        const { target } = this.#options;
+        const own = this.#runners.find(target.harness)?.nativeCredentialVariables ?? [];
+        return target.method.authenticationMethod === 'oauth' && own.length
+            ? own.join(' or ')
+            : this.#variables();
     }
 
     #localAdvice(): string {

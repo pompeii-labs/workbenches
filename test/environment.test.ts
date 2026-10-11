@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { RunnerRegistry } from '../src/runners/registry.js';
 import { PathPlan } from '../src/runtimes/remote/paths.js';
 import { TransferRules } from '../src/runtimes/staging/rules.js';
 import type { ResolvedWorkbench } from '../src/types.js';
@@ -102,7 +103,7 @@ describe('Workbench environment overrides', () => {
                     workbench,
                     workspaceDirectory: '/repo',
                     environment: bound,
-                    runner: { standardInput: false },
+                    runner: { executable: 'opencode', standardInput: false },
                     assets: [],
                 },
                 new TransferRules('E2B')
@@ -139,6 +140,77 @@ describe('Workbench environment overrides', () => {
 
         expect(bound).toEqual({ OPENAI_API_KEY: 'explicit' });
         expect(bound.ANTHROPIC_API_KEY).toBeUndefined();
+    });
+
+    test('admits the native credential variables only the selected runner declares', () => {
+        const token = { CLAUDE_CODE_OAUTH_TOKEN: 'fixture-subscription-token' };
+        const claude = fixture();
+        claude.manifest = {
+            ...claude.manifest,
+            runner: 'claude-code',
+            model: { id: 'anthropic/claude-sonnet-4-5' },
+        };
+
+        expect(
+            environment.bind(claude, { file: token, explicit: new Map() }, {})
+        ).toEqual(token);
+        expect(
+            environment.bind(
+                claude,
+                {
+                    file: {},
+                    explicit: new Map([['CLAUDE_CODE_OAUTH_TOKEN', 'explicit-token']]),
+                },
+                {}
+            )
+        ).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'explicit-token' });
+
+        // OpenCode declares none, so the same token stays out.
+        expect(
+            environment.bind(fixture(), { file: token, explicit: new Map() }, {})
+        ).toEqual({});
+        expect(() =>
+            environment.bind(
+                fixture(),
+                {
+                    file: {},
+                    explicit: new Map([['CLAUDE_CODE_OAUTH_TOKEN', 'explicit-token']]),
+                },
+                {}
+            )
+        ).toThrow('Environment override is not supported');
+    });
+
+    test('forwards a runner native credential variable into a remote sandbox only when set', () => {
+        const forwarded = (runner: string, values: Record<string, string>) => {
+            const workbench = fixture();
+            workbench.manifest = { ...workbench.manifest, runner, runtime: 'e2b' };
+            return new PathPlan(
+                {
+                    workbench,
+                    workspaceDirectory: '/repo',
+                    environment: values,
+                    runner: RunnerRegistry.standard().resolve(runner).runtimeContract(),
+                    assets: [],
+                },
+                new TransferRules('E2B')
+            ).environment();
+        };
+        const token = { CLAUDE_CODE_OAUTH_TOKEN: 'fixture-subscription-token' };
+
+        expect(forwarded('claude-code', token).CLAUDE_CODE_OAUTH_TOKEN).toBe(
+            'fixture-subscription-token'
+        );
+        expect(forwarded('claude-code', {})).not.toHaveProperty(
+            'CLAUDE_CODE_OAUTH_TOKEN'
+        );
+        // Runners that declare no native credential variables forward exactly what they did.
+        for (const runner of ['opencode', 'pi']) {
+            expect(forwarded(runner, token)).toEqual(forwarded(runner, {}));
+            expect(forwarded(runner, token)).not.toHaveProperty(
+                'CLAUDE_CODE_OAUTH_TOKEN'
+            );
+        }
     });
 
     test('fails cleanly for missing and oversized environment files', async () => {

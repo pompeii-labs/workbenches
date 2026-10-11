@@ -269,14 +269,14 @@ See [Returned results](docs/OUTCOMES.md) for the complete contract.
 
 | Surface         | Reference engine support                                |
 | --------------- | ------------------------------------------------------- |
-| Harnesses       | OpenCode and Pi                                         |
+| Harnesses       | OpenCode, Pi, and Claude Code                           |
 | Runtimes        | Local, Docker, E2B, and Daytona                         |
 | Interaction     | Terminal UI, one-shot, detached, and resumable sessions |
 | Inputs          | Text and supported image attachments                    |
 | Results         | Changesets, artifacts, and links                        |
 | Repository work | Isolated GitHub checkout with native `git` and `gh`     |
 
-OpenCode supports native permissions, questions, steering, and resume. Pi supports streaming, image input, steering at its next legal model boundary, follow-up input, cancellation, tool events, and resume. Workbench preserves the capabilities each harness actually exposes rather than inventing a common protocol they cannot honor.
+Workbench preserves the capabilities each harness actually exposes rather than inventing a common protocol they cannot honor. The [runner capability table](docs/EXECUTION.md#reference-runner-adapters) lists each harness's runtimes, steering, MCP support, sign-in, and verified versions.
 
 ## Runtime boundaries
 
@@ -286,7 +286,7 @@ Local Workbenches run directly on the host in the selected directory. Declared a
 
 ### Docker
 
-Docker Workbenches run in their declared image. The package is read-only, the workspace is mounted with its declared access, and runner credentials live in a private volume. Host Docker access requires a manifest declaration and an explicit `--allow-host-docker` grant on every run.
+Docker Workbenches run in their declared image. The package is read-only, the workspace is mounted with its declared access, and runner credentials that Workbench manages live in a private volume. Host Docker access requires a manifest declaration and an explicit `--allow-host-docker` grant on every run.
 
 ### E2B
 
@@ -296,7 +296,7 @@ The E2B control key remains on the host. Harness credentials are staged only for
 
 ### Daytona
 
-Daytona Workbenches get a fresh Daytona sandbox created from the entry's published `image` for each execution (`runtimes.daytona` requires `class`; `image` is optional in the schema, but the reference engine cannot prepare an entry without a published `image`, and there is no fallback to another runtime's image), using the same staging rules and pending outcomes as E2B. The `linux` class and OpenCode multi-turn sessions are supported; native authentication and sandbox recovery are not. Pi Workbenches cannot run on Daytona yet. The Daytona key stays on the host, and model credentials come from your environment.
+Daytona Workbenches get a fresh Daytona sandbox created from the entry's published `image` for each execution (`runtimes.daytona` requires `class`; `image` is optional in the schema, but the reference engine cannot prepare an entry without a published `image`, and there is no fallback to another runtime's image), using the same staging rules and pending outcomes as E2B. The `linux` class and multi-turn sessions are supported; native authentication and sandbox recovery are not. Runners that read standard input, Pi and Claude Code, cannot run on Daytona yet. The Daytona key stays on the host, and model credentials come from your environment.
 
 ## Command overview
 
