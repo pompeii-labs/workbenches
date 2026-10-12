@@ -4,8 +4,9 @@ import type { ResolvedWorkbench } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
 import type { RunnerContextStaging } from '../context/stage.js';
 import type { RunnerFiles } from '../types.js';
+import { todoReminderPlugin, todoReminderPluginPath } from './todo-reminder.js';
 
-/** OpenCode's staged skills, native config, and context, and how to remove them. */
+/** OpenCode's staged skills, native config, plugins, and context, and how to remove them. */
 export class StagedOpenCodeSkills {
     constructor(
         private readonly files: RunnerFiles,
@@ -20,7 +21,7 @@ export class StagedOpenCodeSkills {
     }
 }
 
-/** Stages OpenCode skills, native config, and context through `files`. */
+/** Stages OpenCode skills, native config, wb's plugins, and context through `files`. */
 export class OpenCodeSkillStaging {
     constructor(
         private readonly files: RunnerFiles,
@@ -62,6 +63,11 @@ export class OpenCodeSkillStaging {
                 workbench.skills.map((skill) =>
                     files.copy(skill.directory, join(skillsDirectory, skill.name))
                 )
+            );
+            await files.mkdir(join(directory, 'plugin'), { recursive: true });
+            await files.writeFile(
+                join(directory, todoReminderPluginPath),
+                todoReminderPlugin
             );
             context = await this.context.stage({ directory, workbench });
             await files.chmod(directory, 0o555);
