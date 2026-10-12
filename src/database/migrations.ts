@@ -104,8 +104,7 @@ CREATE TABLE leases (
     name TEXT PRIMARY KEY,
     token TEXT NOT NULL,
     pid INTEGER NOT NULL,
-    acquired_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL
+    acquired_at INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE run_status (

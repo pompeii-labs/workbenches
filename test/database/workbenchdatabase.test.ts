@@ -249,14 +249,34 @@ describe('leases', () => {
         expect(leases.tryAcquire('busy', 'third')).toBeTrue();
     });
 
-    test('recover once their expiry has passed', async () => {
+    test('stay with a live holder however old they are', async () => {
         const home = await temporaryHome();
-        const leases = new LeaseStore(WorkbenchDatabase.forHome(home));
+        const longAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
+        const database = WorkbenchDatabase.forHome(home);
         expect(
-            leases.tryAcquire('aged', 'first', Date.now() - 25 * 60 * 60 * 1000)
+            new LeaseStore(database, () => longAgo).tryAcquire('aged', 'first')
         ).toBeTrue();
 
-        expect(leases.tryAcquire('aged', 'second')).toBeTrue();
+        expect(new LeaseStore(database).tryAcquire('aged', 'second')).toBeFalse();
+        expect(database.one('SELECT acquired_at FROM leases')).toEqual({
+            acquired_at: longAgo,
+        });
+    });
+
+    test('are recovered when their owner process is gone', async () => {
+        const home = await temporaryHome();
+        const database = WorkbenchDatabase.forHome(home);
+        const leases = new LeaseStore(database);
+        const finished = Bun.spawn(['true']);
+        await finished.exited;
+        database.run(
+            'INSERT INTO leases (name, token, pid, acquired_at) VALUES (?, ?, ?, 0)',
+            'gone',
+            'planted',
+            finished.pid
+        );
+
+        expect(leases.tryAcquire('gone', 'next')).toBeTrue();
     });
 });
 

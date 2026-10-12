@@ -191,12 +191,11 @@ describe('durable Workbench runs', () => {
         const home = await temporaryHome();
         const database = WorkbenchDatabase.forHome(home);
         database.run(
-            'INSERT INTO leases (name, token, pid, acquired_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+            'INSERT INTO leases (name, token, pid, acquired_at) VALUES (?, ?, ?, ?)',
             'reconcile:test',
             'existing',
             process.pid,
-            Date.now(),
-            Date.now() + 60_000
+            Date.now()
         );
         const inspected = Promise.withResolvers<void>();
         const probe = spyOn(process, 'kill').mockImplementation(() => {

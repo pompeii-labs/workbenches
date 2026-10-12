@@ -1,3 +1,4 @@
+import { ProcessProbe } from '../processes/processprobe.js';
 import type { WorkbenchDatabase } from './workbenchdatabase.js';
 
 export interface LeaseOptions {
@@ -6,16 +7,17 @@ export interface LeaseOptions {
     timeoutMessage: string;
 }
 
-/** A lease older than this is released even if its recorded process looks alive (pid reuse). */
-const LEASE_LIFETIME_MILLISECONDS = 24 * 60 * 60 * 1000;
-
 /**
  * Named mutual exclusion between processes, stored as rows. A lease is taken
- * and released in transactions. A lease whose owner process is gone, or that
- * outlived its expiry, is recovered by the next taker.
+ * and released in transactions. The owner is recorded by pid, and a lease is
+ * recovered only when that process is gone.
  */
 export class LeaseStore {
-    constructor(private readonly database: WorkbenchDatabase) {}
+    constructor(
+        private readonly database: WorkbenchDatabase,
+        private readonly clock: () => number = Date.now,
+        private readonly probe = new ProcessProbe()
+    ) {}
 
     async exclusive<T>(
         name: string,
@@ -23,9 +25,9 @@ export class LeaseStore {
         operation: () => Promise<T>
     ): Promise<T> {
         const token = crypto.randomUUID();
-        const started = Date.now();
+        const started = this.clock();
         while (!this.tryAcquire(name, token)) {
-            if (Date.now() - started >= options.timeoutMilliseconds)
+            if (this.clock() - started >= options.timeoutMilliseconds)
                 throw new Error(options.timeoutMessage);
             await Bun.sleep(options.pollMilliseconds);
         }
@@ -36,27 +38,21 @@ export class LeaseStore {
         }
     }
 
-    tryAcquire(name: string, token: string, now = Date.now()): boolean {
+    tryAcquire(name: string, token: string): boolean {
         return this.database.transaction(() => {
             const held = this.database.one(
-                'SELECT pid, expires_at FROM leases WHERE name = ?',
+                'SELECT pid FROM leases WHERE name = ?',
                 name
             );
-            if (
-                held &&
-                typeof held.pid === 'number' &&
-                typeof held.expires_at === 'number' &&
-                held.expires_at > now &&
-                processIsAlive(held.pid)
-            )
+            // A live holder keeps its lease however long it holds it.
+            if (held && typeof held.pid === 'number' && this.probe.alive(held.pid))
                 return false;
             this.database.run(
-                'INSERT OR REPLACE INTO leases (name, token, pid, acquired_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+                'INSERT OR REPLACE INTO leases (name, token, pid, acquired_at) VALUES (?, ?, ?, ?)',
                 name,
                 token,
                 process.pid,
-                now,
-                now + LEASE_LIFETIME_MILLISECONDS
+                this.clock()
             );
             return true;
         });
@@ -68,15 +64,5 @@ export class LeaseStore {
             name,
             token
         );
-    }
-}
-
-function processIsAlive(pid: number): boolean {
-    try {
-        process.kill(pid, 0);
-        return true;
-    } catch (error) {
-        // An inaccessible process still owns its lease.
-        return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
     }
 }
