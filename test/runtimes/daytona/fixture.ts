@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 
+import { RunnerRegistry } from '../../../src/runners/registry.js';
 import type {
     DaytonaClient,
     DaytonaClock,
@@ -339,6 +340,9 @@ export function request(workbench: ResolvedWorkbench) {
         workbench,
         workspaceDirectory: workbench.repositoryDirectory,
         environment: { OPENAI_API_KEY: 'fixture-key' },
+        runner: RunnerRegistry.standard()
+            .resolve(workbench.manifest.runner)
+            .runtimeContract(),
         assets: [
             { path: workbench.repositoryDirectory, access: 'read-write' as const },
             { path: workbench.packageDirectory, access: 'read-only' as const },

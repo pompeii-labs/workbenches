@@ -113,7 +113,7 @@ export class DiskAssetSnapshot implements StagedAsset {
             return new StateStore(
                 new SandboxArchive(sources.rules),
                 binding.hostPath,
-                binding.kind === 'credentials' ? nativeCredentialPaths : undefined
+                binding.kind === 'credentials' ? nativeCredentialPaths() : undefined
             ).withSource((source) =>
                 DiskAssetSnapshot.createFrom(binding, maximumBytes, {
                     source: sources.local,
@@ -162,7 +162,7 @@ export class DiskAssetSnapshot implements StagedAsset {
                 ? binding.kind === 'credentials'
                     ? await new StateSelection(
                           sourcePath,
-                          nativeCredentialPaths,
+                          nativeCredentialPaths(),
                           rules.provider
                       ).existing()
                     : await plan.selectPaths(
@@ -240,7 +240,7 @@ export class DiskAssetSnapshot implements StagedAsset {
         return new StateStore(
             this.archives,
             this.binding.hostPath,
-            this.binding.kind === 'credentials' ? nativeCredentialPaths : undefined
+            this.binding.kind === 'credentials' ? nativeCredentialPaths() : undefined
         ).install(archive, this.stateSource.version, maximumBytes);
     }
 

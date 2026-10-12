@@ -3,8 +3,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { RunnerRegistry } from '../src/runners/index.js';
 import { Workbench } from '../src/workbench/index.js';
 
+const runners = RunnerRegistry.standard();
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -18,8 +20,8 @@ afterEach(async () => {
 describe('spec 0 manifest parser', () => {
     test('resolves the same package from its directory or manifest file', async () => {
         const fixture = await createFixture();
-        const fromDirectory = await Workbench.load(fixture.packageDirectory);
-        const fromFile = await Workbench.load(fixture.manifestPath);
+        const fromDirectory = await Workbench.load(fixture.packageDirectory, runners);
+        const fromFile = await Workbench.load(fixture.manifestPath, runners);
 
         expect(fromDirectory).toEqual(fromFile);
         expect(fromDirectory.manifest).toMatchObject({
@@ -37,10 +39,10 @@ describe('spec 0 manifest parser', () => {
             manifest: validManifest().replace('spec: 0', 'spec: 2'),
         });
 
-        await expect(Workbench.load(missing.packageDirectory)).rejects.toThrow(
+        await expect(Workbench.load(missing.packageDirectory, runners)).rejects.toThrow(
             'Manifest spec undefined is not supported by this engine; upgrade wb'
         );
-        await expect(Workbench.load(future.packageDirectory)).rejects.toThrow(
+        await expect(Workbench.load(future.packageDirectory, runners)).rejects.toThrow(
             'Manifest spec 2 is not supported by this engine; upgrade wb'
         );
     });
@@ -59,11 +61,11 @@ describe('spec 0 manifest parser', () => {
             ),
         });
 
-        await expect(Workbench.load(legacyString.packageDirectory)).rejects.toThrow(
-            'model must be an object'
-        );
+        await expect(
+            Workbench.load(legacyString.packageDirectory, runners)
+        ).rejects.toThrow('model must be an object');
         expect(
-            (await Workbench.load(providerNeutral.packageDirectory)).manifest
+            (await Workbench.load(providerNeutral.packageDirectory, runners)).manifest
         ).toMatchObject({
             spec: 0,
             model: {
@@ -80,7 +82,7 @@ describe('spec 0 manifest parser', () => {
                 'version: 1.2.3-rc.1+build.7'
             ),
         });
-        const resolved = await Workbench.load(fixture.packageDirectory);
+        const resolved = await Workbench.load(fixture.packageDirectory, runners);
         expect(resolved.manifest.version).toBe('1.2.3-rc.1+build.7');
     });
 
@@ -88,7 +90,7 @@ describe('spec 0 manifest parser', () => {
         const fixture = await createFixture({
             manifest: validManifest().replace('version: 0.1.0', 'version: latest'),
         });
-        await expect(Workbench.load(fixture.packageDirectory)).rejects.toThrow(
+        await expect(Workbench.load(fixture.packageDirectory, runners)).rejects.toThrow(
             'version must be a semantic version'
         );
     });
@@ -97,7 +99,7 @@ describe('spec 0 manifest parser', () => {
         const fixture = await createFixture({
             manifest: `${validManifest()}surprise: true\n`,
         });
-        await expect(Workbench.load(fixture.packageDirectory)).rejects.toThrow(
+        await expect(Workbench.load(fixture.packageDirectory, runners)).rejects.toThrow(
             'Unknown manifest field: surprise'
         );
     });
@@ -110,11 +112,11 @@ describe('spec 0 manifest parser', () => {
             manifest: `${validManifest()}image:\n  build: ./Dockerfile.workbench\n  context: ../..\n`,
         });
 
-        expect((await Workbench.load(published.packageDirectory)).manifest.image).toBe(
-            'ghcr.io/example/workbench:0.1.0'
-        );
         expect(
-            (await Workbench.load(localBuild.packageDirectory)).manifest.image
+            (await Workbench.load(published.packageDirectory, runners)).manifest.image
+        ).toBe('ghcr.io/example/workbench:0.1.0');
+        expect(
+            (await Workbench.load(localBuild.packageDirectory, runners)).manifest.image
         ).toEqual({ build: './Dockerfile.workbench', context: '../..' });
     });
 
@@ -122,23 +124,25 @@ describe('spec 0 manifest parser', () => {
         const valid = await createFixture({
             manifest: `${validManifest().replace('runtime: local', 'runtime: docker')}image: alpine:3.22\ndocker:\n  engine:\n    mode: host\n`,
         });
-        expect((await Workbench.load(valid.packageDirectory)).manifest.docker).toEqual({
+        expect(
+            (await Workbench.load(valid.packageDirectory, runners)).manifest.docker
+        ).toEqual({
             engine: { mode: 'host' },
         });
 
         const local = await createFixture({
             manifest: `${validManifest()}docker:\n  engine:\n    mode: host\n`,
         });
-        await expect(Workbench.load(local.packageDirectory)).rejects.toThrow(
+        await expect(Workbench.load(local.packageDirectory, runners)).rejects.toThrow(
             'docker.engine requires runtime: docker'
         );
 
         const unsupported = await createFixture({
             manifest: `${validManifest().replace('runtime: local', 'runtime: docker')}docker:\n  engine:\n    mode: isolated\n`,
         });
-        await expect(Workbench.load(unsupported.packageDirectory)).rejects.toThrow(
-            'docker.engine.mode must be host'
-        );
+        await expect(
+            Workbench.load(unsupported.packageDirectory, runners)
+        ).rejects.toThrow('docker.engine.mode must be host');
     });
 
     test('rejects incomplete and unknown local image build fields', async () => {
@@ -149,10 +153,10 @@ describe('spec 0 manifest parser', () => {
             manifest: `${validManifest()}image:\n  build: ./Dockerfile\n  platform: linux/amd64\n`,
         });
 
-        await expect(Workbench.load(incomplete.packageDirectory)).rejects.toThrow(
-            'image.build must be a non-empty string'
-        );
-        await expect(Workbench.load(unknown.packageDirectory)).rejects.toThrow(
+        await expect(
+            Workbench.load(incomplete.packageDirectory, runners)
+        ).rejects.toThrow('image.build must be a non-empty string');
+        await expect(Workbench.load(unknown.packageDirectory, runners)).rejects.toThrow(
             'Unknown image field: platform'
         );
     });
@@ -165,17 +169,17 @@ describe('spec 0 manifest parser', () => {
             manifest: `${validManifest()}image:\n  build: ../../../Dockerfile\n`,
         });
 
-        await expect(Workbench.load(absolute.packageDirectory)).rejects.toThrow(
-            'image.build must be a relative path'
-        );
-        await expect(Workbench.load(escaped.packageDirectory)).rejects.toThrow(
+        await expect(
+            Workbench.load(absolute.packageDirectory, runners)
+        ).rejects.toThrow('image.build must be a relative path');
+        await expect(Workbench.load(escaped.packageDirectory, runners)).rejects.toThrow(
             'image.build must remain inside the repository'
         );
     });
 
     test('rejects a missing instructions file', async () => {
         const fixture = await createFixture({ writeInstructions: false });
-        await expect(Workbench.load(fixture.packageDirectory)).rejects.toThrow(
+        await expect(Workbench.load(fixture.packageDirectory, runners)).rejects.toThrow(
             'Instructions file does not exist'
         );
     });
@@ -187,7 +191,7 @@ describe('spec 0 manifest parser', () => {
                 'instructions: /tmp/instructions.md'
             ),
         });
-        await expect(Workbench.load(fixture.packageDirectory)).rejects.toThrow(
+        await expect(Workbench.load(fixture.packageDirectory, runners)).rejects.toThrow(
             'instructions must be a relative path'
         );
     });
@@ -201,7 +205,7 @@ describe('spec 0 manifest parser', () => {
             '# Instructions\n'
         );
 
-        await expect(Workbench.load(repositoryDirectory)).rejects.toThrow(
+        await expect(Workbench.load(repositoryDirectory, runners)).rejects.toThrow(
             'Workbench must live beneath a .workbenches directory'
         );
     });
@@ -213,7 +217,7 @@ describe('spec 0 manifest parser', () => {
                 'env:\n  lower_case:\n    required: true'
             ),
         });
-        await expect(Workbench.load(fixture.packageDirectory)).rejects.toThrow(
+        await expect(Workbench.load(fixture.packageDirectory, runners)).rejects.toThrow(
             'Invalid environment variable name: lower_case'
         );
     });
@@ -222,7 +226,7 @@ describe('spec 0 manifest parser', () => {
         const fixture = await createFixture({
             manifest: validManifest().replace('env: {}', 'env:\n  TOKEN: {}'),
         });
-        const resolved = await Workbench.load(fixture.packageDirectory);
+        const resolved = await Workbench.load(fixture.packageDirectory, runners);
         expect(resolved.manifest.env.TOKEN).toEqual({ required: true });
     });
 
@@ -233,7 +237,7 @@ describe('spec 0 manifest parser', () => {
                 'env:\n  TOKEN:\n    secret: true'
             ),
         });
-        await expect(Workbench.load(fixture.packageDirectory)).rejects.toThrow(
+        await expect(Workbench.load(fixture.packageDirectory, runners)).rejects.toThrow(
             'Unknown env.TOKEN field: secret'
         );
     });
@@ -242,7 +246,7 @@ describe('spec 0 manifest parser', () => {
         const fixture = await createFixture({
             manifest: `${validManifest()}workspaces:\n  api:\n    access: read-write\n  schemas:\n    required: false\n`,
         });
-        const resolved = await Workbench.load(fixture.packageDirectory);
+        const resolved = await Workbench.load(fixture.packageDirectory, runners);
         expect(resolved.manifest.workspaces).toEqual({
             api: { required: true, access: 'read-write' },
             schemas: { required: false, access: 'read-only' },
@@ -263,16 +267,16 @@ describe('spec 0 manifest parser', () => {
             manifest: `${validManifest()}workspaces:\n  api:\n    path: ../api\n`,
         });
 
-        await expect(Workbench.load(invalidName.packageDirectory)).rejects.toThrow(
-            'Invalid workspace name: Bad_Name'
-        );
-        await expect(Workbench.load(reserved.packageDirectory)).rejects.toThrow(
-            'Invalid workspace name: primary'
-        );
-        await expect(Workbench.load(invalidAccess.packageDirectory)).rejects.toThrow(
-            'workspaces.api.access must be read-only or read-write'
-        );
-        await expect(Workbench.load(unknown.packageDirectory)).rejects.toThrow(
+        await expect(
+            Workbench.load(invalidName.packageDirectory, runners)
+        ).rejects.toThrow('Invalid workspace name: Bad_Name');
+        await expect(
+            Workbench.load(reserved.packageDirectory, runners)
+        ).rejects.toThrow('Invalid workspace name: primary');
+        await expect(
+            Workbench.load(invalidAccess.packageDirectory, runners)
+        ).rejects.toThrow('workspaces.api.access must be read-only or read-write');
+        await expect(Workbench.load(unknown.packageDirectory, runners)).rejects.toThrow(
             'Unknown workspaces.api field: path'
         );
     });
@@ -297,18 +301,18 @@ describe('spec 0 manifest parser', () => {
             ),
         });
 
-        await expect(Workbench.load(invalidName.packageDirectory)).rejects.toThrow(
-            'Invalid MCP name'
-        );
-        await expect(Workbench.load(invalidUrl.packageDirectory)).rejects.toThrow(
-            'must use http or https'
-        );
-        await expect(Workbench.load(invalidTransport.packageDirectory)).rejects.toThrow(
-            'transport must be http'
-        );
-        await expect(Workbench.load(duplicate.packageDirectory)).rejects.toThrow(
-            'Duplicate MCP name: server'
-        );
+        await expect(
+            Workbench.load(invalidName.packageDirectory, runners)
+        ).rejects.toThrow('Invalid MCP name');
+        await expect(
+            Workbench.load(invalidUrl.packageDirectory, runners)
+        ).rejects.toThrow('must use http or https');
+        await expect(
+            Workbench.load(invalidTransport.packageDirectory, runners)
+        ).rejects.toThrow('transport must be http');
+        await expect(
+            Workbench.load(duplicate.packageDirectory, runners)
+        ).rejects.toThrow('Duplicate MCP name: server');
     });
 
     test('resolves a valid portable skill', async () => {
@@ -322,7 +326,7 @@ describe('spec 0 manifest parser', () => {
                     '---\nname: migrations\ndescription: Manage migrations safely.\n---\n\n# Migrations\n',
             },
         });
-        const resolved = await Workbench.load(fixture.packageDirectory);
+        const resolved = await Workbench.load(fixture.packageDirectory, runners);
         expect(resolved.skills.map((skill) => skill.name)).toEqual(['migrations']);
     });
 
@@ -335,15 +339,15 @@ describe('spec 0 manifest parser', () => {
             '---\nname: other\ndescription: Wrong name.\n---\n'
         );
 
-        await expect(Workbench.load(noFrontmatter.packageDirectory)).rejects.toThrow(
-            'Skill must begin with YAML frontmatter'
-        );
-        await expect(Workbench.load(noDescription.packageDirectory)).rejects.toThrow(
-            'description must be a non-empty string'
-        );
-        await expect(Workbench.load(mismatch.packageDirectory)).rejects.toThrow(
-            'Skill name must match its directory: other'
-        );
+        await expect(
+            Workbench.load(noFrontmatter.packageDirectory, runners)
+        ).rejects.toThrow('Skill must begin with YAML frontmatter');
+        await expect(
+            Workbench.load(noDescription.packageDirectory, runners)
+        ).rejects.toThrow('description must be a non-empty string');
+        await expect(
+            Workbench.load(mismatch.packageDirectory, runners)
+        ).rejects.toThrow('Skill name must match its directory: other');
     });
 
     test('rejects duplicate resolved skills', async () => {
@@ -357,7 +361,7 @@ describe('spec 0 manifest parser', () => {
                     '---\nname: migrations\ndescription: Manage migrations safely.\n---\n',
             },
         });
-        await expect(Workbench.load(fixture.packageDirectory)).rejects.toThrow(
+        await expect(Workbench.load(fixture.packageDirectory, runners)).rejects.toThrow(
             'Duplicate skill name: migrations'
         );
     });

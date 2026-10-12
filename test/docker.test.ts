@@ -15,7 +15,7 @@ import { ConnectionCheck } from '../src/connections/check.js';
 import { NativeCredentialFile } from '../src/connections/nativecredentials.js';
 import { ConnectionSetup } from '../src/connections/setup.js';
 import { OutcomeOutput } from '../src/outcomes/output.js';
-import type { RunnerRegistry } from '../src/runners/registry.js';
+import { RunnerRegistry } from '../src/runners/registry.js';
 import type { PreparedRunner } from '../src/runners/runner.js';
 import { RunEvents } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/index.js';
@@ -459,7 +459,7 @@ describe('Docker runtime provider', () => {
             host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock(commands),
-        }).prepare({ ...request(fixture), purpose: 'build' });
+        }).prepare(buildRequest(fixture));
         try {
             expect(
                 commands.some(
@@ -601,7 +601,7 @@ describe('Docker runtime provider', () => {
                 new ConnectionCheck({
                     ...options,
                     runtimes: registry,
-                    runners: { prepare: async () => runner },
+                    runners: openCodePreparing(runner),
                 }),
         });
 
@@ -694,7 +694,7 @@ describe('Docker runtime provider', () => {
             {
                 environment: {},
                 runtimes: registry,
-                runners: { prepare: async () => runner } as unknown as RunnerRegistry,
+                runners: openCodePreparing(runner),
             }
         );
         try {
@@ -1483,6 +1483,9 @@ function request(
         workbench: fixture.workbench,
         workspaceDirectory: fixture.root,
         environment,
+        runner: RunnerRegistry.standard()
+            .resolve(fixture.workbench.manifest.runner)
+            .runtimeContract(),
         assets: [
             { path: fixture.root, access: 'read-write' as const },
             {
@@ -1491,6 +1494,27 @@ function request(
             },
         ],
     };
+}
+
+/** A registry whose OpenCode runner declares everything OpenCode does but prepares `prepared`. */
+function openCodePreparing(prepared: PreparedRunner): RunnerRegistry {
+    const opencode = RunnerRegistry.standard().resolve('opencode');
+    const runner = {
+        ...opencode,
+        runtimeContract: () => opencode.runtimeContract(),
+        prepare: async () => prepared,
+    };
+    return { resolve: () => runner } as unknown as RunnerRegistry;
+}
+
+/** An image build, which never launches the runner and so carries no runner contract. */
+function buildRequest(fixture: {
+    root: string;
+    packageDirectory: string;
+    workbench: ResolvedWorkbench;
+}) {
+    const { runner: _runner, ...fields } = request(fixture);
+    return { ...fields, purpose: 'build' as const };
 }
 
 describe('Docker runtime provider contract', () => {

@@ -1,4 +1,5 @@
 import { ActiveModelCatalog, type AuthenticatedModelRoute } from '../models/index.js';
+import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRuntime, RuntimeCredentialFiles } from '../runtimes/contracts.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { ConnectionCheck, type ConnectionCheckOptions } from './check.js';
@@ -41,6 +42,8 @@ export interface ConnectionSetupOptions {
     check?: (
         options: ConnectionCheckOptions
     ) => Pick<ConnectionCheck, 'open' | 'inspect'>;
+    /** The runners the target harness is resolved from. */
+    runners?: Pick<RunnerRegistry, 'find' | 'resolve'>;
 }
 
 /**
@@ -56,10 +59,12 @@ export interface ConnectionSetupOptions {
 export class ConnectionSetup {
     readonly file: NativeCredentialFile;
     readonly #options: ConnectionSetupOptions;
+    readonly #runners: Pick<RunnerRegistry, 'find' | 'resolve'>;
 
     constructor(options: ConnectionSetupOptions) {
         this.#options = options;
-        this.file = NativeCredentialFile.for(options.target.harness);
+        this.#runners = options.runners ?? RunnerRegistry.standard();
+        this.file = NativeCredentialFile.for(options.target.harness, this.#runners);
     }
 
     /** Refuses runtimes whose store Workbench does not write: `local` and `daytona`. */
@@ -68,7 +73,7 @@ export class ConnectionSetup {
         if (target.runtime === 'docker' || target.runtime === 'e2b') return;
         throw new Error(
             target.runtime === 'local'
-                ? `The local runtime uses your own ${harnessLabel(target.harness)} sign-in; Workbench neither writes nor removes it`
+                ? `The local runtime uses your own ${this.#runner} sign-in; Workbench neither writes nor removes it`
                 : `${runtimeLabel(target.runtime)} has no runner credential store; provider keys reach it only from the environment`
         );
     }
@@ -129,8 +134,8 @@ export class ConnectionSetup {
             ),
             target.method.nativeProvider
         );
-        // Pi reads its auth.json before the environment, so a stored Pi entry decides alone.
-        if (entry && target.harness === 'pi') {
+        // A runner that reads its credential file before the environment lets a stored entry decide alone.
+        if (entry && this.file.storeFirst) {
             return this.#serves(entry)
                 ? ready({ saved: true })
                 : this.#missing(this.#mismatch(entry));
@@ -167,8 +172,8 @@ export class ConnectionSetup {
 
     /**
      * Checks inside the runtime with the inspector smoke uses. `stored` writes
-     * or reads the runtime store's entry first, so a Pi entry can decide
-     * readiness as it does for a run. A runtime without a store passes none.
+     * or reads the runtime store's entry first, so a store-first runner's entry
+     * can decide readiness as it does for a run. A runtime without a store passes none.
      */
     async #inspect(
         stored?: (
@@ -191,7 +196,7 @@ export class ConnectionSetup {
                   }
                 : {}),
         });
-        if (entry && target.harness === 'pi' && !this.#serves(entry)) {
+        if (entry && this.file.storeFirst && !this.#serves(entry)) {
             return this.#missing(this.#mismatch(entry));
         }
         const route = status.connections.find((connection) =>
@@ -250,6 +255,7 @@ export class ConnectionSetup {
             reference: workbench.reference,
             environment: this.#options.environment,
             ...(this.#options.store ? { store: this.#options.store } : {}),
+            runners: this.#runners,
         };
         return this.#options.check?.(options) ?? new ConnectionCheck(options);
     }
@@ -265,7 +271,8 @@ export class ConnectionSetup {
 
     /**
      * Inherited provider variables win over stored entries for a run, except
-     * for Pi. A variable holds an API key, so it never serves a subscription.
+     * for a store-first runner. A variable holds an API key, so it never serves
+     * a subscription.
      */
     #environmentServes(): boolean {
         if (this.#options.target.method.authenticationMethod === 'oauth') return false;
@@ -280,7 +287,7 @@ export class ConnectionSetup {
     }
 
     get #runner(): string {
-        return harnessLabel(this.#options.target.harness);
+        return harnessLabel(this.#options.target.harness, this.#runners);
     }
 }
 

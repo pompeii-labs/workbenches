@@ -215,13 +215,14 @@ export class ExecutionPreparation {
                     publishRunOutcome(home, this.options.events, outcome, state),
             });
         }
-        this.runner = await (
-            this.dependencies.runners ?? RunnerRegistry.standard()
-        ).prepare(workbench, environment);
+        const runners = this.dependencies.runners ?? RunnerRegistry.standard();
+        const harness = runners.resolve(workbench.manifest.runner);
+        this.runner = await harness.prepare(workbench, environment);
         this.runtime = await this.dependencies.runtimes.resolve(runtimeName).prepare({
             workbench,
             workspaceDirectory,
             environment,
+            runner: harness.runtimeContract(),
             assets: [
                 { path: workspaceDirectory, access: 'read-write' },
                 ...(this.repository
@@ -291,11 +292,16 @@ export class ExecutionPreparation {
                 : {}),
         });
         const preflight = await this.runtime.preflight();
-        const selection = await this.selectConnection(this.runner, this.runtime);
+        const selection = await this.selectConnection(
+            runners,
+            this.runner,
+            this.runtime
+        );
         return { runner: this.runner, runtime: this.runtime, preflight, ...selection };
     }
 
     private async selectConnection(
+        runners: Pick<RunnerRegistry, 'resolve'>,
         runner: PreparedRunner,
         runtime: PreparedRuntime
     ): Promise<Pick<PreparedExecution, 'configuration' | 'authentication'>> {
@@ -307,6 +313,7 @@ export class ExecutionPreparation {
             runner,
             reference: this.options.reference ?? workbench.manifest.name,
             ...(store ? { store } : {}),
+            runners,
         });
         if (this.options.mode === 'one-shot') {
             return { configuration: await inspector.require(connection) };
@@ -337,7 +344,7 @@ export class ExecutionPreparation {
                     `Authentication is required for ${preferred.provider}. Start a foreground task run once to finish ${preferred.nativeProvider} sign-in.`
                 );
             }
-            if (workbench.manifest.runner !== 'opencode') {
+            if (!runners.resolve(workbench.manifest.runner).connection.inRunSignIn) {
                 throw new Error(
                     `First-run authentication for ${workbench.manifest.runner} is not available inside a Workbench run yet`
                 );

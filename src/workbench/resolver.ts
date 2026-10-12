@@ -3,10 +3,11 @@ import { resolve } from 'node:path';
 import { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import type { CatalogRegistryReference } from '../catalog/types.js';
 import type { RepositoryRequest } from '../repositories/contracts.js';
+import { RunnerRegistry } from '../runners/registry.js';
 import { workbenchHome } from '../storage.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { WorkbenchSource } from './source.js';
-import { Workbench } from './workbench.js';
+import { type RunnerConfigShapes, Workbench } from './workbench.js';
 
 export interface ResolvedWorkbenchReference {
     workbench: ResolvedWorkbench;
@@ -25,6 +26,10 @@ export interface WorkbenchResolverOptions {
 }
 
 export class WorkbenchResolver {
+    constructor(
+        private readonly runners: RunnerConfigShapes = RunnerRegistry.standard()
+    ) {}
+
     async resolve(
         value: string,
         options: WorkbenchResolverOptions = {}
@@ -36,7 +41,8 @@ export class WorkbenchResolver {
             if (saved) {
                 return {
                     workbench: await Workbench.load(
-                        saved.localPath ?? saved.packagePath
+                        saved.localPath ?? saved.packagePath,
+                        this.runners
                     ),
                     workspaceDirectory: resolve(options.workspaceDirectory ?? cwd),
                     cleanup: async () => {},
@@ -52,7 +58,7 @@ export class WorkbenchResolver {
             );
         }
 
-        const source = new WorkbenchSource(cwd);
+        const source = new WorkbenchSource(cwd, this.runners);
         const reference = source.parse(value);
         const local = await source.local(reference.source);
         if (!local) {

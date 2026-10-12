@@ -22,11 +22,13 @@ import {
 } from '../src/authoring/index.js';
 import { WorkbenchPackage } from '../src/catalog/index.js';
 import type { RegistryPackage } from '../src/registry/index.js';
+import { RunnerRegistry } from '../src/runners/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
 import { SessionStore } from '../src/sessions/index.js';
 import type { WorkbenchManifest } from '../src/types.js';
 import { Workbench } from '../src/workbench/index.js';
 
+const runners = RunnerRegistry.standard();
 const temporaryDirectories: string[] = [];
 const smoke = async () => {};
 
@@ -144,7 +146,7 @@ describe('native Workbench authoring', () => {
         expect(edit.prompt).toContain('.workbenches/core');
         await edit.operation.finish();
 
-        const workbench = await Workbench.load(packageDirectory);
+        const workbench = await Workbench.load(packageDirectory, runners);
         const run = await new RunDispatcher(home).prepare({
             resolved: {
                 workbench,
@@ -174,7 +176,7 @@ describe('native Workbench authoring', () => {
             join(packageDirectory, 'workbench.yml'),
             verificationManifest('core', '0.1.0')
         );
-        const workbench = await Workbench.load(packageDirectory);
+        const workbench = await Workbench.load(packageDirectory, runners);
         const run = await new RunDispatcher(home).prepare({
             resolved: {
                 workbench,
@@ -228,7 +230,7 @@ describe('native Workbench authoring', () => {
         const home = await temporaryDirectory('workbench-authoring-home-');
         const repository = await temporaryDirectory('workbench-authoring-repo-');
         const packageDirectory = await writeWorkbench(repository, 'core', '0.1.0');
-        const workbench = await Workbench.load(packageDirectory);
+        const workbench = await Workbench.load(packageDirectory, runners);
         const authoring = new WorkbenchAuthoring(home, {
             smoke,
             resolver: {
@@ -1140,7 +1142,7 @@ describe('native Workbench authoring', () => {
         const home = await temporaryDirectory('workbench-pinned-home-');
         const repository = await temporaryDirectory('workbench-pinned-repo-');
         const packageDirectory = await writeWorkbench(repository, 'core', '0.1.0');
-        const workbench = await Workbench.load(packageDirectory);
+        const workbench = await Workbench.load(packageDirectory, runners);
         const dispatcher = new RunDispatcher(home);
         const run = await dispatcher.prepare({
             resolved: {
@@ -1157,7 +1159,7 @@ describe('native Workbench authoring', () => {
         expect(session.workbench_digest).toMatch(/^sha256:[0-9a-f]{64}$/);
 
         await writeFile(join(packageDirectory, 'instructions.md'), '# mutated\n');
-        const mutated = await Workbench.load(packageDirectory);
+        const mutated = await Workbench.load(packageDirectory, runners);
         await expect(
             dispatcher.prepare({
                 resolved: {

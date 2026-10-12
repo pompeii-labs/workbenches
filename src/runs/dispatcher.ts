@@ -55,7 +55,10 @@ export class RunDispatcher {
     async prepare(options: PrepareRunOptions): Promise<StoredRun> {
         const workbench = withRuntime(
             !options.session && options.resolved.source === 'local'
-                ? await Workbench.load(options.resolved.workbench.packageDirectory)
+                ? await Workbench.load(
+                      options.resolved.workbench.packageDirectory,
+                      RunnerRegistry.standard()
+                  )
                 : options.resolved.workbench,
             options.resolved.workbench.selectedRuntime
         );

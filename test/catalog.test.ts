@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { SavedWorkbenchCatalog } from '../src/catalog/index.js';
+import { RunnerRegistry } from '../src/runners/index.js';
 import { GitHubWorkbenchSource } from '../src/sources/index.js';
 import { workbenchHome } from '../src/storage.js';
 import {
@@ -20,6 +21,7 @@ import {
     WorkbenchSource,
 } from '../src/workbench/index.js';
 
+const runners = RunnerRegistry.standard();
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -112,7 +114,10 @@ describe('sources and saved catalog', () => {
         const fixture = await createRepository(['core']);
         const home = await temporaryDirectory('workbench-catalog-');
         const catalog = new SavedWorkbenchCatalog(home);
-        const workbench = await Workbench.load(fixture.packages.core as string);
+        const workbench = await Workbench.load(
+            fixture.packages.core as string,
+            runners
+        );
 
         const first = await catalog.add({
             alias: 'fixture-core',
@@ -148,7 +153,10 @@ describe('sources and saved catalog', () => {
         const home = await temporaryDirectory('workbench-reference-');
         const catalog = new SavedWorkbenchCatalog(home);
         const workspace = await temporaryDirectory('workbench-workspace-');
-        const workbench = await Workbench.load(fixture.packages.core as string);
+        const workbench = await Workbench.load(
+            fixture.packages.core as string,
+            runners
+        );
         const saved = await catalog.add({
             alias: 'fixture-core',
             source: fixture.root,
@@ -205,7 +213,7 @@ describe('sources and saved catalog', () => {
         const home = await temporaryDirectory('workbench-catalog-invalid-');
         const catalog = new SavedWorkbenchCatalog(home);
         const packageDirectory = fixture.packages.core as string;
-        const workbench = await Workbench.load(packageDirectory);
+        const workbench = await Workbench.load(packageDirectory, runners);
         await catalog.add({
             alias: 'fixture-core',
             source: fixture.root,
@@ -288,7 +296,10 @@ describe('sources and saved catalog', () => {
                 '../../shared.md'
             )
         );
-        const workbench = await Workbench.load(fixture.packages.core as string);
+        const workbench = await Workbench.load(
+            fixture.packages.core as string,
+            runners
+        );
         const portableHome = await temporaryDirectory('workbench-portable-');
         await expect(
             new SavedWorkbenchCatalog(portableHome).add({

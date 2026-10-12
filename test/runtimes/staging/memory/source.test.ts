@@ -26,6 +26,7 @@ describe('memory source stat', () => {
                 workbench,
                 workspaceDirectory: '/virtual/ws',
                 environment: {},
+                runner: { standardInput: false },
                 assets: [
                     { path: '/virtual/ws', access: 'read-write' },
                     { path: '/virtual/pkg', access: 'read-only' },

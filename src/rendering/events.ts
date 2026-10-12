@@ -2,6 +2,7 @@ import { isAbsolute, relative } from 'node:path';
 
 import pc from 'picocolors';
 
+import { RunnerRegistry } from '../runners/registry.js';
 import type { WorkbenchEvent } from '../runs/index.js';
 import { TerminalMarkdownStream } from './markdown.js';
 
@@ -20,6 +21,8 @@ export interface EventRendererOptions {
     stderr?: (value: string) => void;
     color?: boolean;
     columns?: number;
+    /** Names runners as people read them. Defaults to the standard runners. */
+    runners?: Pick<RunnerRegistry, 'find'>;
 }
 
 export function createEventRenderer(options: EventRendererOptions): EventRenderer {
@@ -32,6 +35,7 @@ export function createEventRenderer(options: EventRendererOptions): EventRendere
     return new HumanEventRenderer(stdout, stderr, {
         colors: pc.createColors(options.color ?? defaultColorEnabled()),
         columns: options.columns ?? process.stdout.columns ?? 80,
+        runners: options.runners ?? RunnerRegistry.standard(),
     });
 }
 
@@ -95,13 +99,19 @@ class HumanEventRenderer implements EventRenderer {
     private inAnswer = false;
     private workspace = '';
     private deliveryFailed = false;
+    private readonly runners: Pick<RunnerRegistry, 'find'>;
 
     constructor(
         private readonly stdout: (value: string) => void,
         private readonly stderr: (value: string) => void,
-        options: { colors: Colors; columns: number }
+        options: {
+            colors: Colors;
+            columns: number;
+            runners: Pick<RunnerRegistry, 'find'>;
+        }
     ) {
         this.colors = options.colors;
+        this.runners = options.runners;
         this.markdown = new TerminalMarkdownStream(
             stdout,
             options.colors,
@@ -117,7 +127,7 @@ class HumanEventRenderer implements EventRenderer {
             const model = text(event.data, 'model');
             const runtime = text(event.data, 'runtime');
             this.stdout(
-                `${colors.cyan('●')} ${colors.bold(name)}\n  ${colors.dim([humanName(event.runner), model, runtime].filter(Boolean).join(' · '))}\n`
+                `${colors.cyan('●')} ${colors.bold(name)}\n  ${colors.dim([this.runnerName(event.runner), model, runtime].filter(Boolean).join(' · '))}\n`
             );
             return;
         }
@@ -337,6 +347,10 @@ class HumanEventRenderer implements EventRenderer {
         this.markdown.reset();
         this.inAnswer = false;
     }
+
+    private runnerName(runner: string): string {
+        return this.runners.find(runner)?.displayName ?? runner;
+    }
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -368,11 +382,6 @@ function stringArray(value: unknown, key: string): string[] {
     return Array.isArray(candidate)
         ? candidate.filter((entry): entry is string => typeof entry === 'string')
         : [];
-}
-
-function humanName(value: string): string {
-    if (value.toLowerCase() === 'opencode') return 'OpenCode';
-    return value;
 }
 
 function styledToolLabel(data: unknown, workspace: string, colors: Colors): string {

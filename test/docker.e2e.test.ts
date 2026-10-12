@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { NativeCredentialFile } from '../src/connections/nativecredentials.js';
+import { RunnerRegistry } from '../src/runners/registry.js';
 import { InteractiveRun, RunStore, type WorkbenchEvent } from '../src/runs/index.js';
 import { DockerClient } from '../src/runtimes/docker/client.js';
 import { DockerCredentialVolume } from '../src/runtimes/docker/credentials.js';
@@ -56,6 +57,7 @@ describe('Docker runtime end-to-end', () => {
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
+                runner: { standardInput: false },
                 assets: [
                     { path: fixture.root, access: 'read-write' },
                     { path: fixture.packageDirectory, access: 'read-only' },
@@ -155,6 +157,7 @@ describe('Docker runtime end-to-end', () => {
                 client,
                 'alpine:3.22',
                 runner,
+                RunnerRegistry.standard().resolve('opencode').runtimeContract(),
                 client.user
             );
             const file = NativeCredentialFile.for('opencode');
@@ -229,6 +232,7 @@ describe('Docker runtime end-to-end', () => {
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
+                runner: { standardInput: false },
                 assets: [
                     { path: fixture.root, access: 'read-write' },
                     { path: fixture.packageDirectory, access: 'read-only' },
@@ -317,6 +321,7 @@ describe('Docker runtime end-to-end', () => {
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
+                runner: { standardInput: false },
                 authorizations: { hostDocker: true },
                 assets: [
                     { path: fixture.root, access: 'read-write' },
@@ -373,6 +378,7 @@ describe('Docker runtime end-to-end', () => {
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
+                runner: { standardInput: false },
                 assets: [
                     { path: fixture.root, access: 'read-write' },
                     { path: fixture.packageDirectory, access: 'read-only' },
@@ -398,6 +404,7 @@ describe('Docker runtime end-to-end', () => {
                 workbench: fixture.workbench,
                 workspaceDirectory: fixture.root,
                 environment: {},
+                runner: { standardInput: false },
                 assets: [
                     { path: fixture.root, access: 'read-write' },
                     { path: fixture.packageDirectory, access: 'read-only' },

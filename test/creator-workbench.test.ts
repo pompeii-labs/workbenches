@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { RunnerRegistry } from '../src/runners/index.js';
 import { Workbench } from '../src/workbench/index.js';
 
 const root = process.cwd();
@@ -22,7 +23,10 @@ async function digest(path: string): Promise<string> {
 
 describe('creator Workbench', () => {
     test('is a valid self-contained spec 1 package', async () => {
-        const workbench = await Workbench.load(creatorDirectory);
+        const workbench = await Workbench.load(
+            creatorDirectory,
+            RunnerRegistry.standard()
+        );
 
         expect(workbench.manifest).toEqual({
             spec: 1,

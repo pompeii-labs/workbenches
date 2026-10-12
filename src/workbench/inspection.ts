@@ -332,7 +332,10 @@ export class WorkbenchInspector {
                 ? await new SavedWorkbenchCatalog(this.home).find(value)
                 : undefined;
         if (saved) {
-            const workbench = await Workbench.load(saved.packagePath);
+            const workbench = await Workbench.load(
+                saved.packagePath,
+                RunnerRegistry.standard()
+            );
             return this.describeResolved(workbench, value, {
                 kind: 'saved',
                 alias: saved.alias,
@@ -394,13 +397,16 @@ export class WorkbenchInspector {
         let runner: PreparedRunner | undefined;
         let runtime: PreparedRuntime | undefined;
         try {
-            runner = await RunnerRegistry.standard().prepare(workbench, process.env);
+            const runners = RunnerRegistry.standard();
+            const harness = runners.resolve(workbench.manifest.runner);
+            runner = await harness.prepare(workbench, process.env);
             runtime = await RuntimeRegistry.standard()
                 .resolve('local')
                 .prepare({
                     workbench,
                     workspaceDirectory: workbench.repositoryDirectory,
                     environment: process.env,
+                    runner: harness.runtimeContract(),
                     assets: [
                         { path: workbench.repositoryDirectory, access: 'read-write' },
                         { path: workbench.packageDirectory, access: 'read-only' },
@@ -417,6 +423,7 @@ export class WorkbenchInspector {
                 runner,
                 reference,
                 store: new ConnectionStore(this.home),
+                runners,
             }).inspect();
             return WorkbenchInspection.describe({
                 workbench,

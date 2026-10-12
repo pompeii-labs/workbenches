@@ -316,6 +316,7 @@ function prepareRequest(
         workbench: target,
         workspaceDirectory: root,
         environment: {},
+        runner: { standardInput: false },
         assets: [
             { path: root, access: 'read-write' },
             { path: packageDirectory, access: 'read-only' },

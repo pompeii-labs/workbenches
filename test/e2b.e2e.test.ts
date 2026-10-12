@@ -9,6 +9,7 @@ import {
     OutcomeStore,
     type RunOutcome,
 } from '../src/outcomes/index.js';
+import { RunnerRegistry } from '../src/runners/registry.js';
 import {
     InteractiveRun,
     type InteractiveRunSession,
@@ -129,6 +130,9 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             workbench,
             workspaceDirectory: workbench.repositoryDirectory,
             environment: process.env,
+            runner: RunnerRegistry.standard()
+                .resolve(workbench.manifest.runner)
+                .runtimeContract(),
             assets: [
                 { path: workbench.repositoryDirectory, access: 'read-write' },
                 { path: workbench.packageDirectory, access: 'read-only' },
@@ -256,6 +260,9 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                 workbench,
                 workspaceDirectory: workbench.repositoryDirectory,
                 environment: process.env,
+                runner: RunnerRegistry.standard()
+                    .resolve(workbench.manifest.runner)
+                    .runtimeContract(),
                 assets: [
                     {
                         path: workbench.repositoryDirectory,
@@ -421,6 +428,9 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                 workbench,
                 workspaceDirectory: workbench.repositoryDirectory,
                 environment: process.env,
+                runner: RunnerRegistry.standard()
+                    .resolve(workbench.manifest.runner)
+                    .runtimeContract(),
                 assets: [
                     {
                         path: workbench.repositoryDirectory,
@@ -506,6 +516,9 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                 workbench,
                 workspaceDirectory: workbench.repositoryDirectory,
                 environment: process.env,
+                runner: RunnerRegistry.standard()
+                    .resolve(workbench.manifest.runner)
+                    .runtimeContract(),
                 assets,
                 credentials,
                 purpose: 'connect',
@@ -543,6 +556,9 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                 workbench,
                 workspaceDirectory: workbench.repositoryDirectory,
                 environment: process.env,
+                runner: RunnerRegistry.standard()
+                    .resolve(workbench.manifest.runner)
+                    .runtimeContract(),
                 assets,
                 credentials,
                 purpose: 'run',
@@ -562,6 +578,9 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                 workbench,
                 workspaceDirectory: workbench.repositoryDirectory,
                 environment: process.env,
+                runner: RunnerRegistry.standard()
+                    .resolve(workbench.manifest.runner)
+                    .runtimeContract(),
                 assets,
                 credentials,
                 purpose: 'run',

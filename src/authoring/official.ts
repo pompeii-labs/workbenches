@@ -9,6 +9,7 @@ import {
     type RegistryReference,
 } from '../registry/index.js';
 import { SemanticVersion } from '../releases/index.js';
+import { RunnerRegistry } from '../runners/index.js';
 import { Workbench } from '../workbench/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/resolver.js';
 
@@ -134,7 +135,10 @@ export class OfficialWorkbenchResolver {
         ) {
             throw new Error('The cached official creator path is invalid');
         }
-        const workbench = await Workbench.load(pointer.package_path);
+        const workbench = await Workbench.load(
+            pointer.package_path,
+            RunnerRegistry.standard()
+        );
         if (
             workbench.manifest.name !== 'workbench-creator' ||
             workbench.manifest.version !== pointer.workbench_version ||

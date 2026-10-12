@@ -1,18 +1,20 @@
 import { describe, expect, test } from 'bun:test';
+import { connectionRuntimes } from '../src/connections/contracts.js';
 import {
     connectionAuthenticationMethods,
     connectionHarnesses,
-    connectionProviderCapabilities,
     connectionProviders,
-    connectionRuntimes,
+    harnessConnection,
 } from '../src/connections/targets.js';
 import { piRouteCandidates } from '../src/runners/pi/providers.js';
+import { RunnerRegistry } from '../src/runners/registry.js';
 import { modelCatalogFixture } from './model-catalog-fixture.js';
 
 describe('runner connection targets', () => {
     test('enumerates engine runtimes and harnesses independently of saved Workbenches', () => {
+        const runners = RunnerRegistry.standard();
         expect(connectionRuntimes).toEqual(['local', 'docker', 'e2b', 'daytona']);
-        expect(connectionHarnesses).toEqual(['opencode', 'pi']);
+        expect(connectionHarnesses(runners)).toEqual(['opencode', 'pi']);
         expect(
             connectionProviders('pi', modelCatalogFixture).map(({ id }) => id)
         ).toEqual(['openai', 'anthropic', 'openrouter', 'github-copilot', 'opencode']);
@@ -44,8 +46,9 @@ describe('runner connection targets', () => {
         capabilities.providers['fireworks-ai'] = [
             { native_provider: 'fireworks', auth: ['api'] },
         ];
+        const pi = harnessConnection('pi', RunnerRegistry.standard());
 
-        expect(connectionProviderCapabilities('pi', catalog)['fireworks-ai']).toEqual([
+        expect(pi.capabilities(catalog)['fireworks-ai']).toEqual([
             { native_provider: 'fireworks', auth: ['api'] },
         ]);
         expect(
@@ -55,7 +58,7 @@ describe('runner connection targets', () => {
                     model: 'accounts/fireworks/model-1',
                     value: 'fireworks-ai/accounts/fireworks/model-1',
                 },
-                connectionProviderCapabilities('pi', catalog)
+                pi.capabilities(catalog)
             )
         ).toEqual([
             {

@@ -1,19 +1,22 @@
 import { autocomplete, type Option, password, select } from '@clack/prompts';
 import { defineCommand } from 'citty';
+import {
+    type ConnectionAuthenticationMethod,
+    connectionRuntimes,
+} from '../connections/contracts.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
 import type { ConnectionWorkbench } from '../connections/setup.js';
 import {
-    type ConnectionAuthenticationMethod,
     type ConnectionTarget,
     connectionAuthenticationMethods,
     connectionHarnesses,
     connectionProviders,
-    connectionRuntimes,
     harnessLabel,
     runtimeLabel,
 } from '../connections/targets.js';
 import { ModelCatalog } from '../models/catalog.js';
 import { ModelRouter } from '../models/routing.js';
+import { RunnerRegistry } from '../runners/index.js';
 import { type RuntimeKeyProvider, RuntimeSecretStore } from '../runtimes/secrets.js';
 import { workbenchHome } from '../storage.js';
 import { selectedRuntime, WorkbenchResolver, withRuntime } from '../workbench/index.js';
@@ -25,7 +28,8 @@ export const connectCommand = defineCommand({
         name: 'connect',
         description: 'Connect model and runtime providers.',
     },
-    args: {
+    // A function, so the harness list is read from the registry when help or a run needs it.
+    args: () => ({
         workbench: {
             type: 'positional',
             description: 'Saved alias or local Workbench reference',
@@ -42,7 +46,7 @@ export const connectCommand = defineCommand({
         },
         harness: {
             type: 'string',
-            description: 'Agent harness: opencode or pi',
+            description: `Agent harness: ${connectionHarnesses(RunnerRegistry.standard()).join(' or ')}`,
         },
         provider: {
             type: 'string',
@@ -69,10 +73,11 @@ export const connectCommand = defineCommand({
                 "Remove a provider's model credential from a runtime, or a saved E2B or Daytona key",
             default: false,
         },
-    },
+    }),
     async run({ args }) {
         const output = new CliPresenter();
         const home = workbenchHome();
+        const runners = RunnerRegistry.standard();
         const requested = args.runtime?.trim().toLowerCase();
         const runtimeKey =
             requested !== undefined &&
@@ -95,7 +100,7 @@ export const connectCommand = defineCommand({
         const runtimeProvider = runtimeKey
             ? requested
             : !modelTarget && process.stdin.isTTY && process.stderr.isTTY
-              ? await chooseConnectionKind()
+              ? await chooseConnectionKind(runners)
               : undefined;
         if (runtimeProvider) {
             await connectRuntimeProvider(runtimeProvider, args, home, output);
@@ -116,7 +121,7 @@ export const connectCommand = defineCommand({
         let cleanup = async () => {};
         try {
             const selection = args.workbench
-                ? await connectionTargetForWorkbench(args, home, !args.remove)
+                ? await connectionTargetForWorkbench(args, home, !args.remove, runners)
                 : {
                       choice: await selectConnectionTarget(
                           {
@@ -125,7 +130,8 @@ export const connectCommand = defineCommand({
                               ...(args.provider ? { provider: args.provider } : {}),
                               ...(args.method ? { method: args.method } : {}),
                           },
-                          !args.remove
+                          !args.remove,
+                          runners
                       ),
                       cleanup,
                   };
@@ -139,13 +145,14 @@ export const connectCommand = defineCommand({
                     target: { ...choice, method },
                     output,
                     ...(workbench ? { workbench } : {}),
+                    runners,
                 });
             const method = choice.method ?? choice.methods[0];
             if (!method) throw new Error('An authentication method must be selected');
             if (choice.runtime === 'docker' && !workbench) {
                 // The volume is written and checked through a Workbench image.
                 throw new AuthenticationRequiredError(
-                    `Docker keeps ${harnessLabel(choice.harness)} credentials in a volume that is written and checked through a Workbench image. Run wb connect <workbench> --runtime docker --provider ${choice.provider} --method ${method.id}${args.remove ? ' --remove' : ''}`
+                    `Docker keeps ${harnessLabel(choice.harness, runners)} credentials in a volume that is written and checked through a Workbench image. Run wb connect <workbench> --runtime docker --provider ${choice.provider} --method ${method.id}${args.remove ? ' --remove' : ''}`
                 );
             }
             if (args.remove) {
@@ -167,14 +174,19 @@ interface ConnectionChoice extends Omit<ConnectionTarget, 'method'> {
     method?: ConnectionAuthenticationMethod;
 }
 
-async function chooseConnectionKind(): Promise<string | undefined> {
+async function chooseConnectionKind(
+    runners: Pick<RunnerRegistry, 'find' | 'list'>
+): Promise<string | undefined> {
+    const harnesses = connectionHarnesses(runners).map((harness) =>
+        harnessLabel(harness, runners)
+    );
     const choice = await select({
         message: 'What would you like to connect?',
         options: [
             {
                 value: 'model',
                 label: 'Model provider',
-                hint: 'OpenCode or Pi credentials and default route',
+                hint: `${harnesses.join(' or ')} credentials and default route`,
             },
             {
                 value: 'e2b',
@@ -253,7 +265,8 @@ async function connectRuntimeProvider(
 async function connectionTargetForWorkbench(
     args: Record<string, unknown>,
     home: string,
-    chooseMethod: boolean
+    chooseMethod: boolean,
+    runners: RunnerRegistry
 ): Promise<{
     choice: ConnectionChoice;
     workbench: ConnectionWorkbench;
@@ -276,7 +289,7 @@ async function connectionTargetForWorkbench(
         if (!connectionRuntimes.includes(runtime as ConnectionTarget['runtime'])) {
             throw new Error(`Unsupported connection runtime: ${runtime}`);
         }
-        if (!connectionHarnesses.includes(harness as ConnectionTarget['harness'])) {
+        if (!connectionHarnesses(runners).includes(harness)) {
             throw new Error(`Unsupported connection harness: ${harness}`);
         }
         const providers = [
@@ -296,7 +309,8 @@ async function connectionTargetForWorkbench(
                 ...(typeof args.method === 'string' ? { method: args.method } : {}),
                 providers,
             },
-            chooseMethod
+            chooseMethod,
+            runners
         );
         return {
             choice,
@@ -322,7 +336,8 @@ async function selectConnectionTarget(
         method?: string;
         providers?: string[];
     },
-    chooseMethod: boolean
+    chooseMethod: boolean,
+    runners: Pick<RunnerRegistry, 'find' | 'list'>
 ): Promise<ConnectionChoice> {
     const interactive = process.stdin.isTTY && process.stderr.isTTY;
     const runtime = await chooseOption({
@@ -341,18 +356,19 @@ async function selectConnectionTarget(
         },
         flag: '--runtime',
     });
+    const harnesses = connectionHarnesses(runners);
     const harness = await chooseOption({
         ...(input.harness ? { provided: input.harness } : {}),
-        values: [...connectionHarnesses],
+        values: harnesses,
         interactive,
         message: 'Choose a harness',
         labels: Object.fromEntries(
-            connectionHarnesses.map((value) => [value, harnessLabel(value)])
+            harnesses.map((value) => [value, harnessLabel(value, runners)])
         ),
         flag: '--harness',
     });
     const catalog = ModelCatalog.current();
-    const providers = connectionProviders(harness, catalog).filter(
+    const providers = connectionProviders(harness, catalog, runners).filter(
         (candidate) => !input.providers || input.providers.includes(candidate.id)
     );
     const provider = await chooseOption({
@@ -370,7 +386,8 @@ async function selectConnectionTarget(
         runtime,
         harness,
         provider,
-        catalog
+        catalog,
+        runners
     );
     if (!chooseMethod && !input.method) return { runtime, harness, provider, methods };
     const methodId = await chooseOption({

@@ -8,8 +8,10 @@ import {
     SavedWorkbenchUpgrade,
     WorkbenchPackage,
 } from '../src/catalog/index.js';
+import { RunnerRegistry } from '../src/runners/index.js';
 import { Workbench } from '../src/workbench/index.js';
 
+const runners = RunnerRegistry.standard();
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -27,7 +29,7 @@ describe('saved Workbench upgrades', () => {
         const saved = await new SavedWorkbenchCatalog(home).add({
             alias: 'fixture-core',
             source: fixture.root,
-            workbench: await Workbench.load(fixture.packageDirectory),
+            workbench: await Workbench.load(fixture.packageDirectory, runners),
         });
 
         await fixture.writeVersion('0.2.0', '# updated\n');
@@ -39,7 +41,7 @@ describe('saved Workbench upgrades', () => {
         );
         const live = await new SavedWorkbenchCatalog(home).addLocal({
             alias: 'fixture-core',
-            workbench: await Workbench.load(fixture.packageDirectory),
+            workbench: await Workbench.load(fixture.packageDirectory, runners),
         });
         expect(live.localPath).toBe(fixture.packageDirectory);
         expect(live.version).toBe('0.2.0');
@@ -52,15 +54,16 @@ describe('saved Workbench upgrades', () => {
         const saved = await catalog.add({
             alias: 'fixture-core',
             source: fixture.root,
-            workbench: await Workbench.load(fixture.packageDirectory),
+            workbench: await Workbench.load(fixture.packageDirectory, runners),
         });
 
         const result = await catalog.upgrade('fixture-core', {
             source: fixture.root,
             selector: 'core',
-            manifest: (await Workbench.load(fixture.packageDirectory)).manifest,
+            manifest: (await Workbench.load(fixture.packageDirectory, runners))
+                .manifest,
             files: await new WorkbenchPackage(
-                await Workbench.load(fixture.packageDirectory)
+                await Workbench.load(fixture.packageDirectory, runners)
             ).files(),
         });
 
@@ -73,7 +76,7 @@ describe('saved Workbench upgrades', () => {
         const fixture = await localFixture('0.1.0');
         const home = await temporaryDirectory('workbench-upgrade-shared-');
         const catalog = new SavedWorkbenchCatalog(home);
-        const workbench = await Workbench.load(fixture.packageDirectory);
+        const workbench = await Workbench.load(fixture.packageDirectory, runners);
         const first = await catalog.add({
             alias: 'fixture-one',
             source: fixture.root,
@@ -86,7 +89,7 @@ describe('saved Workbench upgrades', () => {
         });
         await fixture.writeVersion('0.2.0', '# updated\n');
 
-        const candidate = await Workbench.load(fixture.packageDirectory);
+        const candidate = await Workbench.load(fixture.packageDirectory, runners);
         const upgrade = {
             source: fixture.root,
             selector: 'core',
@@ -106,7 +109,7 @@ describe('saved Workbench upgrades', () => {
         const saved = await catalog.add({
             alias: 'fixture-core',
             source: fixture.root,
-            workbench: await Workbench.load(fixture.packageDirectory),
+            workbench: await Workbench.load(fixture.packageDirectory, runners),
         });
         await writeFile(join(fixture.packageDirectory, 'workbench.yml'), 'spec: 99\n');
 

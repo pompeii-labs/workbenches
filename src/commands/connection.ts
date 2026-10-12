@@ -1,5 +1,6 @@
 import { password } from '@clack/prompts';
 
+import type { ConnectionAuthenticationMethod } from '../connections/contracts.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
 import type { NativeCredentialEntry } from '../connections/nativecredentials.js';
 import {
@@ -10,13 +11,14 @@ import {
 import { HostSignIn } from '../connections/signin.js';
 import { ConnectionStore } from '../connections/store.js';
 import {
-    type ConnectionAuthenticationMethod,
     type ConnectionTarget,
+    harnessConnection,
     harnessLabel,
     providerLabel,
     runtimeLabel,
 } from '../connections/targets.js';
 import { ActiveModelCatalog, connectCommand } from '../models/index.js';
+import { RunnerRegistry } from '../runners/index.js';
 import type { CliPresenter } from './presenter.js';
 
 export interface ModelConnectionOptions {
@@ -29,6 +31,8 @@ export interface ModelConnectionOptions {
     signIn?: Pick<HostSignIn, 'available' | 'run'>;
     readKey?: () => Promise<string>;
     setup?: ConnectionSetup;
+    /** The runners the target harness is resolved from. */
+    runners?: Pick<RunnerRegistry, 'find' | 'resolve'>;
 }
 
 type CredentialSource = { entry: NativeCredentialEntry } | { advice: string };
@@ -45,12 +49,14 @@ export class ModelConnection {
     readonly #store: ConnectionStore;
     readonly #environment: Record<string, string | undefined>;
     readonly #interactive: boolean;
+    readonly #runners: Pick<RunnerRegistry, 'find' | 'resolve'>;
 
     constructor(options: ModelConnectionOptions) {
         this.#options = options;
         this.#environment = options.environment ?? process.env;
         this.#interactive =
             options.interactive ?? Boolean(process.stdin.isTTY && process.stderr.isTTY);
+        this.#runners = options.runners ?? RunnerRegistry.standard();
         this.#store = new ConnectionStore(options.home);
         this.#setup =
             options.setup ??
@@ -60,6 +66,7 @@ export class ModelConnection {
                 environment: this.#environment,
                 store: this.#store,
                 ...(options.workbench ? { workbench: options.workbench } : {}),
+                runners: this.#runners,
             });
     }
 
@@ -148,7 +155,8 @@ export class ModelConnection {
             return { entry: this.#setup.file.apiKey(await this.#stdinKey()) };
         }
         if (target.method.authenticationMethod === 'oauth') {
-            const signIn = this.#options.signIn ?? new HostSignIn();
+            const signIn =
+                this.#options.signIn ?? new HostSignIn({ runners: this.#runners });
             if (!this.#interactive || !signIn.available(target)) {
                 return { advice: this.#signInAdvice() };
             }
@@ -223,12 +231,13 @@ export class ModelConnection {
     /** A subscription sign-in that cannot run here: where it can still finish. */
     #signInAdvice(): string {
         const { target, workbench } = this.#options;
-        if (target.harness === 'pi') {
-            return `Pi has no command-line sign-in, so a Pi subscription cannot be connected here. Use an API key instead: ${this.#base()} --provider ${target.provider} --method api-key --stdin`;
+        const runner = this.#runner;
+        if (!harnessConnection(target.harness, this.#runners).hostSignIn) {
+            return `${runner} has no command-line sign-in, so a ${runner} subscription cannot be connected here. Use an API key instead: ${this.#base()} --provider ${target.provider} --method api-key --stdin`;
         }
         return workbench
-            ? `Run ${this.#command()} in a terminal with OpenCode installed, or start a foreground task once with wb run ${workbench.reference} --runtime ${target.runtime} --task <task>`
-            : `Run ${this.#command()} in a terminal with OpenCode installed`;
+            ? `Run ${this.#command()} in a terminal with ${runner} installed, or start a foreground task once with wb run ${workbench.reference} --runtime ${target.runtime} --task <task>`
+            : `Run ${this.#command()} in a terminal with ${runner} installed`;
     }
 
     #variables(): string {
@@ -245,9 +254,11 @@ export class ModelConnection {
         if (!workbench) {
             return `Name a Workbench so its runner can check its own sign-in: wb connect <workbench> --runtime local --provider ${target.provider} --method ${target.method.id}${variable}`;
         }
-        return target.harness === 'opencode'
-            ? `Run opencode auth login --provider ${target.method.nativeProvider}${variable}`
-            : `Run pi and sign in with /login${variable}`;
+        const connection = harnessConnection(target.harness, this.#runners);
+        const signIn = connection.hostSignIn
+            ? `Run ${[connection.hostSignIn.executable, ...connection.hostSignIn.arguments(target.method.nativeProvider)].join(' ')}`
+            : connection.manualSignIn;
+        return `${signIn}${variable}`;
     }
 
     /** The `wb connect` command for this target, plus `extra` flags. */
@@ -275,7 +286,7 @@ export class ModelConnection {
     }
 
     get #runner(): string {
-        return harnessLabel(this.#options.target.harness);
+        return harnessLabel(this.#options.target.harness, this.#runners);
     }
 
     get #runtime(): string {

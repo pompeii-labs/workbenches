@@ -1,14 +1,26 @@
 import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import { RunnerRegistry } from '../runners/registry.js';
 import type {
     RuntimeCredentialBinding,
     RuntimeCredentialFiles,
 } from '../runtimes/contracts.js';
 import { credentialPathSegments } from '../runtimes/credentialpath.js';
 
-// Native auth files for the supported harnesses. Logs, databases, and caches are session state.
-export const nativeCredentialPaths = ['auth.json', 'opencode/auth.json'] as const;
+/**
+ * The native credential file of every registered runner, relative to a
+ * credential root, in a stable order. Logs, databases, and caches are session
+ * state.
+ */
+export function nativeCredentialPaths(
+    runners: Pick<RunnerRegistry, 'list'> = RunnerRegistry.standard()
+): string[] {
+    return runners
+        .list()
+        .flatMap((runner) => (runner.credentials ? [runner.credentials.file] : []))
+        .toSorted();
+}
 
 export class RunnerCredentialStore {
     constructor(private readonly home: string) {}

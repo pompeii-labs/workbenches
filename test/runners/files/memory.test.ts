@@ -156,7 +156,7 @@ describe('an OpenCode runner over in-memory files', () => {
         } as unknown as ResolvedWorkbench;
         const runner = new OpenCodeRunner({
             skills: new OpenCodeSkillStaging(files, new RunnerContextStaging(files)),
-            catalog: modelCatalogFixture,
+            catalog: () => modelCatalogFixture,
         });
         const prepared = await runner.prepare(workbench);
         try {
@@ -193,7 +193,7 @@ describe('an OpenCode runner over in-memory files', () => {
         }
         const runner = new OpenCodeRunner({
             skills: new StubSkills(files, new RunnerContextStaging(files)),
-            catalog: modelCatalogFixture,
+            catalog: () => modelCatalogFixture,
         });
         const prepared = await runner.prepare({
             manifest: { runner: 'opencode' },

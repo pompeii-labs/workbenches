@@ -25,7 +25,7 @@ describe('runner registry', () => {
         workbench.manifest.runner = 'opencode';
         workbench.runnerConfigPath = runnerConfigPath;
 
-        const runner = await RunnerRegistry.standard().prepare(workbench, {});
+        const runner = await prepare(workbench);
 
         expect(
             runner.assets.some((asset) => asset.path === runnerConfigPath)
@@ -92,7 +92,7 @@ describe('runner registry', () => {
         );
         workbench.manifest.runner = 'opencode';
         workbench.runnerConfigPath = config;
-        const runner = await RunnerRegistry.standard().prepare(workbench, {});
+        const runner = await prepare(workbench);
         try {
             const stage = runner.assets[0]?.path;
             if (!stage) throw new Error('Missing staged configuration');
@@ -111,7 +111,7 @@ describe('runner registry', () => {
 
     test('binds Pi credentials inside Docker and rejects a changed runner', async () => {
         const workbench = await fixture();
-        const runner = await RunnerRegistry.standard().prepare(workbench, {});
+        const runner = await prepare(workbench);
         const runtime = preparedRuntime(workbench);
         const invocation = runner.native(runtime, [
             'pi',
@@ -189,11 +189,16 @@ describe('runner registry', () => {
         const workbench = await fixture();
         workbench.manifest.runner = 'unknown';
 
-        await expect(RunnerRegistry.standard().prepare(workbench, {})).rejects.toThrow(
-            'Unsupported runner: unknown'
-        );
+        await expect(prepare(workbench)).rejects.toThrow('Unsupported runner: unknown');
     });
 });
+
+/** Resolves the Workbench's runner from the standard registry and prepares it. */
+async function prepare(workbench: ResolvedWorkbench) {
+    return await RunnerRegistry.standard()
+        .resolve(workbench.manifest.runner)
+        .prepare(workbench, {});
+}
 
 async function fixture(): Promise<ResolvedWorkbench> {
     const root = await mkdtemp(join(tmpdir(), 'runner-registry-'));

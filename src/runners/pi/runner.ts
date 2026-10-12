@@ -14,6 +14,7 @@ import {
     type RunnerEventNormalizer,
 } from '../runner.js';
 import type { PiConfigStaging, StagedPiConfig } from './config.js';
+import { piConnection } from './connection.js';
 import { PiEventAdapter } from './events.js';
 import {
     buildPiInvocation,
@@ -24,12 +25,24 @@ import { PiSessionAdapter, type SpawnedPi } from './session.js';
 
 export class PiRunner extends Runner {
     readonly name = 'pi';
+    readonly displayName = 'Pi';
     readonly session: PiSessionAdapter;
+    readonly runnerConfig = 'directory';
+    /** A Pi session takes its input over piped standard input. */
+    readonly standardInput = true;
+    /** Pi reads its auth.json before provider variables. */
+    readonly credentials = {
+        file: 'auth.json',
+        apiKeyEntryType: 'api_key',
+        storeFirst: true,
+        environment: (root: string) => ({ WORKBENCH_CREDENTIALS_DIR: root }),
+    };
+    readonly connection = piConnection;
 
     constructor(
         private readonly config: PiConfigStaging,
-        /** The model catalog snapshot routes are resolved against. */
-        private readonly catalog: ModelCatalogSnapshot
+        /** Reads the model catalog snapshot routes are resolved against, when preparing. */
+        private readonly catalog: () => ModelCatalogSnapshot
     ) {
         super();
         this.session = new PiSessionAdapter({ config });
@@ -44,7 +57,7 @@ export class PiRunner extends Runner {
             environment,
             this.session,
             this.config,
-            this.catalog
+            this.catalog()
         );
     }
 }

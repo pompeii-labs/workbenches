@@ -41,5 +41,5 @@ export {
     type WorkbenchReference,
     WorkbenchSource,
 } from './source.js';
-export { Workbench } from './workbench.js';
+export { type RunnerConfigShapes, Workbench } from './workbench.js';
 export { WorkbenchWorkspaces } from './workspaces.js';

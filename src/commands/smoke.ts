@@ -6,6 +6,7 @@ import { defineCommand } from 'citty';
 
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
 import { CatalogSnapshots } from '../catalog/snapshots.js';
+import { RunnerRegistry } from '../runners/index.js';
 import { RuntimeSmoke } from '../runtimes/index.js';
 import { SmokeReport } from '../runtimes/smokereport.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
@@ -133,12 +134,13 @@ export const smokeCommand = defineCommand({
                 const scratch = await mkdtemp(join(tmpdir(), 'wb-smoke-'));
                 try {
                     const snapshots = new CatalogSnapshots(scratch);
+                    const runners = RunnerRegistry.standard();
                     for (const workbench of workbenches) {
                         const { packagePath } = await snapshots.materialize(
                             workbench.selector,
                             workbench.files
                         );
-                        const candidate = await Workbench.load(packagePath);
+                        const candidate = await Workbench.load(packagePath, runners);
                         await smoke.check(
                             `${reference.source}#${workbench.selector}`,
                             candidate

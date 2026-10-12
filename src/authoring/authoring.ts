@@ -1,6 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 
+import { RunnerRegistry } from '../runners/index.js';
 import { SessionLifecycle, type StoredSession } from '../sessions/index.js';
 import { Workbench, WorkbenchResolver } from '../workbench/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/resolver.js';
@@ -270,7 +271,7 @@ export class WorkbenchAuthoring {
                 `Session ${session.id} used an immutable saved Workbench. Improve a local source package instead.`
             );
         }
-        const workbench = await Workbench.load(path);
+        const workbench = await Workbench.load(path, RunnerRegistry.standard());
         if (workbench.manifest.name !== session.workbench) {
             throw new Error(
                 `Session ${session.id} no longer points to the same Workbench source`

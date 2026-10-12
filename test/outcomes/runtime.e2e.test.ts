@@ -142,6 +142,7 @@ describe('Outcome runtime process end to end', () => {
                     workbench,
                     workspaceDirectory: root,
                     environment: process.env,
+                    runner: { standardInput: false },
                     outcome: { directory: lifecycle.output.directory },
                     assets: [
                         { path: root, access: 'read-write' },
@@ -230,6 +231,7 @@ describe('Outcome runtime process end to end', () => {
             workbench,
             workspaceDirectory: root,
             environment: process.env,
+            runner: { standardInput: false },
             outcome: { directory: lifecycle.output.directory },
             assets: [
                 { path: root, access: 'read-write' },
@@ -271,6 +273,7 @@ describe('Outcome runtime process end to end', () => {
             workbench,
             workspaceDirectory: root,
             environment: process.env,
+            runner: { standardInput: false },
             outcome: { directory: lifecycle.output.directory },
             assets: [
                 { path: root, access: 'read-write' },
@@ -307,6 +310,7 @@ describe('Outcome runtime process end to end', () => {
             workbench,
             workspaceDirectory: root,
             environment: process.env,
+            runner: { standardInput: false },
             outcome: { directory: lifecycle.output.directory },
             assets: [
                 { path: root, access: 'read-write' },

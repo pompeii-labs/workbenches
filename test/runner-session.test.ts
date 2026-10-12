@@ -132,11 +132,17 @@ function fakeAdapter(
 
 class FakeRunner extends Runner {
     readonly name: string;
+    readonly displayName: string;
     readonly session: RunnerSessionAdapter;
+    readonly runnerConfig = 'either';
+    readonly standardInput = false;
+    /** Any declared connection: these tests never connect. */
+    readonly connection = RunnerRegistry.standard().resolve('opencode').connection;
 
     constructor(name: string, session: RunnerSessionAdapter) {
         super();
         this.name = name;
+        this.displayName = name;
         this.session = session;
     }
 

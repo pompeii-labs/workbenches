@@ -1,3 +1,4 @@
+import { RunnerRegistry } from '../runners/registry.js';
 import type { RuntimeCredentialFiles } from '../runtimes/contracts.js';
 
 /** One provider's entry in a runner's native credential file. */
@@ -9,26 +10,32 @@ export interface NativeCredentialEntry {
 
 /**
  * A runner's documented credential file inside a Workbench credential store: a
- * JSON object keyed by native provider. OpenCode keeps it at
- * `opencode/auth.json` under its data home and Pi at `auth.json`. Entry values
- * are secrets and are never printed. Workbench never reads the user's own
- * runner files.
+ * JSON object keyed by native provider, at the path the runner declares. Entry
+ * values are secrets and are never printed. Workbench never reads the user's
+ * own runner files.
  */
 export class NativeCredentialFile {
     private constructor(
         readonly runner: string,
         /** The file's path relative to a credential root. */
         readonly path: string,
-        private readonly apiType: string
+        private readonly apiKeyEntryType: string,
+        /** A stored entry decides readiness alone, ahead of provider variables. */
+        readonly storeFirst: boolean
     ) {}
 
-    static for(runner: string): NativeCredentialFile {
-        if (runner === 'opencode') {
-            return new NativeCredentialFile('opencode', 'opencode/auth.json', 'api');
-        }
-        if (runner === 'pi')
-            return new NativeCredentialFile('pi', 'auth.json', 'api_key');
-        throw new Error(`Unsupported runner: ${runner}`);
+    static for(
+        runner: string,
+        runners: Pick<RunnerRegistry, 'find'> = RunnerRegistry.standard()
+    ): NativeCredentialFile {
+        const credentials = runners.find(runner)?.credentials;
+        if (!credentials) throw new Error(`Unsupported runner: ${runner}`);
+        return new NativeCredentialFile(
+            runner,
+            credentials.file,
+            credentials.apiKeyEntryType,
+            credentials.storeFirst
+        );
     }
 
     /** The entry an API key becomes in this runner's format. */
@@ -41,12 +48,15 @@ export class NativeCredentialFile {
                 'The API key contains whitespace or starts with NAME=; give only the key value, not an env-file line'
             );
         }
-        return { type: this.apiType, value: { type: this.apiType, key: trimmed } };
+        return {
+            type: this.apiKeyEntryType,
+            value: { type: this.apiKeyEntryType, key: trimmed },
+        };
     }
 
     /** Whether `entry` can serve an `api`, `oauth`, or `native` (any) method. */
     serves(entry: NativeCredentialEntry, method: string): boolean {
-        if (method === 'api') return entry.type === this.apiType;
+        if (method === 'api') return entry.type === this.apiKeyEntryType;
         if (method === 'oauth') return entry.type === 'oauth';
         return true;
     }

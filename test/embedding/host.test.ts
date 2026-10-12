@@ -116,7 +116,7 @@ describe('a host with only fetch', () => {
                     files,
                     new RunnerContextStaging(files)
                 ),
-                catalog: modelCatalogFixture,
+                catalog: () => modelCatalogFixture,
                 session: {
                     fetch: (input, init) => opencode.fetch(input, init),
                     // The host keeps the password, so a later process can reuse it.
@@ -127,6 +127,7 @@ describe('a host with only fetch', () => {
             workbench,
             workspaceDirectory: '/ws',
             environment: { OPENAI_API_KEY: 'key' },
+            runner: makeRunner().runtimeContract(),
             assets: [
                 { path: '/ws', access: 'read-write' as const },
                 { path: '/pkg', access: 'read-only' as const },

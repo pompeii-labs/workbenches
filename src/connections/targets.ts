@@ -1,43 +1,31 @@
-import type {
-    ModelCatalogHarnessProviderRoute,
-    ModelCatalogSnapshot,
-} from '../models/snapshot.js';
-import {
-    PI_PACKAGE_VERSION,
-    PI_PROVIDER_CAPABILITIES,
-} from '../runners/pi/providers.js';
+import type { ModelCatalogSnapshot } from '../models/snapshot.js';
+import { RunnerRegistry } from '../runners/registry.js';
+import type { RunnerConnection } from '../runners/runner.js';
+import type { ConnectionAuthenticationMethod, ConnectionRuntime } from './contracts.js';
 
-export const connectionRuntimes = ['local', 'docker', 'e2b', 'daytona'] as const;
-export type ConnectionRuntime = (typeof connectionRuntimes)[number];
-
-export const connectionHarnesses = ['opencode', 'pi'] as const;
-export type ConnectionHarness = (typeof connectionHarnesses)[number];
+/** Every registered runner, in registration order. */
+export function connectionHarnesses(runners: Pick<RunnerRegistry, 'list'>): string[] {
+    return runners.list().map((runner) => runner.name);
+}
 
 export interface ConnectionProvider {
     id: string;
     label: string;
 }
 
-export interface ConnectionAuthenticationMethod {
-    id: string;
-    label: string;
-    nativeProvider: string;
-    nativeMethod?: string;
-    authenticationMethod: 'api' | 'oauth' | 'native';
-}
-
 export interface ConnectionTarget {
     runtime: ConnectionRuntime;
-    harness: ConnectionHarness;
+    harness: string;
     provider: string;
     method: ConnectionAuthenticationMethod;
 }
 
 export function connectionProviders(
-    harness: ConnectionHarness,
-    catalog: ModelCatalogSnapshot
+    harness: string,
+    catalog: ModelCatalogSnapshot,
+    runners: Pick<RunnerRegistry, 'find'> = RunnerRegistry.standard()
 ): ConnectionProvider[] {
-    const capabilities = connectionProviderCapabilities(harness, catalog);
+    const capabilities = harnessConnection(harness, runners).capabilities(catalog);
     const served = new Set(
         Object.values(catalog.models).flatMap((model) => Object.keys(model.routes))
     );
@@ -54,71 +42,15 @@ export function connectionProviders(
 
 export function connectionAuthenticationMethods(
     runtime: ConnectionRuntime,
-    harness: ConnectionHarness,
+    harness: string,
     provider: string,
-    catalog: ModelCatalogSnapshot
+    catalog: ModelCatalogSnapshot,
+    runners: Pick<RunnerRegistry, 'find'> = RunnerRegistry.standard()
 ): ConnectionAuthenticationMethod[] {
-    if (harness === 'opencode' && provider === 'openai') {
-        return [
-            runtime === 'local'
-                ? {
-                      id: 'chatgpt',
-                      label: 'ChatGPT subscription',
-                      nativeProvider: 'openai',
-                      nativeMethod: 'ChatGPT Pro/Plus (browser)',
-                      authenticationMethod: 'oauth',
-                  }
-                : {
-                      id: 'chatgpt',
-                      label: 'ChatGPT subscription (headless)',
-                      nativeProvider: 'openai',
-                      nativeMethod: 'ChatGPT Pro/Plus (headless)',
-                      authenticationMethod: 'oauth',
-                  },
-            {
-                id: 'api-key',
-                label: 'OpenAI API key',
-                nativeProvider: 'openai',
-                nativeMethod: 'Manually enter API Key',
-                authenticationMethod: 'api',
-            },
-        ];
-    }
-    if (harness === 'pi' && provider === 'openai') {
-        const capabilities = connectionProviderCapabilities(harness, catalog)[provider];
-        return [
-            ...(capabilities?.some(
-                (candidate) =>
-                    candidate.native_provider === 'openai-codex' &&
-                    candidate.auth.includes('oauth')
-            )
-                ? [
-                      {
-                          id: 'chatgpt',
-                          label: 'ChatGPT subscription',
-                          nativeProvider: 'openai-codex',
-                          authenticationMethod: 'oauth' as const,
-                      },
-                  ]
-                : []),
-            ...(capabilities?.some(
-                (candidate) =>
-                    candidate.native_provider === 'openai' &&
-                    candidate.auth.includes('api')
-            )
-                ? [
-                      {
-                          id: 'api-key',
-                          label: 'OpenAI API key',
-                          nativeProvider: 'openai',
-                          authenticationMethod: 'api' as const,
-                      },
-                  ]
-                : []),
-        ];
-    }
-    const [capability] =
-        connectionProviderCapabilities(harness, catalog)[provider] ?? [];
+    const connection = harnessConnection(harness, runners);
+    const methods = connection.methods(runtime, provider, catalog);
+    if (methods) return methods;
+    const [capability] = connection.capabilities(catalog)[provider] ?? [];
     if (!capability) return [];
     if (capability.auth.length === 1 && capability.auth[0] === 'api') {
         return [
@@ -140,30 +72,14 @@ export function connectionAuthenticationMethods(
     ];
 }
 
-export function connectionProviderCapabilities(
-    harness: ConnectionHarness,
-    catalog: ModelCatalogSnapshot
-): Record<string, ModelCatalogHarnessProviderRoute[]> {
-    if (harness === 'pi') {
-        return (
-            catalog.harnesses?.pi?.versions[PI_PACKAGE_VERSION]?.providers ??
-            PI_PROVIDER_CAPABILITIES
-        );
-    }
-    return (
-        catalog.harnesses?.opencode?.versions['1.18.30']?.providers ??
-        (Object.fromEntries(
-            Object.keys(catalog.providers).map((provider) => [
-                provider,
-                [
-                    {
-                        native_provider: provider,
-                        auth: ['native'],
-                    },
-                ],
-            ])
-        ) as Record<string, ModelCatalogHarnessProviderRoute[]>)
-    );
+/** The connection support a harness declares. */
+export function harnessConnection(
+    harness: string,
+    runners: Pick<RunnerRegistry, 'find'>
+): RunnerConnection {
+    const runner = runners.find(harness);
+    if (!runner) throw new Error(`Unsupported connection harness: ${harness}`);
+    return runner.connection;
 }
 
 export function connectionModel(
@@ -192,10 +108,11 @@ export function runtimeLabel(runtime: string): string {
     return runtime.charAt(0).toUpperCase() + runtime.slice(1);
 }
 
-export function harnessLabel(harness: string): string {
-    if (harness === 'opencode') return 'OpenCode';
-    if (harness === 'pi') return 'Pi';
-    return harness;
+export function harnessLabel(
+    harness: string,
+    runners: Pick<RunnerRegistry, 'find'>
+): string {
+    return runners.find(harness)?.displayName ?? harness;
 }
 
 export function providerLabel(provider: string): string {

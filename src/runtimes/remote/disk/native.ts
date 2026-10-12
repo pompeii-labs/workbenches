@@ -41,7 +41,7 @@ export class NativeStateCapture {
                 const remoteArchive = `/tmp/workbench-native-state-${index}.tar.gz`;
                 const selection =
                     snapshot.binding.kind === 'credentials'
-                        ? `cd ${quote(root)}; set --; for file in ${nativeCredentialPaths.map(quote).join(' ')}; do if [ -e "$file" ] || [ -L "$file" ]; then set -- "$@" "$file"; fi; done; tar -czf ${quote(remoteArchive)} -T /dev/null "$@"`
+                        ? `cd ${quote(root)}; set --; for file in ${nativeCredentialPaths().map(quote).join(' ')}; do if [ -e "$file" ] || [ -L "$file" ]; then set -- "$@" "$file"; fi; done; tar -czf ${quote(remoteArchive)} -T /dev/null "$@"`
                         : `tar -C ${quote(root)} --exclude=./.git --exclude=./.workbench-state -czf ${quote(remoteArchive)} .`;
                 const result = await sandbox.run(selection);
                 if (result.code !== 0)

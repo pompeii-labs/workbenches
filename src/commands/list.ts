@@ -3,6 +3,7 @@ import { basename } from 'node:path';
 import { defineCommand } from 'citty';
 
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
+import { RunnerRegistry } from '../runners/index.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
 import { Workbench, WorkbenchSource } from '../workbench/index.js';
@@ -24,6 +25,7 @@ export const listCommand = defineCommand({
     },
     async run({ args }) {
         const output = new CliPresenter();
+        const runners = RunnerRegistry.standard();
         if (!args.source || args.saved) {
             const entries = await new SavedWorkbenchCatalog(workbenchHome()).list();
             if (entries.length === 0) {
@@ -32,7 +34,9 @@ export const listCommand = defineCommand({
             }
             for (const entry of entries) {
                 const current = entry.localPath
-                    ? await Workbench.load(entry.localPath).catch(() => undefined)
+                    ? await Workbench.load(entry.localPath, runners).catch(
+                          () => undefined
+                      )
                     : undefined;
                 const identity = `${current?.manifest.name ?? entry.name}@${current?.manifest.version ?? entry.version}`;
                 const source = entry.localPath
@@ -49,7 +53,7 @@ export const listCommand = defineCommand({
             }
             return;
         }
-        const source = new WorkbenchSource();
+        const source = new WorkbenchSource(process.cwd(), runners);
         const reference = source.parse(args.source);
         const local = await source.local(reference.source);
         if (local) {

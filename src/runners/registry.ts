@@ -1,12 +1,11 @@
 import { ActiveModelCatalog } from '../models/index.js';
-import type { ResolvedWorkbench } from '../types.js';
 import { RunnerContextStaging } from './context/stage.js';
 import { DiskRunnerFiles } from './files/disk.js';
 import { OpenCodeRunner } from './opencode/runner.js';
 import { OpenCodeSkillStaging } from './opencode/skills.js';
 import { PiConfigStaging } from './pi/config.js';
 import { PiRunner } from './pi/runner.js';
-import type { PreparedRunner, Runner } from './runner.js';
+import type { Runner } from './runner.js';
 import {
     RUNNER_CAPABILITIES,
     type RunnerAdapterDeclaration,
@@ -36,7 +35,7 @@ export class RunnerRegistry {
     static standard(): RunnerRegistry {
         const files = new DiskRunnerFiles();
         const context = new RunnerContextStaging(files);
-        const catalog = ActiveModelCatalog.current();
+        const catalog = () => ActiveModelCatalog.current();
         return new RunnerRegistry([
             new OpenCodeRunner({
                 skills: new OpenCodeSkillStaging(files, context),
@@ -46,20 +45,20 @@ export class RunnerRegistry {
         ]);
     }
 
-    resolve(name: string): Runner {
-        const runner = this.#runners.get(name);
-        if (!runner) throw new Error(`Unsupported runner: ${name}`);
-        return runner;
+    /** Every registered runner, in registration order. */
+    list(): Runner[] {
+        return [...this.#runners.values()];
     }
 
-    async prepare(
-        workbench: ResolvedWorkbench,
-        environment: Record<string, string | undefined>
-    ): Promise<PreparedRunner> {
-        return await this.resolve(workbench.manifest.runner).prepare(
-            workbench,
-            environment
-        );
+    /** The runner registered as `name`, or undefined for a name no runner claims. */
+    find(name: string): Runner | undefined {
+        return this.#runners.get(name);
+    }
+
+    resolve(name: string): Runner {
+        const runner = this.find(name);
+        if (!runner) throw new Error(`Unsupported runner: ${name}`);
+        return runner;
     }
 
     session(name: string): RunnerSessionAdapter {

@@ -2,6 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { RunnerRegistry } from '../runners/registry.js';
+import type { RunnerCredentials, RunnerHostSignIn } from '../runners/runner.js';
 import { HostCredentialFiles } from './credentials.js';
 import {
     type NativeCredentialEntry,
@@ -16,20 +18,23 @@ export interface HostSignInDependencies {
         command: string[],
         env: Record<string, string | undefined>
     ) => Promise<number>;
+    runners?: Pick<RunnerRegistry, 'find'>;
 }
 
 /**
  * Runs a runner's documented command-line login on this host against a private
  * temporary data home, then keeps only the target provider's entry. The
- * user's own runner sign-in is never touched. Only OpenCode has a
- * command-line login; Pi must be configured separately.
+ * user's own runner sign-in is never touched. Only a runner that declares a
+ * host sign-in has one; others must be configured separately.
  */
 export class HostSignIn {
     readonly #which: NonNullable<HostSignInDependencies['which']>;
     readonly #interact: NonNullable<HostSignInDependencies['interact']>;
+    readonly #runners: Pick<RunnerRegistry, 'find'>;
 
     constructor(dependencies: HostSignInDependencies = {}) {
         this.#which = dependencies.which ?? Bun.which;
+        this.#runners = dependencies.runners ?? RunnerRegistry.standard();
         this.#interact =
             dependencies.interact ??
             ((command, env) =>
@@ -42,7 +47,7 @@ export class HostSignIn {
     }
 
     available(target: ConnectionTarget): boolean {
-        return target.harness === 'opencode' && Boolean(this.#which('opencode'));
+        return Boolean(this.#login(target));
     }
 
     /** The provider's entry from a fresh login, or undefined when none was made. */
@@ -50,8 +55,8 @@ export class HostSignIn {
         target: ConnectionTarget,
         environment: Record<string, string | undefined>
     ): Promise<NativeCredentialEntry | undefined> {
-        const executable = this.#which('opencode');
-        if (target.harness !== 'opencode' || !executable) {
+        const login = this.#login(target);
+        if (!login) {
             throw new Error(
                 `${target.harness} has no command-line sign-in on this machine`
             );
@@ -66,19 +71,16 @@ export class HostSignIn {
         try {
             const code = await this.#interact(
                 [
-                    executable,
-                    'auth',
-                    'login',
-                    '--provider',
-                    target.method.nativeProvider,
-                    ...(target.method.nativeMethod
-                        ? ['--method', target.method.nativeMethod]
-                        : []),
+                    login.executable,
+                    ...login.signIn.arguments(
+                        target.method.nativeProvider,
+                        target.method.nativeMethod
+                    ),
                 ],
-                { ...environment, XDG_DATA_HOME: directory }
+                { ...environment, ...login.credentials.environment(directory) }
             );
             if (code !== 0) return undefined;
-            return await NativeCredentialFile.for('opencode').find(
+            return await NativeCredentialFile.for(target.harness, this.#runners).find(
                 new HostCredentialFiles(directory),
                 target.method.nativeProvider
             );
@@ -88,5 +90,21 @@ export class HostSignIn {
                 process.off('SIGTERM', ignore);
             });
         }
+    }
+
+    /** The target runner's host login and the executable found for it, when it has both. */
+    #login(target: ConnectionTarget):
+        | {
+              executable: string;
+              signIn: RunnerHostSignIn;
+              credentials: RunnerCredentials;
+          }
+        | undefined {
+        const runner = this.#runners.find(target.harness);
+        const signIn = runner?.connection.hostSignIn;
+        const credentials = runner?.credentials;
+        if (!signIn || !credentials) return undefined;
+        const executable = this.#which(signIn.executable);
+        return executable ? { executable, signIn, credentials } : undefined;
     }
 }

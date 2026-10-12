@@ -25,6 +25,7 @@ const request = {
     workbench: fixture,
     workspaceDirectory: '/workspace',
     environment: { PATH: '/bin' },
+    runner: { standardInput: false },
     assets: [
         { path: '/workspace', access: 'read-write' as const },
         { path: '/repo/.workbenches/core', access: 'read-only' as const },

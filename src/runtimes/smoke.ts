@@ -55,7 +55,9 @@ export class RuntimeSmoke {
                 'Host Docker authorization was supplied to a Workbench that does not declare docker.engine'
             );
         }
-        const runner = await RunnerRegistry.standard().prepare(workbench, environment);
+        const runners = RunnerRegistry.standard();
+        const harness = runners.resolve(workbench.manifest.runner);
+        const runner = await harness.prepare(workbench, environment);
         let runtime: PreparedRuntime | undefined;
         let result: WorkbenchSmokeResult | undefined;
         let operationError: unknown;
@@ -64,6 +66,7 @@ export class RuntimeSmoke {
                 workbench,
                 workspaceDirectory,
                 environment,
+                runner: harness.runtimeContract(),
                 assets: [
                     { path: workspaceDirectory, access: 'read-write' },
                     {
@@ -108,6 +111,7 @@ export class RuntimeSmoke {
                 ...(this.options.home
                     ? { store: new ConnectionStore(this.options.home) }
                     : {}),
+                runners,
             }).inspect({
                 ...(this.options.connection ? { discoverConnections: true } : {}),
                 ...(this.options.connection
