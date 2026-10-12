@@ -15,6 +15,7 @@ import {
     withRuntime,
 } from '../workbench/index.js';
 import { CliInput } from './input.js';
+import { LegacyNotice } from './legacynotice.js';
 import { CliPresenter } from './presenter.js';
 import { CliRunClient } from './run-client.js';
 
@@ -150,6 +151,7 @@ export const runCommand = defineCommand({
             rawArgs,
         });
         const home = workbenchHome();
+        new LegacyNotice(home).show();
         const runtimes = RuntimeRegistry.standard();
         const dispatcher = new RunDispatcher(home);
         const taskSources = [

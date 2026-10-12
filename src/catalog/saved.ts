@@ -47,6 +47,17 @@ export class SavedWorkbenchCatalog {
         return parsed.entries;
     }
 
+    /**
+     * Drops a shared snapshot once no saved Workbench and no session refers to
+     * it. Called when a session that owned a reference is removed.
+     */
+    async releaseSnapshot(digest: string | undefined): Promise<void> {
+        if (!digest) return;
+        await this.#snapshots.release(digest, async () =>
+            (await this.list()).some((entry) => entry.digest === digest)
+        );
+    }
+
     async find(alias: string): Promise<CatalogEntry | undefined> {
         return (await this.list()).find((entry) => entry.alias === alias);
     }
@@ -142,35 +153,40 @@ export class SavedWorkbenchCatalog {
         const previous = entries.find((entry) => entry.alias === alias);
         if (!previous) throw new Error(`Saved Workbench does not exist: ${alias}`);
 
-        const entry = await this.materialize({
-            alias,
-            source: upgrade.source,
-            selector: upgrade.selector,
-            manifest: upgrade.manifest,
-            files: upgrade.files,
-            addedAt: previous.addedAt,
-            ...(upgrade.revision ? { revision: upgrade.revision } : {}),
-            ...(upgrade.expectedDigest
-                ? { expectedDigest: upgrade.expectedDigest }
-                : {}),
-            ...(upgrade.registry ? { registry: upgrade.registry } : {}),
-            ...(upgrade.ref
-                ? { ref: upgrade.ref }
-                : previous.ref
-                  ? { ref: previous.ref }
-                  : {}),
-        });
+        const entry = await this.#snapshots.exclusive(
+            WorkbenchPackage.digest(upgrade.files),
+            async () => {
+                const materialized = await this.materialize({
+                    alias,
+                    source: upgrade.source,
+                    selector: upgrade.selector,
+                    manifest: upgrade.manifest,
+                    files: upgrade.files,
+                    addedAt: previous.addedAt,
+                    ...(upgrade.revision ? { revision: upgrade.revision } : {}),
+                    ...(upgrade.expectedDigest
+                        ? { expectedDigest: upgrade.expectedDigest }
+                        : {}),
+                    ...(upgrade.registry ? { registry: upgrade.registry } : {}),
+                    ...(upgrade.ref
+                        ? { ref: upgrade.ref }
+                        : previous.ref
+                          ? { ref: previous.ref }
+                          : {}),
+                });
+                if (materialized.digest !== previous.digest)
+                    await this.write(
+                        entries.map((candidate) =>
+                            candidate.alias === alias ? materialized : candidate
+                        )
+                    );
+                return materialized;
+            }
+        );
         if (entry.digest === previous.digest) {
             return { previous, entry: previous, changed: false };
         }
-
-        const updated = entries.map((candidate) =>
-            candidate.alias === alias ? entry : candidate
-        );
-        await this.write(updated);
-        if (!updated.some((candidate) => candidate.digest === previous.digest)) {
-            await this.#snapshots.remove(previous.digest);
-        }
+        await this.releaseSnapshot(previous.digest);
         return { previous, entry, changed: true };
     }
 
@@ -180,12 +196,7 @@ export class SavedWorkbenchCatalog {
         if (!entry) throw new Error(`Saved Workbench does not exist: ${alias}`);
         const remaining = entries.filter((candidate) => candidate.alias !== alias);
         await this.write(remaining);
-        if (
-            !entry.localPath &&
-            !remaining.some((candidate) => candidate.digest === entry.digest)
-        ) {
-            await this.#snapshots.remove(entry.digest);
-        }
+        if (!entry.localPath) await this.releaseSnapshot(entry.digest);
         return entry;
     }
 
@@ -212,9 +223,14 @@ export class SavedWorkbenchCatalog {
                     : `Saved Workbench already exists: ${options.alias}. Choose another alias with --as.`
             );
         }
-        const entry = await this.materialize(options);
-        await this.write([...entries, entry]);
-        return entry;
+        return this.#snapshots.exclusive(
+            WorkbenchPackage.digest(options.files),
+            async () => {
+                const entry = await this.materialize(options);
+                await this.write([...entries, entry]);
+                return entry;
+            }
+        );
     }
 
     private async materialize(options: CatalogEntryInput): Promise<CatalogEntry> {

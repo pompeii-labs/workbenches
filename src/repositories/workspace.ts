@@ -1,16 +1,22 @@
-import { cp, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { WorkbenchDatabase } from '../database/workbenchdatabase.js';
+import { WorkbenchFiles } from '../files/workbenchfiles.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { assertRepositoryBinding, type RepositoryBinding } from './contracts.js';
 import { RepositoryCredentials } from './credentials.js';
 import { RepositoryGit } from './git.js';
 import { type GitHubCommitIdentity, RepositoryGitHub } from './github.js';
+import { RepositoryCheckoutStore } from './repositorycheckoutstore.js';
 
 /** Persistent engine-owned checkout. The caller directory remains only a discovery scope. */
 export class RepositoryWorkspace {
+    readonly #files: WorkbenchFiles;
+    readonly #checkouts: RepositoryCheckoutStore;
+
     constructor(
-        private readonly home: string,
+        home: string,
         readonly binding: RepositoryBinding,
         private readonly environment: Record<string, string | undefined>,
         private readonly git = new RepositoryGit(environment),
@@ -18,14 +24,16 @@ export class RepositoryWorkspace {
             new RepositoryGitHub(token).commitIdentity()
     ) {
         assertRepositoryBinding(binding);
+        this.#files = new WorkbenchFiles(home);
+        this.#checkouts = new RepositoryCheckoutStore(WorkbenchDatabase.forHome(home));
     }
 
     get directory(): string {
-        return join(this.home, 'sessions', this.binding.session_id, 'repository');
+        return this.#files.checkoutDirectory(this.binding.session_id);
     }
 
     get agentGitDirectory(): string {
-        return join(this.home, 'sessions', this.binding.session_id, 'agent-git');
+        return this.#files.agentGitDirectory(this.binding.session_id);
     }
 
     assertCredentialsOwnedByEngine(workbench: ResolvedWorkbench): void {
@@ -39,48 +47,27 @@ export class RepositoryWorkspace {
     }
 
     async prepare(runtime: string = 'e2b'): Promise<GitHubCommitIdentity | undefined> {
-        const parent = join(this.home, 'sessions', this.binding.session_id);
+        const parent = this.#files.repositoryParent(this.binding.session_id);
         await mkdir(parent, { recursive: true, mode: 0o700 });
-        const marker = join(parent, 'repository.json');
+        const details = await lstat(this.directory).catch((error) => {
+            if (error?.code === 'ENOENT') return undefined;
+            throw error;
+        });
+        const saved = this.#checkouts.find(this.binding.session_id);
         let existing = false;
-        try {
-            const details = await lstat(this.directory);
+        if (details) {
             if (!details.isDirectory() || details.isSymbolicLink())
                 throw new Error('Managed repository checkout is not a directory');
-            const saved = JSON.parse(
-                await readFile(marker, 'utf8')
-            ) as RepositoryBinding;
+            if (!saved)
+                throw new Error(
+                    'Incomplete repository checkout; saved provenance is missing'
+                );
             if (!isDeepStrictEqual(saved, this.binding))
                 throw new Error(
                     'Repository checkout provenance does not match the session'
                 );
             existing = true;
-        } catch (error) {
-            if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
-                throw error;
-            try {
-                await lstat(this.directory);
-                throw new Error(
-                    'Incomplete repository checkout; saved provenance is missing'
-                );
-            } catch (check) {
-                if (
-                    !(
-                        check instanceof Error &&
-                        'code' in check &&
-                        check.code === 'ENOENT'
-                    )
-                )
-                    throw check;
-            }
-        }
-        if (
-            !existing &&
-            (await lstat(marker).catch((error) => {
-                if (error?.code === 'ENOENT') return undefined;
-                throw error;
-            }))
-        ) {
+        } else if (saved) {
             throw new Error(
                 'Managed repository checkout is missing; refusing to discard retained session edits'
             );
@@ -144,14 +131,11 @@ export class RepositoryWorkspace {
                 });
                 await rename(join(staging, '.git'), join(this.directory, '.git'));
             } else if (!existing) {
-                await writeFile(marker, `${JSON.stringify(this.binding)}\n`, {
-                    mode: 0o600,
-                    flag: 'wx',
-                });
+                this.#checkouts.record(this.binding.session_id, this.binding);
                 try {
                     await rename(staging, this.directory);
                 } catch (error) {
-                    await rm(marker, { force: true });
+                    this.#checkouts.forget(this.binding.session_id);
                     throw error;
                 }
             }

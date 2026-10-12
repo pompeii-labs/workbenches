@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -124,6 +124,49 @@ describe('stored one-shot worker', () => {
                 data: { message: 'fixture execution failed' },
             }),
         ]);
+    });
+
+    test('records the failure after another writer takes its sequence', async () => {
+        const home = await temporaryHome();
+        const run = await fixtureRun(home);
+        const original = RunStore.prototype.appendEvent;
+        let raced = false;
+        const append = spyOn(RunStore.prototype, 'appendEvent').mockImplementation(
+            async function (this: RunStore, id, event) {
+                if (!raced) {
+                    raced = true;
+                    await original.call(this, id, {
+                        ...event,
+                        type: 'output.text',
+                        data: {},
+                    });
+                }
+                return original.call(this, id, event);
+            }
+        );
+        try {
+            const worker = new RunWorker(home, {
+                executeRun: async () => {
+                    throw new Error('fixture execution failed');
+                },
+            });
+
+            await expect(worker.execute({ id: run.id })).resolves.toBe(1);
+        } finally {
+            append.mockRestore();
+        }
+
+        const store = new RunStore(home);
+        expect(
+            (await store.readEvents(run.id)).map((event) => [
+                event.sequence,
+                event.type,
+            ])
+        ).toEqual([
+            [1, 'output.text'],
+            [2, 'run.failed'],
+        ]);
+        expect((await store.read(run.id)).status).toBe('failed');
     });
 });
 

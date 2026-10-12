@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { WorkbenchDatabase } from '../../src/database/workbenchdatabase.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
 import { RunStore } from '../../src/runs/store.js';
 import {
@@ -259,14 +260,18 @@ describe('E2B outcome recovery safety', () => {
             'pending'
         );
         await store.close();
-        const recordPath = join(f.home, 'runs', f.run.id, 'run.json');
-        const originalRecord = await readFile(recordPath);
-        await writeFile(recordPath, '{broken');
+        const database = WorkbenchDatabase.forHome(f.home);
+        const originalStatus = (await f.runs.read(f.run.id)).status;
+        database.run('UPDATE runs SET status = ? WHERE id = ?', 'broken', f.run.id);
         await expect(f.recovery.recover(f.client)).rejects.toThrow();
         expect(await f.recovery.exists()).toBe(true);
         expect(f.killed).toEqual([]);
         expect(f.counts().connects).toBe(0);
-        await writeFile(recordPath, originalRecord);
+        database.run(
+            'UPDATE runs SET status = ? WHERE id = ?',
+            originalStatus,
+            f.run.id
+        );
         expect(await f.recovery.recover(f.client)).toEqual(outcome);
         expect((await f.runs.read(f.run.id)).outcome_id).toBe(outcome.id);
         expect(await store.list()).toHaveLength(1);

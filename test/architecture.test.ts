@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join, relative } from 'node:path';
+import ts from 'typescript';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import { importCycles, valueImports } from './architecture/imports.js';
 
@@ -137,6 +138,39 @@ describe('engine architecture', () => {
         expect(entrypoint).not.toMatch(/export\s+\*/u);
     });
 
+    test('builds session and run storage paths only in the files store', async () => {
+        const violations: string[] = [];
+        for (const file of await sourceFiles(source)) {
+            const path = relative(root, file);
+            if (path.startsWith('src/files/')) continue;
+            const syntax = ts.createSourceFile(
+                path,
+                await readFile(file, 'utf8'),
+                ts.ScriptTarget.Latest,
+                true
+            );
+            const visit = (node: ts.Node): void => {
+                if (ts.isCallExpression(node) && pathBuilder(node)) {
+                    const literals = node.arguments.map((argument) =>
+                        ts.isStringLiteralLike(argument) ? argument.text : undefined
+                    );
+                    for (const [index, text] of literals.entries()) {
+                        // Authoring keeps its own, unrelated `runs` index.
+                        if (
+                            (text === 'sessions' || text === 'runs') &&
+                            literals[index - 1] !== 'authoring'
+                        )
+                            violations.push(`${path}: ${text}`);
+                    }
+                }
+                ts.forEachChild(node, visit);
+            };
+            visit(syntax);
+        }
+
+        expect(violations).toEqual([]);
+    });
+
     test('does not bundle model catalog generation into the engine', async () => {
         const packageJson = JSON.parse(
             await readFile(join(root, 'package.json'), 'utf8')
@@ -151,6 +185,16 @@ describe('engine architecture', () => {
         ).toBe(false);
     });
 });
+
+function pathBuilder(call: ts.CallExpression): boolean {
+    const callee = call.expression;
+    const name = ts.isIdentifier(callee)
+        ? callee.text
+        : ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : undefined;
+    return name === 'join' || name === 'resolve';
+}
 
 /**
  * The runner names a line's string literals contain, as the whole literal or

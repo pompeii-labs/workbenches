@@ -1,8 +1,10 @@
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 
 import { WorkbenchPackage } from '../catalog/index.js';
+import { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import { CatalogSnapshots } from '../catalog/snapshots.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
+import { LegacyLayout } from '../files/legacylayout.js';
 import { modelLabel } from '../models/index.js';
 import { RepositoryGitHub, RepositoryWorkspace } from '../repositories/index.js';
 import { RunnerRegistry } from '../runners/index.js';
@@ -53,6 +55,7 @@ export class RunDispatcher {
     }
 
     async prepare(options: PrepareRunOptions): Promise<StoredRun> {
+        await new LegacyLayout(this.home).assertNoLiveWorker();
         const workbench = withRuntime(
             !options.session && options.resolved.source === 'local'
                 ? await Workbench.load(
@@ -95,20 +98,13 @@ export class RunDispatcher {
             ).assertCredentialsOwnedByEngine(workbench);
         }
         // Capture package bytes only. Workspace ownership and identity are unchanged.
+        // Snapshots are content addressed and shared, so identical packages are stored once.
+        const snapshots = new CatalogSnapshots(this.home);
         const packagePath =
             options.session?.workbench_path ??
-            join(
-                this.home,
-                'sessions',
-                id,
-                'packages',
-                digest.slice('sha256:'.length),
-                '.workbenches',
-                basename(workbench.packageDirectory)
-            );
-        const session =
-            options.session ??
-            (await this.sessions.create({
+            snapshots.packagePath(digest, basename(workbench.packageDirectory));
+        const createSession = () =>
+            this.sessions.create({
                 id,
                 ...(suggestedName ? { name: suggestedName } : {}),
                 workbench: workbench.manifest.name,
@@ -130,15 +126,35 @@ export class RunDispatcher {
                     ? { registry: options.resolved.registry }
                     : {}),
                 latest_run_id: id,
-            }));
+            });
+        let session: StoredSession;
+        if (options.session) {
+            session = options.session;
+        } else {
+            let acquired = false;
+            try {
+                // The snapshot must exist from the moment a session refers to it, and
+                // must not be released in between.
+                session = await snapshots.exclusive(digest, async () => {
+                    acquired = true;
+                    await snapshots.materialize(
+                        basename(workbench.packageDirectory),
+                        files,
+                        digest
+                    );
+                    return createSession();
+                });
+            } catch (error) {
+                // Never wait on the lease again when acquiring it is what failed.
+                if (acquired)
+                    await new SavedWorkbenchCatalog(this.home)
+                        .releaseSnapshot(digest)
+                        .catch(() => {});
+                throw error;
+            }
+        }
         let stored: StoredRun;
         try {
-            if (!options.session)
-                await new CatalogSnapshots(join(this.home, 'sessions', id)).materialize(
-                    basename(workbench.packageDirectory),
-                    files,
-                    digest
-                );
             stored = await this.store.create({
                 id,
                 metadata: {
@@ -180,7 +196,10 @@ export class RunDispatcher {
                 },
             });
         } catch (error) {
-            if (!options.session) await this.sessions.remove(session.id);
+            if (!options.session) {
+                await this.sessions.remove(session.id);
+                await new SavedWorkbenchCatalog(this.home).releaseSnapshot(digest);
+            }
             throw error;
         }
         if (options.session) {

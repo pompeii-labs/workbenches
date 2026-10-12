@@ -31,9 +31,9 @@ export const statusCommand = defineCommand({
         },
     },
     async run({ args }) {
-        const reader = new RunStatusReader(workbenchHome());
         const now = Date.now();
-        const runs = rank(await reader.list({ recentMs: RECENT_MS, now }));
+        const reader = new RunStatusReader(workbenchHome(), () => now);
+        const runs = rank(await reader.list({ recentMs: RECENT_MS }));
         if (args.json) {
             process.stdout.write(`${JSON.stringify(runs)}\n`);
             return;

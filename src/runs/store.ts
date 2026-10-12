@@ -1,24 +1,24 @@
 import { createHash, randomBytes } from 'node:crypto';
-import {
-    appendFile,
-    lstat,
-    mkdir,
-    open,
-    readdir,
-    readFile,
-    rename,
-    rm,
-    stat,
-    writeFile,
-} from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import type { CatalogRegistryReference } from '../catalog/types.js';
+import { delay } from '../database/delay.js';
+import { type Row, RowReader } from '../database/rowreader.js';
+import { WorkbenchDatabase } from '../database/workbenchdatabase.js';
+import { WorkbenchFiles } from '../files/workbenchfiles.js';
 import { OutcomeStore } from '../outcomes/store.js';
-import type { RepositoryBinding } from '../repositories/contracts.js';
+import { ProcessProbe } from '../processes/processprobe.js';
+import {
+    isRepositoryBinding,
+    type RepositoryBinding,
+} from '../repositories/contracts.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
-import { RunControl } from './control.js';
-import type { WorkbenchEvent } from './events.js';
+import { isStoredRegistry, isStoredWorkspaces } from './bindings.js';
+import { WORKBENCH_EVENT_PROTOCOL, type WorkbenchEvent } from './events.js';
 import { RunReconciliationLease } from './reconciliation.js';
+import { RunEventStore } from './runeventstore.js';
+import { RunRequestStore, type StoredRunRequest } from './runrequeststore.js';
+
+export type { StoredRunRequest } from './runrequeststore.js';
 
 export type StoredRunStatus =
     | 'dispatched'
@@ -55,24 +55,6 @@ export interface StoredRun {
     outcome_id?: string;
 }
 
-export interface StoredRunRequest {
-    version: 1;
-    workbench_path: string;
-    workspace: string;
-    repository?: RepositoryBinding;
-    task: string;
-    workspaces?: WorkbenchWorkspaceBinding[];
-    allow_host_docker?: boolean;
-    /** The caller accepted a GPU requirement the runtime cannot verify. */
-    allow_unchecked_gpu?: boolean;
-    reference?: string;
-    session_id?: string;
-    native_session_id?: string;
-    connection?: string;
-    /** Selected runtime. Absent on requests stored before runtimes were selectable. */
-    runtime?: string;
-}
-
 const terminalStatuses = new Set<StoredRunStatus>(['completed', 'failed', 'cancelled']);
 const terminalEventTypes = new Set<WorkbenchEvent['type']>([
     'run.completed',
@@ -87,7 +69,22 @@ export interface CreateStoredRunOptions {
 }
 
 export class RunStore {
-    constructor(private readonly home: string) {}
+    readonly #database: WorkbenchDatabase;
+    readonly #events: RunEventStore;
+    readonly #requests: RunRequestStore;
+    readonly #files: WorkbenchFiles;
+    readonly #probe: ProcessProbe;
+
+    constructor(
+        private readonly home: string,
+        probe = new ProcessProbe()
+    ) {
+        this.#database = WorkbenchDatabase.forHome(home);
+        this.#events = new RunEventStore(this.#database);
+        this.#requests = new RunRequestStore(this.#database);
+        this.#files = new WorkbenchFiles(home);
+        this.#probe = probe;
+    }
 
     static createId(): string {
         return `wb_${Date.now().toString(36)}${randomBytes(10).toString('hex')}`;
@@ -108,14 +105,14 @@ export class RunStore {
     }
 
     assertWorkerAlive(run: StoredRun): void {
-        if (run.pid && !this.processAlive(run.pid)) {
+        if (run.pid && !this.#probe.alive(run.pid)) {
             throw new Error(`Workbench run worker exited unexpectedly: ${run.id}`);
         }
     }
 
     async reconcile(run: StoredRun, now = Date.now()): Promise<StoredRun> {
         if (RunStore.isTerminal(run.status)) return run;
-        return new RunReconciliationLease(run.id, this.directory(run.id)).exclusive(
+        return new RunReconciliationLease(run.id, this.#database).exclusive(
             async () => {
                 const current = await this.read(run.id);
                 if (RunStore.isTerminal(current.status)) return current;
@@ -126,17 +123,16 @@ export class RunStore {
                     now - dispatchedAt < 30_000;
                 if (
                     waitingForWorker ||
-                    (current.pid && this.processAlive(current.pid))
+                    (current.pid && this.#probe.alive(current.pid))
                 ) {
                     return current;
                 }
-                const events = await this.readEvents(current.id);
-                const last = events.at(-1);
+                const last = this.#events.last(current.id);
                 if (last && terminalEventTypes.has(last.type)) {
                     return this.update(current.id, this.terminalState(last));
                 }
                 await this.appendEvent(current.id, {
-                    protocol: 0,
+                    protocol: WORKBENCH_EVENT_PROTOCOL,
                     run_id: current.id,
                     sequence: (last?.sequence ?? 0) + 1,
                     timestamp: new Date(now).toISOString(),
@@ -156,94 +152,77 @@ export class RunStore {
     async create(options: CreateStoredRunOptions): Promise<StoredRun> {
         const id = options.id ?? RunStore.createId();
         RunStore.validateId(id);
-        const directory = this.directory(id);
-        if (await stat(directory).catch(() => null)) {
-            throw new Error(`Run already exists: ${id}`);
-        }
-        await mkdir(directory, { recursive: true, mode: 0o700 });
-        const metadata: StoredRun = {
+        const run: StoredRun = {
             version: 1,
             id,
             status: 'dispatched',
             dispatched_at: new Date().toISOString(),
             ...options.metadata,
         };
-        await Promise.all([
-            this.writeJson(this.metadataPath(id), metadata),
-            this.writeJson(this.requestPath(id), {
-                version: 1,
-                ...options.request,
-            } satisfies StoredRunRequest),
-            writeFile(this.eventsPath(id), '', { mode: 0o600 }),
-            new RunControl(this.home, id).initialize(),
-        ]);
-        return metadata;
+        this.#database.transaction(() => {
+            const inserted = this.#database.run(
+                `INSERT OR IGNORE INTO runs (
+                    id, status, workbench, workbench_version, runner, model, runtime,
+                    workspace, repository, mode, execution, workspaces, allow_host_docker,
+                    registry, registry_event_id, dispatched_at, started_at, finished_at,
+                    pid, runner_session_id, session_id, resumed_from, exit_code, outcome_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                ...this.columns(run)
+            );
+            if (inserted.changes === 0) throw new Error(`Run already exists: ${id}`);
+            this.#requests.put(id, { version: 1, ...options.request });
+        });
+        return run;
     }
 
     async read(id: string): Promise<StoredRun> {
         RunStore.validateId(id);
-        const source = await readFile(this.metadataPath(id), 'utf8').catch(() => null);
-        if (!source) throw new Error(`Workbench run does not exist: ${id}`);
-        const value = JSON.parse(source) as Partial<StoredRun>;
-        if (
-            value.version !== 1 ||
-            value.id !== id ||
-            typeof value.status !== 'string' ||
-            typeof value.workbench !== 'string' ||
-            typeof value.dispatched_at !== 'string'
-        ) {
-            throw new Error(`Invalid Workbench run record: ${id}`);
-        }
-        return value as StoredRun;
+        const row = this.#database.one('SELECT * FROM runs WHERE id = ?', id);
+        if (!row) throw new Error(`Workbench run does not exist: ${id}`);
+        return this.parse(row, id);
     }
 
     async update(
         id: string,
         patch: Partial<Omit<StoredRun, 'version' | 'id'>>
     ): Promise<StoredRun> {
-        const current = await this.read(id);
-        const next: StoredRun = { ...current, ...patch };
-        await this.writeJson(this.metadataPath(id), next);
-        return next;
+        RunStore.validateId(id);
+        return this.#database.transaction(() => {
+            const current = this.parse(
+                this.#database.one('SELECT * FROM runs WHERE id = ?', id) ??
+                    this.missing(id),
+                id
+            );
+            const next: StoredRun = { ...current, ...patch };
+            const [, ...values] = this.columns(next);
+            this.#database.run(
+                `UPDATE runs SET status = ?, workbench = ?, workbench_version = ?, runner = ?,
+                    model = ?, runtime = ?, workspace = ?, repository = ?, mode = ?,
+                    execution = ?, workspaces = ?, allow_host_docker = ?, registry = ?,
+                    registry_event_id = ?, dispatched_at = ?, started_at = ?,
+                    finished_at = ?, pid = ?, runner_session_id = ?, session_id = ?,
+                    resumed_from = ?, exit_code = ?, outcome_id = ? WHERE id = ?`,
+                ...values,
+                id
+            );
+            return next;
+        });
     }
 
     async takeRequest(id: string): Promise<StoredRunRequest> {
         RunStore.validateId(id);
-        const path = this.requestPath(id);
-        const source = await readFile(path, 'utf8').catch(() => null);
-        if (!source) throw new Error(`Workbench run request is unavailable: ${id}`);
-        const value = JSON.parse(source) as Partial<StoredRunRequest>;
-        if (
-            value.version !== 1 ||
-            typeof value.workbench_path !== 'string' ||
-            typeof value.workspace !== 'string' ||
-            typeof value.task !== 'string' ||
-            (value.connection !== undefined && typeof value.connection !== 'string') ||
-            (value.runtime !== undefined && typeof value.runtime !== 'string') ||
-            (value.allow_unchecked_gpu !== undefined &&
-                typeof value.allow_unchecked_gpu !== 'boolean')
-        ) {
-            throw new Error(`Invalid Workbench run request: ${id}`);
-        }
-        await rm(path, { force: true });
-        return value as StoredRunRequest;
+        return this.#requests.take(id);
     }
 
     async appendEvent(id: string, event: WorkbenchEvent): Promise<void> {
         RunStore.validateId(id);
-        await appendFile(this.eventsPath(id), `${JSON.stringify(event)}\n`, {
-            mode: 0o600,
-        });
+        this.#events.append(id, event);
     }
 
     async readEvents(id: string): Promise<WorkbenchEvent[]> {
         RunStore.validateId(id);
         await this.read(id);
-        const source = await readFile(this.eventsPath(id), 'utf8');
-        return source
-            .split('\n')
-            .filter(Boolean)
-            .map((line) => this.parseEvent(line, id));
+        return this.#events.read(id);
     }
 
     async latest(): Promise<StoredRun> {
@@ -252,6 +231,10 @@ export class RunStore {
         return latest;
     }
 
+    /**
+     * Yields events as they are committed. Between polls it compares the
+     * database's change signal and reads nothing when no one has written.
+     */
     async *follow(
         id: string,
         options: {
@@ -261,70 +244,51 @@ export class RunStore {
         } = {}
     ): AsyncGenerator<WorkbenchEvent> {
         RunStore.validateId(id);
-        await this.read(id);
-        const path = this.eventsPath(id);
-        let offset = 0;
-        let pending = '';
-        const decoder = new TextDecoder();
+        let run = await this.read(id);
         const pollMilliseconds = options.pollMilliseconds ?? 100;
         const afterSequence = options.afterSequence ?? 0;
+        let cursor = 0;
+        let seen = '';
 
-        const readAvailable = async (): Promise<WorkbenchEvent[]> => {
-            const details = await stat(path).catch(() => null);
-            if (!details || details.size <= offset) return [];
-            const handle = await open(path, 'r');
-            try {
-                const bytes = new Uint8Array(details.size - offset);
-                const result = await handle.read(bytes, 0, bytes.length, offset);
-                offset += result.bytesRead;
-                pending += decoder.decode(bytes.subarray(0, result.bytesRead), {
-                    stream: true,
-                });
-            } finally {
-                await handle.close();
-            }
-            const lines = pending.split('\n');
-            pending = lines.pop() ?? '';
-            return lines
-                .filter(Boolean)
-                .map((line) => this.parseEvent(line, id))
+        const drain = (): WorkbenchEvent[] => {
+            const logged = this.#events.after(id, cursor);
+            const last = logged.at(-1);
+            if (last) cursor = last.cursor;
+            return logged
+                .map((entry) => entry.event)
                 .filter((event) => event.sequence > afterSequence);
         };
 
         while (!options.signal?.aborted) {
-            for (const event of await readAvailable()) yield event;
-
-            const run = await this.read(id);
-            if (RunStore.isTerminal(run.status)) {
-                for (const event of await readAvailable()) yield event;
-                if (pending.trim()) {
-                    const event = this.parseEvent(pending, id);
-                    if (event.sequence > afterSequence) yield event;
+            const token = this.#database.changeToken();
+            if (token !== seen) {
+                seen = token;
+                for (const event of drain()) yield event;
+                run = await this.read(id);
+                if (RunStore.isTerminal(run.status)) {
+                    for (const event of drain()) yield event;
+                    return;
                 }
-                return;
             }
             this.assertWorkerAlive(run);
-            await this.delay(pollMilliseconds, options.signal);
+            await delay(pollMilliseconds, options.signal);
         }
     }
 
     async list(): Promise<StoredRun[]> {
-        const root = join(this.home, 'runs');
-        const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
-        const runs = await Promise.all(
-            entries
-                .filter((entry) => entry.isDirectory() && entry.name.startsWith('wb_'))
-                .map((entry) => this.read(entry.name).catch(() => null))
-        );
-        return runs
-            .filter((run): run is StoredRun => run !== null)
-            .toSorted((left, right) =>
-                right.dispatched_at.localeCompare(left.dispatched_at)
-            );
+        return this.#database
+            .all('SELECT * FROM runs ORDER BY dispatched_at DESC, id DESC')
+            .flatMap((row) => {
+                try {
+                    return [this.parse(row, String(row.id))];
+                } catch {
+                    return [];
+                }
+            });
     }
 
     async size(id: string): Promise<number> {
-        await this.read(id);
+        const run = await this.read(id);
         const outcomes = new OutcomeStore(this.home);
         const metadata = await Promise.all(
             (await outcomes.listByRun(id)).map((outcome) =>
@@ -332,7 +296,9 @@ export class RunStore {
             )
         );
         return (
-            (await this.directorySize(this.directory(id))) +
+            Buffer.byteLength(JSON.stringify(run)) +
+            (await this.#files.runBytes(id)) +
+            this.#events.bytes(id) +
             metadata.reduce((sum, bytes) => sum + bytes, 0)
         );
     }
@@ -346,54 +312,133 @@ export class RunStore {
         for (const outcome of await outcomes.list()) {
             if (outcome.run_id === id) await outcomes.remove(outcome.id);
         }
-        await rm(this.directory(id), { recursive: true, force: true });
-    }
-
-    private directory(id: string): string {
-        return join(this.home, 'runs', id);
-    }
-
-    private metadataPath(id: string): string {
-        return join(this.directory(id), 'run.json');
-    }
-
-    private requestPath(id: string): string {
-        return join(this.directory(id), 'request.json');
-    }
-
-    private eventsPath(id: string): string {
-        return join(this.directory(id), 'events.ndjson');
-    }
-
-    private async directorySize(path: string): Promise<number> {
-        const details = await lstat(path).catch(() => undefined);
-        if (!details) return 0;
-        if (!details.isDirectory()) return details.size;
-        const entries = await readdir(path).catch(() => []);
-        const sizes = await Promise.all(
-            entries.map((entry) => this.directorySize(join(path, entry)))
-        );
-        return sizes.reduce((total, size) => total + size, 0);
-    }
-
-    private async writeJson(path: string, value: unknown): Promise<void> {
-        const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-        await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-            mode: 0o600,
+        this.#database.transaction(() => {
+            this.#database.run(
+                "DELETE FROM repository_receipts WHERE scope = 'run' AND id = ?",
+                id
+            );
+            this.#database.run('DELETE FROM runs WHERE id = ?', id);
         });
-        await rename(temporary, path);
+        await this.#files.removeWork(id);
     }
 
-    private parseEvent(line: string, id: string): WorkbenchEvent {
-        try {
-            const event = JSON.parse(line) as Partial<WorkbenchEvent>;
-            if (event.run_id !== id || typeof event.type !== 'string') {
-                throw new Error();
-            }
-            return event as WorkbenchEvent;
-        } catch {
-            throw new Error(`Invalid event stream for Workbench run: ${id}`);
-        }
+    private missing(id: string): never {
+        throw new Error(`Workbench run does not exist: ${id}`);
+    }
+
+    private columns(run: StoredRun) {
+        return [
+            run.id,
+            run.status,
+            run.workbench,
+            run.workbench_version,
+            run.runner,
+            run.model,
+            run.runtime ?? null,
+            run.workspace,
+            run.repository ? JSON.stringify(run.repository) : null,
+            run.mode ?? null,
+            run.execution ?? null,
+            run.workspaces ? JSON.stringify(run.workspaces) : null,
+            run.allow_host_docker === undefined ? null : Number(run.allow_host_docker),
+            run.registry ? JSON.stringify(run.registry) : null,
+            run.registry_event_id ?? null,
+            run.dispatched_at,
+            run.started_at ?? null,
+            run.finished_at ?? null,
+            run.pid ?? null,
+            run.runner_session_id ?? null,
+            run.session_id ?? null,
+            run.resumed_from ?? null,
+            run.exit_code ?? null,
+            run.outcome_id ?? null,
+        ] as const;
+    }
+
+    private parse(row: Row, id: string): StoredRun {
+        const reader = new RowReader(row, 'Workbench run record');
+        const status = reader.text('status');
+        if (
+            status !== 'dispatched' &&
+            status !== 'running' &&
+            status !== 'completed' &&
+            status !== 'failed' &&
+            status !== 'cancelled'
+        )
+            throw new Error(`Invalid Workbench run record: ${id}`);
+        const mode = reader.optionalText('mode');
+        const execution = reader.optionalText('execution');
+        if (
+            (mode !== undefined &&
+                mode !== 'foreground' &&
+                mode !== 'detached' &&
+                mode !== 'interactive') ||
+            (execution !== undefined &&
+                execution !== 'one_shot' &&
+                execution !== 'session')
+        )
+            throw new Error(`Invalid Workbench run record: ${id}`);
+        const repository = reader.optionalJson('repository', isRepositoryBinding);
+        const workspaces = reader.optionalJson('workspaces', isStoredWorkspaces);
+        const registry = reader.optionalJson('registry', isStoredRegistry);
+        const optional = {
+            runtime: reader.optionalText('runtime'),
+            registry_event_id: reader.optionalText('registry_event_id'),
+            started_at: reader.optionalText('started_at'),
+            finished_at: reader.optionalText('finished_at'),
+            pid: reader.optionalInteger('pid'),
+            runner_session_id: reader.optionalText('runner_session_id'),
+            session_id: reader.optionalText('session_id'),
+            resumed_from: reader.optionalText('resumed_from'),
+            exit_code: reader.optionalInteger('exit_code'),
+            outcome_id: reader.optionalText('outcome_id'),
+            allow_host_docker: reader.optionalFlag('allow_host_docker'),
+        };
+        return {
+            version: 1,
+            id: reader.text('id'),
+            status,
+            workbench: reader.text('workbench'),
+            workbench_version: reader.text('workbench_version'),
+            runner: reader.text('runner'),
+            model: reader.text('model'),
+            ...(optional.runtime !== undefined ? { runtime: optional.runtime } : {}),
+            workspace: reader.text('workspace'),
+            ...(repository ? { repository } : {}),
+            ...(mode ? { mode } : {}),
+            ...(execution ? { execution } : {}),
+            ...(workspaces ? { workspaces } : {}),
+            ...(optional.allow_host_docker !== undefined
+                ? { allow_host_docker: optional.allow_host_docker }
+                : {}),
+            ...(registry ? { registry } : {}),
+            ...(optional.registry_event_id !== undefined
+                ? { registry_event_id: optional.registry_event_id }
+                : {}),
+            dispatched_at: reader.text('dispatched_at'),
+            ...(optional.started_at !== undefined
+                ? { started_at: optional.started_at }
+                : {}),
+            ...(optional.finished_at !== undefined
+                ? { finished_at: optional.finished_at }
+                : {}),
+            ...(optional.pid !== undefined ? { pid: optional.pid } : {}),
+            ...(optional.runner_session_id !== undefined
+                ? { runner_session_id: optional.runner_session_id }
+                : {}),
+            ...(optional.session_id !== undefined
+                ? { session_id: optional.session_id }
+                : {}),
+            ...(optional.resumed_from !== undefined
+                ? { resumed_from: optional.resumed_from }
+                : {}),
+            ...(optional.exit_code !== undefined
+                ? { exit_code: optional.exit_code }
+                : {}),
+            ...(optional.outcome_id !== undefined
+                ? { outcome_id: optional.outcome_id }
+                : {}),
+        };
     }
 
     private terminalState(
@@ -424,32 +469,5 @@ export class RunStore {
             exit_code: exitCode ?? 1,
             finished_at: event.timestamp,
         };
-    }
-
-    private processAlive(pid: number): boolean {
-        try {
-            process.kill(pid, 0);
-            return true;
-        } catch (error) {
-            // EPERM (or an unknown inspection failure) does not prove an exit.
-            return !(
-                error instanceof Error &&
-                'code' in error &&
-                error.code === 'ESRCH'
-            );
-        }
-    }
-
-    private delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
-        if (signal?.aborted) return Promise.resolve();
-        return new Promise((resolve) => {
-            const finish = () => {
-                clearTimeout(timer);
-                signal?.removeEventListener('abort', finish);
-                resolve();
-            };
-            const timer = setTimeout(finish, milliseconds);
-            signal?.addEventListener('abort', finish, { once: true });
-        });
     }
 }

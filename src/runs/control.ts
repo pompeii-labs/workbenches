@@ -1,12 +1,14 @@
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-
+import { delay } from '../database/delay.js';
+import { DatabaseConstraintError } from '../database/error.js';
+import { RowReader } from '../database/rowreader.js';
+import { WorkbenchDatabase } from '../database/workbenchdatabase.js';
 import {
     normalizeRunnerInput,
     type RunnerInput,
     type RunnerPermissionDecision,
     type RunnerQuestionResponse,
 } from '../runners/session.js';
+import { RunControlStore } from './runcontrolstore.js';
 
 export type RunControlKind =
     | 'attach_client'
@@ -82,12 +84,18 @@ interface RunControlOptions {
     timeoutMilliseconds?: number;
 }
 
+/**
+ * The durable request channel between a client and the process running a
+ * session. Requests and receipts are rows. A request is claimed atomically, so
+ * no two receivers ever hold the same one.
+ */
 export class RunControl {
     private readonly pollMilliseconds: number;
     private readonly timeoutMilliseconds: number;
+    private readonly store: RunControlStore;
 
     constructor(
-        private readonly home: string,
+        home: string,
         private readonly runId: string,
         options: RunControlOptions = {}
     ) {
@@ -96,29 +104,39 @@ export class RunControl {
         }
         this.pollMilliseconds = options.pollMilliseconds ?? 50;
         this.timeoutMilliseconds = options.timeoutMilliseconds ?? 30_000;
-    }
-
-    async initialize(): Promise<void> {
-        await Promise.all([
-            mkdir(this.pendingDirectory(), { recursive: true, mode: 0o700 }),
-            mkdir(this.activeDirectory(), { recursive: true, mode: 0o700 }),
-            mkdir(this.receiptDirectory(), { recursive: true, mode: 0o700 }),
-        ]);
+        this.store = new RunControlStore(WorkbenchDatabase.forHome(home));
     }
 
     async submit(submission: RunControlSubmission): Promise<RunControlReceipt> {
-        await this.initialize();
         const request = this.createRequest(submission);
-        await this.writeJson(this.pendingPath(request.id), request);
+        try {
+            this.store.enqueue(
+                this.runId,
+                request.id,
+                request.kind,
+                JSON.stringify(request)
+            );
+        } catch (error) {
+            if (
+                error instanceof DatabaseConstraintError &&
+                error.code === 'foreign_key'
+            )
+                throw new Error(`Workbench run does not exist: ${this.runId}`);
+            throw error;
+        }
         return this.waitForReceipt(request);
     }
 
     async receive(signal?: AbortSignal): Promise<RunControlRequest | undefined> {
-        await this.initialize();
         while (!signal?.aborted) {
-            const request = await this.claimNext();
+            // Read the change signal before claiming so a write in between is not missed.
+            const token = this.store.changeToken();
+            const request = this.claimNext();
             if (request) return request;
-            await this.delay(this.pollMilliseconds, signal);
+            while (!signal?.aborted) {
+                await delay(this.pollMilliseconds, signal);
+                if (this.store.changeToken() !== token) break;
+            }
         }
         return undefined;
     }
@@ -139,14 +157,13 @@ export class RunControl {
                 ? { disposition: result.disposition }
                 : { error: { code: result.code, message: result.message } }),
         };
-        await this.writeJson(this.receiptPath(request.id), receipt);
-        await rm(this.activePath(request.id), { force: true });
+        this.store.settle(this.runId, request.id, JSON.stringify(receipt));
         return receipt;
     }
 
     async rejectPending(code: string, message: string): Promise<void> {
         for (;;) {
-            const request = await this.claimNext();
+            const request = this.claimNext();
             if (!request) return;
             await this.resolve(request, { outcome: 'rejected', code, message });
         }
@@ -178,85 +195,50 @@ export class RunControl {
         };
     }
 
-    private async claimNext(): Promise<RunControlRequest | undefined> {
-        const entries = await readdir(this.pendingDirectory()).catch(() => []);
-        const requests = await Promise.all(
-            entries
-                .filter((entry) => entry.endsWith('.json'))
-                .map(async (entry) => {
-                    try {
-                        return {
-                            entry,
-                            request: await this.readRequest(
-                                join(this.pendingDirectory(), entry)
-                            ),
-                        };
-                    } catch (error) {
-                        if (isMissing(error)) return undefined;
-                        throw error;
-                    }
-                })
-        );
-        const available = requests.filter(
-            (request): request is NonNullable<typeof request> => request !== undefined
-        );
-        available.sort((left, right) => {
-            const leftTime = BigInt(left.request.submitted_at_ns);
-            const rightTime = BigInt(right.request.submitted_at_ns);
-            if (leftTime < rightTime) return -1;
-            if (leftTime > rightTime) return 1;
-            return left.entry.localeCompare(right.entry);
-        });
-        for (const candidate of available) {
-            try {
-                await rename(
-                    join(this.pendingDirectory(), candidate.entry),
-                    this.activePath(candidate.request.id)
-                );
-                return candidate.request;
-            } catch (error) {
-                if (isMissing(error)) continue;
-                throw error;
-            }
-        }
-        return undefined;
+    private claimNext(): RunControlRequest | undefined {
+        const payload = this.store.claimNext(this.runId);
+        return payload === undefined ? undefined : this.parseRequest(payload);
     }
 
     private async waitForReceipt(
         request: RunControlRequest
     ): Promise<RunControlReceipt> {
         const started = Date.now();
+        let seen = '';
         while (Date.now() - started < this.timeoutMilliseconds) {
-            const source = await readFile(this.receiptPath(request.id), 'utf8').catch(
-                () => undefined
-            );
-            if (source) return this.parseReceipt(source, request);
-            await this.delay(this.pollMilliseconds);
+            const token = this.store.changeToken();
+            if (token !== seen) {
+                seen = token;
+                const payload = this.store.receipt(request.id);
+                if (payload !== undefined) return this.parseReceipt(payload, request);
+            }
+            await delay(this.pollMilliseconds);
         }
         throw new Error(this.timeoutMessage(request.kind));
     }
 
-    private async readRequest(path: string): Promise<RunControlRequest> {
-        const value = JSON.parse(
-            await readFile(path, 'utf8')
-        ) as Partial<RunControlRequest>;
+    private parseRequest(source: unknown): RunControlRequest {
+        const value = this.parseJson(source);
         if (
+            !RowReader.isRecord(value) ||
             value.version !== 1 ||
             typeof value.id !== 'string' ||
+            typeof value.kind !== 'string' ||
             !runControlKinds.has(value.kind as RunControlKind) ||
             typeof value.submitted_at_ns !== 'string'
         ) {
             throw new Error('Invalid Workbench control request');
         }
-        return value as RunControlRequest;
+        return value as unknown as RunControlRequest;
     }
 
     private parseReceipt(
-        source: string,
+        source: unknown,
         request: RunControlRequest
     ): RunControlReceipt {
-        const value = JSON.parse(source) as Partial<RunControlReceipt>;
+        const value = this.parseJson(source);
         if (
+            !RowReader.isRecord(value) ||
             value.version !== 1 ||
             value.id !== request.id ||
             value.kind !== request.kind ||
@@ -264,7 +246,16 @@ export class RunControl {
         ) {
             throw new Error('The Workbench returned an invalid input acknowledgement');
         }
-        return value as RunControlReceipt;
+        return value as unknown as RunControlReceipt;
+    }
+
+    private parseJson(source: unknown): unknown {
+        if (typeof source !== 'string') return undefined;
+        try {
+            return JSON.parse(source);
+        } catch {
+            return undefined;
+        }
     }
 
     private timeoutMessage(kind: RunControlKind): string {
@@ -272,49 +263,6 @@ export class RunControl {
             return 'The Workbench did not acknowledge cancellation. Inspect the session with wb ps or stop it with wb kill <session-id>.';
         }
         return 'The Workbench did not acknowledge the message. The session may still be active; inspect it with wb ps.';
-    }
-
-    private pendingDirectory(): string {
-        return join(this.home, 'runs', this.runId, 'control', 'pending');
-    }
-
-    private activeDirectory(): string {
-        return join(this.home, 'runs', this.runId, 'control', 'active');
-    }
-
-    private receiptDirectory(): string {
-        return join(this.home, 'runs', this.runId, 'control', 'receipts');
-    }
-
-    private pendingPath(id: string): string {
-        return join(this.pendingDirectory(), `${id}.json`);
-    }
-
-    private activePath(id: string): string {
-        return join(this.activeDirectory(), `${id}.json`);
-    }
-
-    private receiptPath(id: string): string {
-        return join(this.receiptDirectory(), `${id}.json`);
-    }
-
-    private async writeJson(path: string, value: unknown): Promise<void> {
-        const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-        await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600 });
-        await rename(temporary, path);
-    }
-
-    private async delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
-        if (signal?.aborted) return;
-        await new Promise<void>((resolve) => {
-            const finish = () => {
-                clearTimeout(timer);
-                signal?.removeEventListener('abort', finish);
-                resolve();
-            };
-            const timer = setTimeout(finish, milliseconds);
-            signal?.addEventListener('abort', finish, { once: true });
-        });
     }
 }
 
@@ -330,11 +278,3 @@ const runControlKinds = new Set<RunControlKind>([
     'close',
     'cancel',
 ]);
-
-function isMissing(error: unknown): boolean {
-    return (
-        error instanceof Error &&
-        'code' in error &&
-        (error as NodeJS.ErrnoException).code === 'ENOENT'
-    );
-}

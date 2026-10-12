@@ -1,6 +1,7 @@
 import type { CatalogRegistryReference } from '../catalog/index.js';
 import { RegistryTelemetry } from '../registry/index.js';
 import { RunControl, type RunControlRequest } from './control.js';
+import { DuplicateEventSequenceError } from './error.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
 import { InteractiveRunWorker } from './interactive-worker.js';
 import { RunStore, type StoredRun } from './store.js';
@@ -15,6 +16,9 @@ export interface ExecuteStoredRunOptions {
     environment?: Record<string, string | undefined>;
     signal?: AbortSignal;
 }
+
+/** Tries to record a run's failure this many times before giving up. */
+const FAILURE_APPEND_ATTEMPTS = 5;
 
 interface RunWorkerDependencies {
     executeRun?: (
@@ -170,21 +174,31 @@ export class RunWorker {
         run: StoredRun,
         message: string
     ): Promise<WorkbenchEvent | undefined> {
-        const events = await this.store.readEvents(run.id);
-        const last = events.at(-1);
-        if (
-            last?.type === 'run.completed' ||
-            last?.type === 'run.failed' ||
-            last?.type === 'run.cancelled'
-        ) {
-            return undefined;
+        // Another writer can take the next sequence between the read and the append.
+        for (let attempt = 1; ; attempt += 1) {
+            const last = (await this.store.readEvents(run.id)).at(-1);
+            if (
+                last?.type === 'run.completed' ||
+                last?.type === 'run.failed' ||
+                last?.type === 'run.cancelled'
+            ) {
+                return undefined;
+            }
+            try {
+                return await new RunEvents({
+                    runId: run.id,
+                    runner: run.runner,
+                    initialSequence: last?.sequence ?? 0,
+                    onEvent: (event) => this.store.appendEvent(run.id, event),
+                }).emit('run.failed', { message });
+            } catch (error) {
+                if (
+                    !(error instanceof DuplicateEventSequenceError) ||
+                    attempt >= FAILURE_APPEND_ATTEMPTS
+                )
+                    throw error;
+            }
         }
-        return new RunEvents({
-            runId: run.id,
-            runner: run.runner,
-            initialSequence: last?.sequence ?? 0,
-            onEvent: (event) => this.store.appendEvent(run.id, event),
-        }).emit('run.failed', { message });
     }
 
     private async processControls(

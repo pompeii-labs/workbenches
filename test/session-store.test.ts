@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { WorkbenchDatabase } from '../src/database/workbenchdatabase.js';
 import { RunStore } from '../src/runs/index.js';
 import { SessionResolver, SessionStore } from '../src/sessions/index.js';
 
@@ -62,10 +63,8 @@ describe('session storage', () => {
             }
             expect(order).toEqual(['first', 'second']);
             expect(
-                await stat(join(home, 'sessions', session.id, '.lease')).catch(
-                    () => undefined
-                )
-            ).toBeUndefined();
+                WorkbenchDatabase.forHome(home).all('SELECT name FROM leases')
+            ).toEqual([]);
         });
     }
 
@@ -87,17 +86,19 @@ describe('session storage', () => {
 
         expect(await store.read(session.id)).toEqual(session);
         expect(store.nativeDirectory(session.id)).toBe(
-            join(home, 'sessions', session.id, 'native')
+            join(home, 'files', 'native', session.id)
         );
-
-        const metadataPath = join(home, 'sessions', session.id, 'session.json');
-        const legacy = JSON.parse(await readFile(metadataPath, 'utf8')) as Record<
-            string,
-            unknown
-        >;
-        delete legacy.runtime;
-        await writeFile(metadataPath, `${JSON.stringify(legacy)}\n`);
-        expect(await store.read(session.id)).toMatchObject({ runtime: 'local' });
+        expect((await stat(store.nativeDirectory(session.id))).isDirectory()).toBe(
+            true
+        );
+        expect(
+            WorkbenchDatabase.forHome(home).one(
+                'SELECT native_path FROM sessions WHERE id = ?',
+                session.id
+            )
+        ).toEqual({ native_path: store.nativeDirectory(session.id) });
+        expect(await readdir(home)).not.toContain('sessions');
+        expect(session.runtime).toBe('local');
 
         const updated = await store.update(session.id, {
             native_session_id: 'ses_native_1',
@@ -112,6 +113,9 @@ describe('session storage', () => {
         await expect(store.read(session.id)).rejects.toThrow(
             'Workbench session does not exist'
         );
+        expect(
+            await stat(store.nativeDirectory(session.id)).catch(() => undefined)
+        ).toBe(undefined);
     });
 
     test('persists a presentation-only session name without changing identity', async () => {
@@ -203,11 +207,9 @@ describe('session storage', () => {
             native_session_id: 'ses_concurrent',
             latest_run_id: 'wb_concurrentrun123456789012',
         });
-        expect(
-            await stat(join(home, 'sessions', session.id, '.metadata-lease')).catch(
-                () => undefined
-            )
-        ).toBeUndefined();
+        expect(WorkbenchDatabase.forHome(home).all('SELECT name FROM leases')).toEqual(
+            []
+        );
     });
 
     test('rejects unsafe or unusable session names', async () => {

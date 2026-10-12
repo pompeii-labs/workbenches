@@ -3,6 +3,7 @@ import { defineCommand } from 'citty';
 import { RunSupervision } from '../runs/supervision.js';
 import { SessionLifecycle } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
+import { LegacyNotice } from './legacynotice.js';
 import { CliPresenter } from './presenter.js';
 
 export const psCommand = defineCommand({
@@ -25,6 +26,7 @@ export const psCommand = defineCommand({
     },
     async run({ args }) {
         const output = new CliPresenter();
+        new LegacyNotice(workbenchHome()).show();
         const activities = await new SessionLifecycle(workbenchHome()).list({
             all: args.all,
         });
