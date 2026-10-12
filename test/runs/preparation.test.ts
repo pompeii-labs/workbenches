@@ -277,6 +277,41 @@ describe('shared execution preparation', () => {
         }
     });
 
+    for (const [runner, kept] of [
+        ['opencode', true],
+        ['pi', true],
+        ['claude-code', false],
+    ] as const) {
+        test(`${runner} on e2b ${kept ? 'syncs' : 'has no'} runner credential store`, async () => {
+            const fixture = await createFixture({ runtime: 'e2b', runner });
+            try {
+                // The store is bound before runtime preparation, whatever routing decides later.
+                await fixture.preparation.prepare().catch(() => undefined);
+                const request = fixture.provider.request;
+                if (!request) throw new Error('Missing runtime request');
+                const store = join(fixture.home, 'runtime-credentials', 'e2b', runner);
+                expect(request.credentials?.directory).toBe(kept ? store : undefined);
+                expect(Boolean(await stat(store).catch(() => undefined))).toBe(kept);
+                if (!kept) {
+                    expect(
+                        await stat(join(fixture.home, 'runtime-credentials')).catch(
+                            () => undefined
+                        )
+                    ).toBeUndefined();
+                    expect(
+                        new PathPlan(request, rules).bindings.some(
+                            (binding) =>
+                                binding.kind === 'credentials' ||
+                                binding.runtimePath === '/workbench-credentials'
+                        )
+                    ).toBeFalse();
+                }
+            } finally {
+                await fixture.preparation.cleanup();
+            }
+        });
+    }
+
     test('retains a failed preparation runtime for partial collection before cleanup', async () => {
         const failure = new Error('preflight failed');
         const fixture = await createFixture({ preflightFailure: failure });
@@ -545,6 +580,7 @@ async function createFixture(options: FixtureOptions = {}) {
 class TrackingRunner extends Runner {
     readonly displayName;
     readonly session;
+    readonly executable;
     readonly runnerConfig;
     readonly standardInput;
     readonly credentials;
@@ -558,6 +594,7 @@ class TrackingRunner extends Runner {
         this.runner = RunnerRegistry.standard().resolve(name);
         this.displayName = this.runner.displayName;
         this.session = this.runner.session;
+        this.executable = this.runner.executable;
         this.runnerConfig = this.runner.runnerConfig;
         this.standardInput = this.runner.standardInput;
         this.credentials = this.runner.credentials;

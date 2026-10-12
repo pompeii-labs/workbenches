@@ -26,7 +26,7 @@ requirements:
 - The first entry is the default. Consumers pick another with `--runtime`.
 - `local: {}` runs on the host: the runner and every tool must be installed there, and `local` takes no image. Declare it only when host execution is intended.
 - `docker` and `e2b` require `image`: a published reference, or `{build: <package-relative Dockerfile>, context: <dir>}` to build from the package.
-- `daytona` requires `class` (only `linux` runs today). `image` is optional in the schema, but the reference engine cannot prepare a daytona entry without a published `image`. It cannot build a local Dockerfile and does not fall back to the docker image. Pi Workbenches cannot run on Daytona yet.
+- `daytona` requires `class` (only `linux` runs today). `image` is optional in the schema, but the reference engine cannot prepare a daytona entry without a published `image`. It cannot build a local Dockerfile and does not fall back to the docker image. Runners that read standard input (`pi`, `claude-code`) cannot run on Daytona yet.
 - `requirements` (all optional): `os` (`linux`, `macos`, `windows`), `arch` (`x64`, `arm64`), `cpu`, `memory_gb`, `disk_gb`, `gpu`. Declare only what the work truly depends on. `local` compares them with the host; `docker` turns cpu and memory into container limits; `daytona` sizes the sandbox from them. `gpu: true` is refused everywhere except `local` with `--allow-unchecked-gpu`.
 - `docker: {engine: {mode: host}}` under the docker runtime asks for the host's Docker daemon. Consumers must pass `--allow-host-docker` on every run. Use it only when the work must run containers itself.
 
@@ -43,7 +43,7 @@ requirements:
 
 Every image used by `docker`, `e2b`, or `daytona` must:
 
-1. **Contain the runner** at a pinned version: `npm install -g opencode-ai@<version>` or `@earendil-works/pi-coding-agent@<version>`. Nothing can be installed at run time.
+1. **Contain the runner** at a pinned version: `npm install -g opencode-ai@<version>`, `@earendil-works/pi-coding-agent@<version>`, or `@anthropic-ai/claude-code@<version>`. Nothing can be installed at run time.
 2. **Contain every tool the manifest declares** in `tools`, on `PATH`.
 3. **Contain `git` and GNU `tar`** (with `--null` support) for `e2b` and `daytona`, which stage files with them. `--repo` runs also use `git` and `gh`.
 4. **Run as any numeric user.** The engine runs as the host's uid. Never rely on `USER`, a home directory, or files owned by root being writable.
@@ -75,6 +75,16 @@ RUN npm install -g opencode-ai@${OPENCODE_VERSION} \
 # RUN ...
 
 WORKDIR /workspace
+```
+
+For another runner, swap the runner line, for example Claude Code:
+
+```dockerfile
+ARG CLAUDE_CODE_VERSION=<pinned version>
+
+# The runner.
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+    && chmod -R a+rX "$(npm root -g)"
 ```
 
 Start from a base that already carries heavy dependencies when the work needs them (a browser automation image for UI work, a language toolchain image), and add the runner and tools on top.

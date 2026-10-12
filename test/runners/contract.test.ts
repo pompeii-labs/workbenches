@@ -6,6 +6,7 @@ import type {
     ModelCatalogHarnessProviderRoute,
     ModelCatalogSnapshot,
 } from '../../src/models/snapshot.js';
+import { CLAUDE_CODE_PROVIDER_CAPABILITIES } from '../../src/runners/claude-code/connection.js';
 import { PI_PROVIDER_CAPABILITIES } from '../../src/runners/pi/providers.js';
 import { RunnerRegistry } from '../../src/runners/registry.js';
 import type { Runner } from '../../src/runners/runner.js';
@@ -55,14 +56,18 @@ const expected: Record<
     string,
     {
         displayName: string;
+        executable: string;
         runnerConfig: Runner['runnerConfig'];
         standardInput: boolean;
-        credentials: {
-            file: string;
-            apiKeyEntryType: string;
-            storeFirst: boolean;
-            environment: Record<string, string>;
-        };
+        /** Undefined for a runner whose credentials Workbench never keeps. */
+        credentials:
+            | {
+                  file: string;
+                  apiKeyEntryType: string;
+                  storeFirst: boolean;
+                  environment: Record<string, string>;
+              }
+            | undefined;
         capabilities: Capabilities;
         builtInCapabilities: Capabilities;
         catalogVersion: string;
@@ -75,8 +80,8 @@ const expected: Record<
             authenticated: AuthenticatedModelRoute[];
         };
         methods: {
-            local: ConnectionAuthenticationMethod[];
-            docker: ConnectionAuthenticationMethod[];
+            local: ConnectionAuthenticationMethod[] | undefined;
+            docker: ConnectionAuthenticationMethod[] | undefined;
         };
         hostSignIn?: { executable: string; plain: string[]; withMethod: string[] };
         manualSignIn?: string;
@@ -85,6 +90,7 @@ const expected: Record<
 > = {
     opencode: {
         displayName: 'OpenCode',
+        executable: 'opencode',
         runnerConfig: 'either',
         standardInput: false,
         credentials: {
@@ -175,6 +181,7 @@ const expected: Record<
     },
     pi: {
         displayName: 'Pi',
+        executable: 'pi',
         runnerConfig: 'directory',
         standardInput: true,
         credentials: {
@@ -268,6 +275,56 @@ const expected: Record<
         manualSignIn: 'Run pi and sign in with /login',
         inRunSignIn: false,
     },
+    'claude-code': {
+        displayName: 'Claude Code',
+        executable: 'claude',
+        runnerConfig: 'file',
+        standardInput: true,
+        credentials: undefined,
+        capabilities: CLAUDE_CODE_PROVIDER_CAPABILITIES,
+        builtInCapabilities: CLAUDE_CODE_PROVIDER_CAPABILITIES,
+        catalogVersion: '2.1.292',
+        candidates: [
+            {
+                provider: 'openrouter',
+                nativeProvider: 'openrouter',
+                nativeModel: 'openai/gpt-5.6-terra',
+                authenticationMethod: 'api',
+            },
+            {
+                provider: 'anthropic',
+                nativeProvider: 'anthropic',
+                nativeModel: 'claude-sonnet-4-5',
+            },
+        ],
+        packagedProviders: false,
+        probe: {
+            command: ['/bin/sh', '-c', 'claude auth status --json || [ "$?" -eq 1 ]'],
+            failsClosed: false,
+            listing: JSON.stringify(
+                {
+                    loggedIn: true,
+                    authMethod: 'claude.ai',
+                    apiProvider: 'firstParty',
+                    email: 'person@example.com',
+                    subscriptionType: 'max',
+                },
+                null,
+                2
+            ),
+            authenticated: [
+                {
+                    provider: 'anthropic',
+                    nativeProvider: 'anthropic',
+                    nativeModel: 'claude-sonnet-4-5',
+                    authenticationMethod: 'oauth',
+                },
+            ],
+        },
+        methods: { local: undefined, docker: undefined },
+        manualSignIn: 'Run claude auth login',
+        inRunSignIn: false,
+    },
 };
 
 describe('runner contract', () => {
@@ -282,7 +339,9 @@ describe('runner contract', () => {
         if (!declared) continue;
 
         describe(runner.name, () => {
-            test('declares its name, config shape, and standard input', () => {
+            test('declares its name, executable, config shape, and standard input', () => {
+                expect(runner.executable).toBe(declared.executable);
+                expect(runner.runtimeContract().executable).toBe(declared.executable);
                 expect(runner.displayName).toBe(declared.displayName);
                 expect(runner.runnerConfig).toBe(declared.runnerConfig);
                 expect(runner.standardInput).toBe(declared.standardInput);
@@ -292,6 +351,13 @@ describe('runner contract', () => {
             });
 
             test('declares its native credential file', () => {
+                if (!declared.credentials) {
+                    expect(runner.credentials).toBeUndefined();
+                    expect(
+                        runner.runtimeContract().credentialEnvironment
+                    ).toBeUndefined();
+                    return;
+                }
                 const { environment, ...file } = declared.credentials;
                 expect(runner.credentials).toMatchObject(file);
                 expect(runner.credentials?.environment('/credentials')).toEqual(

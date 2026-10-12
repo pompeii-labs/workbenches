@@ -135,12 +135,19 @@ export abstract class Runner {
     /** The harness name as people read it. */
     abstract readonly displayName: string;
     abstract readonly session: RunnerSessionAdapter;
+    /** The harness CLI a runtime must provide, found on its `PATH`. */
+    abstract readonly executable: string;
     /** The shape a package's `runner_config` must have: a file, a directory, or either. */
     abstract readonly runnerConfig: 'file' | 'directory' | 'either';
     /** The harness holds its session open over piped standard input. */
     abstract readonly standardInput: boolean;
     /** The runner's native credential file. Without it Workbench keeps no credentials for it. */
     readonly credentials?: RunnerCredentials | undefined;
+    /**
+     * Credential variables the harness reads itself, beyond the catalog's
+     * provider keys. `--env-file` and `--env` admit them for this runner.
+     */
+    readonly nativeCredentialVariables: readonly string[] = [];
     /** How `wb connect`, runs, `view` and `smoke` reach the runner's model providers. */
     abstract readonly connection: RunnerConnection;
 
@@ -153,7 +160,11 @@ export abstract class Runner {
     runtimeContract(): RuntimeRunnerContract {
         const credentials = this.credentials;
         return {
+            executable: this.executable,
             standardInput: this.standardInput,
+            ...(this.nativeCredentialVariables.length > 0
+                ? { credentialVariables: [...this.nativeCredentialVariables] }
+                : {}),
             ...(credentials
                 ? {
                       credentialEnvironment: (root: string) =>

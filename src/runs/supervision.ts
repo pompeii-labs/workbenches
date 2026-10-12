@@ -232,7 +232,11 @@ class RunObservation {
                 details: data,
             });
         }
-        if (event.type === 'input.accepted' && data.kind === 'permission')
+        // A permission is settled by an answer, or rejected when the runner withdraws it.
+        if (
+            (event.type === 'input.accepted' || event.type === 'input.rejected') &&
+            data.kind === 'permission'
+        )
             this.pending.delete(id);
         if (event.type === 'question.answered' || event.type === 'question.rejected')
             this.pending.delete(id);

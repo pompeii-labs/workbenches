@@ -1,4 +1,7 @@
 import { ActiveModelCatalog } from '../models/index.js';
+import { DiskAssetSource } from '../runtimes/staging/disk.js';
+import { ClaudeCodeConfigStaging } from './claude-code/config.js';
+import { ClaudeCodeRunner } from './claude-code/runner.js';
 import { RunnerContextStaging } from './context/stage.js';
 import { DiskRunnerFiles } from './files/disk.js';
 import { OpenCodeRunner } from './opencode/runner.js';
@@ -42,6 +45,14 @@ export class RunnerRegistry {
                 catalog,
             }),
             new PiRunner(new PiConfigStaging(files, context), catalog),
+            new ClaudeCodeRunner({
+                config: new ClaudeCodeConfigStaging(
+                    files,
+                    context,
+                    new DiskAssetSource()
+                ),
+                catalog,
+            }),
         ]);
     }
 

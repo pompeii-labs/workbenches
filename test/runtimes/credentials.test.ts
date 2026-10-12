@@ -7,12 +7,15 @@ import { PathPlan } from '../../src/runtimes/remote/paths.js';
 import { TransferRules } from '../../src/runtimes/staging/rules.js';
 import type { ResolvedWorkbench } from '../../src/types.js';
 
-/** The variable that points each runner at its mounted credential store. */
-const credentialVariables: Record<string, string> = {
+/** The variable that points each runner at its mounted credential store, if it has one. */
+const credentialVariables: Record<string, string | undefined> = {
     opencode: 'XDG_DATA_HOME',
     pi: 'WORKBENCH_CREDENTIALS_DIR',
+    'claude-code': undefined,
 };
-const variables = Object.values(credentialVariables);
+const variables = Object.values(credentialVariables).filter(
+    (variable): variable is string => Boolean(variable)
+);
 
 describe('runner credential environment', () => {
     const runners = RunnerRegistry.standard().list();
@@ -24,7 +27,7 @@ describe('runner credential environment', () => {
     });
 
     for (const runner of runners) {
-        const variable = credentialVariables[runner.name] ?? '';
+        const variable = credentialVariables[runner.name];
 
         test(`points ${runner.name} at its Docker credential volume`, () => {
             const volume = new DockerCredentialVolume(
@@ -34,9 +37,9 @@ describe('runner credential environment', () => {
                 runner.runtimeContract(),
                 undefined
             );
-            expect(volume.environment()).toEqual({
-                [variable]: '/workbench-credentials',
-            });
+            expect(volume.environment()).toEqual(
+                variable ? { [variable]: '/workbench-credentials' } : {}
+            );
         });
 
         test(`points ${runner.name} at its remote credential store only when one is bound`, () => {
@@ -48,20 +51,26 @@ describe('runner credential environment', () => {
                 runner: runner.runtimeContract(),
                 assets: [],
             };
-            const bound = new PathPlan(
-                {
-                    ...request,
-                    credentials: {
-                        runtime: 'e2b',
-                        runner: runner.name,
-                        directory: `/home/workbench/runtime-credentials/e2b/${runner.name}`,
+            const bind = () =>
+                new PathPlan(
+                    {
+                        ...request,
+                        credentials: {
+                            runtime: 'e2b',
+                            runner: runner.name,
+                            directory: `/home/workbench/runtime-credentials/e2b/${runner.name}`,
+                        },
                     },
-                },
-                new TransferRules('E2B')
-            ).environment();
-            expect(bound[variable]).toBe('/workbench-credentials');
-            for (const other of variables.filter((name) => name !== variable)) {
-                expect(bound).not.toHaveProperty(other);
+                    new TransferRules('E2B')
+                ).environment();
+            if (variable) {
+                const bound = bind();
+                expect(bound[variable]).toBe('/workbench-credentials');
+                for (const other of variables.filter((name) => name !== variable)) {
+                    expect(bound).not.toHaveProperty(other);
+                }
+            } else {
+                expect(bind).toThrow('keeps no credential file');
             }
             const unbound = new PathPlan(
                 request,

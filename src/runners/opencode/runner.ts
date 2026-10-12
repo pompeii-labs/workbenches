@@ -36,6 +36,7 @@ export class OpenCodeRunner extends Runner {
     readonly name = 'opencode';
     readonly displayName = 'OpenCode';
     readonly session: OpenCodeSessionAdapter;
+    readonly executable = 'opencode';
     readonly runnerConfig = 'either';
     readonly standardInput = false;
     /** OpenCode keeps its credential file under its data home. */

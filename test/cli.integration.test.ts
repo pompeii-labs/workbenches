@@ -1311,6 +1311,66 @@ describe('CLI integration', () => {
         expect(await readTextTree(join(home, 'runs'))).not.toContain(secret);
     });
 
+    test('admits a Claude Code token from an environment file and ends a failed startup with its reason', async () => {
+        const fixture = await createFixture({
+            runner: 'claude-code',
+            model: 'anthropic/claude-sonnet-4-5',
+        });
+        const bin = await fakeClaude();
+        const home = await temporaryDirectory('workbench-claude-token-home-');
+        const record = join(fixture.root, 'runner');
+        const environmentFile = join(fixture.root, '.env.claude');
+        await writeFile(
+            environmentFile,
+            'CLAUDE_CODE_OAUTH_TOKEN=fixture-subscription-token\n'
+        );
+        const environment = withoutProviderKeys({
+            ...(await fakeUserHome()),
+            PATH: `${bin}:${process.env.PATH}`,
+            WB_TEST_RECORD: record,
+            WORKBENCH_HOME: home,
+        });
+
+        const signedOut = await executeCli(
+            ['smoke', fixture.packageDirectory],
+            environment
+        );
+        expect(signedOut.code).toBe(AuthenticationRequiredError.exitCode);
+        const smoked = await executeCli(
+            ['smoke', fixture.packageDirectory, '--env-file', environmentFile],
+            environment
+        );
+        expect(smoked.code).toBe(0);
+        expect(smoked.stdout).toContain('ready\tfixture-core');
+
+        const ran = await executeSavedCli(
+            [
+                'run',
+                fixture.packageDirectory,
+                '--task',
+                'inspect',
+                '--env-file',
+                environmentFile,
+            ],
+            environment
+        );
+        expect(ran.code).toBe(0);
+        expect(ran.stdout).toContain('fixture reply');
+        expect(await readFile(`${record}.claude-token`, 'utf8')).toBe('subscription\n');
+
+        // A `claude` that exits 1 at startup fails the run with its standard error.
+        const reason = "cp: setting permissions for 'skills': Permission denied";
+        const failed = await executeCli(
+            ['run', 'fixture-run', '--task', 'inspect', '--env-file', environmentFile],
+            { ...environment, FAKE_CLAUDE_STARTUP_FAILURE: reason }
+        );
+        expect(failed.code).toBe(1);
+        expect(`${failed.stdout}\n${failed.stderr}`).toContain(reason);
+        expect(failed.stderr).not.toContain('worker exited unexpectedly');
+        const output = `${ran.stdout}${ran.stderr}${failed.stdout}${failed.stderr}`;
+        expect(output).not.toContain('fixture-subscription-token');
+    });
+
     test('binds declared sibling workspaces across smoke, run, and detached execution', async () => {
         const fixture = await createFixture({
             workspaces: {
@@ -3331,6 +3391,7 @@ async function createFixture(
         tools?: string[];
         skill?: boolean;
         runner?: string;
+        model?: string;
         runtime?: 'local' | 'docker';
         image?: string;
         localImage?: boolean;
@@ -3369,7 +3430,7 @@ async function createFixture(
             'name: fixture-core',
             `runner: ${options.runner ?? 'opencode'}`,
             'model:',
-            '  id: openai/gpt-5.6-terra',
+            `  id: ${options.model ?? 'openai/gpt-5.6-terra'}`,
             'instructions: ./instructions.md',
             ...(options.skill
                 ? ['skills:', '  - ./skills/fixture-skill']
@@ -3564,6 +3625,55 @@ async function fakeDocker() {
     );
     await chmod(join(bin, 'docker'), 0o755);
     return { bin, record, state };
+}
+
+/**
+ * A `claude` that is signed in only with the fixture subscription token. A
+ * session answers each user message with one reply, or, with
+ * `FAKE_CLAUDE_STARTUP_FAILURE`, prints it to standard error and exits 1.
+ */
+async function fakeClaude() {
+    const directory = await mkdtemp(join(tmpdir(), 'workbench-claude-bin-'));
+    temporaryDirectories.push(directory);
+    const claude = join(directory, 'claude');
+    await writeFile(
+        claude,
+        [
+            '#!/usr/bin/env bun',
+            'const args = Bun.argv.slice(2);',
+            'const signedIn = process.env.CLAUDE_CODE_OAUTH_TOKEN === "fixture-subscription-token";',
+            'if (args[0] === "--version") { console.log("2.1.292 (Claude Code)"); process.exit(0); }',
+            'if (args[0] === "auth") {',
+            '  console.log(JSON.stringify(signedIn ? { loggedIn: true, authMethod: "oauth_token" } : { loggedIn: false }));',
+            '  process.exit(signedIn ? 0 : 1);',
+            '}',
+            'const record = process.env.WB_TEST_RECORD;',
+            'if (record) await Bun.write(record + ".claude-token", signedIn ? "subscription\\n" : "missing\\n");',
+            'const failure = process.env.FAKE_CLAUDE_STARTUP_FAILURE;',
+            'if (failure) { process.stderr.write(failure + "\\n"); process.exit(1); }',
+            'const session = args[args.indexOf("--session-id") + 1] ?? "fixture-session";',
+            'const emit = (value: Record<string, unknown>) => process.stdout.write(JSON.stringify({ session_id: session, ...value }) + "\\n");',
+            'const decoder = new TextDecoder();',
+            'let pending = "";',
+            'for await (const chunk of Bun.stdin.stream()) {',
+            '  pending += decoder.decode(chunk, { stream: true });',
+            '  const lines = pending.split("\\n");',
+            '  pending = lines.pop() ?? "";',
+            '  for (const line of lines) {',
+            '    const message = line.trim() ? JSON.parse(line) : undefined;',
+            '    if (message?.type !== "user") continue;',
+            '    emit({ type: "command_lifecycle", command_uuid: message.uuid, state: "started" });',
+            '    emit({ type: "system", subtype: "init" });',
+            '    emit({ type: "assistant", parent_tool_use_id: null, message: { id: "msg_fixture", role: "assistant", content: [{ type: "text", text: "fixture reply" }] } });',
+            '    emit({ type: "result", subtype: "success", is_error: false, stop_reason: "end_turn", result: "fixture reply", usage: { input_tokens: 1, output_tokens: 1 }, total_cost_usd: 0 });',
+            '    emit({ type: "command_lifecycle", command_uuid: message.uuid, state: "completed" });',
+            '  }',
+            '}',
+            '',
+        ].join('\n')
+    );
+    await chmod(claude, 0o755);
+    return directory;
 }
 
 async function fakeBin(

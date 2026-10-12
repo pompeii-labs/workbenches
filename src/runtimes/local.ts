@@ -16,6 +16,7 @@ import type {
     RuntimeSessionOptions,
 } from './contracts.js';
 import { RuntimeError } from './error.js';
+import { runnerExecutable } from './runner.js';
 
 export interface LocalRuntimeDependencies {
     findExecutable?: (name: string) => string | null;
@@ -106,6 +107,8 @@ export class LocalRuntime implements PreparedRuntime {
     private cleaned = false;
     private readonly requiresGitHubCli;
     private readonly allowUncheckedGpu: boolean;
+    /** The runner CLI the host must provide. */
+    private readonly executable: string;
 
     constructor(
         request: RuntimePrepareRequest,
@@ -114,6 +117,7 @@ export class LocalRuntime implements PreparedRuntime {
         private readonly outcome?: HostOutcomeCapture
     ) {
         this.allowUncheckedGpu = request.allowUncheckedGpu ?? false;
+        this.executable = runnerExecutable(request);
         this.requiresGitHubCli = request.repository?.delivery === 'pr';
         this.workbench = request.workbench;
         this.workspaceDirectory = request.workspaceDirectory;
@@ -157,7 +161,7 @@ export class LocalRuntime implements PreparedRuntime {
             const result = new WorkbenchPreflight({
                 environment: this.environment,
                 findExecutable: this.dependencies.findExecutable,
-            }).check(this.workbench);
+            }).check(this.workbench, this.executable);
             const requirements = this.requirementsPreflight.check(this.workbench, {
                 allowUncheckedGpu: this.allowUncheckedGpu,
             });

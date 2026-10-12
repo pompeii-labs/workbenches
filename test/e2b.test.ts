@@ -433,6 +433,36 @@ describe('E2B runtime provider', () => {
         }
     });
 
+    test("looks for the runner's declared executable, not its name", async () => {
+        const resolved = await fixture();
+        resolved.manifest.runner = 'claude-code';
+        const client = new FakeClient();
+        const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare(
+            request(resolved)
+        );
+        try {
+            expect((await runtime.preflight()).runner).toEqual({
+                name: 'claude-code',
+                path: '/usr/bin/claude',
+            });
+        } finally {
+            await runtime.cleanup();
+        }
+        const absent = new FakeClient();
+        absent.sandbox.missingCommands.add('claude');
+        const missing = await new E2BRuntimeProvider({
+            ...disk,
+            client: absent,
+        }).prepare(request(resolved));
+        try {
+            await expect(missing.preflight()).rejects.toThrow(
+                'Runner CLI is unavailable in E2B image template-fixture: claude'
+            );
+        } finally {
+            await missing.cleanup();
+        }
+    });
+
     test('surfaces template preparation failures before creating a sandbox', async () => {
         const resolved = await fixture();
         const client = new FakeClient();

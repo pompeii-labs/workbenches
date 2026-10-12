@@ -151,8 +151,12 @@ export const connectCommand = defineCommand({
             if (!method) throw new Error('An authentication method must be selected');
             if (choice.runtime === 'docker' && !workbench) {
                 // The volume is written and checked through a Workbench image.
+                const runner = harnessLabel(choice.harness, runners);
+                const fix = `Run wb connect <workbench> --runtime docker --provider ${choice.provider} --method ${method.id}${args.remove ? ' --remove' : ''}`;
                 throw new AuthenticationRequiredError(
-                    `Docker keeps ${harnessLabel(choice.harness, runners)} credentials in a volume that is written and checked through a Workbench image. Run wb connect <workbench> --runtime docker --provider ${choice.provider} --method ${method.id}${args.remove ? ' --remove' : ''}`
+                    runners.find(choice.harness)?.credentials
+                        ? `Docker keeps ${runner} credentials in a volume that is written and checked through a Workbench image. ${fix}`
+                        : `${runner} in Docker is checked through a Workbench image. ${fix}`
                 );
             }
             if (args.remove) {

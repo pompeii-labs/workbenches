@@ -95,8 +95,9 @@ export class DockerRuntimeProvider implements RuntimeProvider {
         let stateDirectory: string | undefined;
         let outcome: HostOutcomeCapture | undefined;
         try {
+            // A runner without a credential file gets no volume and no mount.
             const credentials =
-                request.purpose === 'build'
+                request.purpose === 'build' || !request.runner.credentialEnvironment
                     ? undefined
                     : new DockerCredentialVolume(
                           client,

@@ -21,6 +21,7 @@ import {
     StoredRunHandle,
     type WorkbenchEvent,
 } from '../src/runs/index.js';
+import { RunSupervision } from '../src/runs/supervision.js';
 import { LocalRuntimeProvider, RuntimeRegistry } from '../src/runtimes/index.js';
 import { SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
@@ -178,6 +179,31 @@ describe('interactive run worker', () => {
             type: 'run.failed',
             data: { code: 'output_truncated' },
         });
+    });
+
+    test('records a failed turn before the worker returns its exit code', async () => {
+        const home = await temporaryHome();
+        const stored = await fixtureRun(home, {
+            mode: 'detached',
+            task: 'initial task',
+        });
+        const adapter = new ControlledAdapter({ failure: 'native startup failed' });
+
+        await expect(
+            workerFor(home, stored.id, adapter).execute({
+                environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+            })
+        ).resolves.toBe(1);
+
+        // The dispatched worker exits right after this, so the record is final now.
+        expect(await new RunStore(home).read(stored.id)).toMatchObject({
+            status: 'failed',
+            exit_code: 1,
+        });
+        const events = await new RunStore(home).readEvents(stored.id);
+        expect(events.filter((event) => event.type === 'run.failed')).toEqual([
+            expect.objectContaining({ data: { message: 'native startup failed' } }),
+        ]);
     });
 
     test('does not deliver an initial task after its client already cancelled', async () => {
@@ -707,6 +733,82 @@ describe('interactive run worker', () => {
         );
     });
 
+    for (const kind of ['permission', 'question'] as const) {
+        test(`stops offering a ${kind} the runner withdraws`, async () => {
+            const home = await temporaryHome();
+            const stored = await fixtureRun(home);
+            // The turn stays active after the withdrawal, so only the withdrawal clears the request.
+            const adapter = new ControlledAdapter({
+                ...(kind === 'permission'
+                    ? { requestPermission: true }
+                    : { requestQuestion: true }),
+                holdAfterRequest: true,
+            });
+            const execution = workerFor(home, stored.id, adapter).execute({
+                environment: { OPENAI_API_KEY: 'fixture-openai-key' },
+            });
+            const handle = new StoredRunHandle(home, stored.id);
+            await waitForReady(home, stored.id);
+            const supervision = new RunSupervision(home);
+            const snapshot = async () =>
+                supervision.snapshot(await new RunStore(home).read(stored.id));
+
+            const turn = handle.send('inspect outside');
+            await (kind === 'permission'
+                ? adapter.permissionRequested
+                : adapter.questionRequested);
+            const id = `${kind}-1`;
+            await until(async () => (await snapshot()).state === 'needs_input');
+            await adapter.withdraw(id);
+            await until(async () => (await snapshot()).pending_requests.length === 0);
+            expect((await snapshot()).state).not.toBe('needs_input');
+            await expect(
+                kind === 'permission'
+                    ? handle.respondToPermission(id, 'allow_once')
+                    : handle.respondToQuestion(id, {
+                          outcome: 'answered',
+                          answers: [['Production']],
+                      })
+            ).rejects.toThrow('no longer active');
+            adapter.completeFirst();
+            await turn;
+            await handle.close();
+            await execution;
+
+            // The runner sees a rejection, never the late answer.
+            if (kind === 'permission') {
+                expect(adapter.permissionDecisions).toEqual(['reject']);
+            } else {
+                expect(adapter.questionResponses).toEqual([{ outcome: 'rejected' }]);
+            }
+            const events = await collect(handle.events);
+            expect(
+                events.filter(
+                    (event) =>
+                        (event.data as { id?: string } | undefined)?.id === id &&
+                        event.type !==
+                            `${kind === 'permission' ? 'input' : 'question'}.requested`
+                )
+            ).toEqual([
+                expect.objectContaining(
+                    kind === 'permission'
+                        ? {
+                              type: 'input.rejected',
+                              data: {
+                                  id,
+                                  kind: 'permission',
+                                  code: 'request_withdrawn',
+                              },
+                          }
+                        : {
+                              type: 'question.rejected',
+                              data: { id, code: 'request_withdrawn' },
+                          }
+                ),
+            ]);
+        });
+    }
+
     test('routes question answers through the durable control channel', async () => {
         const home = await temporaryHome();
         const stored = await fixtureRun(home);
@@ -945,6 +1047,9 @@ class ControlledAdapter implements RunnerSessionAdapter {
             autoComplete?: boolean;
             startAfter?: Promise<void>;
             reason?: string;
+            failure?: string;
+            /** After its request settles, the first turn waits for `completeFirst`. */
+            holdAfterRequest?: boolean;
         } = {}
     ) {
         let markPermissionRequested!: () => void;
@@ -996,6 +1101,11 @@ class ControlledAdapter implements RunnerSessionAdapter {
         this.releaseFirst?.();
     }
 
+    /** The runner no longer needs request `id` answered. */
+    withdraw(id: string): Promise<void> {
+        return this.host?.withdrawRequest?.(id) ?? Promise.resolve();
+    }
+
     private async prompt(input: RunnerInput) {
         this.prompts.push(normalizeRunnerInput(input).text);
         for (const resolve of this.promptWaiters.splice(0)) resolve();
@@ -1024,7 +1134,14 @@ class ControlledAdapter implements RunnerSessionAdapter {
                     ],
                 });
                 if (response) this.questionResponses.push(response);
+            } else if (this.options.failure) {
+                throw new Error(this.options.failure);
             } else if (!this.options.autoComplete) {
+                await new Promise<void>((resolve) => {
+                    this.releaseFirst = resolve;
+                });
+            }
+            if (this.options.holdAfterRequest) {
                 await new Promise<void>((resolve) => {
                     this.releaseFirst = resolve;
                 });
@@ -1055,6 +1172,7 @@ class ControlledAdapter implements RunnerSessionAdapter {
 class InteractiveWorkerTestRunner extends Runner {
     readonly name = 'opencode';
     readonly displayName = 'OpenCode';
+    readonly executable = 'opencode';
     readonly runnerConfig = 'either';
     readonly standardInput = false;
     readonly credentials = RunnerRegistry.standard().resolve('opencode').credentials;
@@ -1189,6 +1307,14 @@ function workbench(): ResolvedWorkbench {
             runtime: 'local',
         },
     };
+}
+
+async function until(check: () => Promise<boolean>): Promise<void> {
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
+        if (await check()) return;
+        await Bun.sleep(2);
+    }
+    throw new Error('Timed out waiting for the condition');
 }
 
 async function waitForReady(home: string, runId: string): Promise<void> {

@@ -50,8 +50,12 @@ export interface RuntimeCredentialFiles {
 
 /** The only facts a runtime knows about the runner it launches. */
 export interface RuntimeRunnerContract {
+    /** The runner CLI the runtime must provide. */
+    executable: string;
     /** The runner holds its session open over piped standard input. */
     standardInput: boolean;
+    /** Variables the runner reads for its own credentials, forwarded into a sandbox when set. */
+    credentialVariables?: string[];
     /** The environment that points the runner at a mounted credential root. */
     credentialEnvironment?(root: string): Record<string, string>;
 }

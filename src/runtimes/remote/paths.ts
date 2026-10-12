@@ -92,6 +92,11 @@ export class PathPlan {
                     `Runner credential storage does not match the Workbench runner: ${request.credentials.runner}`
                 );
             }
+            if (!request.runner.credentialEnvironment) {
+                throw new Error(
+                    `Runner ${request.credentials.runner} keeps no credential file, so it takes no credential storage`
+                );
+            }
             const hostPath = resolve(request.credentials.directory);
             if (unique.has(hostPath)) {
                 throw new Error(
@@ -246,6 +251,10 @@ export class PathPlan {
                 ...new ModelRouter(
                     ActiveModelCatalog.current()
                 ).providerEnvironmentNames(workbench),
+                // The runner's own credential variables, only when the run set one.
+                ...(this.request.runner?.credentialVariables ?? []).filter(
+                    (name) => this.request.environment[name] !== undefined
+                ),
             ]),
         ].filter((name) => !hostOnly.has(name));
     }

@@ -1,8 +1,12 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { OutcomeStore } from '../src/outcomes/store.js';
+import type {
+    RuntimePrepareRequest,
+    RuntimeProvider,
+} from '../src/runtimes/contracts.js';
 
 import {
     LocalRuntimeProvider,
@@ -25,7 +29,7 @@ const request = {
     workbench: fixture,
     workspaceDirectory: '/workspace',
     environment: { PATH: '/bin' },
-    runner: { standardInput: false },
+    runner: { executable: 'opencode', standardInput: false },
     assets: [
         { path: '/workspace', access: 'read-write' as const },
         { path: '/repo/.workbenches/core', access: 'read-only' as const },
@@ -119,6 +123,29 @@ describe('local runtime provider contract', () => {
                     },
                 }),
             }),
+    });
+
+    test("checks the runner contract's executable on the host", async () => {
+        const looked: string[] = [];
+        const runtime = await new LocalRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: (name) => {
+                looked.push(name);
+                return `/bin/${name}`;
+            },
+        }).prepare({
+            ...request,
+            runner: { executable: 'fixture-cli', standardInput: true },
+        });
+        try {
+            expect((await runtime.preflight()).runner).toEqual({
+                name: 'opencode',
+                path: '/bin/fixture-cli',
+            });
+            expect(looked).not.toContain('opencode');
+        } finally {
+            await runtime.cleanup();
+        }
     });
 
     test('uses host paths and records cancellation', async () => {
@@ -247,6 +274,49 @@ describe('local runtime provider contract', () => {
             phase: 'prepare',
             message: 'image is not supported with the local runtime',
         });
+    });
+
+    test('smoke binds an e2b credential store only for runners with a credential file', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'runtime-smoke-home-'));
+        try {
+            for (const [runner, kept] of [
+                ['opencode', true],
+                ['pi', true],
+                ['claude-code', false],
+            ] as const) {
+                let seen: RuntimePrepareRequest | undefined;
+                const capture: RuntimeProvider = {
+                    name: 'e2b',
+                    placement: 'sandbox',
+                    prepare: async (request) => {
+                        seen = request;
+                        throw new Error('captured');
+                    },
+                };
+                const target = workbench();
+                target.manifest.runner = runner;
+                target.manifest.runtime = 'e2b';
+                await expect(
+                    new RuntimeSmoke({
+                        workbench: target,
+                        workspaceDirectory: '/target',
+                        environment: {},
+                        registry: new RuntimeRegistry([capture]),
+                        home,
+                    }).check()
+                ).rejects.toThrow('captured');
+                expect(seen?.credentials?.runner).toBe(kept ? runner : undefined);
+                expect(
+                    Boolean(
+                        await stat(
+                            join(home, 'runtime-credentials', 'e2b', runner)
+                        ).catch(() => undefined)
+                    )
+                ).toBe(kept);
+            }
+        } finally {
+            await rm(home, { recursive: true, force: true });
+        }
     });
 
     test('rejects launch after cleanup', async () => {

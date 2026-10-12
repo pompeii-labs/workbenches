@@ -44,6 +44,36 @@ describe('SandboxSetup', () => {
         }
     });
 
+    test("looks for the runner contract's executable, not the runner name", async () => {
+        const client = new FakeClient();
+        const runner = { executable: 'fixture-cli', standardInput: false };
+        const runtime = await daytonaProvider({ client }).prepare({
+            ...request(await fixture()),
+            runner,
+        });
+        try {
+            expect((await runtime.preflight()).runner).toEqual({
+                name: 'opencode',
+                path: '/usr/bin/fixture-cli',
+            });
+        } finally {
+            await runtime.cleanup();
+        }
+        const absent = new FakeClient();
+        absent.sandbox.missingCommands.add('fixture-cli');
+        const missing = await daytonaProvider({ client: absent }).prepare({
+            ...request(await fixture()),
+            runner,
+        });
+        try {
+            await expect(missing.preflight()).rejects.toThrow(
+                /Runner CLI is unavailable in Daytona image .*: fixture-cli/
+            );
+        } finally {
+            await missing.cleanup();
+        }
+    });
+
     test('names the missing tool when root access is unavailable', async () => {
         const client = new FakeClient();
         client.sandbox.missingCommands.add('gh');

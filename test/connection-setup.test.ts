@@ -537,6 +537,147 @@ describe('model connection', () => {
     });
 });
 
+describe('a runner without a credential file', () => {
+    const storeless = 'Claude Code has no credential store Workbench writes';
+
+    test('checks Docker through the runner itself, with no store to read or write', async () => {
+        const home = await temporary('workbench-storeless-docker-');
+        const checks: string[] = [];
+        const setup = new ConnectionSetup({
+            home,
+            target: apiKey('docker'),
+            environment: {},
+            workbench: workbench(),
+            check: () => ({
+                open: async () => {
+                    throw new Error('no store is opened');
+                },
+                inspect: async (options = {}) => {
+                    checks.push(options.before ? 'inspect with a store' : 'inspect');
+                    return anthropicStatus();
+                },
+            }),
+        });
+
+        expect(setup.file).toBeUndefined();
+        expect(setup.storesCredentials).toBeFalse();
+        await expect(setup.verify()).resolves.toEqual({
+            ready: true,
+            saved: false,
+            fromEnvironment: false,
+        });
+        expect(checks).toEqual(['inspect']);
+        expect(() => setup.requireStore()).toThrow(storeless);
+        expect(() => setup.apiKey('fixture')).toThrow(storeless);
+        expect(await setup.remove(['anthropic'])).toBeFalse();
+        expect(await readdir(home)).toEqual([]);
+    });
+
+    test('advises the runner token variable for a Docker subscription token', async () => {
+        const home = await temporary('workbench-storeless-token-');
+        const target: ConnectionTarget = {
+            ...apiKey('docker'),
+            method: {
+                id: 'setup-token',
+                label: 'Claude subscription token (CLAUDE_CODE_OAUTH_TOKEN from claude setup-token)',
+                nativeProvider: 'anthropic',
+                authenticationMethod: 'oauth',
+            },
+        };
+        const setup = new ConnectionSetup({
+            home,
+            target,
+            environment: {},
+            workbench: workbench(),
+            check: () => ({
+                open: async () => {
+                    throw new Error('no store is opened');
+                },
+                // Only an API key is listed, so the token method is not ready.
+                inspect: async () => anthropicStatus(),
+            }),
+        });
+        const failure = await new ModelConnection({
+            home,
+            target,
+            output: presenter([]),
+            environment: {},
+            interactive: true,
+            workbench: workbench(),
+            setup,
+        })
+            .connect({ stdin: false })
+            .catch((error: unknown) => error);
+        expect((failure as Error).message).toBe(
+            'Claude Code in Docker has no Anthropic credential for Claude subscription token (CLAUDE_CODE_OAUTH_TOKEN from claude setup-token). Set CLAUDE_CODE_OAUTH_TOKEN where wb runs. For one run, --env-file also works.'
+        );
+        expect(await readdir(home)).toEqual([]);
+    });
+
+    test('reads E2B keys only from the environment, without a sandbox or a store', async () => {
+        const home = await temporary('workbench-storeless-e2b-');
+        const setup = (environment: Record<string, string>) =>
+            new ConnectionSetup({
+                home,
+                target: apiKey('e2b'),
+                environment,
+                workbench: workbench(),
+                check: () => {
+                    throw new Error('a sandbox must not be prepared');
+                },
+            });
+
+        await expect(setup({}).verify()).resolves.toMatchObject({
+            ready: false,
+            missing:
+                'Claude Code has no credential store Workbench writes, so in E2B it reads Anthropic keys only from the environment or --env-file',
+        });
+        await expect(setup({ ANTHROPIC_API_KEY: 'fixture' }).verify()).resolves.toEqual(
+            { ready: true, saved: false, fromEnvironment: true }
+        );
+        expect(await setup({}).remove(['anthropic'])).toBeFalse();
+        expect(await readdir(home)).toEqual([]);
+    });
+
+    test('connects from the environment, rejects --stdin, and has nothing to remove', async () => {
+        const home = await temporary('workbench-storeless-connection-');
+        const store = new ConnectionStore(home);
+        const context = { runner: 'claude-code', runtime: 'e2b' };
+        const lines: string[] = [];
+        const connection = (environment: Record<string, string>) =>
+            new ModelConnection({
+                home,
+                target: apiKey('e2b'),
+                output: presenter(lines),
+                environment,
+                interactive: true,
+                readKey: async () => {
+                    throw new Error('stdin must not be read');
+                },
+            });
+
+        const failure = await connection({})
+            .connect({ stdin: false })
+            .catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(AuthenticationRequiredError);
+        expect((failure as Error).message).toBe(
+            'Claude Code has no credential store Workbench writes, so in E2B it reads Anthropic keys only from the environment or --env-file. Set ANTHROPIC_API_KEY where wb runs. For one run, --env-file also works.'
+        );
+        await expect(connection({}).connect({ stdin: true })).rejects.toThrow(
+            `${storeless}; Anthropic keys reach it only from the environment or --env-file`
+        );
+
+        await connection({ ANTHROPIC_API_KEY: 'fixture' }).connect({ stdin: false });
+        expect(lines).toEqual(['ready\te2b\tclaude-code\tanthropic\n']);
+        expect((await store.find(context))?.provider).toBe('anthropic');
+
+        await connection({}).remove([apiKey('e2b').method]);
+        expect(lines.at(-1)).toBe('absent\te2b\tclaude-code\tanthropic\n');
+        expect(await store.find(context)).toBeUndefined();
+        expect(await readdir(home)).not.toContain('runtime-credentials');
+    });
+});
+
 describe('host sign-in', () => {
     test('survives Ctrl-C during the login and still removes its temporary home', async () => {
         const root = await temporary('workbench-signin-signal-');
@@ -695,6 +836,40 @@ function chatgpt(runtime: ConnectionTarget['runtime']): ConnectionTarget {
             nativeMethod: 'ChatGPT Pro/Plus (headless)',
             authenticationMethod: 'oauth',
         },
+    };
+}
+
+/** An Anthropic key for Claude Code, which keeps no credential file. */
+function apiKey(runtime: ConnectionTarget['runtime']): ConnectionTarget {
+    return {
+        runtime,
+        harness: 'claude-code',
+        provider: 'anthropic',
+        method: {
+            id: 'api-key',
+            label: 'Anthropic API key',
+            nativeProvider: 'anthropic',
+            authenticationMethod: 'api',
+        },
+    };
+}
+
+/** An inspection in which the runner lists an Anthropic key route. */
+function anthropicStatus(): RunnerAuthenticationStatus {
+    return {
+        model: 'anthropic/claude-sonnet-4-5',
+        ready: true,
+        authenticatedProviders: ['anthropic'],
+        connections: [
+            {
+                provider: 'anthropic',
+                nativeProvider: 'anthropic',
+                nativeModel: 'claude-sonnet-4-5',
+                authenticationMethod: 'api',
+            },
+        ],
+        routes: [],
+        connectCommand: 'wb connect fixture --runtime docker',
     };
 }
 

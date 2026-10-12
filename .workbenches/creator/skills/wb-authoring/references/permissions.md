@@ -48,7 +48,19 @@ runner_config: ./runner/opencode.json
 }
 ```
 
-Check OpenCode's documentation for the version you pin; permission keys are the runner's, not the Workbench standard's.
+For Claude Code, ship a JSON file with Claude Code permission rules and an optional turn limit, and declare it the same way (`runner_config: ./runner/claude-code.json`). Only `permissions.allow`, `permissions.deny`, and `max_turns` are accepted; any other field fails validation. Declared MCPs, the outbox, and named workspaces are granted by the engine, so do not list them.
+
+```json
+{
+  "permissions": {
+    "allow": ["Read", "Glob", "Grep", "Skill", "Read(//opt/acme-tools/**)", "Bash(npm test:*)", "Bash(git diff:*)"],
+    "deny": ["Read(./.env)", "Read(./.env.*)", "Bash(flyctl apps destroy:*)"]
+  },
+  "max_turns": 200
+}
+```
+
+Check the runner's documentation for the version you pin; permission keys and rule syntax are the runner's, not the Workbench standard's.
 
 ## Test it
 

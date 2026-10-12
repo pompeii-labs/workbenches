@@ -209,17 +209,19 @@ describe('DaytonaRuntimeProvider', () => {
         });
     }
 
-    test('refuses a runner that reads from standard input', async () => {
-        const client = new FakeClient();
-        const resolved = await fixture();
-        resolved.manifest.runner = 'pi';
-        await expect(
-            daytonaProvider({ client }).prepare(request(resolved))
-        ).rejects.toThrow(
-            'The daytona runtime does not support runners that read from standard input yet'
-        );
-        expect(client.createOptions).toHaveLength(0);
-    });
+    for (const runner of ['pi', 'claude-code']) {
+        test(`refuses ${runner}, which reads from standard input`, async () => {
+            const client = new FakeClient();
+            const resolved = await fixture();
+            resolved.manifest.runner = runner;
+            await expect(
+                daytonaProvider({ client }).prepare(request(resolved))
+            ).rejects.toThrow(
+                'The daytona runtime does not support runners that read from standard input yet'
+            );
+            expect(client.createOptions).toHaveLength(0);
+        });
+    }
 
     test('refuses a GPU requirement', async () => {
         const client = new FakeClient();

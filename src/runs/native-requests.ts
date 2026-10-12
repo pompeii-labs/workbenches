@@ -44,6 +44,14 @@ export class NativeRequests {
         return true;
     }
 
+    /** Drops a request the runner withdrew, so a later answer finds it no longer active. */
+    withdraw(id: string): void {
+        this.#permissions.get(id)?.('reject');
+        this.#permissions.delete(id);
+        this.#questions.get(id)?.({ outcome: 'rejected' });
+        this.#questions.delete(id);
+    }
+
     rejectPermissions(): void {
         for (const resolve of this.#permissions.values()) resolve('reject');
         this.#permissions.clear();

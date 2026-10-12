@@ -38,6 +38,8 @@ export interface ResolvedRunnerConfiguration {
     nativeProvider: string;
     nativeModel: string;
     routes: ModelRoute[];
+    /** How the selected route is authenticated, such as `api` or `oauth`, when the runner reported it. */
+    authenticationMethod?: string;
     runnerConfigPath?: string;
     catalogVersion?: string;
 }
@@ -147,6 +149,9 @@ export class ModelRouter {
             nativeProvider,
             nativeModel,
             routes,
+            ...(selectedAuthentication?.authenticationMethod
+                ? { authenticationMethod: selectedAuthentication.authenticationMethod }
+                : {}),
             ...(options.workbench.runnerConfigPath
                 ? { runnerConfigPath: options.workbench.runnerConfigPath }
                 : {}),

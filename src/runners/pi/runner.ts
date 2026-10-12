@@ -27,6 +27,7 @@ export class PiRunner extends Runner {
     readonly name = 'pi';
     readonly displayName = 'Pi';
     readonly session: PiSessionAdapter;
+    readonly executable = 'pi';
     readonly runnerConfig = 'directory';
     /** A Pi session takes its input over piped standard input. */
     readonly standardInput = true;

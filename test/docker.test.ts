@@ -743,6 +743,57 @@ describe('Docker runtime provider', () => {
         }
     });
 
+    test('keeps a credential volume only for runners with a credential file', async () => {
+        for (const [runner, kept] of [
+            ['opencode', true],
+            ['pi', true],
+            ['claude-code', false],
+        ] as const) {
+            const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+            fixture.workbench.manifest.runner = runner;
+            const commands: string[][] = [];
+            let launched: string[] = [];
+            const runtime = await new DockerRuntimeProvider({
+                host: new NodeHost(),
+                findExecutable: () => '/usr/bin/docker',
+                command: dockerMock(commands),
+                interact(command) {
+                    launched = command;
+                    return Promise.resolve(0);
+                },
+                user: () => ({ uid: 501, gid: 20 }),
+            }).prepare({ ...request(fixture), purpose: 'connect' });
+            try {
+                await runtime.interact({
+                    command: [runner, '--version'],
+                    cwd: runtime.workspaceDirectory,
+                    env: runtime.environment,
+                });
+                const volume = DockerCredentialVolume.nameFor(runner);
+                const created = commands.some(
+                    (command) => command[1] === 'volume' && command[2] === 'create'
+                );
+                const helpers = commands.some((command) =>
+                    command.join(' ').includes('/workbench-credentials')
+                );
+                expect({ runner, created, helpers }).toEqual({
+                    runner,
+                    created: kept,
+                    helpers: kept,
+                });
+                expect(Boolean(runtime.credentials)).toBe(kept);
+                expect(launched.includes(`${volume}:/workbench-credentials`)).toBe(
+                    kept
+                );
+                expect(launched.join(' ').includes('/workbench-credentials')).toBe(
+                    kept
+                );
+            } finally {
+                await runtime.cleanup();
+            }
+        }
+    });
+
     test('writes credential files through a labeled offline helper with content on stdin', async () => {
         const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
         const helpers: Array<{ command: string[]; input?: string }> = [];
@@ -803,6 +854,35 @@ describe('Docker runtime provider', () => {
             );
         } finally {
             await runtime.cleanup();
+        }
+    });
+
+    test("looks for the runner's declared executable, not its name", async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        fixture.workbench.manifest.runner = 'claude-code';
+        const provider = (missing?: string) =>
+            new DockerRuntimeProvider({
+                host: new NodeHost(),
+                findExecutable: () => '/usr/bin/docker',
+                command: dockerMock([], missing ? { missing } : {}),
+                spawn: () => ({ exited: Promise.resolve(0) }),
+            });
+        const found = await provider().prepare(request(fixture));
+        try {
+            expect((await found.preflight()).runner).toEqual({
+                name: 'claude-code',
+                path: '/usr/local/bin/claude',
+            });
+        } finally {
+            await found.cleanup();
+        }
+        const missing = await provider('claude').prepare(request(fixture));
+        try {
+            await expect(missing.preflight()).rejects.toThrow(
+                'Runner CLI is unavailable in Docker image ghcr.io/example/lux@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: claude'
+            );
+        } finally {
+            await missing.cleanup();
         }
     });
 
