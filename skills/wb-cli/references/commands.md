@@ -78,7 +78,8 @@ The CLI reports anonymous save and run counts only for registry Workbenches publ
 | Path | Contents |
 | --- | --- |
 | `catalog.json`, `packages/` | Saved aliases and package snapshots. |
-| `sessions/`, `runs/`, `outcomes/` | Sessions, runs, and durable results. |
+| `wb.db`, `files/` | Sessions, runs, and events (one SQLite database), and the runner state, checkouts, and live-run scratch they refer to. |
+| `outcomes/`, `blobs/` | Durable results. |
 | `connections.json` | `wb connect` defaults. No secrets. |
 | `metadata/models/` | The cached model catalog, refreshed every 6 hours. |
 

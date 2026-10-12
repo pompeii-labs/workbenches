@@ -585,7 +585,7 @@ wb status --json       # run summaries for other tools
 { "statusLine": { "type": "command", "command": "wb status --line", "refreshInterval": 1 } }
 ```
 
-Status folds each run's event log incrementally into a private `status-cache.json` in the run directory, so frequent polling reads only new events.
+Status folds each run's event log incrementally into a cache row in the local database, so frequent polling reads only new events.
 
 Headless callers can supervise the same engine without keeping a client attached:
 
