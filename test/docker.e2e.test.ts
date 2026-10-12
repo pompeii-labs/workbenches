@@ -549,7 +549,7 @@ async function createSessionFixture(runner: 'opencode' | 'pi'): Promise<{
         dockerfile,
         runner === 'opencode'
             ? [
-                  'FROM oven/bun:1.3.11',
+                  'FROM oven/bun:1.4.3',
                   'RUN bun add --global opencode-ai@1.18.28 \\',
                   '    && install -m 0755 "$(readlink -f "$(command -v opencode)")" /usr/local/bin/opencode.runtime \\',
                   '    && rm /usr/local/bin/opencode \\',
