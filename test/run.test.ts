@@ -375,6 +375,41 @@ describe('local run lifecycle', () => {
         expect(JSON.stringify(events)).not.toContain('SECRET_RESPONSE_BODY');
     });
 
+    test('says a killed runner most likely ran out of memory', async () => {
+        const fixture = await createFixture();
+        const events: WorkbenchEvent[] = [];
+
+        const code = await WorkbenchRun.execute(
+            {
+                workbenchPath: fixture.packageDirectory,
+                task: 'inspect',
+                onEvent(event) {
+                    events.push(event);
+                },
+            },
+            {
+                env: TEST_ENVIRONMENT,
+                findExecutable: () => '/bin/opencode',
+                spawn() {
+                    return {
+                        exited: Promise.resolve(137),
+                        stdout: new Response('').body as ReadableStream<Uint8Array>,
+                        stderr: new Response('').body as ReadableStream<Uint8Array>,
+                    };
+                },
+            }
+        );
+
+        expect(code).toBe(137);
+        expect(events.at(-1)).toMatchObject({
+            type: 'run.failed',
+            data: {
+                message: 'OpenCode was killed (exit 137), most likely out of memory.',
+                exit_code: 137,
+            },
+        });
+    });
+
     test('removes terminal control sequences from runner diagnostics', async () => {
         const fixture = await createFixture();
         const events: WorkbenchEvent[] = [];

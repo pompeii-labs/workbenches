@@ -66,6 +66,65 @@ describe('OpenCodeServer', () => {
     });
 });
 
+describe('OpenCodeServer exit', () => {
+    async function failureAfterExit(code: number): Promise<string> {
+        let exit = (_code: number) => {};
+        let closeOutput = () => {};
+        const failures: string[] = [];
+        const server = new OpenCodeServer({
+            workspaceDirectory: '/workspace',
+            password: () => 'secret',
+            startupTimeoutMs: 1000,
+            fetch: strictFetch([]),
+            launch: () => ({
+                process: {
+                    exited: new Promise<number>((resolve) => {
+                        exit = resolve;
+                    }),
+                    stdout: new ReadableStream<Uint8Array>({
+                        start(controller) {
+                            closeOutput = () => {
+                                try {
+                                    controller.close();
+                                } catch {}
+                            };
+                            controller.enqueue(
+                                new TextEncoder().encode(
+                                    'listening on http://127.0.0.1:4096\n'
+                                )
+                            );
+                        },
+                    }),
+                    kill: () => {
+                        closeOutput();
+                        exit(0);
+                    },
+                },
+                resolveUrl: async (url) => url,
+            }),
+        });
+        await server.start(
+            () => ({ command: 'opencode', args: [], env: {} }) as never,
+            (error) => failures.push(error.message)
+        );
+        exit(code);
+        closeOutput();
+        await Bun.sleep(5);
+        await server.close();
+        return failures[0] ?? '';
+    }
+
+    test('says a killed server most likely ran out of memory', async () => {
+        expect(await failureAfterExit(137)).toBe(
+            'OpenCode server was killed (exit 137), most likely out of memory.'
+        );
+    });
+
+    test('keeps the plain message for another exit code', async () => {
+        expect(await failureAfterExit(2)).toBe('OpenCode server exited with code 2');
+    });
+});
+
 /** An event stream that stays open until its request is aborted. */
 function openStream(signal: AbortSignal | null | undefined): Response {
     return new Response(

@@ -1,5 +1,6 @@
 import type { RunnerContext } from '../context/files.js';
 import { runtimeContext } from '../context/runtime.js';
+import { RunnerProcessExit } from '../exit.js';
 import type {
     RunnerAdapterDeclaration,
     RunnerInput,
@@ -235,7 +236,9 @@ class PiRpcSession implements RunnerSession {
             }
         });
         void child.exited.then((code) => {
-            if (!this.closed) this.fail(new Error(`Pi RPC exited with code ${code}`));
+            if (!this.closed) {
+                this.fail(new Error(new RunnerProcessExit('Pi RPC').message(code)));
+            }
         });
 
         const state = await withTimeout(

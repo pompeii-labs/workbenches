@@ -86,7 +86,7 @@ describe('DaytonaRuntimeProvider', () => {
                     'dev.workbenches.run': run.id,
                     'dev.workbenches.scope': run.scope,
                 },
-                resources: {},
+                resources: { cpu: 2, memoryGb: 4 },
                 leaseMinutes: 60,
             });
         } finally {
@@ -124,6 +124,32 @@ describe('DaytonaRuntimeProvider', () => {
                 memoryGb: 8,
                 diskGb: 20,
             });
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('requests 2 vCPU and 4 GiB when nothing is declared', async () => {
+        const client = new FakeClient();
+        const runtime = await daytonaProvider({ client }).prepare(
+            request(await fixture())
+        );
+        try {
+            await runtime.preflight();
+            expect(client.createOptions[0]?.resources).toEqual({ cpu: 2, memoryGb: 4 });
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('a declared value beats the default, even a smaller one', async () => {
+        const client = new FakeClient();
+        const runtime = await daytonaProvider({ client }).prepare(
+            request(await fixture({ requirements: { cpu: 1, gpu: false } }))
+        );
+        try {
+            await runtime.preflight();
+            expect(client.createOptions[0]?.resources).toEqual({ cpu: 1, memoryGb: 4 });
         } finally {
             await runtime.cleanup();
         }

@@ -590,6 +590,22 @@ describe('Claude Code session adapter', () => {
         }
     });
 
+    test('says a killed child most likely ran out of memory', async () => {
+        const native = new FakeClaudeCode();
+        native.scenario = 'manual';
+        const observed = await open({ native });
+        try {
+            const turn = observed.session.prompt('work');
+            await settle();
+            native.exit(137);
+            await expect(turn).rejects.toThrow(
+                'Claude Code session failed: Claude Code was killed (exit 137), most likely out of memory.'
+            );
+        } finally {
+            await observed.session.close();
+        }
+    });
+
     test('fails a startup exit with the standard error tail that arrives after the exit', async () => {
         const encoder = new TextEncoder();
         const observed = await open({
