@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test';
 import {
-    chmod,
     cp,
     mkdir,
     mkdtemp,
@@ -9,21 +8,23 @@ import {
     realpath,
     rm,
     stat,
-    symlink,
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter } from 'node:path';
 import { OfficialWorkbenchResolver } from '../src/authoring/official.js';
 import { WorkbenchPackage } from '../src/catalog/package.js';
 import { AuthenticationRequiredError } from '../src/connections/error.js';
 import { OutcomeStore } from '../src/outcomes/store.js';
+import { hostEnvironment } from '../src/platform/environment.js';
+import { join, resolve } from '../src/platform/paths.js';
 import { RunControl } from '../src/runs/control.js';
 import { RunEvents } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/index.js';
 import { SessionStore } from '../src/sessions/index.js';
 import type { WorkbenchManifest } from '../src/types.js';
 import { seedModelCatalogFixture } from './model-catalog-fixture.js';
+import { diskMode, executableScript, symlink } from './platform.js';
 
 const projectDirectory = resolve(import.meta.dir, '..');
 const cliPath = join(projectDirectory, 'src', 'cli.ts');
@@ -38,7 +39,7 @@ afterEach(async () => {
 });
 
 describe('CLI integration', () => {
-    setDefaultTimeout(20_000);
+    setDefaultTimeout(process.platform === 'win32' ? 60_000 : 20_000);
 
     test('live add edits feed new CLI runs while a resumed session keeps its package after removal and deletion', async () => {
         const fixture = await createFixture();
@@ -47,7 +48,7 @@ describe('CLI integration', () => {
         const record = join(fixture.root, 'runner');
         const environment = {
             WORKBENCH_HOME: home,
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WB_TEST_RECORD: record,
         };
         await writeFile(
@@ -130,7 +131,7 @@ describe('CLI integration', () => {
         await seedCreator(home, root);
         const bin = await fakeBin([], { authoring: 'valid' });
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
         const api = ['--api-url', 'http://127.0.0.1:1'];
@@ -176,7 +177,13 @@ describe('CLI integration', () => {
         expect(edited.code).toBe(0);
         const launch = JSON.parse(edited.stdout);
         const verified = await executeCli(
-            ['wait', launch.session_id, '--timeout', '10', '--json'],
+            [
+                'wait',
+                launch.session_id,
+                '--timeout',
+                process.platform === 'win32' ? '40' : '10',
+                '--json',
+            ],
             environment,
             root
         );
@@ -194,7 +201,13 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['wait', expert.session_id, '--json', '--timeout', '10'],
+                    [
+                        'wait',
+                        expert.session_id,
+                        '--json',
+                        '--timeout',
+                        process.platform === 'win32' ? '40' : '10',
+                    ],
                     environment,
                     root
                 )
@@ -244,7 +257,7 @@ describe('CLI integration', () => {
                 '--api-url',
                 'http://127.0.0.1:1',
             ],
-            { PATH: `${bin}:${process.env.PATH}`, WORKBENCH_HOME: home },
+            { PATH: `${bin}${delimiter}${process.env.PATH}`, WORKBENCH_HOME: home },
             root
         );
         expect(result.code).toBe(1);
@@ -271,10 +284,10 @@ describe('CLI integration', () => {
                 '--api-url',
                 'http://127.0.0.1:1',
             ],
-            { PATH: `${bin}:${process.env.PATH}`, WORKBENCH_HOME: home },
+            { PATH: `${bin}${delimiter}${process.env.PATH}`, WORKBENCH_HOME: home },
             root
         );
-        expect(result.code).toBe(0);
+        expect(result.code, result.stderr).toBe(0);
         expect(JSON.parse(result.stdout)).toMatchObject({
             state: 'completed',
             authoring: { status: 'completed' },
@@ -291,7 +304,7 @@ describe('CLI integration', () => {
         const releaseFirstTurn = join(fixture.root, 'release-first-turn');
         const bin = await fakeBin([], { releaseFile: releaseFirstTurn });
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
         const dispatched = await executeSavedCli(
@@ -334,7 +347,13 @@ describe('CLI integration', () => {
             await writeFile(releaseFirstTurn, 'release');
         }
         const firstTurn = await executeCli(
-            ['wait', launch.session_id, '--timeout', '10', '--json'],
+            [
+                'wait',
+                launch.session_id,
+                '--timeout',
+                process.platform === 'win32' ? '40' : '10',
+                '--json',
+            ],
             environment
         );
         expect(firstTurn.code).toBe(0);
@@ -388,7 +407,13 @@ describe('CLI integration', () => {
         expect(next.session_id).toBe(launch.session_id);
         expect(next.run_id).not.toBe(launch.run_id);
         const final = await executeCli(
-            ['wait', launch.session_id, '--timeout', '10', '--json'],
+            [
+                'wait',
+                launch.session_id,
+                '--timeout',
+                process.platform === 'win32' ? '40' : '10',
+                '--json',
+            ],
             environment
         );
         expect(final.code).toBe(0);
@@ -548,7 +573,7 @@ describe('CLI integration', () => {
         const home = await temporaryDirectory('workspace-control-');
         const bin = await fakeBin([]);
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
         const launched = await executeSavedCli(
@@ -564,7 +589,15 @@ describe('CLI integration', () => {
         let after = 0;
         for (let attempt = 0; attempt < 3; attempt++) {
             const waited = await executeCli(
-                ['wait', id, '--after', String(after), '--timeout', '5', '--json'],
+                [
+                    'wait',
+                    id,
+                    '--after',
+                    String(after),
+                    '--timeout',
+                    process.platform === 'win32' ? '30' : '5',
+                    '--json',
+                ],
                 environment,
                 workspace
             );
@@ -735,7 +768,7 @@ describe('CLI integration', () => {
 
     test('renders framework-generated command help', async () => {
         const result = await executeCli(['--help']);
-        expect(result.code).toBe(0);
+        expect(result.code, result.stderr).toBe(0);
         expect(result.stdout).toContain(
             'Discover, save, verify, and run open Workbenches'
         );
@@ -857,7 +890,7 @@ describe('CLI integration', () => {
         const bin = await fakeBin();
         const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'do work'],
-            { PATH: `${bin}:${process.env.PATH}` }
+            { PATH: `${bin}${delimiter}${process.env.PATH}` }
         );
 
         expect(result.code).toBe(1);
@@ -882,14 +915,16 @@ describe('CLI integration', () => {
             ],
             {
                 ...(await fakeUserHome()),
-                PATH: `${bin}:/usr/bin:/bin`,
+                PATH: `${bin}${delimiter}${process.platform === 'win32' ? `${process.env.SystemRoot}\\System32` : '/usr/bin:/bin'}`,
                 WORKBENCH_HOME: home,
             }
         );
 
         expect(result.code).toBe(1);
         expect(result.stdout).toBe('');
-        expect(result.stderr).toBe('error: Executable not found in $PATH: "pi"\n');
+        expect(result.stderr).toMatch(
+            /(?:Executable not found in \$PATH: "pi"|Runner CLI is unavailable: pi\.)/
+        );
         expect(await readdir(home)).not.toContain('connections.json');
     });
 
@@ -924,7 +959,7 @@ describe('CLI integration', () => {
             'fixture-openrouter-secret\n'
         );
 
-        expect(result.code).toBe(0);
+        expect(result.code, result.stderr).toBe(0);
         expect(result.stdout).toBe('saved\te2b\topencode\topenrouter\n');
         expect(`${result.stdout}${result.stderr}`).not.toContain(
             'fixture-openrouter-secret'
@@ -934,8 +969,10 @@ describe('CLI integration', () => {
             anthropic: { type: 'api', key: 'fixture-anthropic' },
             openrouter: { type: 'api', key: 'fixture-openrouter-secret' },
         });
-        expect((await stat(file)).mode & 0o777).toBe(0o600);
-        expect((await stat(join(store, 'opencode'))).mode & 0o777).toBe(0o700);
+        expect((await stat(file)).mode & 0o777).toBe(diskMode(0o600));
+        expect((await stat(join(store, 'opencode'))).mode & 0o777).toBe(
+            diskMode(0o700)
+        );
         expect(await readdir(home)).not.toContain('runs');
 
         const removed = await executeCli([...target, '--remove'], environment);
@@ -1104,7 +1141,7 @@ describe('CLI integration', () => {
             const result = await executeSavedCli(
                 ['run', fixture.packageDirectory, ...args],
                 {
-                    PATH: `${bin}:${process.env.PATH}`,
+                    PATH: `${bin}${delimiter}${process.env.PATH}`,
                     WB_TEST_RECORD: record,
                 }
             );
@@ -1125,13 +1162,13 @@ describe('CLI integration', () => {
         const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task-file', brief],
             {
-                PATH: `${bin}:${process.env.PATH}`,
+                PATH: `${bin}${delimiter}${process.env.PATH}`,
                 WB_TEST_RECORD: record,
             },
             fixture.root
         );
 
-        expect(result.code).toBe(0);
+        expect(result.code, result.stderr).toBe(0);
         expect(await readFile(`${record}.args`, 'utf8')).toContain(
             'inspect the project\nwithout changing files\n'
         );
@@ -1145,7 +1182,7 @@ describe('CLI integration', () => {
         const child = await launchSavedCli(
             ['run', fixture.packageDirectory, '--stdin'],
             {
-                PATH: `${bin}:${process.env.PATH}`,
+                PATH: `${bin}${delimiter}${process.env.PATH}`,
                 WB_TEST_RECORD: record,
                 WORKBENCH_HOME: home,
             },
@@ -1181,7 +1218,7 @@ describe('CLI integration', () => {
                 '--task-file',
                 brief,
             ],
-            { PATH: `${bin}:${process.env.PATH}` },
+            { PATH: `${bin}${delimiter}${process.env.PATH}` },
             fixture.root
         );
 
@@ -1198,12 +1235,12 @@ describe('CLI integration', () => {
         const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', '  inspect the project  '],
             {
-                PATH: `${bin}:${process.env.PATH}`,
+                PATH: `${bin}${delimiter}${process.env.PATH}`,
                 WB_TEST_RECORD: record,
             },
             fixture.root
         );
-        expect(result.code).toBe(0);
+        expect(result.code, result.stderr).toBe(0);
         expect(await readFile(`${record}.cwd`, 'utf8')).toBe(`${fixture.root}\n`);
         expect(await readFile(`${record}.args`, 'utf8')).toContain(
             'inspect the project\n'
@@ -1259,14 +1296,14 @@ describe('CLI integration', () => {
                 `PROJECT_TOKEN=${explicitSecret}`,
             ],
             {
-                PATH: `${bin}:${process.env.PATH}`,
+                PATH: `${bin}${delimiter}${process.env.PATH}`,
                 WB_TEST_RECORD: record,
                 WORKBENCH_HOME: home,
                 PROJECT_TOKEN: 'inherited-secret',
             }
         );
 
-        expect(result.code).toBe(0);
+        expect(result.code, result.stderr).toBe(0);
         expect(await readFile(`${record}.project-token`, 'utf8')).toBe(
             `${explicitSecret}\n`
         );
@@ -1298,14 +1335,14 @@ describe('CLI integration', () => {
                 environmentFile,
             ],
             {
-                PATH: `${bin}:${process.env.PATH}`,
+                PATH: `${bin}${delimiter}${process.env.PATH}`,
                 WB_TEST_RECORD: record,
                 WORKBENCH_HOME: home,
                 OPENROUTER_API_KEY: '',
             }
         );
 
-        expect(result.code).toBe(0);
+        expect(result.code, result.stderr).toBe(0);
         expect(await readFile(`${record}.openai-key`, 'utf8')).toBe(`${secret}\n`);
         expect(`${result.stdout}\n${result.stderr}`).not.toContain(secret);
         expect(await readTextTree(join(home, 'runs'))).not.toContain(secret);
@@ -1326,7 +1363,7 @@ describe('CLI integration', () => {
         );
         const environment = withoutProviderKeys({
             ...(await fakeUserHome()),
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WB_TEST_RECORD: record,
             WORKBENCH_HOME: home,
         });
@@ -1384,7 +1421,7 @@ describe('CLI integration', () => {
         const home = await temporaryDirectory('workbench-workspace-home-');
         const record = join(fixture.root, 'workspace-runner');
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WB_TEST_RECORD: record,
             WORKBENCH_HOME: home,
         };
@@ -1454,7 +1491,7 @@ describe('CLI integration', () => {
 
         const smoked = await executeCli(
             ['smoke', fixture.packageDirectory, '--env-file', environmentFile],
-            { PATH: `${bin}:${process.env.PATH}` }
+            { PATH: `${bin}${delimiter}${process.env.PATH}` }
         );
         expect(smoked.code).toBe(0);
         expect(smoked.stdout).toContain('ready\tfixture-core');
@@ -1468,7 +1505,7 @@ describe('CLI integration', () => {
                 '--env',
                 'TYPO_TOKEN=do-not-echo-this',
             ],
-            { PATH: `${bin}:${process.env.PATH}` }
+            { PATH: `${bin}${delimiter}${process.env.PATH}` }
         );
         expect(rejected.code).toBe(1);
         expect(rejected.stderr).toContain(
@@ -1488,7 +1525,7 @@ describe('CLI integration', () => {
         const secret = 'detached-secret-not-for-storage';
         await writeFile(environmentFile, `PROJECT_TOKEN=${secret}\n`);
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WB_TEST_RECORD: record,
             WORKBENCH_HOME: home,
         };
@@ -1520,7 +1557,7 @@ describe('CLI integration', () => {
         const fixture = await createFixture();
         const bin = await fakeBin();
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             NO_COLOR: '1',
         };
 
@@ -1544,7 +1581,7 @@ describe('CLI integration', () => {
         const response =
             '# Result\n\nThe **important** value is `safe`.\n\n- First\n- Second';
         const bin = await fakeBin([], { response });
-        const environment = { PATH: `${bin}:${process.env.PATH}` };
+        const environment = { PATH: `${bin}${delimiter}${process.env.PATH}` };
 
         const human = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--no-color'],
@@ -1568,7 +1605,7 @@ describe('CLI integration', () => {
     test('supports positional tasks, normalized NDJSON, and final-only output', async () => {
         const fixture = await createFixture();
         const bin = await fakeBin();
-        const environment = { PATH: `${bin}:${process.env.PATH}` };
+        const environment = { PATH: `${bin}${delimiter}${process.env.PATH}` };
 
         const json = await executeSavedCli(
             ['run', fixture.packageDirectory, 'inspect', '--json'],
@@ -1660,7 +1697,7 @@ describe('CLI integration', () => {
         const home = await temporaryDirectory('workbench-detached-');
         const bin = await fakeBin([], { delay: true });
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
 
@@ -1732,7 +1769,7 @@ describe('CLI integration', () => {
         const home = await temporaryDirectory('workbench-foreground-client-');
         const bin = await fakeBin([], { block: true });
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
         const child = await launchSavedCli(
@@ -1767,7 +1804,7 @@ describe('CLI integration', () => {
         const record = join(fixture.root, 'runner');
         const bin = await fakeBin([], { delay: 2_000 });
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
             WB_TEST_RECORD: record,
         };
@@ -1807,7 +1844,7 @@ describe('CLI integration', () => {
         const home = await temporaryDirectory('workbench-detached-resume-');
         const bin = await fakeBin([], { delay: 2_000 });
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
 
@@ -1849,7 +1886,7 @@ describe('CLI integration', () => {
         const bin = await fakeBin();
         const resumedSecret = 'resume-secret-not-for-storage';
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
             WB_TEST_RECORD: record,
             PROJECT_TOKEN: 'initial-secret-not-for-storage',
@@ -1914,14 +1951,14 @@ describe('CLI integration', () => {
         const home = await temporaryDirectory('workbench-concurrent-resume-');
         const bin = await fakeBin([], { delay: 500 });
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
         const initial = await executeSavedCli(
             ['run', fixture.packageDirectory, 'initial task', '--final'],
             environment
         );
-        expect(initial.code).toBe(0);
+        expect(initial.code, `${initial.stderr}\n${initial.stdout}`).toBe(0);
         const sessionId = JSON.parse(
             (await executeCli(['ps', '--json'], environment)).stdout
         ).session_id as string;
@@ -1959,7 +1996,7 @@ describe('CLI integration', () => {
         const home = await temporaryDirectory('workbench-kill-');
         const bin = await fakeBin([], { block: true });
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
 
@@ -2006,12 +2043,12 @@ describe('CLI integration', () => {
         const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'use the fixture skill'],
             {
-                PATH: `${bin}:${process.env.PATH}`,
+                PATH: `${bin}${delimiter}${process.env.PATH}`,
                 WB_TEST_RECORD: record,
             }
         );
 
-        expect(result.code).toBe(0);
+        expect(result.code, result.stderr).toBe(0);
         const staged = (await readFile(`${record}.config-dir`, 'utf8')).trim();
         expect(staged).not.toBe('');
         await expect(stat(staged)).rejects.toThrow();
@@ -2024,13 +2061,13 @@ describe('CLI integration', () => {
         const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--dry-run'],
             {
-                PATH: `${bin}:${process.env.PATH}`,
+                PATH: `${bin}${delimiter}${process.env.PATH}`,
                 WB_TEST_RECORD: record,
             },
             fixture.root
         );
 
-        expect(result.code).toBe(0);
+        expect(result.code, result.stderr).toBe(0);
         expect(JSON.parse(result.stdout)).toMatchObject({
             cwd: fixture.root,
             skills: [],
@@ -2043,7 +2080,7 @@ describe('CLI integration', () => {
         const bin = await fakeBin();
         const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--dry-run'],
-            { PATH: `${bin}:${process.env.PATH}` }
+            { PATH: `${bin}${delimiter}${process.env.PATH}` }
         );
 
         expect(result.code).toBe(1);
@@ -2062,7 +2099,7 @@ describe('CLI integration', () => {
         const docker = await fakeDocker();
 
         const built = await executeCli(['build', fixture.packageDirectory, '--json'], {
-            PATH: `${docker.bin}:${process.env.PATH}`,
+            PATH: `${docker.bin}${delimiter}${process.env.PATH}`,
             WB_DOCKER_RECORD: docker.record,
             WB_DOCKER_STATE: docker.state,
         });
@@ -2078,7 +2115,7 @@ describe('CLI integration', () => {
         const fixture = await createFixture({ runtime: 'docker', localImage: true });
         const docker = await fakeDocker();
         const environment = {
-            PATH: `${docker.bin}:${process.env.PATH}`,
+            PATH: `${docker.bin}${delimiter}${process.env.PATH}`,
             WB_DOCKER_RECORD: docker.record,
             WB_DOCKER_STATE: docker.state,
         };
@@ -2115,7 +2152,7 @@ describe('CLI integration', () => {
         });
         const docker = await fakeDocker();
         const result = await executeCli(['smoke', fixture.packageDirectory], {
-            PATH: `${docker.bin}:${process.env.PATH}`,
+            PATH: `${docker.bin}${delimiter}${process.env.PATH}`,
             WB_DOCKER_RECORD: docker.record,
             WB_DOCKER_MISSING: 'lux',
         });
@@ -2143,13 +2180,13 @@ describe('CLI integration', () => {
         const result = await executeSavedCli(
             ['run', fixture.packageDirectory, '--task', 'inspect', '--json'],
             {
-                PATH: `${docker.bin}:${process.env.PATH}`,
+                PATH: `${docker.bin}${delimiter}${process.env.PATH}`,
                 WB_DOCKER_RECORD: docker.record,
                 OPENROUTER_API_KEY: secret,
             }
         );
 
-        expect(result.code).toBe(0);
+        expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
         const events = result.stdout
             .trim()
             .split('\n')
@@ -2172,89 +2209,112 @@ describe('CLI integration', () => {
         expect(commands).not.toContain(secret);
     });
 
-    test('requires an explicit grant before binding the host Docker engine', async () => {
-        const fixture = await createFixture({
-            runtime: 'docker',
-            image: 'ghcr.io/example/lux:0.1.0',
-            dockerEngine: true,
-        });
-        const docker = await fakeDocker();
-        const socketDirectory = await temporaryDirectory('workbench-docker-socket-');
-        const socketPath = join(socketDirectory, 'docker.sock');
-        const home = await temporaryDirectory('workbench-docker-engine-home-');
-        const server = Bun.listen({
-            unix: socketPath,
-            socket: { data() {} },
-        });
-        const environment = {
-            PATH: `${docker.bin}:${process.env.PATH}`,
-            WB_DOCKER_RECORD: docker.record,
-            WB_DOCKER_SOCKET: socketPath,
-            WORKBENCH_HOME: home,
-        };
-        try {
-            const built = await executeCli(
-                ['build', fixture.packageDirectory, '--json'],
-                environment
-            );
-            expect(built.code).toBe(0);
-
-            const denied = await executeSavedCli(
-                ['run', fixture.packageDirectory, '--task', 'inspect'],
-                environment
-            );
-            expect(denied.code).toBe(1);
-            expect(denied.stderr).toContain(
-                'Host Docker engine access requires explicit --allow-host-docker authorization'
-            );
-
-            const allowed = await executeSavedCli(
-                [
-                    'run',
-                    fixture.packageDirectory,
-                    '--task',
-                    'inspect',
-                    '--allow-host-docker',
-                    '--json',
-                ],
-                environment,
-                fixture.root
-            );
-            expect({
-                code: allowed.code,
-                stdout: allowed.stdout,
-                stderr: allowed.stderr,
-            }).toEqual({
-                code: 0,
-                stdout: expect.any(String),
-                stderr: '',
+    test(
+        'requires an explicit grant before binding the host Docker engine',
+        async () => {
+            const fixture = await createFixture({
+                runtime: 'docker',
+                image: 'ghcr.io/example/lux:0.1.0',
+                dockerEngine: true,
             });
-            const commands = await readFile(docker.record, 'utf8');
-            expect(commands).toContain(`${socketPath}:/var/run/docker.sock`);
-            expect(commands).toContain(`${fixture.root}:${fixture.root}`);
-            expect(commands).toContain(`--workdir ${fixture.root}`);
+            const docker = await fakeDocker();
+            const socketDirectory = await temporaryDirectory(
+                'workbench-docker-socket-'
+            );
+            const socketPath = join(socketDirectory, 'docker.sock');
+            const home = await temporaryDirectory('workbench-docker-engine-home-');
+            const server =
+                process.platform === 'win32'
+                    ? undefined
+                    : Bun.listen({
+                          unix: socketPath,
+                          socket: { data() {} },
+                      });
+            const environment = {
+                PATH: `${docker.bin}${delimiter}${process.env.PATH}`,
+                WB_DOCKER_RECORD: docker.record,
+                WB_DOCKER_SOCKET: socketPath,
+                ...(process.platform === 'win32'
+                    ? {
+                          WB_DOCKER_ENDPOINT:
+                              'npipe:////./pipe/dockerDesktopLinuxEngine',
+                      }
+                    : {}),
+                WORKBENCH_HOME: home,
+            };
+            const runtimeWorkspace =
+                process.platform === 'win32'
+                    ? '/run/desktop/mnt/host/' +
+                      fixture.root[0]?.toLowerCase() +
+                      fixture.root.slice(2).replaceAll('\\', '/')
+                    : fixture.root;
+            try {
+                const built = await executeCli(
+                    ['build', fixture.packageDirectory, '--json'],
+                    environment
+                );
+                expect(built.code).toBe(0);
 
-            const detached = await executeSavedCli(
-                [
-                    'run',
-                    fixture.packageDirectory,
-                    '--task',
-                    'inspect',
-                    '--allow-host-docker',
-                    '--detach',
-                ],
-                environment
-            );
-            expect(detached.code).toBe(0);
-            const attached = await executeCli(
-                ['attach', detached.stdout.trim(), '--final'],
-                environment
-            );
-            expect(attached.code).toBe(0);
-        } finally {
-            server.stop(true);
-        }
-    }, 15_000);
+                const denied = await executeSavedCli(
+                    ['run', fixture.packageDirectory, '--task', 'inspect'],
+                    environment
+                );
+                expect(denied.code).toBe(1);
+                expect(denied.stderr).toContain(
+                    'Host Docker engine access requires explicit --allow-host-docker authorization'
+                );
+
+                const allowed = await executeSavedCli(
+                    [
+                        'run',
+                        fixture.packageDirectory,
+                        '--task',
+                        'inspect',
+                        '--allow-host-docker',
+                        '--json',
+                    ],
+                    environment,
+                    fixture.root
+                );
+                expect({
+                    code: allowed.code,
+                    stdout: allowed.stdout,
+                    stderr: allowed.stderr,
+                }).toEqual({
+                    code: 0,
+                    stdout: expect.any(String),
+                    stderr: '',
+                });
+                const commands = await readFile(docker.record, 'utf8');
+                expect(commands).toContain(
+                    `${process.platform === 'win32' ? '/var/run/docker.sock' : socketPath}:/var/run/docker.sock`
+                );
+                expect(commands).toContain(`${fixture.root}:${runtimeWorkspace}`);
+                expect(commands).toContain(`--workdir ${runtimeWorkspace}`);
+
+                const detached = await executeSavedCli(
+                    [
+                        'run',
+                        fixture.packageDirectory,
+                        '--task',
+                        'inspect',
+                        '--allow-host-docker',
+                        '--detach',
+                    ],
+                    environment
+                );
+                expect(detached.code).toBe(0);
+                const attached = await executeCli(
+                    ['attach', detached.stdout.trim(), '--final'],
+                    environment
+                );
+                expect(attached.code).toBe(0);
+            } finally {
+                server?.stop(true);
+            }
+        },
+        process.platform === 'win32' ? 60_000 : 15_000
+    );
 
     test('dispatches and attaches to a detached Docker run', async () => {
         const fixture = await createFixture({
@@ -2265,7 +2325,7 @@ describe('CLI integration', () => {
         const docker = await fakeDocker();
         const home = await temporaryDirectory('workbench-docker-detached-');
         const environment = {
-            PATH: `${docker.bin}:${process.env.PATH}`,
+            PATH: `${docker.bin}${delimiter}${process.env.PATH}`,
             WB_DOCKER_RECORD: docker.record,
             WORKBENCH_HOME: home,
         };
@@ -2299,7 +2359,7 @@ describe('CLI integration', () => {
         const workspace = await temporaryDirectory('workbench-target-');
         const bin = await fakeBin(['fixture-tool']);
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
 
@@ -2433,7 +2493,7 @@ describe('CLI integration', () => {
     test('initializes .workbenches/name in the selected repository', async () => {
         const repository = await temporaryDirectory('workbench-init-');
         const result = await executeCli(['init', 'core'], {}, repository);
-        expect(result.code).toBe(0);
+        expect(result.code, result.stderr).toBe(0);
         const manifest = await readFile(
             join(repository, '.workbenches/core/workbench.yml'),
             'utf8'
@@ -2632,7 +2692,7 @@ describe('CLI integration', () => {
             ].join('\n')
         );
         const bin = await fakeBin();
-        const environment = { PATH: `${bin}:${process.env.PATH}` };
+        const environment = { PATH: `${bin}${delimiter}${process.env.PATH}` };
 
         const json = await executeCli(
             ['view', fixture.packageDirectory, '--json'],
@@ -2684,7 +2744,7 @@ describe('CLI integration', () => {
             )
         );
         const bin = await fakeBin();
-        const environment = { PATH: `${bin}:${process.env.PATH}` };
+        const environment = { PATH: `${bin}${delimiter}${process.env.PATH}` };
         const smoke = await executeCli(
             ['smoke', fixture.packageDirectory, '--runtime', 'e2b'],
             environment
@@ -2720,7 +2780,7 @@ describe('CLI integration', () => {
         const bin = await fakeBin();
         const home = await temporaryDirectory('workbench-runtime-select-');
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
         expect(
@@ -2763,7 +2823,7 @@ describe('CLI integration', () => {
         const bin = await fakeBin();
         const home = await temporaryDirectory('workbench-gpu-gate-');
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
         expect(
@@ -2833,14 +2893,14 @@ function withoutProviderKeys(
 }
 
 describe('CLI exit 3 for missing credentials', () => {
-    setDefaultTimeout(30_000);
+    setDefaultTimeout(process.platform === 'win32' ? 60_000 : 30_000);
 
     test('smoke --json reports a ready Workbench and exits 0', async () => {
         const fixture = await createFixture({ tools: ['fixture-tool'] });
         const home = await temporaryDirectory('smoke-json-ready-');
         const bin = await fakeBin(['fixture-tool']);
         const smoked = await executeCli(['smoke', fixture.packageDirectory, '--json'], {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         });
         expect(smoked.code).toBe(0);
@@ -2852,8 +2912,24 @@ describe('CLI exit 3 for missing credentials', () => {
             workbench: 'fixture-core',
             version: '0.1.0',
             runtime: 'local',
-            runner: { name: 'opencode', path: join(bin, 'opencode') },
-            tools: [{ name: 'fixture-tool', path: join(bin, 'fixture-tool') }],
+            runner: {
+                name: 'opencode',
+                path: join(
+                    bin,
+                    process.platform === 'win32' ? 'opencode.exe' : 'opencode'
+                ),
+            },
+            tools: [
+                {
+                    name: 'fixture-tool',
+                    path: join(
+                        bin,
+                        process.platform === 'win32'
+                            ? 'fixture-tool.exe'
+                            : 'fixture-tool'
+                    ),
+                },
+            ],
             authentication: {
                 ready: true,
                 provider: expect.any(String),
@@ -2872,7 +2948,7 @@ describe('CLI exit 3 for missing credentials', () => {
         const home = await temporaryDirectory('smoke-needs-auth-');
         const bin = await fakeBin();
         const environment = withoutProviderKeys({
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         });
         const human = await executeCli(
@@ -2901,7 +2977,7 @@ describe('CLI exit 3 for missing credentials', () => {
         const bin = await fakeBin();
         const smoked = await executeCli(
             ['smoke', fixture.packageDirectory, '--runtime', 'e2b', '--json'],
-            { PATH: `${bin}:${process.env.PATH}`, WORKBENCH_HOME: home }
+            { PATH: `${bin}${delimiter}${process.env.PATH}`, WORKBENCH_HOME: home }
         );
         expect(smoked.code).toBe(1);
         const report = JSON.parse(smoked.stdout);
@@ -2928,7 +3004,7 @@ describe('CLI exit 3 for missing credentials', () => {
         const home = await temporaryDirectory('smoke-json-several-');
         const bin = await fakeBin();
         const smoked = await executeCli(['smoke', fixture.root, '--json'], {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         });
         expect(smoked.code).toBe(0);
@@ -2957,7 +3033,7 @@ describe('CLI exit 3 for missing credentials', () => {
         const smoked = await executeCli(
             ['smoke', fixture.root, '--json'],
             withoutProviderKeys({
-                PATH: `${bin}:${process.env.PATH}`,
+                PATH: `${bin}${delimiter}${process.env.PATH}`,
                 WORKBENCH_HOME: home,
             })
         );
@@ -2968,8 +3044,8 @@ describe('CLI exit 3 for missing credentials', () => {
             .map((line) => JSON.parse(line).authentication.connect_command)
             .toSorted();
         expect(commands).toEqual([
-            `wb connect ${fixture.root}#core --runtime local`,
-            `wb connect ${fixture.root}#second --runtime local`,
+            `wb connect ${process.platform === 'win32' ? "'" : ''}${fixture.root}#core${process.platform === 'win32' ? "'" : ''} --runtime local`,
+            `wb connect ${process.platform === 'win32' ? "'" : ''}${fixture.root}#second${process.platform === 'win32' ? "'" : ''} --runtime local`,
         ]);
     });
 
@@ -2982,7 +3058,7 @@ describe('CLI exit 3 for missing credentials', () => {
         const home = await temporaryDirectory('smoke-e2b-key-');
         const bin = await fakeBin();
         const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
             E2B_API_KEY: '',
         };
@@ -3009,7 +3085,7 @@ describe('CLI exit 3 for missing credentials', () => {
         const home = await temporaryDirectory('run-needs-auth-');
         const bin = await fakeBin();
         const environment = withoutProviderKeys({
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         });
         const foreground = await executeSavedCli(
@@ -3046,7 +3122,7 @@ describe('CLI exit 3 for missing credentials', () => {
         const home = await temporaryDirectory('session-needs-auth-');
         const bin = await fakeBin();
         const authenticated = {
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
             WORKBENCH_HOME: home,
         };
         const first = await executeSavedCli(
@@ -3094,7 +3170,7 @@ describe('CLI exit 3 for missing credentials', () => {
                 'http://127.0.0.1:1',
             ],
             withoutProviderKeys({
-                PATH: `${bin}:${process.env.PATH}`,
+                PATH: `${bin}${delimiter}${process.env.PATH}`,
                 WORKBENCH_HOME: home,
             }),
             root
@@ -3308,12 +3384,12 @@ async function launchCli(
     await seedModelCatalogFixture(home);
     return Bun.spawn([process.execPath, cliPath, ...arguments_], {
         cwd,
-        env: {
-            ...process.env,
-            OPENROUTER_API_KEY: 'fixture-openrouter-key',
-            ...environment,
-            WORKBENCH_HOME: home,
-        },
+        env: hostEnvironment(
+            process.env,
+            { OPENROUTER_API_KEY: 'fixture-openrouter-key' },
+            environment,
+            { WORKBENCH_HOME: home }
+        ),
         stdin,
         stdout: 'pipe',
         stderr: 'pipe',
@@ -3322,7 +3398,7 @@ async function launchCli(
 
 async function waitForActiveSession(home: string): Promise<string> {
     const started = Date.now();
-    while (Date.now() - started < 5_000) {
+    while (Date.now() - started < (process.platform === 'win32' ? 20_000 : 5_000)) {
         const sessions = await readdir(join(home, 'sessions')).catch(() => []);
         const sessionId = sessions.find((entry) => entry.startsWith('wb_'));
         if (sessionId) {
@@ -3557,73 +3633,46 @@ async function fakeDocker() {
             '',
         ].join('\n')
     );
-    await chmod(server, 0o755);
+    await executableScript(server);
     await writeFile(
         join(bin, 'docker'),
         [
-            '#!/bin/sh',
-            'printf "%s\\n" "$*" >> "$WB_DOCKER_RECORD"',
-            'if test "$1" = "port"; then',
-            '  printf "127.0.0.1:%s\\n" "$(cat "$WB_DOCKER_RECORD.port")"',
-            '  exit 0',
-            'fi',
-            'case "$1 $2" in',
-            '  "version --format") printf "%s\\n" "28.1.1" ;;',
-            '  "image pull") printf "%s\\n" "sha256:local" ;;',
-            '  "image inspect")',
-            '    case "$3" in',
-            '      workbench-local/*)',
-            '        test -f "$WB_DOCKER_STATE" || exit 1',
-            '        printf "%s\\n" \'{"Id":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoDigests":[]}\'',
-            '        ;;',
-            '      *)',
-            '        printf "%s\\n" \'{"Id":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoDigests":["ghcr.io/example/lux@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}\'',
-            '        ;;',
-            '    esac',
-            '    ;;',
-            '  "context inspect") printf "%s\\n" "unix://$WB_DOCKER_SOCKET" ;;',
-            '  "buildx build") : > "$WB_DOCKER_STATE" ;;',
-            '  "volume create") printf "%s\\n" "$3" ;;',
-            '  "container rm") exit 0 ;;',
-            '  "run --rm")',
-            '    last=""',
-            '    entrypoint=""',
-            '    previous=""',
-            '    for argument in "$@"; do',
-            '      test "$previous" = "--entrypoint" && entrypoint="$argument"',
-            '      previous="$argument"',
-            '      last="$argument"',
-            '    done',
-            '    if test "$entrypoint" = "/bin/sh"; then',
-            '      case " $* " in',
-            '        *" workbench-context opencode "*) entrypoint="opencode" ;;',
-            '        *)',
-            '      test "$last" = "$WB_DOCKER_MISSING" && exit 127',
-            '      case "$*" in',
-            '        *"command -v"*) printf "/usr/local/bin/%s\\n" "$last" ;;',
-            '      esac',
-            '      exit 0',
-            '          ;;',
-            '      esac',
-            '    fi',
-            '    if test "$entrypoint" = "opencode"; then',
-            '      case " $* " in',
-            `        *" serve "*) exec ${JSON.stringify(server)} ;;`,
-            '      esac',
-            '      printf \'%s\\n\' \'{"type":"step_start","part":{"type":"step-start"}}\'',
-            '      printf \'%s\\n\' \'{"type":"text","part":{"type":"text","text":"fixture response"}}\'',
-            '      printf \'%s\\n\' \'{"type":"step_finish","part":{"type":"step-finish","reason":"stop","tokens":{"total":9,"input":4,"output":5,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.0001}}\'',
-            '      exit 0',
-            '    fi',
-            '    if test "$entrypoint" = "docker"; then exit 0; fi',
-            '    exit 1',
-            '    ;;',
-            '  *) exit 1 ;;',
-            'esac',
-            '',
+            '#!/usr/bin/env bun',
+            'const fs = await import("node:fs/promises");',
+            'const args = process.argv.slice(2);',
+            'await fs.appendFile(process.env.WB_DOCKER_RECORD, args.join(" ") + "\\n");',
+            'const action = args.slice(0, 2).join(" ");',
+            'if (args[0] === "port") { console.log("127.0.0.1:" + await fs.readFile(process.env.WB_DOCKER_RECORD + ".port", "utf8")); process.exit(0); }',
+            'if (action === "version --format") { console.log("28.1.1"); process.exit(0); }',
+            'if (action === "info --format") { console.log(JSON.stringify({OSType:"linux",OperatingSystem:"Docker Desktop"})); process.exit(0); }',
+            'if (action === "image pull") { console.log("sha256:local"); process.exit(0); }',
+            'if (action === "image inspect") {',
+            '  const local = args[2].startsWith("workbench-local/");',
+            '  if (local && !await Bun.file(process.env.WB_DOCKER_STATE).exists()) process.exit(1);',
+            '  console.log(JSON.stringify({Id: "sha256:" + "b".repeat(64), RepoDigests: local ? [] : ["ghcr.io/example/lux@sha256:" + "a".repeat(64)]})); process.exit(0);',
+            '}',
+            'if (action === "context inspect") { console.log(process.env.WB_DOCKER_ENDPOINT ?? ("unix://" + process.env.WB_DOCKER_SOCKET)); process.exit(0); }',
+            'if (action === "buildx build") { await Bun.write(process.env.WB_DOCKER_STATE, ""); process.exit(0); }',
+            'if (action === "volume create") { console.log(args[2]); process.exit(0); }',
+            'if (action === "container rm") process.exit(0);',
+            'if (action === "run --rm") {',
+            '  let entry = args[args.indexOf("--entrypoint") + 1];',
+            '  if (entry === "/bin/sh") {',
+            '    if (args.includes("workbench-context") && args.includes("opencode")) entry = "opencode";',
+            '    else { const last = args.at(-1); if (last === process.env.WB_DOCKER_MISSING) process.exit(127); if (args.some(a=>a.includes("command -v"))) console.log("/usr/local/bin/" + last); process.exit(0); }',
+            '  }',
+            '  if (entry === "docker") process.exit(0);',
+            '  if (entry === "opencode") {',
+            `    if (args.includes("serve")) { const child = Bun.spawn([process.execPath, ${JSON.stringify(server)}], {stdin:"inherit",stdout:"inherit",stderr:"inherit"}); process.exit(await child.exited); }`,
+            '    console.log(JSON.stringify({type:"step_start",part:{type:"step-start"}}));',
+            '    console.log(JSON.stringify({type:"text",part:{type:"text",text:"fixture response"}}));',
+            '    console.log(JSON.stringify({type:"step_finish",part:{type:"step-finish",reason:"stop",tokens:{total:9,input:4,output:5,reasoning:0,cache:{read:0,write:0}},cost:0.0001}})); process.exit(0);',
+            '  }',
+            '}',
+            'process.exit(1);',
         ].join('\n')
     );
-    await chmod(join(bin, 'docker'), 0o755);
+    await executableScript(join(bin, 'docker'));
     return { bin, record, state };
 }
 
@@ -3672,7 +3721,7 @@ async function fakeClaude() {
             '',
         ].join('\n')
     );
-    await chmod(claude, 0o755);
+    await executableScript(claude);
     return directory;
 }
 
@@ -3804,11 +3853,12 @@ async function fakeBin(
             '',
         ].join('\n')
     );
-    await chmod(runner, 0o755);
+    await executableScript(runner);
     for (const tool of tools) {
         const path = join(directory, tool);
-        await writeFile(path, '#!/bin/sh\nexit 0\n');
-        await chmod(path, 0o755);
+        await writeFile(path, '#!/usr/bin/env bun\nprocess.exit(0);\n');
+        await executableScript(path);
+        expect(Bun.which(tool, { PATH: directory })).not.toBeNull();
     }
     return directory;
 }

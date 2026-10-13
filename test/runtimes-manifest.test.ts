@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { ValidateFunction } from 'ajv';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { fullFormats } from 'ajv-formats/dist/formats.js';
+import { join } from '../src/platform/paths.js';
 
 import { RunnerRegistry } from '../src/runners/index.js';
 import type { ResolvedWorkbench, WorkbenchManifest } from '../src/types.js';

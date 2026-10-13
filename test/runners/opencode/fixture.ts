@@ -1,7 +1,6 @@
 import { expect } from 'bun:test';
-import { join } from 'node:path';
-
 import { ModelRouter } from '../../../src/models/index.js';
+import { join } from '../../../src/platform/paths.js';
 import { RunnerContextStaging } from '../../../src/runners/context/stage.js';
 import { DiskRunnerFiles } from '../../../src/runners/files/disk.js';
 import { OpenCodeSessionAdapter } from '../../../src/runners/opencode/adapter.js';

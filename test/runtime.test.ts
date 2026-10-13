@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { OutcomeStore } from '../src/outcomes/store.js';
+import { join } from '../src/platform/paths.js';
 import type {
     RuntimePrepareRequest,
     RuntimeProvider,
@@ -98,9 +98,10 @@ describe('local runtime provider contract', () => {
             );
             const started = Date.now();
             child.kill?.();
-            expect(new TextDecoder().decode((await reader.read()).value)).toContain(
-                'ignored'
-            );
+            if (process.platform !== 'win32')
+                expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+                    'ignored'
+                );
             expect(await child.exited).not.toBe(0);
             expect(Date.now() - started).toBeLessThan(4_000);
         } finally {

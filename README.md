@@ -27,7 +27,7 @@ This installs four skills:
 
 ## Or install the CLI directly
 
-Native binaries are available for macOS and Linux on arm64 and x64.
+Native binaries are available for macOS and Linux on arm64 and x64, and Windows on x64.
 
 ```sh
 curl -fsSL https://workbenches.dev/install.sh | sh
@@ -39,6 +39,20 @@ The installer verifies the release checksum and creates `workbench` and `wb` com
 wb --version
 wb update --check
 ```
+
+### Windows
+
+Windows x64 release builds use `workbench-windows-x64.tar.gz`. Download `install.ps1` from this repository and run it in PowerShell:
+
+```powershell
+.\install.ps1
+# Pin a release or choose an installation directory:
+.\install.ps1 -Version 1.1.0 -BinDir "$env:LOCALAPPDATA\Workbench\bin"
+```
+
+The installer verifies the published SHA-256 checksum and installs `workbench.exe` and `wb.exe` in `%LOCALAPPDATA%\Workbench\bin` by default. Add that directory to your user PATH. `wb update --check` checks for newer versions, and `wb update` installs the update for both executable aliases.
+
+Docker execution on Windows uses Docker Desktop with Linux containers. Host engine access also supports its local named-pipe context and still requires `--allow-host-docker`; workspaces in that mode must use Windows drive paths.
 
 ## Why Workbenches
 

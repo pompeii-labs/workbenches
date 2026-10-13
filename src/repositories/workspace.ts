@@ -1,6 +1,7 @@
-import { cp, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { writeFile } from '../platform/permissions.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { assertRepositoryBinding, type RepositoryBinding } from './contracts.js';
 import { RepositoryCredentials } from './credentials.js';

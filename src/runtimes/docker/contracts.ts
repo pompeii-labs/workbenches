@@ -40,6 +40,8 @@ export interface DockerUser {
 }
 
 export interface DockerHostSocket {
+    /** Socket and drive mounts are resolved inside the Docker Desktop Linux VM. */
+    desktop?: boolean;
     path: string;
     gid?: number;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { builtinModules } from 'node:module';
-import { join } from 'node:path';
+import { join } from '../../src/platform/paths.js';
 
 const root = join(import.meta.dir, '..', '..');
 

@@ -90,6 +90,7 @@ export class FakeClaudeCode {
             this.finish = resolve;
         });
         const child: ClaudeCodeChild = {
+            nativePipes: false,
             exited,
             stdin: {
                 write: (value: string) => this.receive(value),

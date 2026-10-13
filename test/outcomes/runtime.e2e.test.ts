@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { OutcomeLifecycle, OutcomeStore } from '../../src/outcomes/index.js';
+import { join } from '../../src/platform/paths.js';
 import type { PreparedRuntime } from '../../src/runtimes/contracts.js';
 import { DockerRuntimeProvider } from '../../src/runtimes/docker/provider.js';
 import { LocalRuntimeProvider } from '../../src/runtimes/local.js';
@@ -72,7 +72,7 @@ async function localProbe(root: string, name: string): Promise<ResolvedWorkbench
             spec: 0,
             version: '0.1.0',
             name,
-            runner: 'sh',
+            runner: process.platform === 'win32' ? 'bun' : 'sh',
             model: { id: 'openai/gpt-5.6-terra' },
             instructions: './instructions.md',
             skills: [],
@@ -143,7 +143,10 @@ describe('Outcome runtime process end to end', () => {
                     workspaceDirectory: root,
                     environment: process.env,
                     runner: {
-                        executable: workbench.manifest.runner,
+                        executable:
+                            target === 'local' && process.platform === 'win32'
+                                ? process.execPath
+                                : workbench.manifest.runner,
                         standardInput: false,
                     },
                     outcome: { directory: lifecycle.output.directory },
@@ -160,21 +163,37 @@ describe('Outcome runtime process end to end', () => {
                 expect(runtime.pathFor(lifecycle.output.directory)).toBe(outbox);
                 await runtime.preflight();
                 const child = runtime.launch({
-                    command: [
-                        '/bin/sh',
-                        '-c',
-                        [
-                            'printf "process streamed\\n"',
-                            'printf "after\\n" > modify.txt',
-                            'printf "added\\n" > add.txt',
-                            'rm delete.txt',
-                            'printf "api after\\n" > "$WORKBENCH_WORKSPACE_API/api.txt"',
-                            'mkdir -p "$WORKBENCH_OUTPUT_DIR/reports"',
-                            'printf "<h1>Original report</h1>\\n" > "$WORKBENCH_OUTPUT_DIR/reports/report.html"',
-                            'printf "\\000\\001\\377" > "$WORKBENCH_OUTPUT_DIR/original.bin"',
-                            'printf \'{"version":1,"summary":"Process complete","links":[{"label":"Pull request","uri":"https://example.com/pull/1","kind":"pull_request"}]}\' > "$WORKBENCH_OUTPUT_DIR/outcome.json"',
-                        ].join('; '),
-                    ],
+                    command:
+                        target === 'local' && process.platform === 'win32'
+                            ? [
+                                  process.execPath,
+                                  '-e',
+                                  [
+                                      'const fs = await import("node:fs/promises"); const path = await import("node:path");',
+                                      'console.log("process streamed");',
+                                      'await fs.writeFile("modify.txt", "after\\n"); await fs.writeFile("add.txt", "added\\n"); await fs.unlink("delete.txt");',
+                                      'await fs.writeFile(path.join(process.env.WORKBENCH_WORKSPACE_API, "api.txt"), "api after\\n");',
+                                      'const out = process.env.WORKBENCH_OUTPUT_DIR; await fs.mkdir(path.join(out, "reports"), {recursive:true});',
+                                      'await fs.writeFile(path.join(out, "reports", "report.html"), "<h1>Original report</h1>\\n");',
+                                      'await fs.writeFile(path.join(out, "original.bin"), Buffer.from([0,1,255]));',
+                                      'await fs.writeFile(path.join(out, "outcome.json"), JSON.stringify({version:1,summary:"Process complete",links:[{label:"Pull request",uri:"https://example.com/pull/1",kind:"pull_request"}]}));',
+                                  ].join('\n'),
+                              ]
+                            : [
+                                  '/bin/sh',
+                                  '-c',
+                                  [
+                                      'printf "process streamed\\n"',
+                                      'printf "after\\n" > modify.txt',
+                                      'printf "added\\n" > add.txt',
+                                      'rm delete.txt',
+                                      'printf "api after\\n" > "$WORKBENCH_WORKSPACE_API/api.txt"',
+                                      'mkdir -p "$WORKBENCH_OUTPUT_DIR/reports"',
+                                      'printf "<h1>Original report</h1>\\n" > "$WORKBENCH_OUTPUT_DIR/reports/report.html"',
+                                      'printf "\\000\\001\\377" > "$WORKBENCH_OUTPUT_DIR/original.bin"',
+                                      'printf \'{"version":1,"summary":"Process complete","links":[{"label":"Pull request","uri":"https://example.com/pull/1","kind":"pull_request"}]}\' > "$WORKBENCH_OUTPUT_DIR/outcome.json"',
+                                  ].join('; '),
+                              ],
                     cwd: runtime.workspaceDirectory,
                     env: runtime.environment,
                 });

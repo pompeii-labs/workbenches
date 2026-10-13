@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { OutcomeStore } from '../../src/outcomes/store.js';
+import { join } from '../../src/platform/paths.js';
 import { RepositoryRetention } from '../../src/repositories/retention.js';
 import { RepositoryWorkspace } from '../../src/repositories/workspace.js';
 import { capture, checkoutFixture, fixtureIdentity, saveRun } from './fixture.js';

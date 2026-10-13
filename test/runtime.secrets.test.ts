@@ -1,17 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import {
-    chmod,
-    mkdtemp,
-    readFile,
-    rm,
-    stat,
-    symlink,
-    writeFile,
-} from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve } from '../src/platform/paths.js';
+import { chmod, writeFile } from '../src/platform/permissions.js';
 import { E2BManagedSandboxes } from '../src/runtimes/e2b/managed.js';
 import { RuntimeSecretStore } from '../src/runtimes/secrets.js';
+import { diskMode, exposeFile, symlink } from './platform.js';
 
 const homes: string[] = [];
 const cli = resolve(import.meta.dir, '../src/cli.ts');
@@ -35,7 +29,7 @@ describe('E2B runtime connection', () => {
         expect(saved.stdout).toContain('E2B runtime key saved');
         expect(`${saved.stdout}${saved.stderr}`).not.toContain(key);
         expect((await stat(join(home, 'runtime.secrets.json'))).mode & 0o777).toBe(
-            0o600
+            diskMode(0o600)
         );
         expect(new RuntimeSecretStore(home).key('e2b')).toBe(key);
         expect(
@@ -76,7 +70,7 @@ describe('E2B runtime connection', () => {
         const store = new RuntimeSecretStore(home);
         store.save('e2b', 'private-key');
         const file = join(home, 'runtime.secrets.json');
-        await chmod(file, 0o644);
+        await exposeFile(file);
         expect(() => store.key('e2b')).toThrow('not private');
         await chmod(file, 0o600);
         await writeFile(file, '{"api_key":"private-key",', { mode: 0o600 });
@@ -116,7 +110,7 @@ describe('Daytona runtime connection', () => {
         expect(saved.stdout).toContain('Daytona runtime key saved');
         expect(`${saved.stdout}${saved.stderr}`).not.toContain(key);
         expect((await stat(join(home, 'runtime.secrets.json'))).mode & 0o777).toBe(
-            0o600
+            diskMode(0o600)
         );
         expect(new RuntimeSecretStore(home).key('daytona')).toBe(key);
         expect(new RuntimeSecretStore(home).key('e2b')).toBeUndefined();

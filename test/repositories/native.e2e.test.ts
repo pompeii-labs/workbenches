@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join } from '../../src/platform/paths.js';
 import { RepositoryWorkspace } from '../../src/repositories/workspace.js';
 import { RunnerRegistry } from '../../src/runners/registry.js';
 import { DockerRuntimeProvider } from '../../src/runtimes/docker/provider.js';

@@ -1,4 +1,4 @@
-import { dirname, posix } from 'node:path';
+import { posix } from 'node:path';
 
 import { formatOutcomeBytes } from '../../../outcomes/presentation.js';
 import type { SnapshotEntry } from '../plan.js';
@@ -105,7 +105,7 @@ export class MemoryArchive {
                 // A virtual root stands in for the workspace, so a link that climbs
                 // out of the returned tree is caught wherever the tree is mounted.
                 rules.validateSymlink({
-                    parent: dirname(posix.join(archiveRoot, name)),
+                    parent: posix.dirname(posix.join(archiveRoot, name)),
                     link: entry.link,
                     displayPath: name,
                     root: archiveRoot,

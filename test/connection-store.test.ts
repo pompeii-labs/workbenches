@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import {
     ConnectionStore,
     type RunnerConnectionContext,
 } from '../src/connections/store.js';
+import { join } from '../src/platform/paths.js';
+import { diskMode } from './platform.js';
 
 const temporaryDirectories: string[] = [];
 const context: RunnerConnectionContext = {
@@ -46,7 +46,9 @@ describe('runner connection preferences', () => {
             nativeMethod: 'Enter API key',
         });
         expect(await store.find({ runner: 'pi', runtime: 'e2b' })).toBeUndefined();
-        expect((await stat(join(home, 'connections.json'))).mode & 0o777).toBe(0o600);
+        expect((await stat(join(home, 'connections.json'))).mode & 0o777).toBe(
+            diskMode(0o600)
+        );
         const stored = await readFile(join(home, 'connections.json'), 'utf8');
         expect(JSON.parse(stored)).toMatchObject({
             version: 4,

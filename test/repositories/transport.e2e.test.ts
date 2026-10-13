@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join } from '../../src/platform/paths.js';
 import { RunStore } from '../../src/runs/store.js';
 import { DockerManagedContainers } from '../../src/runtimes/docker/containers.js';
 import { E2BSdkClient } from '../../src/runtimes/e2b/sdk.js';

@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
 import { AuthoringOperation } from '../src/authoring/index.js';
 import { SavedWorkbenchCatalog, WorkbenchPackage } from '../src/catalog/index.js';
 import { CliPresenter } from '../src/commands/presenter.js';
 import { presentPushed } from '../src/commands/push.js';
+import { join, resolve } from '../src/platform/paths.js';
 import { RegistryAccountStore, RegistryClient } from '../src/registry/index.js';
 import { RunnerRegistry } from '../src/runners/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';

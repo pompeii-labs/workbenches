@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import {
-    chmod,
     copyFile,
     cp,
     lstat,
@@ -14,6 +13,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { chmod } from '../../platform/permissions.js';
 
 import type { ResolvedWorkbench } from '../../types.js';
 import { selectedRuntime } from '../../workbench/runtimes.js';
@@ -151,18 +151,18 @@ async function validateSymlink(root: string, path: string): Promise<void> {
     const target = await readlink(path);
     if (isAbsolute(target)) {
         throw new Error(
-            `Absolute symlink is not allowed in Docker build context: ${relative(root, path)}`
+            `Absolute symlink is not allowed in Docker build context: ${relative(root, path).split(sep).join('/')}`
         );
     }
     const destination = resolve(dirname(path), target);
     if (!contains(root, destination)) {
         throw new Error(
-            `Escaping symlink is not allowed in Docker build context: ${relative(root, path)}`
+            `Escaping symlink is not allowed in Docker build context: ${relative(root, path).split(sep).join('/')}`
         );
     }
     await realpath(destination).catch(() => {
         throw new Error(
-            `Broken symlink is not allowed in Docker build context: ${relative(root, path)}`
+            `Broken symlink is not allowed in Docker build context: ${relative(root, path).split(sep).join('/')}`
         );
     });
 }

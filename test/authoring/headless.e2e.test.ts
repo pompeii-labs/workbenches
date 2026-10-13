@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter } from 'node:path';
 import { ConnectionStore } from '../../src/connections/store.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
+import { join } from '../../src/platform/paths.js';
 import { RunnerRegistry } from '../../src/runners/registry.js';
 import { StoredRunHandle } from '../../src/runs/handle.js';
 import { RunStore } from '../../src/runs/store.js';
@@ -68,7 +69,7 @@ test.skipIf(process.env.WORKBENCH_AUTHORING_E2E !== '1')(
             ].flatMap((key) => (process.env[key] ? [[key, process.env[key]]] : []))
         );
         Object.assign(environment, {
-            PATH: `${bin}:${environment.PATH}`,
+            PATH: `${bin}${delimiter}${environment.PATH}`,
             WORKBENCH_HOME: home,
         });
         const preference = await new ConnectionStore(workbenchHome()).find({

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readdir, readFile } from 'node:fs/promises';
-import { extname, join, relative } from 'node:path';
+import { extname } from 'node:path';
+import { join, relative } from '../../../src/platform/paths.js';
 
 import {
     externalValueImports,

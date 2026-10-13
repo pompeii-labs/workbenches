@@ -38,7 +38,7 @@ export class WorkbenchPackage {
         for (const entry of entries.sort((left, right) =>
             left.name.localeCompare(right.name)
         )) {
-            const path = join(relativePath, entry.name);
+            const path = [relativePath, entry.name].filter(Boolean).join('/');
             if (entry.isDirectory()) {
                 files.push(...(await this.readFiles(path)));
             } else if (entry.isFile()) {

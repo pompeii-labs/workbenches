@@ -1,14 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
+import { join } from '../../../src/platform/paths.js';
 import {
     buildClaudeCodeInvocation,
     type ClaudeCodeInvocationOptions,
     inSessionConfig,
 } from '../../../src/runners/claude-code/invocation.js';
 import type { RunnerInvocation } from '../../../src/types.js';
+import { symlink } from '../../platform.js';
 
 const options: ClaudeCodeInvocationOptions = {
     workspaceDirectory: '/workspace',
@@ -152,7 +152,11 @@ describe('Claude Code invocation', () => {
             const link = join(root, 'link');
             await symlink(target, link);
             const wrapped = inSessionConfig(
-                { command: ['true'], env: {} } as unknown as RunnerInvocation,
+                {
+                    command: [process.execPath, '-e', 'process.exit(0)'],
+                    cwd: root,
+                    env: {},
+                } as unknown as RunnerInvocation,
                 join(root, 'staged')
             );
             const [shell, flag, script, ...rest] = wrapped.command;

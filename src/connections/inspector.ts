@@ -264,7 +264,11 @@ async function inspectNative(
     }
     // Unless the listing fails closed, ready direct routes stand when it fails.
     const directRoutesStand = !connection.probe.failsClosed && directRoutes.length > 0;
-    const base = options.runner.native(options.runtime, connection.probe.command);
+    const base = options.runner.native(
+        options.runtime,
+        connection.probe.commandFor?.(options.runtime.workspaceDirectory) ??
+            connection.probe.command
+    );
     const result = await options.runtime
         .execute(base, {
             network: 'none',

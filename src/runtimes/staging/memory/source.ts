@@ -1,4 +1,4 @@
-import { posix } from 'node:path';
+import { pathStyle } from '../../../platform/paths.js';
 
 import type { TransferRules } from '../rules.js';
 import type { AssetSource, AssetStat } from '../source.js';
@@ -24,6 +24,7 @@ export class MemoryAssetSource implements AssetSource {
 
     /** Adds a file and the directories above it. */
     file(path: string, content: string | Uint8Array, mode = 0o644): this {
+        path = pathStyle(path).normalize(path);
         this.directories(path);
         this.entries.set(path, {
             kind: 'file',
@@ -38,6 +39,7 @@ export class MemoryAssetSource implements AssetSource {
 
     /** Adds a symbolic link and the directories above it. */
     link(path: string, target: string): this {
+        path = pathStyle(path).normalize(path);
         this.directories(path);
         this.entries.set(path, { kind: 'symlink', link: target, mode: 0o777 });
         return this;
@@ -45,7 +47,8 @@ export class MemoryAssetSource implements AssetSource {
 
     /** Adds an empty directory and the directories above it. */
     directory(path: string): this {
-        this.directories(`${path}/x`);
+        path = pathStyle(path).normalize(path);
+        this.directories(pathStyle(path).join(path, 'x'));
         return this;
     }
 
@@ -80,47 +83,57 @@ export class MemoryAssetSource implements AssetSource {
     }
 
     private directories(path: string): void {
-        const parts = path.split('/').filter(Boolean);
-        for (let index = 1; index < parts.length; index++) {
-            const directory = `/${parts.slice(0, index).join('/')}`;
-            if (!this.entries.has(directory)) {
+        const paths = pathStyle(path);
+        let directory = paths.dirname(path);
+        while (true) {
+            if (!this.entries.has(directory))
                 this.entries.set(directory, { kind: 'directory', mode: 0o755 });
-            }
+            const parent = paths.dirname(directory);
+            if (parent === directory || parent === '.') break;
+            directory = parent;
         }
     }
 
     async stat(path: string): Promise<AssetStat | undefined> {
+        path = pathStyle(path).normalize(path);
         // Follow a chain of final links. A cycle describes nothing, as ELOOP would.
         let current = path;
         for (let hops = 0; hops <= maximumLinkHops; hops++) {
             const entry = this.entries.get(current);
             if (entry?.kind !== 'symlink') return this.describe(current);
-            current = posix.resolve(posix.dirname(current), entry.link);
+            const paths = pathStyle(current);
+            current = paths.resolve(paths.dirname(current), entry.link);
         }
         return undefined;
     }
 
     async lstat(path: string): Promise<AssetStat | undefined> {
+        path = pathStyle(path).normalize(path);
         return this.describe(path);
     }
 
     async list(path: string): Promise<string[]> {
-        const prefix = `${path.replace(/\/$/, '')}/`;
+        path = pathStyle(path).normalize(path);
+        const separator = pathStyle(path).sep;
+        const prefix = path.endsWith(separator) ? path : path + separator;
         return [...this.entries.keys()]
             .filter(
                 (key) =>
-                    key.startsWith(prefix) && !key.slice(prefix.length).includes('/')
+                    key.startsWith(prefix) &&
+                    !key.slice(prefix.length).includes(separator)
             )
             .map((key) => key.slice(prefix.length));
     }
 
     async readLink(path: string): Promise<string> {
+        path = pathStyle(path).normalize(path);
         const entry = this.entries.get(path);
         if (entry?.kind !== 'symlink') throw new Error(`Not a link: ${path}`);
         return entry.link;
     }
 
     async read(path: string): Promise<Uint8Array> {
+        path = pathStyle(path).normalize(path);
         this.reads.push(path);
         const entry = this.entries.get(path);
         if (entry?.kind !== 'file') throw new Error(`Not a file: ${path}`);

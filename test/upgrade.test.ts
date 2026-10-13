@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import {
     SavedWorkbenchCatalog,
     SavedWorkbenchUpgrade,
     WorkbenchPackage,
 } from '../src/catalog/index.js';
+import { join } from '../src/platform/paths.js';
 import { RunnerRegistry } from '../src/runners/index.js';
 import { Workbench } from '../src/workbench/index.js';
 

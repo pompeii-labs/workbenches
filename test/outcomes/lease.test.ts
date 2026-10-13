@@ -1,16 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import {
-    mkdir,
-    mkdtemp,
-    readdir,
-    readFile,
-    rm,
-    symlink,
-    writeFile,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { OutcomeStorageLease } from '../../src/outcomes/lease.js';
+import { join } from '../../src/platform/paths.js';
+import { symlink } from '../platform.js';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -55,8 +49,10 @@ describe('OutcomeStorageLease', () => {
             join(root, '.lease', `2147483647.${crypto.randomUUID()}.json`),
             JSON.stringify({ pid: 2147483647, choosing: false, number: 1 })
         );
-        const source = new URL('../../src/outcomes/lease.ts', import.meta.url).pathname;
-        const script = `import {readFile,writeFile} from 'node:fs/promises'; import {join} from 'node:path'; import {OutcomeStorageLease} from ${JSON.stringify(source)}; const root=process.argv[1]; for(let i=0;i<4;i++) await new OutcomeStorageLease(root).exclusive(async()=>{const path=join(root,'counter');const n=Number(await readFile(path,'utf8')); await Bun.sleep(5); await writeFile(path,String(n+1));});`;
+        const source = fileURLToPath(
+            new URL('../../src/outcomes/lease.ts', import.meta.url)
+        );
+        const script = `import {readFile,writeFile} from 'node:fs/promises'; import { join } from 'node:path'; import {OutcomeStorageLease} from ${JSON.stringify(source)}; const root=process.argv[1]; for(let i=0;i<4;i++) await new OutcomeStorageLease(root).exclusive(async()=>{const path=join(root,'counter');const n=Number(await readFile(path,'utf8')); await Bun.sleep(5); await writeFile(path,String(n+1));});`;
         const children = Array.from({ length: 6 }, () =>
             Bun.spawn([process.execPath, '-e', script, root], {
                 env: { PATH: process.env.PATH },

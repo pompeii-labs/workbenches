@@ -1,11 +1,11 @@
 import { afterEach } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import type { OutcomeChangeEntry, RunOutcome } from '../../src/outcomes/contracts.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
 import { WorkspaceSnapshot } from '../../src/outcomes/workspace.js';
+import { join } from '../../src/platform/paths.js';
 import type { RepositoryBinding } from '../../src/repositories/contracts.js';
 import { RepositoryGit } from '../../src/repositories/git.js';
 import { RepositoryGitHub } from '../../src/repositories/github.js';

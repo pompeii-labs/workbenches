@@ -1,8 +1,9 @@
-import { relative } from 'node:path';
-
 import { modelLabel } from '../../models/label.js';
+import { relative } from '../../platform/paths.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
+import { isWindowsPath } from '../windows.js';
+import { isOutboxPermission } from './outbox.js';
 
 export function buildOpenCodeInvocation(
     workbench: ResolvedWorkbench,
@@ -192,15 +193,22 @@ function buildOpenCodeEnvironment(
             ];
         })
     );
-    const instructionRelativePath = relative(workspaceDirectory, instructionsPath);
+    const instructionRelativePath = relative(
+        workspaceDirectory,
+        instructionsPath
+    ).replaceAll('\\', '/');
     const instructionPath = instructionRelativePath.startsWith('..')
-        ? instructionsPath
+        ? instructionsPath.replaceAll('\\', '/')
         : instructionRelativePath;
-    const outbox = baseEnv.WORKBENCH_OUTPUT_DIR;
+    const requestedOutbox = baseEnv.WORKBENCH_OUTPUT_DIR;
+    const outbox =
+        requestedOutbox && isWindowsPath(requestedOutbox)
+            ? requestedOutbox.replaceAll('\\', '/')
+            : requestedOutbox;
     // Approve only the engine-owned result directory. Keep all other native
     // permission defaults and package settings intact, including tool approval.
     const outboxPermission =
-        outbox && !/[?*\\]/.test(outbox)
+        outbox && isOutboxPermission('external_directory', [`${outbox}/*`], outbox)
             ? { permission: { external_directory: { [`${outbox}/*`]: 'allow' } } }
             : {};
     const config = {

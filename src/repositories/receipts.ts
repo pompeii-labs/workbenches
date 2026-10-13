@@ -1,5 +1,6 @@
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 import {
     parseRepository,
     type RepositoryDeliveryReceipt,

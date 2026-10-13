@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { ModelRouter } from '../../src/models/index.js';
 import { MemoryOutcomeSink } from '../../src/outcomes/memory.js';
+import { join } from '../../src/platform/paths.js';
 import { RunnerContextStaging } from '../../src/runners/context/stage.js';
 import { MemoryRunnerFiles } from '../../src/runners/files/memory.js';
 import { OpenCodeRunner } from '../../src/runners/opencode/runner.js';

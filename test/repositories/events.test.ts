@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { fullFormats } from 'ajv-formats/dist/formats.js';
+import { join } from '../../src/platform/paths.js';
 import { RunEvents } from '../../src/runs/events.js';
 import { binding, result, temporary } from './fixture.js';
 

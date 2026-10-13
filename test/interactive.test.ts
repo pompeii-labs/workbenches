@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { OutcomeStore } from '../src/outcomes/store.js';
+import { join } from '../src/platform/paths.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import { type PreparedRunner, Runner } from '../src/runners/runner.js';
 import {

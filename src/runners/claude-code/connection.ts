@@ -1,5 +1,6 @@
 import type { ModelCatalogHarnessProviderRoute } from '../../models/index.js';
 import type { RunnerConnection } from '../runner.js';
+import { isWindowsPath, windowsInvocation } from '../windows.js';
 import { CLAUDE_CODE_VERSION } from './capabilities.js';
 
 /** Anthropic by API key or subscription, and the gateways by their own key. */
@@ -38,6 +39,23 @@ export const claudeCodeConnection: RunnerConnection = {
     probe: {
         // Logged out, the command exits 1 after printing its status, which is an answer.
         command: ['/bin/sh', '-c', 'claude auth status --json || [ "$?" -eq 1 ]'],
+        commandFor: (cwd) =>
+            isWindowsPath(cwd)
+                ? windowsInvocation(
+                      {
+                          command: [
+                              process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe',
+                              '/d',
+                              '/c',
+                              'exit',
+                              '0',
+                          ],
+                          cwd,
+                          env: {},
+                      },
+                      '& claude auth status --json; if ($LASTEXITCODE -gt 1) { exit $LASTEXITCODE }'
+                  ).command
+                : claudeCodeConnection.probe.command,
         failsClosed: false,
         authenticated(listing, candidates) {
             const method = loginMethod(listing);

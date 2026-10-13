@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { chmod, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
+import { delimiter } from 'node:path';
 import { runCommand } from 'citty';
-
 import { smokeCommand } from '../src/commands/smoke.js';
+import { join } from '../src/platform/paths.js';
 import { activateModelCatalogFixture } from './model-catalog-fixture.js';
+import { executableScript } from './platform.js';
 
 const temporaryDirectories: string[] = [];
 const originalFetch = globalThis.fetch;
@@ -46,9 +46,12 @@ describe('remote smoke', () => {
     test('smokes a remote package with skills without treating it as a local path', async () => {
         const home = await temporaryDirectory('workbench-remote-smoke-home-');
         const bin = await temporaryDirectory('workbench-remote-smoke-bin-');
-        await writeFile(join(bin, 'opencode'), '#!/bin/sh\necho 1.0.0\n');
-        await chmod(join(bin, 'opencode'), 0o755);
-        process.env.PATH = `${bin}:${process.env.PATH}`;
+        await writeFile(
+            join(bin, 'opencode'),
+            '#!/usr/bin/env bun\nconsole.log("1.0.0");\n'
+        );
+        await executableScript(join(bin, 'opencode'));
+        process.env.PATH = `${bin}${delimiter}${process.env.PATH}`;
         process.env.WORKBENCH_HOME = home;
         // Bun.which reads the PATH captured at process start, so an in-process
         // change to process.env.PATH is invisible to it unless passed explicitly.

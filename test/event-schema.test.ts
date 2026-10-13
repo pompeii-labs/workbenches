@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join } from '../src/platform/paths.js';
 
 import { WORKBENCH_EVENT_TYPES } from '../src/runs/index.js';
 

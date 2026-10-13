@@ -1,17 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import {
-    chmodSync,
     closeSync,
     constants,
     fstatSync,
+    lstatSync,
     mkdirSync,
     openSync,
     readFileSync,
     renameSync,
     rmSync,
-    writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import {
+    chmodSync,
+    isPrivateWindowsFile,
+    writeFileSync,
+} from '../platform/permissions.js';
 import { workbenchHome } from '../storage.js';
 
 /** The sandbox providers that need a host-only API key. */
@@ -73,6 +77,8 @@ export class RuntimeSecretStore {
         const path = join(this.home, filename);
         let descriptor: number;
         try {
+            if (lstatSync(path).isSymbolicLink())
+                throw new Error('Linked secret store');
             descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
         } catch (error) {
             if (isMissing(error)) return { version: 1 };
@@ -83,7 +89,10 @@ export class RuntimeSecretStore {
             if (!details.isFile() || details.size > maximumBytes) {
                 throw new Error('The Workbench runtime secret store is invalid');
             }
-            if (process.platform !== 'win32' && (details.mode & 0o077) !== 0) {
+            if (
+                (process.platform !== 'win32' && (details.mode & 0o077) !== 0) ||
+                !isPrivateWindowsFile(path)
+            ) {
                 throw new Error(
                     'The Workbench runtime secret store is not private (expected mode 0600)'
                 );

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { writeFile } from '../../platform/permissions.js';
 
 import { selectedRuntime } from '../../workbench/runtimes.js';
 import type { RuntimePrepareRequest } from '../contracts.js';

@@ -288,7 +288,7 @@ export class WorkbenchAuthoring {
     }
 
     private relativePackage(repository: string, packageDirectory: string): string {
-        return relative(repository, packageDirectory) || '.';
+        return relative(repository, packageDirectory).replaceAll('\\', '/') || '.';
     }
 
     private sessionVerification(

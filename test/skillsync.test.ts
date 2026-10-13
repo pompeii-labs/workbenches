@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join } from '../src/platform/paths.js';
 
 const root = process.cwd();
 const source = join(root, '.workbenches', 'creator', 'skills', 'wb-authoring');

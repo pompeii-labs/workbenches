@@ -7,18 +7,21 @@ import {
     readFile,
     rm,
     stat,
-    symlink,
     writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
-
+import { tmpdir } from 'node:os';
+import { delimiter } from 'node:path';
 import type {
     ModelCatalogSnapshot,
     ResolvedRunnerConfiguration,
 } from '../../../src/models/index.js';
+import { join } from '../../../src/platform/paths.js';
 import { ClaudeCodeConfigStaging } from '../../../src/runners/claude-code/config.js';
 import { runtimeCostStore } from '../../../src/runners/claude-code/cost.js';
-import { executeOnHost } from '../../../src/runners/claude-code/process.js';
+import {
+    executeOnHost as executeFixture,
+    executeOnHost,
+} from '../../../src/runners/claude-code/process.js';
 import {
     ClaudeCodeRunner,
     type PreparedClaudeCodeRunner,
@@ -39,6 +42,7 @@ import type {
     WorkbenchWorkspaceBinding,
 } from '../../../src/types.js';
 import { modelCatalogFixture } from '../../model-catalog-fixture.js';
+import { diskMode, executableScript, symlink } from '../../platform.js';
 import { FakeClaudeCode } from './fixture.js';
 
 const catalog: ModelCatalogSnapshot = {
@@ -52,7 +56,7 @@ const catalog: ModelCatalogSnapshot = {
 /** Stages under the test scratch prefix, never the person's temporary directory. */
 class ScratchFiles extends DiskRunnerFiles {
     override tempDirectory(prefix: string): Promise<string> {
-        return mkdtemp(`/tmp/b3-${prefix}`);
+        return mkdtemp(join(tmpdir(), `b3-${prefix}`));
     }
 }
 
@@ -70,7 +74,7 @@ afterEach(async () => {
 
 /** A package with one skill and a workspace with a CLAUDE.md, on disk. */
 async function project() {
-    const root = await mkdtemp('/tmp/b3-runner-');
+    const root = await mkdtemp(join(tmpdir(), 'b3-runner-'));
     scratch.push(root);
     const packageDirectory = join(root, 'package');
     const workspace = join(root, 'workspace');
@@ -182,6 +186,12 @@ function fakeRuntime(name: string, options: FakeRuntimeOptions) {
         pathFor: mount,
         execute: async (invocation: RunnerInvocation) => {
             executed.push(invocation);
+            if (invocation.env.WORKBENCH_COST_PATH) {
+                const path = invocation.env.WORKBENCH_COST_PATH;
+                const value = invocation.env.WORKBENCH_COST_VALUE;
+                if (value !== undefined) files.set(path, `${value}\n`);
+                return { code: 0, stdout: files.get(path) ?? '', stderr: '' };
+            }
             const [, , script, , path, value] = invocation.command;
             if (script?.startsWith('cat') && path) {
                 return { code: 0, stdout: files.get(path) ?? '', stderr: '' };
@@ -234,7 +244,30 @@ async function start(
 
 /** The `claude` argv inside the launch wrappers. */
 function claudeArguments(invocation: RunnerInvocation): string[] {
-    return invocation.command.slice(invocation.command.indexOf('claude'));
+    let command = invocation.command;
+    while (command.includes('-EncodedCommand')) {
+        const script = Buffer.from(
+            command[command.indexOf('-EncodedCommand') + 1] as string,
+            'base64'
+        ).toString('utf16le');
+        const launch = script
+            .split('\n')
+            .findLast((line) => line.startsWith('& ') || line.includes(' | & '));
+        if (!launch) break;
+        command = [...launch.matchAll(/'((?:[^']|'')*)'/g)].map((match) =>
+            (match[1] as string).replaceAll("''", "'")
+        );
+    }
+    return command.slice(
+        command.findIndex(
+            (value) =>
+                value
+                    .replaceAll('\\', '/')
+                    .split('/')
+                    .at(-1)
+                    ?.replace(/\.exe$/i, '') === 'claude'
+        )
+    );
 }
 
 function claudeEnvironment(invocation: RunnerInvocation): Record<string, unknown> {
@@ -258,7 +291,7 @@ describe('Claude Code runner preparation', () => {
 
         expect(ready.assets).toHaveLength(1);
         expect(asset?.access).toBe('read-write');
-        expect(asset?.path).toStartWith('/tmp/b3-workbench-claude-');
+        expect(asset?.path).toStartWith(join(tmpdir(), 'b3-workbench-claude-'));
         expect(
             (await stat(join(asset?.path ?? '', 'skills', 'review'))).isDirectory()
         ).toBe(true);
@@ -276,6 +309,10 @@ describe('Claude Code runner launches', () => {
             ANTHROPIC_BASE_URL: 'https://inherited.invalid',
         });
         const docs = join(root, 'docs');
+        const permissionDocs =
+            process.platform === 'win32'
+                ? `/${docs[0]?.toLowerCase()}/${docs.slice(3).replaceAll('\\', '/')}`
+                : docs;
         const { runtime, launched } = fakeRuntime('local', {
             workbench,
             workspace,
@@ -298,9 +335,15 @@ describe('Claude Code runner launches', () => {
         if (!invocation) throw new Error('no launch');
         const command = claudeArguments(invocation);
 
-        expect(invocation.command.slice(0, 2)).toEqual(['/bin/sh', '-c']);
-        expect(invocation.command).toContain('workbench-context');
-        expect(invocation.command).toContain('workbench-claude');
+        if (process.platform === 'win32')
+            expect(invocation.command).toContain('-EncodedCommand');
+        else expect(invocation.command.slice(0, 2)).toEqual(['/bin/sh', '-c']);
+        if (process.platform === 'win32')
+            expect(invocation.env.WORKBENCH_RUNTIME_CONTEXT).toBeDefined();
+        else {
+            expect(invocation.command).toContain('workbench-context');
+            expect(invocation.command).toContain('workbench-claude');
+        }
         expect(flag(command, '--model')).toBe('claude-sonnet-4-5');
         expect(flag(command, '--resume')).toBe('native-1');
         expect(flag(command, '--system-prompt-snapshot')).toBe('off');
@@ -313,8 +356,8 @@ describe('Claude Code runner launches', () => {
                 allow: [
                     'Read(//runs/r1/outbox/**)',
                     'Edit(//runs/r1/outbox/**)',
-                    `Read(/${docs}/**)`,
-                    `Edit(/${docs}/**)`,
+                    `Read(/${permissionDocs}/**)`,
+                    `Edit(/${permissionDocs}/**)`,
                 ],
                 deny: [],
             },
@@ -372,8 +415,8 @@ describe('Claude Code runner launches', () => {
     test('docker: runtime paths, an API key or a host token, and no login', async () => {
         const { workspace, workbench } = await project();
         const mount = (path: string) =>
-            path.startsWith('/tmp/b3-workbench-claude-')
-                ? `/runner${path.slice(4)}`
+            path.startsWith(join(tmpdir(), 'b3-workbench-claude-'))
+                ? `/runner/${path.slice(tmpdir().length).replaceAll('\\', '/').replace(/^\//, '')}`
                 : path === workspace
                   ? '/workspace'
                   : path;
@@ -593,14 +636,15 @@ describe('Claude Code cost across processes', () => {
         expect(
             fake.executed.every(
                 (invocation) =>
-                    invocation.command[0] === '/bin/sh' &&
-                    Object.keys(invocation.env).every((name) => name === 'PATH')
+                    (invocation.command[0] === '/bin/sh' ||
+                        invocation.command.includes('-EncodedCommand')) &&
+                    invocation.env.ANTHROPIC_API_KEY === undefined
             )
         ).toBe(true);
     });
 
     test('the cost file round-trips through a real shell', async () => {
-        const root = await mkdtemp('/tmp/b3-cost-');
+        const root = await mkdtemp(join(tmpdir(), 'b3-cost-'));
         scratch.push(root);
         const store = runtimeCostStore(
             {
@@ -666,34 +710,29 @@ describe('Claude Code launch wrappers on a real shell', () => {
     async function fakeClaude(root: string): Promise<string> {
         const bin = join(root, 'bin');
         await mkdir(bin);
+        const path = join(bin, 'claude');
         await writeFile(
-            join(bin, 'claude'),
+            path,
             [
-                '#!/bin/sh',
-                'prompt=',
-                'while [ $# -gt 0 ]; do [ "$1" = --append-system-prompt-file ] && prompt=$2; shift; done',
-                '{',
-                '  printf "config=%s\\n" "$CLAUDE_CONFIG_DIR"',
-                '  ls "$CLAUDE_CONFIG_DIR/skills"',
-                '  cat "$prompt"',
-                '  printf "\\ninput=%s\\n" "$(cat)"',
-                '} > "$WORKBENCH_TEST_REPORT"',
-            ].join('\n'),
-            { mode: 0o755 }
+                '#!/usr/bin/env bun',
+                'const args = process.argv.slice(2);',
+                'const prompt = args[args.indexOf("--append-system-prompt-file") + 1];',
+                'const fs = await import("node:fs/promises");',
+                'const path = await import("node:path");',
+                'const config = process.env.CLAUDE_CONFIG_DIR;',
+                'const skills = await fs.readdir(path.join(config, "skills"));',
+                'const text = await fs.readFile(prompt, "utf8");',
+                'const input = await Bun.stdin.text();',
+                'await fs.writeFile(process.env.WORKBENCH_TEST_REPORT, "config=" + config + "\\n" + skills.join("\\n") + "\\n" + text + "\\ninput=" + input.trimEnd() + "\\n");',
+            ].join('\n')
         );
+        await executableScript(path);
         return bin;
     }
 
     async function run(invocation: RunnerInvocation): Promise<void> {
-        const child = Bun.spawn(invocation.command, {
-            cwd: invocation.cwd,
-            env: invocation.env,
-            stdin: 'ignore',
-            stdout: 'ignore',
-            stderr: 'pipe',
-        });
-        const code = await child.exited;
-        if (code !== 0) throw new Error(await new Response(child.stderr).text());
+        const result = await executeFixture(invocation);
+        if (result.code !== 0) throw new Error(result.stderr);
     }
 
     test('keeps native state, replaces skills without following a link, and writes fresh context', async () => {
@@ -705,7 +744,7 @@ describe('Claude Code launch wrappers on a real shell', () => {
             workbench,
             workspace,
             environment: {
-                PATH: `${bin}:/usr/bin:/bin`,
+                PATH: `${bin}${delimiter}${process.platform === 'win32' ? `${process.env.SystemRoot}\\System32` : '/usr/bin:/bin'}`,
                 WORKBENCH_TEST_REPORT: report,
             },
         });
@@ -783,7 +822,7 @@ describe('Claude Code launch wrappers on a real shell', () => {
             undefined
         );
         expect(await readFile(join(outside, 'keep.md'), 'utf8')).toBe('keep');
-        expect((await stat(outside)).mode & 0o777).toBe(0o555);
+        expect((await stat(outside)).mode & 0o777).toBe(diskMode(0o555));
         await chmod(outside, 0o755);
         await chmod(join(config, 'skills'), 0o755);
         await chmod(join(config, 'skills', 'review'), 0o755);
@@ -798,7 +837,7 @@ describe('Claude Code launch wrappers on a real shell', () => {
             workbench,
             workspace,
             environment: {
-                PATH: `${bin}:/usr/bin:/bin`,
+                PATH: `${bin}${delimiter}${process.platform === 'win32' ? `${process.env.SystemRoot}\\System32` : '/usr/bin:/bin'}`,
                 WORKBENCH_TEST_REPORT: report,
             },
         });
@@ -836,7 +875,7 @@ describe('Claude Code launch wrappers on a real shell', () => {
             workbench,
             workspace,
             environment: {
-                PATH: `${bin}:/usr/bin:/bin`,
+                PATH: `${bin}${delimiter}${process.platform === 'win32' ? `${process.env.SystemRoot}\\System32` : '/usr/bin:/bin'}`,
                 WORKBENCH_TEST_REPORT: report,
             },
         });

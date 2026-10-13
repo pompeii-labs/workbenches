@@ -1,3 +1,5 @@
+import { launchEnvironment } from '../../platform/environment.js';
+import { hostCommand, stopWindowsTree } from '../../platform/process.js';
 import type { WorkbenchEventDraft } from '../../runs/events.js';
 import { RunnerProcessExit } from '../exit.js';
 import type {
@@ -465,7 +467,22 @@ export function defaultSpawn(
     command: string[],
     options: Parameters<ClaudeCodeSpawn>[1]
 ): ClaudeCodeChild {
-    return Bun.spawn(command, options) as unknown as ClaudeCodeChild;
+    const child = Bun.spawn(hostCommand(command, options.env), {
+        ...options,
+        env: launchEnvironment(options.env),
+        windowsHide: true,
+    });
+    return {
+        exited: child.exited,
+        stdin: child.stdin,
+        stdout: child.stdout,
+        stderr: child.stderr,
+        kill: (signal?: NodeJS.Signals) => {
+            if (child.exitCode !== null) return;
+            if (process.platform === 'win32') stopWindowsTree(child.pid);
+            else child.kill(signal);
+        },
+    } as ClaudeCodeChild;
 }
 
 function asError(error: unknown): Error {

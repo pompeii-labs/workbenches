@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from '../src/platform/paths.js';
 
 import type { ResolvedWorkbench } from '../src/types.js';
 import { workspaceEnvironment } from '../src/workbench/bindings.js';
@@ -70,7 +70,7 @@ describe('named workspace bindings', () => {
             workspaceEnvironment(
                 bindings.map((binding) => ({
                     ...binding,
-                    path: `/mapped/${binding.path.split('/').at(-1)}`,
+                    path: `/mapped/${binding.path.split(/[\\/]/).at(-1)}`,
                 }))
             )
         ).toEqual({

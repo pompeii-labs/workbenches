@@ -1,4 +1,4 @@
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from '../../platform/paths.js';
 
 import { WorkspaceProtection } from './protection.js';
 import type { TransferRules } from './rules.js';

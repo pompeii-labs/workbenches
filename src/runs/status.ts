@@ -1,5 +1,6 @@
-import { open, readFile, rename, writeFile } from 'node:fs/promises';
+import { open, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 
 import type { WorkbenchEvent } from './events.js';
 import { RunStore, type StoredRun, type StoredRunStatus } from './store.js';

@@ -9,7 +9,7 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from '../src/platform/paths.js';
 import { RunnerContextStaging } from '../src/runners/context/stage.js';
 import { DiskRunnerFiles } from '../src/runners/files/disk.js';
 import { PiConfigStaging } from '../src/runners/pi/config.js';
@@ -142,7 +142,7 @@ describe('Pi adapter translation', () => {
         expect(resumed.command).toContain('pi_native_1');
     });
 
-    test('links the native credential file without reading or copying it', async () => {
+    test('stages native credentials using the host filesystem strategy', async () => {
         const workbench = await fixture();
         const native = await mkdtemp(join(tmpdir(), 'pi-native-'));
         temporaryDirectories.push(native);
@@ -157,8 +157,14 @@ describe('Pi adapter translation', () => {
         temporaryDirectories.push(staged.directory);
         const linked = join(staged.directory, 'auth.json');
 
-        expect((await lstat(linked)).isSymbolicLink()).toBeTrue();
-        expect(await readlink(linked)).toBe(credentials);
+        expect((await lstat(linked)).isSymbolicLink()).toBe(
+            process.platform !== 'win32'
+        );
+        if (process.platform === 'win32')
+            expect(await readFile(linked, 'utf8')).toBe(
+                await readFile(credentials, 'utf8')
+            );
+        else expect(await readlink(linked)).toBe(credentials);
     });
 
     test('stages declared skills into the runner configuration', async () => {

@@ -10,7 +10,7 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from '../src/platform/paths.js';
 
 import {
     type CliRelease,
@@ -78,7 +78,7 @@ describe('CLI self-update', () => {
     });
 
     test('rejects unsupported release targets', () => {
-        expect(() => ReleaseTarget.from('win32', 'x64')).toThrow(
+        expect(() => ReleaseTarget.from('freebsd', 'x64')).toThrow(
             'Unsupported release operating system'
         );
         expect(() => ReleaseTarget.from('linux', 'riscv64')).toThrow(
@@ -98,7 +98,9 @@ describe('CLI self-update', () => {
 
         expect(installed).toBe(await realpath(target));
         expect(await readFile(target, 'utf8')).toContain('echo updated');
-        expect((await stat(target)).mode & 0o111).not.toBe(0);
+        if (process.platform !== 'win32')
+            expect((await stat(target)).mode & 0o111).not.toBe(0);
+        else expect((await stat(target)).isFile()).toBe(true);
     });
 
     test('leaves the installed executable untouched after a checksum failure', async () => {
@@ -141,7 +143,10 @@ async function releaseFixture(options: { invalidChecksum?: boolean } = {}) {
     const archive = join(root, archiveName);
     await mkdir(packageDirectory, { recursive: true });
     await executableFile(
-        join(packageDirectory, 'workbench'),
+        join(
+            packageDirectory,
+            process.platform === 'win32' ? 'workbench.exe' : 'workbench'
+        ),
         '#!/bin/sh\necho updated\n'
     );
     const code = await Bun.spawn(['tar', '-czf', archive, '-C', root, targetName], {

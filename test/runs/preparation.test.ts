@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { ConnectionStore } from '../../src/connections/store.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
+import { join } from '../../src/platform/paths.js';
 import { RepositoryWorkspace } from '../../src/repositories/workspace.js';
 import { runtimeContext } from '../../src/runners/context/runtime.js';
 import { RunnerRegistry } from '../../src/runners/registry.js';
@@ -145,7 +145,7 @@ describe('shared execution preparation', () => {
                         if (runtime === 'docker') {
                             const plan = new DockerMountPlan(request);
                             expect(plan.arguments()).toContain(
-                                `${fixture.home}/sessions/${fixture.repository.binding.session_id}/agent-git:/workspace/.git`
+                                `${join(fixture.home, 'sessions', fixture.repository.binding.session_id, 'agent-git')}:/workspace/.git`
                             );
                             expect(plan.containerEnvironment()).toMatchObject({
                                 WORKBENCH_REPOSITORY: 'example/project',

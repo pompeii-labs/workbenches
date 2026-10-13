@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
+import { delimiter } from 'node:path';
 import { ModelRouter } from '../../../src/models/index.js';
+import { join } from '../../../src/platform/paths.js';
 import { ClaudeCodeCost } from '../../../src/runners/claude-code/cost.js';
 import { ClaudeCodeSessionAdapter } from '../../../src/runners/claude-code/session.js';
 import type {
@@ -16,11 +16,18 @@ import type {
 } from '../../../src/runners/session.js';
 import type { WorkbenchEventDraft } from '../../../src/runs/events.js';
 import { modelCatalogFixture } from '../../model-catalog-fixture.js';
+import { executableScript } from '../../platform.js';
 import { claudeCodeWorkbench, PREPARED } from './fixture.js';
 
 const fixtures = join(import.meta.dir, '..', '..', 'fixtures', 'claude-code');
-const bin = join(import.meta.dir, 'bin');
 const root = await mkdtemp(join(tmpdir(), 'claude-code-traces-'));
+const bin = join(root, 'bin');
+await mkdir(bin);
+await writeFile(
+    join(bin, 'claude'),
+    `#!/usr/bin/env bun\nawait import(${JSON.stringify(new URL('./replay.ts', import.meta.url).href)});\n`
+);
+await executableScript(join(bin, 'claude'));
 afterAll(() => rm(root, { recursive: true, force: true }));
 const workbench = claudeCodeWorkbench(root);
 
@@ -74,7 +81,7 @@ async function replay(
             workbench,
             workspaceDirectory: root,
             environment: {
-                PATH: `${bin}:${process.env.PATH ?? ''}`,
+                PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`,
                 HOME: root,
                 REPLAY_FIXTURE: fixture,
                 REPLAY_REPORT: report,

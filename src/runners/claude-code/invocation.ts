@@ -1,4 +1,6 @@
+import { hostEnvironment } from '../../platform/environment.js';
 import type { RunnerInvocation } from '../../types.js';
+import { isWindowsPath, powershellQuote, windowsInvocation } from '../windows.js';
 
 /** The files a session's staged configuration provides. */
 export interface ClaudeCodeStagedPaths {
@@ -113,7 +115,9 @@ export function withoutClaudeVariables(
     environment: Record<string, string | undefined>
 ): Record<string, string | undefined> {
     return Object.fromEntries(
-        Object.entries(environment).filter(([name]) => !inheritedClaudeVariable(name))
+        Object.entries(hostEnvironment(environment)).filter(
+            ([name]) => !inheritedClaudeVariable(name)
+        )
     );
 }
 
@@ -166,6 +170,26 @@ export function inSessionConfig(
     invocation: RunnerInvocation,
     skills: string
 ): RunnerInvocation {
+    if (isWindowsPath(invocation.cwd)) {
+        return windowsInvocation(
+            {
+                ...invocation,
+                env: { ...invocation.env, WORKBENCH_CLAUDE_SKILLS: skills },
+            },
+            [
+                '$config = $env:CLAUDE_CONFIG_DIR',
+                'if ((Test-Path -LiteralPath $config) -and ((Get-Item -LiteralPath $config -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "CLAUDE_CONFIG_DIR is a symlink" }',
+                '[IO.Directory]::CreateDirectory($config) | Out-Null',
+                `foreach ($entry in @(${SESSION_CONFIG_ENTRIES.map(powershellQuote).join(',')})) {`,
+                '  $path = Join-Path $config $entry',
+                '  if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }',
+                '}',
+                '$skills = Join-Path $config "skills"',
+                '[IO.Directory]::CreateDirectory($skills) | Out-Null',
+                'Get-ChildItem -LiteralPath $env:WORKBENCH_CLAUDE_SKILLS -Force | Copy-Item -Destination $skills -Recurse -Force',
+            ].join('\n')
+        );
+    }
     return {
         ...invocation,
         command: [
@@ -209,6 +233,7 @@ export function withInput(
     invocation: RunnerInvocation,
     line: string
 ): RunnerInvocation {
+    if (isWindowsPath(invocation.cwd)) return windowsInvocation(invocation, '', line);
     const chunks = inputChunks(line);
     return {
         ...invocation,

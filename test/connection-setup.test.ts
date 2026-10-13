@@ -9,8 +9,6 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { ModelConnection } from '../src/commands/connection.js';
 import { CliPresenter } from '../src/commands/presenter.js';
 import type { ConnectionCheck } from '../src/connections/check.js';
@@ -22,11 +20,13 @@ import { ConnectionSetup, type ConnectionWorkbench } from '../src/connections/se
 import { HostSignIn } from '../src/connections/signin.js';
 import { ConnectionStore } from '../src/connections/store.js';
 import type { ConnectionTarget } from '../src/connections/targets.js';
+import { join } from '../src/platform/paths.js';
 import type {
     PreparedRuntime,
     RuntimeCredentialFiles,
 } from '../src/runtimes/contracts.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { diskMode } from './platform.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -51,8 +51,8 @@ describe('native credential files', () => {
             anthropic: { type: 'api', key: 'fixture-anthropic' },
             openrouter: { type: 'api', key: 'fixture-openrouter' },
         });
-        expect((await stat(path)).mode & 0o777).toBe(0o600);
-        expect((await stat(join(root, 'opencode'))).mode & 0o777).toBe(0o700);
+        expect((await stat(path)).mode & 0o777).toBe(diskMode(0o600));
+        expect((await stat(join(root, 'opencode'))).mode & 0o777).toBe(diskMode(0o700));
         expect(await readdir(join(root, 'opencode'))).toEqual(['auth.json']);
 
         expect(await file.remove(files, 'openrouter')).toBeTrue();
@@ -238,7 +238,7 @@ describe('connection setup', () => {
             setup.save(NativeCredentialFile.for('opencode').apiKey('fixture'))
         ).resolves.toEqual({ ready: true, saved: true, fromEnvironment: false });
         const directory = join(home, 'runtime-credentials', 'e2b', 'opencode');
-        expect((await stat(directory)).mode & 0o777).toBe(0o700);
+        expect((await stat(directory)).mode & 0o777).toBe(diskMode(0o700));
     });
 
     test('treats Daytona as environment-only because runs mount no runner store', async () => {
@@ -697,8 +697,8 @@ describe('host sign-in', () => {
                 '    interact: async (_command, env) => {',
                 '        home = env.XDG_DATA_HOME ?? "";',
                 // The terminal sends Ctrl-C to the whole process group, wb included.
-                `        process.kill(process.pid, 'SIGINT');`,
-                `        process.kill(process.pid, 'SIGTERM');`,
+                `        process.platform === 'win32' ? process.emit('SIGINT') : process.kill(process.pid, 'SIGINT');`,
+                `        process.platform === 'win32' ? process.emit('SIGTERM') : process.kill(process.pid, 'SIGTERM');`,
                 '        await Bun.sleep(200);',
                 '        return 130;',
                 '    },',
@@ -745,7 +745,7 @@ describe('host sign-in', () => {
             interact: async (argv, env) => {
                 command = argv;
                 dataHome = env.XDG_DATA_HOME ?? '';
-                expect((await stat(dataHome)).mode & 0o777).toBe(0o700);
+                expect((await stat(dataHome)).mode & 0o777).toBe(diskMode(0o700));
                 await mkdir(join(dataHome, 'opencode'), { recursive: true });
                 await writeFile(
                     join(dataHome, 'opencode', 'auth.json'),

@@ -1,15 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import {
-    mkdir,
-    mkdtemp,
-    readFile,
-    rm,
-    stat,
-    symlink,
-    writeFile,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from '../src/platform/paths.js';
 import { RunnerContextStaging } from '../src/runners/context/stage.js';
 import { DiskRunnerFiles } from '../src/runners/files/disk.js';
 import {
@@ -19,6 +11,7 @@ import {
 import { OpenCodeSkillStaging } from '../src/runners/opencode/skills.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import { Workbench } from '../src/workbench/index.js';
+import { symlink } from './platform.js';
 
 const runners = RunnerRegistry.standard();
 const files = new DiskRunnerFiles();

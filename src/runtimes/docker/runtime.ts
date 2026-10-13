@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
     OutcomeSink,
     RuntimeOutcomeCollection,
 } from '../../outcomes/collection.js';
 import type { HostOutcomeCapture } from '../../outcomes/runtime.js';
+import { chmodSync, writeFileSync } from '../../platform/permissions.js';
 import type {
     ResolvedWorkbench,
     RunnerInvocation,

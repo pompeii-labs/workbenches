@@ -1,4 +1,6 @@
 import { realpath, stat } from 'node:fs/promises';
+import { hostEnvironment, launchEnvironment } from '../../platform/environment.js';
+import { hostCommand, stopWindowsTree } from '../../platform/process.js';
 
 import type { SpawnedRunner } from '../../types.js';
 import type {
@@ -79,7 +81,7 @@ export class DockerClient {
     environment(
         environment: Record<string, string | undefined>
     ): Record<string, string | undefined> {
-        const result = { ...environment };
+        const result = hostEnvironment(environment);
         for (const name of [
             'GH_TOKEN',
             'GITHUB_TOKEN',
@@ -152,7 +154,7 @@ export class DockerClient {
     ): Promise<DockerCommandResult> {
         const child = Bun.spawn(command, {
             ...(options.cwd ? { cwd: options.cwd } : {}),
-            env: options.env ?? process.env,
+            env: launchEnvironment(options.env ?? process.env),
             stdin: options.input === undefined ? 'ignore' : new Blob([options.input]),
             stdout: 'pipe',
             stderr: 'pipe',
@@ -169,13 +171,21 @@ export class DockerClient {
         command: string[],
         options: DockerSpawnOptions
     ): SpawnedRunner {
-        const child = Bun.spawn(command, options);
+        const child = Bun.spawn(hostCommand(command, options.env ?? process.env), {
+            ...options,
+            env: launchEnvironment(options.env ?? process.env),
+            windowsHide: true,
+        });
         return {
             exited: child.exited,
             ...(child.stdin ? { stdin: child.stdin } : {}),
             ...(child.stdout ? { stdout: child.stdout } : {}),
             ...(child.stderr ? { stderr: child.stderr } : {}),
-            kill: () => child.kill(),
+            kill: () => {
+                if (child.exitCode !== null) return;
+                if (process.platform === 'win32') stopWindowsTree(child.pid);
+                else child.kill();
+            },
         };
     }
 
@@ -213,6 +223,31 @@ export class DockerClient {
             );
         }
         const endpoint = inspected.stdout.trim();
+        if (
+            process.platform === 'win32' &&
+            [
+                'npipe:////./pipe/docker_engine',
+                'npipe:////./pipe/dockerdesktoplinuxengine',
+            ].includes(endpoint.toLowerCase())
+        ) {
+            const info = await command([docker, 'info', '--format', '{{json .}}']);
+            if (info.code !== 0)
+                throw new Error(
+                    DockerClient.formatDiagnostic(
+                        info,
+                        'Failed to inspect Docker Desktop engine'
+                    )
+                );
+            const daemon = JSON.parse(info.stdout);
+            if (
+                daemon.OSType !== 'linux' ||
+                !String(daemon.OperatingSystem).includes('Docker Desktop')
+            )
+                throw new Error(
+                    'Host Docker engine binding on Windows requires Docker Desktop Linux containers'
+                );
+            return { path: '/var/run/docker.sock', gid: 0, desktop: true };
+        }
         if (!endpoint.startsWith('unix://')) {
             throw new Error(
                 `Host Docker engine binding requires a Unix socket context; received ${endpoint || 'an empty endpoint'}`

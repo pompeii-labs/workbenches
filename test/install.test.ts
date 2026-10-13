@@ -9,8 +9,9 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter } from 'node:path';
 import { resolveReleaseTarget } from '../scripts/release-support.js';
+import { join, resolve } from '../src/platform/paths.js';
 
 const projectDirectory = resolve(import.meta.dir, '..');
 const installer = join(projectDirectory, 'install.sh');
@@ -24,7 +25,7 @@ afterEach(async () => {
     );
 });
 
-describe('release installer', () => {
+describe.skipIf(process.platform === 'win32')('POSIX release installer', () => {
     test('verifies and installs the current native artifact without sudo', async () => {
         const fixture = await releaseFixture();
         const installation = await temporaryDirectory('workbench-install-destination-');
@@ -62,7 +63,7 @@ describe('release installer', () => {
         );
 
         const result = await runInstaller('', '', ['--version', '1.2.3'], {
-            PATH: `${stubs}:${process.env.PATH ?? ''}`,
+            PATH: `${stubs}${delimiter}${process.env.PATH ?? ''}`,
             WORKBENCH_TEST_URL_LOG: log,
         });
 
@@ -246,7 +247,7 @@ describe('release installer', () => {
         await executableFile(join(stubs, 'uname'), '#!/bin/sh\necho Plan9\n');
 
         const result = await runInstaller('', '', [], {
-            PATH: `${stubs}:${process.env.PATH ?? ''}`,
+            PATH: `${stubs}${delimiter}${process.env.PATH ?? ''}`,
         });
 
         expect(result.code).toBe(1);

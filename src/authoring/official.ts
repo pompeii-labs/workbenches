@@ -1,8 +1,8 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-
 import { WorkbenchPackage } from '../catalog/package.js';
 import { CatalogSnapshots } from '../catalog/snapshots.js';
+import { writeFile } from '../platform/permissions.js';
 import {
     RegistryClient,
     type RegistryPackage,

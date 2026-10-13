@@ -6,14 +6,13 @@ import {
     readFile,
     realpath,
     rm,
-    symlink,
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-
 import { OutcomeOutput, OutcomeStore } from '../../src/outcomes/index.js';
+import { dirname, join } from '../../src/platform/paths.js';
 import { RunStore } from '../../src/runs/store.js';
+import { diskMode, symlink } from '../platform.js';
 
 const outputs: OutcomeOutput[] = [];
 const directories: string[] = [];
@@ -49,8 +48,10 @@ describe('OutcomeOutput', () => {
         expect(first.directory).toBe(join(directory, 'runs', firstId, 'outbox'));
         expect(first.directory).not.toBe(second.directory);
         expect(first.directory).toBe(await realpath(first.directory));
-        expect((await lstat(first.directory)).mode & 0o777).toBe(0o700);
-        expect((await lstat(dirname(first.directory))).mode & 0o777).toBe(0o700);
+        expect((await lstat(first.directory)).mode & 0o777).toBe(diskMode(0o700));
+        expect((await lstat(dirname(first.directory))).mode & 0o777).toBe(
+            diskMode(0o700)
+        );
         const metadata = join(dirname(first.directory), 'run.json');
         await writeFile(metadata, 'retained run metadata');
         await first.cleanup();

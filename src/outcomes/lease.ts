@@ -1,13 +1,6 @@
-import {
-    lstat,
-    mkdir,
-    readdir,
-    readFile,
-    rename,
-    rm,
-    writeFile,
-} from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rename, rm, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 
 interface LeaseTicket {
     pid: number;
@@ -87,7 +80,7 @@ export class OutcomeStorageLease {
                 )
                     throw new Error('Invalid outcome storage lease ticket');
                 if (processIsAlive(ticket.pid)) tickets.push([name, ticket]);
-                else await rm(path, { force: true });
+                else await removeDeadTicket(path);
             } catch (error) {
                 if (!hasCode(error, 'ENOENT')) throw error;
             }
@@ -121,4 +114,22 @@ export function processIsAlive(pid: number): boolean {
 
 function hasCode(error: unknown, code: string): boolean {
     return error instanceof Error && 'code' in error && error.code === code;
+}
+
+/** Windows can briefly deny deletion while another contender reads the ticket. */
+async function removeDeadTicket(path: string): Promise<void> {
+    for (let attempt = 0; ; attempt += 1) {
+        try {
+            await unlink(path);
+            return;
+        } catch (error) {
+            if (
+                process.platform !== 'win32' ||
+                attempt >= 10 ||
+                (!hasCode(error, 'EPERM') && !hasCode(error, 'EBUSY'))
+            )
+                throw error;
+            await Bun.sleep(10);
+        }
+    }
 }

@@ -1,7 +1,10 @@
+import { launchEnvironment } from '../../platform/environment.js';
 import type { RuntimeCommandResult } from '../../runtimes/contracts.js';
 import type { RunnerInvocation } from '../../types.js';
 
 export interface ClaudeCodeChild {
+    /** In-memory transports can opt out of native Windows pipe scheduling. */
+    nativePipes?: boolean;
     exited: Promise<number>;
     stdin: {
         write(value: string): unknown;
@@ -62,7 +65,7 @@ export class ClaudeCodeProcess {
         if (this.child) throw new Error('Claude Code is already running');
         const child = this.spawn(this.invocation.command, {
             cwd: this.invocation.cwd,
-            env: this.invocation.env,
+            env: launchEnvironment(this.invocation.env),
             stdin: 'pipe',
             stdout: 'pipe',
             stderr: 'pipe',
@@ -141,7 +144,10 @@ export class ClaudeCodeProcess {
         const child = this.child;
         if (!child) return;
         try {
-            await child.stdin.end?.();
+            await settlesWithin(
+                Promise.resolve(child.stdin.end?.()),
+                this.stopTimeoutMs
+            );
         } catch {
             // The child may already have closed its input.
         }
@@ -168,6 +174,10 @@ export class ClaudeCodeProcess {
         const decoder = new TextDecoder();
         let pending = '';
         for (;;) {
+            // Windows pipe notifications need an I/O turn between buffered reads.
+            // Otherwise a live session can stall until its input closes.
+            if (process.platform === 'win32' && this.child?.nativePipes !== false)
+                await Bun.sleep(0);
             const next = await reader.read();
             if (next.done) break;
             pending += decoder.decode(next.value, { stream: true });
@@ -232,10 +242,15 @@ export async function executeOnHost(
 ): Promise<RuntimeCommandResult> {
     const child = Bun.spawn(invocation.command, {
         cwd: invocation.cwd,
-        env: invocation.env,
+        env: launchEnvironment(invocation.env),
+        stdin: invocation.input === undefined ? 'ignore' : 'pipe',
         stdout: 'pipe',
         stderr: 'pipe',
     });
+    if (invocation.input !== undefined && child.stdin) {
+        child.stdin.write(invocation.input);
+        await child.stdin.end();
+    }
     const [stdout, stderr, code] = await Promise.all([
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),

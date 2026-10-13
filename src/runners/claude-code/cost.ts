@@ -1,4 +1,5 @@
 import type { PreparedRuntime } from '../../runtimes/contracts.js';
+import { isWindowsPath, windowsInvocation } from '../windows.js';
 
 /** Where a session keeps the last cumulative native cost between processes. */
 export interface ClaudeCodeCostStore {
@@ -84,6 +85,49 @@ export function runtimeCostStore(
     runtime: ClaudeCodeCostRuntime,
     path: string
 ): ClaudeCodeCostStore {
+    if (isWindowsPath(runtime.workspaceDirectory)) {
+        const run = (setup: string, value?: string) =>
+            runtime.execute(
+                windowsInvocation(
+                    {
+                        command: [
+                            process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe',
+                            '/d',
+                            '/c',
+                            'exit',
+                            '0',
+                        ],
+                        cwd: runtime.workspaceDirectory,
+                        env: {
+                            PATH: runtime.environment.PATH,
+                            SystemRoot: process.env.SystemRoot,
+                            WORKBENCH_COST_PATH: path,
+                            WORKBENCH_COST_VALUE: value,
+                        },
+                    },
+                    setup
+                ),
+                { network: 'none' }
+            );
+        return {
+            read: async () =>
+                parseRecordedCost(
+                    (
+                        await run(
+                            'if (Test-Path -LiteralPath $env:WORKBENCH_COST_PATH) { [Console]::Out.Write([IO.File]::ReadAllText($env:WORKBENCH_COST_PATH)) }'
+                        )
+                    ).stdout
+                ),
+            write: async (total) => {
+                const result = await run(
+                    '[IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($env:WORKBENCH_COST_PATH)) | Out-Null; [IO.File]::WriteAllText($env:WORKBENCH_COST_PATH + ".tmp", ($env:WORKBENCH_COST_VALUE + "`n"), (New-Object Text.UTF8Encoding $false)); Move-Item -LiteralPath ($env:WORKBENCH_COST_PATH + ".tmp") -Destination $env:WORKBENCH_COST_PATH -Force',
+                    formatRecordedCost(total)
+                );
+                if (result.code !== 0)
+                    throw new Error('Claude Code cost was not recorded');
+            },
+        };
+    }
     const run = (script: string, ...values: string[]) =>
         runtime.execute(
             {

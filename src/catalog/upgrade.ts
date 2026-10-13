@@ -69,7 +69,7 @@ export class SavedWorkbenchUpgrade {
     }
 
     private async upgradeSource(entry: CatalogEntry): Promise<CatalogUpgradeResult> {
-        if (entry.localPath || entry.source.startsWith('/')) {
+        if (entry.localPath || isAbsolute(entry.source)) {
             throw new Error(
                 `Local Workbenches are not upgraded. Edit the source directly, or re-add a frozen local entry with wb add ${entry.source} --name ${entry.selector} --as ${entry.alias}.`
             );
@@ -95,3 +95,5 @@ export class SavedWorkbenchUpgrade {
         });
     }
 }
+
+import { isAbsolute } from 'node:path';

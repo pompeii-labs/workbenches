@@ -1,4 +1,4 @@
-import { join, relative } from 'node:path';
+import { join, relative } from '../../platform/paths.js';
 
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';

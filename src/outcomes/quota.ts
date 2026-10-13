@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { lstat, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, readdir, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 
 import { outcomeStorageDirectory } from './directories.js';
 import { OutcomeStorageLease } from './lease.js';

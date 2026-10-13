@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from '../../../src/platform/paths.js';
 
 import { RuntimeRegistry } from '../../../src/runtimes/index.js';
 import { RuntimeSmoke } from '../../../src/runtimes/smoke.js';

@@ -1,4 +1,5 @@
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
+import { isWindowsPath, windowsInvocation } from '../windows.js';
 import { runtimeContext } from './runtime.js';
 
 /** The staged context files a runner reads at launch. */
@@ -18,6 +19,25 @@ export class RunnerContext {
         invocation: RunnerInvocation,
         workbench: ResolvedWorkbench
     ): RunnerInvocation {
+        if (isWindowsPath(invocation.cwd)) {
+            const context = runtimeContext(
+                workbench,
+                invocation.cwd,
+                invocation.env
+            ).replaceAll('\n', ' ');
+            return windowsInvocation(
+                {
+                    ...invocation,
+                    env: {
+                        ...invocation.env,
+                        WORKBENCH_CONTEXT_PREFIX: this.prefix,
+                        WORKBENCH_CONTEXT_FILE: this.instructions,
+                        WORKBENCH_RUNTIME_CONTEXT: context,
+                    },
+                },
+                '[IO.File]::WriteAllText($env:WORKBENCH_CONTEXT_FILE, [IO.File]::ReadAllText($env:WORKBENCH_CONTEXT_PREFIX) + "`n" + $env:WORKBENCH_RUNTIME_CONTEXT + "`n", (New-Object Text.UTF8Encoding $false))'
+            );
+        }
         return {
             ...invocation,
             command: [

@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join } from '../../platform/paths.js';
 import type { RuntimeCredentialFiles } from '../../runtimes/contracts.js';
 import type { RunnerContext } from '../context/files.js';
 import { runtimeContext } from '../context/runtime.js';

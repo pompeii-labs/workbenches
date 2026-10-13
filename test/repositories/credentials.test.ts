@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from '../../src/platform/paths.js';
 
 describe('native GitHub credential transport', () => {
     test('Git invokes the configured gh credential helper without saving a token', async () => {

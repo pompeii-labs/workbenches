@@ -7,15 +7,14 @@ import {
     readFile,
     rename,
     rm,
-    symlink,
     truncate,
     unlink,
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { OutcomeStore, WorkspaceSnapshot } from '../../src/outcomes/index.js';
+import { join } from '../../src/platform/paths.js';
+import { symlink } from '../platform.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -146,6 +145,7 @@ describe('WorkspaceSnapshot', () => {
         const root = await repository();
         await writeFile(join(root, 'modify.txt'), 'dirty before run\n');
         await writeFile(join(root, 'preexisting.txt'), 'already here\n');
+        if (process.platform === 'win32') await chmod(join(root, 'mode.sh'), 0o444);
         const snapshot = await WorkspaceSnapshot.create(root, {
             workspace: { kind: 'primary' },
         });

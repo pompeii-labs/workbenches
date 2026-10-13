@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { NativeCredentialFile } from '../src/connections/nativecredentials.js';
+import { join } from '../src/platform/paths.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import { InteractiveRun, RunStore, type WorkbenchEvent } from '../src/runs/index.js';
 import { DockerClient } from '../src/runtimes/docker/client.js';

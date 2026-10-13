@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join } from '../../src/platform/paths.js';
 import type { DiskAssetSnapshot } from '../../src/runtimes/remote/disk/snapshot.js';
 import { quote } from '../../src/runtimes/staging/shell.js';
 import { workspaceTracking } from '../../src/runtimes/staging/tracking.js';
+import { posixShell } from '../platform.js';
 import { checkoutFixture, temporary } from './fixture.js';
 
 describe('E2B repository collection index', () => {
@@ -15,7 +16,7 @@ describe('E2B repository collection index', () => {
             { binding: { runtimePath: root, kind: 'workspace', access: 'read-write' } },
             {
                 binding: {
-                    runtimePath: join(root, '.git'),
+                    runtimePath: `${root}/.git`,
                     kind: 'git',
                     access: 'read-write',
                 },
@@ -29,7 +30,7 @@ describe('E2B repository collection index', () => {
             quote(privateDirectory)
         );
         const execute = async (args: string) => {
-            const child = Bun.spawn(['sh', '-c', `${git} ${args}`], {
+            const child = Bun.spawn(await posixShell(`${git} ${args}`), {
                 stdin: 'ignore',
                 stdout: 'pipe',
                 stderr: 'pipe',

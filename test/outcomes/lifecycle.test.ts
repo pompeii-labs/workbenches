@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
     OutcomeLifecycle,
     OutcomeOutput,
     OutcomeStore,
 } from '../../src/outcomes/index.js';
+import { join } from '../../src/platform/paths.js';
 import type { PreparedRuntime } from '../../src/runtimes/contracts.js';
 
 const directories: string[] = [];

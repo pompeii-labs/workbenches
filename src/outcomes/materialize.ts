@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { chmod, copyFile, rename, rm } from 'node:fs/promises';
+import { copyFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { chmod } from '../platform/permissions.js';
 import { validExistingBlob, verifyBlob } from './content.js';
 import type { RunOutcome } from './contracts.js';
 import { outcomeStorageDirectory } from './directories.js';

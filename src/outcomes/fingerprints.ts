@@ -60,7 +60,11 @@ export function sameState(
     after: OutcomePathState | undefined
 ): boolean {
     if (!after) return current === undefined;
-    if (!current || current.kind !== after.kind || current.mode !== after.mode)
+    if (
+        !current ||
+        current.kind !== after.kind ||
+        !sameHostMode(current.mode, after.mode)
+    )
         return false;
     return current.kind === 'file' && after.kind === 'file'
         ? current.digest === after.content.digest &&
@@ -75,7 +79,7 @@ export function sameFingerprint(
     right: OutcomePathFingerprint | undefined
 ): boolean {
     if (!left || !right) return left === right;
-    if (left.kind !== right.kind || left.mode !== right.mode) return false;
+    if (left.kind !== right.kind || !sameHostMode(left.mode, right.mode)) return false;
     return left.kind === 'file' && right.kind === 'file'
         ? left.digest === right.digest && left.size_bytes === right.size_bytes
         : left.kind === 'symlink' && right.kind === 'symlink'
@@ -105,4 +109,11 @@ function isNodeError(error: unknown, code: string): boolean {
         'code' in error &&
         (error as NodeJS.ErrnoException).code === code
     );
+}
+
+/** Windows exposes a read-only attribute rather than executable or group bits. */
+function sameHostMode(left: number, right: number): boolean {
+    return process.platform === 'win32'
+        ? (left & 0o200) === (right & 0o200)
+        : left === right;
 }

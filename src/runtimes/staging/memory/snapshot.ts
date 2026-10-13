@@ -1,5 +1,3 @@
-import { dirname, join, relative } from 'node:path';
-
 import type { OutcomeSink } from '../../../outcomes/collection.js';
 import type {
     OutcomeChangeEntry,
@@ -14,6 +12,7 @@ import { formatOutcomeBytes } from '../../../outcomes/presentation.js';
 import { WorkspaceSnapshotLimitError } from '../../../outcomes/snapshot/limit.js';
 import { SnapshotProtection } from '../../../outcomes/snapshot/protection.js';
 import { changesetId, snapshotDigestSource } from '../../../outcomes/snapshot/rules.js';
+import { dirname, join, relative } from '../../../platform/paths.js';
 import { type DiffSide, renderDiff } from '../diff.js';
 import { digestBytes, type SnapshotEntry, TransferPlan } from '../plan.js';
 import { WorkspaceProtection } from '../protection.js';

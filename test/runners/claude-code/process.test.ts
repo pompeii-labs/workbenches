@@ -8,9 +8,9 @@ import {
 function shell(script: string, stopTimeoutMs = 2_000): ClaudeCodeProcess {
     return new ClaudeCodeProcess(
         {
-            command: ['/bin/sh', '-c', script],
-            cwd: '/',
-            env: { PATH: '/usr/bin:/bin' },
+            command: [process.execPath, '-e', script],
+            cwd: process.cwd(),
+            env: { ...process.env },
         },
         (command, options) => Bun.spawn(command, options) as unknown as ClaudeCodeChild,
         stopTimeoutMs
@@ -20,7 +20,7 @@ function shell(script: string, stopTimeoutMs = 2_000): ClaudeCodeProcess {
 describe('Claude Code process', () => {
     test('reads output lines in order, writes input lines, and reports the exit', async () => {
         const process = shell(
-            'printf "one\\ntw"; sleep 0.05; printf "o\\n"; read line; echo "got $line"; echo "Error: broken key" >&2'
+            'process.stdout.write("one\\ntw"); await Bun.sleep(50); process.stdout.write("o\\n"); for await (const chunk of Bun.stdin.stream()) { console.log("got " + new TextDecoder().decode(chunk).trim()); break; } console.error("Error: broken key");'
         );
         const lines: string[] = [];
         const ended = process.start(async (line) => void lines.push(line));
@@ -34,7 +34,7 @@ describe('Claude Code process', () => {
 
     test('kills a child that ignores SIGTERM after the bounded wait', async () => {
         const process = shell(
-            'trap "" TERM; echo ready; while :; do sleep 0.05; done',
+            'process.on("SIGTERM",()=>{}); console.log("ready"); setInterval(()=>{},50);',
             100
         );
         let ready!: () => void;
@@ -44,11 +44,17 @@ describe('Claude Code process', () => {
         const stopping = Date.now();
         await process.stop();
         expect(Date.now() - stopping).toBeLessThan(2_000);
-        expect(await ended).toEqual({ code: 137 });
+        const exit = await ended;
+        if (globalThis.process.platform === 'win32')
+            expect('code' in exit && exit.code !== 0).toBe(true);
+        else expect(exit).toEqual({ code: 137 });
     });
 
     test('stops even when a tool subprocess keeps the output pipe open', async () => {
-        const process = shell('sleep 5 & echo $!; exec sleep 30', 100);
+        const process = shell(
+            'const child = Bun.spawn([process.execPath,"-e","setTimeout(()=>{},5000)"], {stdout:"inherit",stderr:"inherit"}); console.log(child.pid); setTimeout(()=>{},30000);',
+            100
+        );
         let pid!: (value: number) => void;
         const grandchild = new Promise<number>((resolve) => (pid = resolve));
         process.start(async (line) => pid(Number(line)));

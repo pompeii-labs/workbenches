@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from '../src/platform/paths.js';
 import type { WorkbenchEvent } from '../src/runs/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
 import { RunReconciliationLease } from '../src/runs/reconciliation.js';
 import { SessionResolver, SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
+import { diskMode } from './platform.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -25,9 +26,13 @@ describe('durable Workbench runs', () => {
         const run = await fixtureRun(home, 'secret task');
         const directory = join(home, 'runs', run.id);
 
-        expect((await stat(directory)).mode & 0o777).toBe(0o700);
-        expect((await stat(join(directory, 'run.json'))).mode & 0o777).toBe(0o600);
-        expect((await stat(join(directory, 'request.json'))).mode & 0o777).toBe(0o600);
+        expect((await stat(directory)).mode & 0o777).toBe(diskMode(0o700));
+        expect((await stat(join(directory, 'run.json'))).mode & 0o777).toBe(
+            diskMode(0o600)
+        );
+        expect((await stat(join(directory, 'request.json'))).mode & 0o777).toBe(
+            diskMode(0o600)
+        );
         expect(await store.takeRequest(run.id)).toMatchObject({
             task: 'secret task',
         });

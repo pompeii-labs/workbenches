@@ -1,17 +1,20 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-
+import { tmpdir } from 'node:os';
 import type {
     AuthenticatedModelRoute,
     ModelCatalogSnapshot,
 } from '../../../src/models/index.js';
+import { launchEnvironment } from '../../../src/platform/environment.js';
+import { join } from '../../../src/platform/paths.js';
+import { hostCommand } from '../../../src/platform/process.js';
 import {
     CLAUDE_CODE_PROVIDER_CAPABILITIES,
     claudeCodeConnection,
 } from '../../../src/runners/claude-code/connection.js';
 import { claudeCodeRoute } from '../../../src/runners/claude-code/routes.js';
 import { modelCatalogFixture } from '../../model-catalog-fixture.js';
+import { executableScript } from '../../platform.js';
 
 const catalog: ModelCatalogSnapshot = {
     ...modelCatalogFixture,
@@ -174,7 +177,7 @@ describe('Claude Code connection', () => {
     });
 
     describe('probe command', () => {
-        const root = mkdtemp('/tmp/b3-probe-');
+        const root = mkdtemp(join(tmpdir(), 'b3-probe-'));
         afterAll(async () => rm(await root, { recursive: true, force: true }));
 
         async function probe(code: number): Promise<number> {
@@ -182,14 +185,20 @@ describe('Claude Code connection', () => {
             await mkdir(bin);
             await writeFile(
                 join(bin, 'claude'),
-                `#!/bin/sh\necho '{"loggedIn":false}'\nexit ${code}\n`,
+                `#!/usr/bin/env bun\nconsole.log(JSON.stringify({loggedIn:false}));process.exit(${code});\n`,
                 { mode: 0o755 }
             );
-            const [command, ...args] = claudeCodeConnection.probe.command;
-            const child = Bun.spawn([command as string, ...args], {
-                env: { PATH: `${bin}:/usr/bin:/bin` },
-                stdout: 'ignore',
-            });
+            await executableScript(join(bin, 'claude'));
+            const [command, ...args] =
+                claudeCodeConnection.probe.commandFor?.(await root) ??
+                claudeCodeConnection.probe.command;
+            const child = Bun.spawn(
+                hostCommand([command as string, ...args], { PATH: bin }),
+                {
+                    env: launchEnvironment({ PATH: bin }),
+                    stdout: 'ignore',
+                }
+            );
             return child.exited;
         }
 

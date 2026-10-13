@@ -1,9 +1,8 @@
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-
 import { defineCommand } from 'citty';
-
 import { ActiveModelCatalog } from '../models/index.js';
+import { writeFile } from '../platform/permissions.js';
 import { runtimeProviderNames } from '../workbench/runtimes.js';
 import { CliPresenter } from './presenter.js';
 

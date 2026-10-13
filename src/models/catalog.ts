@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 
 import { WORKBENCH_USER_AGENT } from '../user-agent.js';
 import {

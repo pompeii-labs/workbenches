@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { mkdir, readFile, rename } from 'node:fs/promises';
+import { basename, isAbsolute, join, resolve } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 
 import type { RemoteWorkbenchPackage } from '../sources/index.js';
 import type { ResolvedWorkbench, WorkbenchManifest } from '../types.js';
@@ -104,7 +105,7 @@ export class SavedWorkbenchCatalog {
         const legacyLocal =
             previous &&
             !previous.registry &&
-            previous.source.startsWith('/') &&
+            isAbsolute(previous.source) &&
             (previous.source === localPath ||
                 join(previous.source, '.workbenches', previous.selector) === localPath);
         if (previous && previous.localPath !== localPath && !legacyLocal)

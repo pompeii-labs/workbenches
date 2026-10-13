@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readdir, readFile } from 'node:fs/promises';
-import { extname, join, relative } from 'node:path';
+import { extname, sep } from 'node:path';
+import { join, relative } from '../src/platform/paths.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import { importCycles, valueImports } from './architecture/imports.js';
 
@@ -13,7 +14,10 @@ describe('engine architecture', () => {
             await Promise.all(
                 (await sourceFiles(source)).map(
                     async (file) =>
-                        [relative(source, file), await readFile(file, 'utf8')] as const
+                        [
+                            relative(source, file).split(sep).join('/'),
+                            await readFile(file, 'utf8'),
+                        ] as const
                 )
             )
         );
@@ -25,7 +29,10 @@ describe('engine architecture', () => {
             await Promise.all(
                 (await sourceFiles(source)).map(
                     async (file) =>
-                        [relative(source, file), await readFile(file, 'utf8')] as const
+                        [
+                            relative(source, file).split(sep).join('/'),
+                            await readFile(file, 'utf8'),
+                        ] as const
                 )
             )
         );
@@ -63,7 +70,7 @@ describe('engine architecture', () => {
         const used = new Set<(typeof allowed)[number]>();
         const violations: string[] = [];
         for (const file of await sourceFiles(source)) {
-            const path = relative(root, file);
+            const path = relative(root, file).split(sep).join('/');
             // A runner's own folder names it freely.
             if (folders.some((folder) => path.startsWith(folder))) continue;
             // The registry and the domain entrypoint import each concrete runner.

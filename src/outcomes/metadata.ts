@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 
 export async function requireMetadataFile(path: string): Promise<void> {
     const details = await lstat(path).catch((error) => {

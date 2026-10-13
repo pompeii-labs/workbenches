@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, posix } from 'node:path';
-
+import { posix } from 'node:path';
 import { OutcomeStore } from '../src/outcomes/index.js';
+import { join } from '../src/platform/paths.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import type {
     E2BClient,

@@ -1,6 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { launchEnvironment } from '../platform/environment.js';
+import { hostCommand } from '../platform/process.js';
 
 import { RunnerRegistry } from '../runners/registry.js';
 import type { RunnerCredentials, RunnerHostSignIn } from '../runners/runner.js';
@@ -49,8 +51,8 @@ export class HostSignIn {
         this.#interact =
             dependencies.interact ??
             ((command, env) =>
-                Bun.spawn(command, {
-                    env,
+                Bun.spawn(hostCommand(command, env), {
+                    env: launchEnvironment(env),
                     stdin: 'inherit',
                     stdout: 'inherit',
                     stderr: 'inherit',

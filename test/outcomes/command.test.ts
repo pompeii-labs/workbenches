@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-
 import { OutcomeStore, type RunOutcome } from '../../src/outcomes/index.js';
+import { join, resolve } from '../../src/platform/paths.js';
 import { RunStore } from '../../src/runs/index.js';
 
 const projectDirectory = resolve(import.meta.dir, '..', '..');

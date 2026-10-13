@@ -1,6 +1,6 @@
-import { posix, relative, resolve, sep } from 'node:path';
-
+import { posix } from 'node:path';
 import { ActiveModelCatalog, ModelRouter } from '../../models/index.js';
+import { relative, resolve } from '../../platform/paths.js';
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RuntimePrepareRequest } from '../contracts.js';
 import type { TransferRules } from '../staging/rules.js';
@@ -173,7 +173,7 @@ export class PathPlan {
         }
         const suffix = relative(match.hostPath, requested);
         return suffix
-            ? posix.join(match.runtimePath, ...suffix.split(sep))
+            ? posix.join(match.runtimePath, ...suffix.split(/[\\/]/))
             : match.runtimePath;
     }
 

@@ -1,14 +1,13 @@
 import { expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-
 import {
     OutcomeExporter,
     OutcomeOutput,
     OutcomeStore,
 } from '../../src/outcomes/index.js';
+import { dirname, join } from '../../src/platform/paths.js';
 import { RunStore } from '../../src/runs/store.js';
 
 test.skipIf(process.env.WORKBENCH_OUTCOME_BROWSER_E2E !== '1')(

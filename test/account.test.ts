@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
+import { join } from '../src/platform/paths.js';
 import {
     RegistryAccountStore,
     RegistryClient,
     RegistryLogin,
 } from '../src/registry/index.js';
+import { diskMode } from './platform.js';
 
 const API = 'https://registry.example';
 const temporaryDirectories: string[] = [];
@@ -101,7 +101,9 @@ describe('CLI registry account', () => {
         await accounts.save(alpha);
         await accounts.save(beta);
 
-        expect((await stat(join(home, 'credentials.json'))).mode & 0o777).toBe(0o600);
+        expect((await stat(join(home, 'credentials.json'))).mode & 0o777).toBe(
+            diskMode(0o600)
+        );
         const held = await accounts.list();
         expect(held.defaultSlug).toBe('alpha');
         expect(held.organizations.map((entry) => entry.slug)).toEqual([
