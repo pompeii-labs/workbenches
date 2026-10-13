@@ -220,6 +220,40 @@ describe('Pi RPC session adapter', () => {
         }
     });
 
+    for (const [code, message] of [
+        [137, 'Pi RPC was killed (exit 137), most likely out of memory.'],
+        [2, 'Pi RPC exited with code 2'],
+    ] as const) {
+        test(`fails an active turn with the exit message for code ${code}`, async () => {
+            const native = new FakePiRpc();
+            native.scenario = 'cancellation';
+            const session = await new PiSessionAdapter({
+                config,
+                spawn: () => native.process,
+            }).start({
+                workbench,
+                workspaceDirectory: root,
+                environment: {},
+                configuration: new ModelRouter(modelCatalogFixture).resolve({
+                    workbench,
+                }),
+                host: {
+                    emit: async () => {},
+                    requestPermission: async () => 'reject',
+                    requestQuestion: async () => ({ outcome: 'rejected' }),
+                },
+            });
+            try {
+                const turn = session.prompt('wait');
+                await native.waitFor('prompt');
+                native.exit(code);
+                await expect(turn).rejects.toThrow(message);
+            } finally {
+                await session.close();
+            }
+        });
+    }
+
     test('rejects a later turn when the native RPC stream failed while idle', async () => {
         const native = new FakePiRpc();
         const session = await new PiSessionAdapter({
@@ -300,6 +334,10 @@ class FakePiRpc {
             waiters.push(resolve);
             this.commandWaiters.set(type, waiters);
         });
+    }
+
+    exit(code: number): void {
+        this.finish(code);
     }
 
     failStream(): void {

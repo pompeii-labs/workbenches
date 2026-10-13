@@ -2,6 +2,7 @@ import { AuthenticationRequiredError } from '../connections/error.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
 import type { OutcomeCompleteness } from '../outcomes/contracts.js';
 import type { RepositoryBinding } from '../repositories/contracts.js';
+import { RunnerProcessExit } from '../runners/exit.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRunner } from '../runners/runner.js';
 import { TRUNCATED_FAILURE, TRUNCATED_REASON } from '../runners/session.js';
@@ -245,7 +246,10 @@ export class WorkbenchRun {
                 const infrastructure = await this.infrastructure();
                 const outcomeId = await this.collectOutcome('partial');
                 await events.emit('run.failed', {
-                    message: `${runner.failureLabel} exited with code ${result.code}${detail ? `: ${detail}` : ''}`,
+                    message: new RunnerProcessExit(runner.failureLabel).message(
+                        result.code,
+                        detail
+                    ),
                     exit_code: result.code,
                     duration_ms: this.duration(),
                     ...(outcomeId ? { outcome_id: outcomeId } : {}),

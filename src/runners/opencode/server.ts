@@ -1,4 +1,5 @@
 import type { RunnerInvocation } from '../../types.js';
+import { RunnerProcessExit } from '../exit.js';
 
 export interface SpawnedOpenCodeServer {
     exited: Promise<number>;
@@ -83,10 +84,13 @@ export class OpenCodeServer {
             this.options.startupTimeoutMs
         );
         void child.exited.then((code) => {
+            const error = new Error(
+                new RunnerProcessExit('OpenCode server').message(code)
+            );
             if (!this.closed && !this.url) {
-                ready.reject(new Error(`OpenCode server exited with code ${code}`));
+                ready.reject(error);
             } else if (!this.closed) {
-                onFailure(new Error(`OpenCode server exited with code ${code}`));
+                onFailure(error);
             }
         });
         try {

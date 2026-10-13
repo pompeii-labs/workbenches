@@ -1,4 +1,5 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
+import { RunnerProcessExit } from '../exit.js';
 import type {
     NormalizedRunnerInput,
     RunnerInput,
@@ -174,7 +175,9 @@ class ClaudeCodeSession implements RunnerSession {
                             [
                                 this.process.exitDetail(),
                                 'code' in exit
-                                    ? `Claude Code exited with code ${exit.code}`
+                                    ? new RunnerProcessExit('Claude Code').message(
+                                          exit.code
+                                      )
                                     : `Claude Code output failed: ${exit.error.message}`,
                             ],
                             this.secrets
