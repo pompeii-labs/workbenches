@@ -172,6 +172,63 @@ export class DaytonaApi implements DaytonaClient {
             throw error;
         }
     }
+
+    /** `POST /sandbox/{sandboxIdOrName}/start`, then waits until it is started. */
+    async startSandbox(id: string): Promise<DaytonaSandbox> {
+        await this.transport.request(
+            'POST',
+            `/sandbox/${encodeURIComponent(id)}/start`
+        );
+        const ready = await this.transport.waitUntilStarted(id);
+        return new DaytonaToolbox(
+            this.transport,
+            ready.id,
+            await this.transport.toolboxUrl(ready),
+            ready.state
+        );
+    }
+
+    /** `POST /sandbox/{sandboxIdOrName}/stop`, then waits until it is stopped. */
+    async stopSandbox(id: string): Promise<void> {
+        await this.transport.request('POST', `/sandbox/${encodeURIComponent(id)}/stop`);
+        await this.transport.waitUntilStopped(id);
+    }
+
+    /** `POST /sandbox/{sandboxIdOrName}/ttl/{ttlMinutes}`. The deadline counts from now. */
+    async setSandboxTtl(id: string, minutes: number): Promise<void> {
+        await this.transport.request(
+            'POST',
+            `/sandbox/${encodeURIComponent(id)}/ttl/${interval(minutes, 0)}`
+        );
+    }
+
+    /** `POST /sandbox/{sandboxIdOrName}/autodelete/{interval}`. */
+    async setAutoDeleteInterval(id: string, minutes: number): Promise<void> {
+        await this.transport.request(
+            'POST',
+            `/sandbox/${encodeURIComponent(id)}/autodelete/${interval(minutes, -1)}`
+        );
+    }
+
+    /**
+     * `POST /sandbox/{sandboxIdOrName}/autoarchive/{interval}`. Daytona
+     * documents `0` as the maximum interval, so a caller that needs a bound
+     * passes the minutes it needs.
+     */
+    async setAutoArchiveInterval(id: string, minutes: number): Promise<void> {
+        await this.transport.request(
+            'POST',
+            `/sandbox/${encodeURIComponent(id)}/autoarchive/${interval(minutes, 0)}`
+        );
+    }
+}
+
+/** A whole number of minutes for a path segment, no smaller than `minimum`. */
+function interval(minutes: number, minimum: number): string {
+    if (!Number.isSafeInteger(minutes) || minutes < minimum) {
+        throw new DaytonaApiError(`Invalid Daytona interval: ${minutes} minutes`);
+    }
+    return String(minutes);
 }
 
 function imageReference(image: string): string {

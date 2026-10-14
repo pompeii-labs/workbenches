@@ -15,7 +15,7 @@ export interface DaytonaApiOptions {
     commandTimeoutMs?: number;
     /** Bound on one file transfer. Default 30 minutes. */
     transferTimeoutMs?: number;
-    /** How long a new sandbox may take to start. Default 10 minutes. */
+    /** How long a sandbox may take to start or stop. Default 10 minutes. */
     startTimeoutMs?: number;
     /** Delay between polls of a background command. Default 300 milliseconds. */
     pollIntervalMs?: number;
@@ -125,14 +125,27 @@ export class DaytonaTransport {
         return (await response.json()) as T;
     }
 
-    async waitUntilStarted(id: string): Promise<SandboxDto> {
+    waitUntilStarted(id: string): Promise<SandboxDto> {
+        return this.waitForState(id, 'started', 'start');
+    }
+
+    waitUntilStopped(id: string): Promise<SandboxDto> {
+        return this.waitForState(id, 'stopped', 'stop');
+    }
+
+    /** Polls the sandbox until it reaches `target`, and fails on a terminal state. */
+    private async waitForState(
+        id: string,
+        target: 'started' | 'stopped',
+        action: string
+    ): Promise<SandboxDto> {
         const deadline = Date.now() + this.startTimeoutMs;
         for (;;) {
             const dto = await this.json<SandboxDto>(
                 'GET',
                 `/sandbox/${encodeURIComponent(id)}`
             );
-            if (dto.state === 'started') return dto;
+            if (dto.state === target) return dto;
             if (
                 dto.state === 'error' ||
                 dto.state === 'build_failed' ||
@@ -145,7 +158,7 @@ export class DaytonaTransport {
             }
             if (Date.now() >= deadline) {
                 throw new DaytonaApiError(
-                    `Daytona sandbox ${id} did not start within ${Math.round(this.startTimeoutMs / 1000)} seconds (state: ${dto.state ?? 'unknown'})`
+                    `Daytona sandbox ${id} did not ${action} within ${Math.round(this.startTimeoutMs / 1000)} seconds (state: ${dto.state ?? 'unknown'})`
                 );
             }
             await this.wait(Math.min(1_000, this.pollIntervalMs * 3));
