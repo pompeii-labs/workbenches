@@ -51,7 +51,7 @@ export class OutcomeStorageLease {
             }
             throw new Error('Timed out acquiring outcome storage lease');
         } finally {
-            await rm(path, { force: true });
+            await removeTicket(path);
         }
     }
 
@@ -68,7 +68,7 @@ export class OutcomeStorageLease {
                     details.size > 1_024
                 )
                     throw new Error('Invalid outcome storage lease ticket');
-                const ticket: LeaseTicket = JSON.parse(await readFile(path, 'utf8'));
+                const ticket: LeaseTicket = JSON.parse(await readTicket(path));
                 if (
                     !Number.isSafeInteger(ticket.pid) ||
                     ticket.pid <= 0 ||
@@ -95,7 +95,7 @@ export class OutcomeStorageLease {
                 mode: 0o600,
                 flag: 'wx',
             });
-            await rename(temporary, path);
+            await retryTransientWindowsTicketAccess(() => rename(temporary, path));
         } finally {
             await rm(temporary, { force: true });
         }
@@ -116,13 +116,31 @@ function hasCode(error: unknown, code: string): boolean {
     return error instanceof Error && 'code' in error && error.code === code;
 }
 
-/** Windows can briefly deny deletion while another contender reads the ticket. */
+async function readTicket(path: string): Promise<string> {
+    return await retryTransientWindowsTicketAccess(() => readFile(path, 'utf8'));
+}
+
+async function removeTicket(path: string): Promise<void> {
+    await retryTransientWindowsTicketAccess(async () => {
+        await unlink(path);
+    }).catch((error) => {
+        if (!hasCode(error, 'ENOENT')) throw error;
+    });
+}
+
+/** Windows can briefly deny access while another contender reads or replaces a ticket. */
 async function removeDeadTicket(path: string): Promise<void> {
+    await removeTicket(path);
+}
+
+async function retryTransientWindowsTicketAccess<T>(
+    operation: () => Promise<T>
+): Promise<T> {
     for (let attempt = 0; ; attempt += 1) {
         try {
-            await unlink(path);
-            return;
+            return await operation();
         } catch (error) {
+            if (hasCode(error, 'ENOENT')) throw error;
             if (
                 process.platform !== 'win32' ||
                 attempt >= 10 ||

@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+    mkdir,
+    mkdtemp,
+    readdir,
+    readFile,
+    rm,
+    unlink,
+    writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { OutcomeStorageLease } from '../../src/outcomes/lease.js';
@@ -91,7 +99,7 @@ describe('OutcomeStorageLease', () => {
         await expect(
             new OutcomeStorageLease(root).exclusive(async () => {})
         ).rejects.toThrow('real directory');
-        await rm(join(root, '.lease'));
+        await unlink(join(root, '.lease'));
         await mkdir(join(root, '.lease'));
         const ticket = join(outside, 'owner');
         await writeFile(

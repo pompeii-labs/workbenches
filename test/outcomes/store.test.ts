@@ -7,6 +7,7 @@ import {
     readFile,
     rm,
     stat,
+    unlink,
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -249,7 +250,7 @@ describe('OutcomeStore', () => {
         await symlink(other, join(home, 'outcomes', id));
         await expect(store.collectGarbage()).rejects.toThrow('real directories');
         expect(await store.blob(descriptor)).toBeString();
-        await rm(join(home, 'outcomes', id));
+        await unlink(join(home, 'outcomes', id));
         await writeFile(
             join(home, 'blobs', '.captures', `${crypto.randomUUID()}.json`),
             '{"pid":-1}'

@@ -49,6 +49,8 @@ async function initializeRepository(root: string): Promise<void> {
         'user.name=Workbench',
         '-c',
         'user.email=workbench@localhost',
+        '-c',
+        'commit.gpgsign=false',
         'commit',
         '-q',
         '-m',
