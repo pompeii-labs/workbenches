@@ -643,16 +643,17 @@ describe('DaytonaRuntime', () => {
         test('fails when the sandbox is not running and deletes nothing', async () => {
             const client = new FakeClient();
             const { prepared, sandboxId } = await staged(client);
-            client.sandbox.state = 'stopped';
+            client.sandbox.state = 'error';
             const runtime = await daytonaProvider({ client }).adopt(
                 prepared,
                 sandboxId
             );
             await expect(runtime.preflight()).rejects.toThrow(
-                'Daytona sandbox sandbox-fixture is stopped, not running'
+                'Daytona sandbox sandbox-fixture is error, not running'
             );
             await runtime.cleanup();
             expect(client.deleted).toEqual([]);
+            expect(client.lifecycle).toEqual([]);
         });
 
         test('fails when a workspace baseline cannot be recovered', async () => {

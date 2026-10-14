@@ -304,9 +304,13 @@ export abstract class RemoteRuntime<S extends RemoteSandbox, A extends StagedAss
         }
     }
 
-    /** Seconds left of the lease, never less than a minute. */
+    /**
+     * Seconds left of the lease, counted from when this runtime created or
+     * attached to its sandbox, never less than a minute.
+     */
     protected leaseSeconds(): number {
-        const elapsed = this.options.now().getTime() - (this.sandboxStartedAt ?? 0);
+        const now = this.options.now().getTime();
+        const elapsed = now - (this.sandboxStartedAt ?? now);
         return Math.max(60, (this.options.leaseMilliseconds - elapsed) / 1_000);
     }
 
