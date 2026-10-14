@@ -21,6 +21,7 @@ export type {
     AssetBinding,
     CollectorOptions,
     NativeStateOptions,
+    NativeStateSink,
     OutcomeCollector,
     PackOptions,
     RemoteTransfer,

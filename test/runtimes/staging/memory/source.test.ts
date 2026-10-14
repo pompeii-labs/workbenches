@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { PathPlan } from '../../../../src/runtimes/remote/paths.js';
 import { MemoryAssetSource } from '../../../../src/runtimes/staging/memory/source.js';
 import { TransferRules } from '../../../../src/runtimes/staging/rules.js';
+import { TarArchive, type TarEntry } from '../../../../src/runtimes/staging/tar.js';
 import type { ResolvedWorkbench } from '../../../../src/types.js';
 
 describe('memory source stat', () => {
@@ -47,5 +48,51 @@ describe('memory source stat', () => {
         expect((await source.stat('/virtual/b/two'))?.kind).toBe('file');
         expect(await source.stat('/virtual/b/loop')).toBeUndefined();
         expect(await source.stat('/virtual/missing')).toBeUndefined();
+    });
+});
+
+describe('memory source unpack', () => {
+    const rules = new TransferRules('Daytona');
+
+    async function gzip(entries: TarEntry[]): Promise<Uint8Array> {
+        return new TarArchive(TarArchive.pack(entries).bytes).gzip();
+    }
+
+    test('restores only regular files beneath the directory', async () => {
+        await expect(
+            new MemoryAssetSource().unpack(
+                '/host/state',
+                await gzip([
+                    {
+                        name: '../x',
+                        type: 'file',
+                        mode: 0o644,
+                        content: new TextEncoder().encode('y'),
+                    },
+                ]),
+                rules
+            )
+        ).rejects.toThrow('Unsafe Daytona archive path: ../x');
+        await expect(
+            new MemoryAssetSource().unpack(
+                '/host/state',
+                await gzip([
+                    {
+                        name: 'current',
+                        type: 'symlink',
+                        mode: 0o777,
+                        content: new Uint8Array(),
+                        link: '/etc/passwd',
+                    },
+                ]),
+                rules
+            )
+        ).rejects.toThrow('Daytona native state archive contains a link: current');
+        const empty = await new MemoryAssetSource().unpack(
+            '/host/state',
+            await gzip([]),
+            rules
+        );
+        expect((await empty.stat('/host/state'))?.kind).toBe('directory');
     });
 });

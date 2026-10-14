@@ -1,6 +1,8 @@
 import { posix } from 'node:path';
 
+import type { TransferRules } from '../rules.js';
 import type { AssetSource, AssetStat } from '../source.js';
+import { TarArchive } from '../tar.js';
 
 const maximumLinkHops = 40;
 
@@ -44,6 +46,36 @@ export class MemoryAssetSource implements AssetSource {
     /** Adds an empty directory and the directories above it. */
     directory(path: string): this {
         this.directories(`${path}/x`);
+        return this;
+    }
+
+    /**
+     * Adds the files of a gzip tar beneath `directory`, which is created even
+     * when the archive is empty. This restores what a `NativeStateSink`
+     * received, so the same directory can be staged as a `state` asset again.
+     * Only regular files and directories are accepted, and every path must
+     * stay beneath `directory`. `rules` names the provider in messages.
+     */
+    async unpack(
+        directory: string,
+        archive: Uint8Array,
+        rules: TransferRules
+    ): Promise<this> {
+        const entries = (await TarArchive.gunzip(archive)).entries();
+        this.directory(directory);
+        for (const entry of entries) {
+            const name = rules.normalizeArchivePath(entry.name).replace(/\/$/, '');
+            if (entry.type === 'directory' && name === '') continue;
+            rules.validateRelativePath(name);
+            const path = posix.join(directory, name);
+            if (entry.type === 'directory') this.directory(path);
+            else if (entry.type === 'file') this.file(path, entry.content, entry.mode);
+            else {
+                throw new Error(
+                    `${rules.provider} native state archive contains a link: ${name}`
+                );
+            }
+        }
         return this;
     }
 

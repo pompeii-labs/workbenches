@@ -17,6 +17,7 @@ import { quote } from '../shell.js';
 import { workspaceTracking } from '../tracking.js';
 import type { OutcomeCollector, TransferSandbox } from '../transfer.js';
 import { MemoryArchive } from './archive.js';
+import { readBoundedBytes } from './bounded.js';
 import type { MemoryAssetSnapshot } from './snapshot.js';
 
 /** Collects a run's changes and returned files into byte arrays and a sink. */
@@ -203,30 +204,11 @@ export class MemoryOutcomeCollector implements OutcomeCollector {
 
     private async download(remote: string, maximumBytes: number): Promise<Uint8Array> {
         const { maximumTransferBytes } = this.options;
-        const sandbox = this.sandbox;
-        const provider = this.rules.provider;
-        const reader = (await sandbox.download(remote)).getReader();
-        const chunks: Uint8Array[] = [];
-        let total = 0;
-        for (;;) {
-            const next = await reader.read();
-            if (next.done) break;
-            total += next.value.byteLength;
-            if (total > maximumBytes) {
-                await reader.cancel().catch(() => {});
-                throw new Error(
-                    `${provider} output exceeds the ${formatOutcomeBytes(maximumTransferBytes)} transfer safety limit`
-                );
-            }
-            chunks.push(next.value);
-        }
-        const out = new Uint8Array(total);
-        let offset = 0;
-        for (const chunk of chunks) {
-            out.set(chunk, offset);
-            offset += chunk.byteLength;
-        }
-        return out;
+        return readBoundedBytes(
+            await this.sandbox.download(remote),
+            maximumBytes,
+            `${this.rules.provider} output exceeds the ${formatOutcomeBytes(maximumTransferBytes)} transfer safety limit`
+        );
     }
 }
 
