@@ -60,6 +60,33 @@ export interface DaytonaClient {
     listSandboxes(labels: Record<string, string>): Promise<DaytonaSandboxSummary[]>;
     getSandbox(id: string): Promise<DaytonaSandbox | undefined>;
     deleteSandbox(id: string): Promise<void>;
+    /**
+     * Starts a stopped sandbox and resolves once it is started. Its disk is the
+     * one it was stopped with; nothing that was in memory survives. A client
+     * without it cannot reattach a stopped sandbox.
+     */
+    startSandbox?(id: string): Promise<DaytonaSandbox>;
+    /**
+     * Stops a sandbox and resolves once it is stopped. Its filesystem is kept
+     * and only its disk is billed. A client without it cannot keep a sandbox.
+     */
+    stopSandbox?(id: string): Promise<void>;
+    /**
+     * Sets the wall-clock time to live, counted from now, after which Daytona
+     * destroys the sandbox in any state. `0` clears it.
+     */
+    setSandboxTtl?(id: string, minutes: number): Promise<void>;
+    /**
+     * Sets how long a sandbox may stay continuously stopped before Daytona
+     * deletes it. `-1` disables auto-delete and `0` deletes on stop.
+     */
+    setAutoDeleteInterval?(id: string, minutes: number): Promise<void>;
+    /**
+     * Sets how long a sandbox may stay continuously stopped before Daytona
+     * archives it. Daytona's default is seven days. A client without it leaves
+     * that default in place.
+     */
+    setAutoArchiveInterval?(id: string, minutes: number): Promise<void>;
 }
 
 /** Sends one HTTP request. Shaped like the platform `fetch`. */

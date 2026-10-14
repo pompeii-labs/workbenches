@@ -190,6 +190,12 @@ export interface PreparedRuntime {
     /** Collect returned files and links without finalizing native state or workspace diffs. */
     collectOutput?(store: OutcomeSink): Promise<CollectedOutput | undefined>;
     finalizeOutcome?(): Promise<void>;
+    /**
+     * Ends the runtime like `cleanup`, but keeps its remote sandbox, stopped,
+     * for `keepMinutes` so a later run can reattach it. Only a provider whose
+     * platform can stop a sandbox and keep its disk implements it.
+     */
+    readonly suspend?: ((keepMinutes: number) => Promise<void>) | undefined;
     cleanup(): Promise<void>;
 }
 

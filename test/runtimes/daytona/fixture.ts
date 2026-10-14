@@ -115,6 +115,10 @@ export class FakeClient implements DaytonaClient {
     deleteAttempts = 0;
     /** Daytona no longer knows the sandbox. */
     missing = false;
+    /** Lifecycle requests other than create and delete, in order. */
+    readonly lifecycle: string[] = [];
+    /** The lifecycle request that fails, by name, such as `stop`. */
+    lifecycleFailure: string | undefined;
 
     async createSandbox(options: DaytonaCreateOptions): Promise<DaytonaSandbox> {
         this.createOptions.push(options);
@@ -137,6 +141,36 @@ export class FakeClient implements DaytonaClient {
         }
         this.deleted.push(id);
     }
+
+    async startSandbox(id: string): Promise<DaytonaSandbox> {
+        this.record('start', id);
+        this.sandbox.state = 'started';
+        return this.sandbox;
+    }
+
+    async stopSandbox(id: string): Promise<void> {
+        this.record('stop', id);
+        this.sandbox.state = 'stopped';
+    }
+
+    async setSandboxTtl(id: string, minutes: number): Promise<void> {
+        this.record(`ttl ${minutes}`, id);
+    }
+
+    async setAutoDeleteInterval(id: string, minutes: number): Promise<void> {
+        this.record(`autodelete ${minutes}`, id);
+    }
+
+    async setAutoArchiveInterval(id: string, minutes: number): Promise<void> {
+        this.record(`autoarchive ${minutes}`, id);
+    }
+
+    private record(operation: string, id: string): void {
+        if (this.lifecycleFailure && operation.startsWith(this.lifecycleFailure)) {
+            throw new Error(`${operation} failed`);
+        }
+        this.lifecycle.push(`${operation} ${id}`);
+    }
 }
 
 export class FakeSandbox implements DaytonaSandbox {
@@ -151,6 +185,8 @@ export class FakeSandbox implements DaytonaSandbox {
     /** What the next preview URL requests answer, in order, before the default. */
     previewAnswers: Array<Error | string> = [];
     artifactDownload: Uint8Array | undefined;
+    /** The archive a native state capture downloads. */
+    nativeStateDownload: Uint8Array | undefined;
     installResult: { code: number; stdout: string; stderr: string } | undefined;
     nextRun: { code: number; stdout: string; stderr: string } | undefined;
     sandboxInfo: DaytonaSandboxInfo = { cpuCount: 1, memoryMB: 1_024, diskGb: 3 };
@@ -265,6 +301,9 @@ export class FakeSandbox implements DaytonaSandbox {
 
     /** What the sandbox would hold at a collection path: unchanged input, no deletions. */
     private remoteBytes(path: string): Uint8Array {
+        if (path.includes('workbench-native-state')) {
+            return this.nativeStateDownload ?? new Uint8Array();
+        }
         if (path.includes('workbench-artifacts')) {
             return this.artifactDownload ?? new Uint8Array();
         }

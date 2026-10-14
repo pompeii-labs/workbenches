@@ -180,6 +180,80 @@ describe('DaytonaApi', () => {
         });
     });
 
+    describe('sandbox lifecycle', () => {
+        /** Answers lifecycle posts, and reports `states` in order on each lookup. */
+        function lifecycle(states: string[]) {
+            return client((request) => {
+                if (request.method === 'POST') return json({});
+                return json({
+                    id: 'sandbox-1',
+                    state: states.shift() ?? 'unknown',
+                    toolboxProxyUrl: 'https://proxy.daytona.test/toolbox/',
+                });
+            });
+        }
+
+        test('starts a stopped sandbox and waits until it is started', async () => {
+            const { api, requests } = lifecycle(['starting', 'started']);
+            const sandbox = await api.startSandbox('sandbox-1');
+            expect(sandbox.id).toBe('sandbox-1');
+            expect(sandbox.state).toBe('started');
+            expect(requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual([
+                'POST /api/sandbox/sandbox-1/start',
+                'GET /api/sandbox/sandbox-1',
+                'GET /api/sandbox/sandbox-1',
+            ]);
+            expect(requests[0]?.headers.get('authorization')).toBe(
+                'Bearer secret-api-key'
+            );
+        });
+
+        test('stops a sandbox and waits until it is stopped', async () => {
+            const { api, requests } = lifecycle(['stopping', 'stopped']);
+            await api.stopSandbox('sandbox-1');
+            expect(requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual([
+                'POST /api/sandbox/sandbox-1/stop',
+                'GET /api/sandbox/sandbox-1',
+                'GET /api/sandbox/sandbox-1',
+            ]);
+        });
+
+        test('fails a stop that ends in an error state', async () => {
+            const { api } = lifecycle(['error']);
+            await expect(api.stopSandbox('sandbox-1')).rejects.toThrow(
+                'Daytona sandbox sandbox-1 entered state error'
+            );
+        });
+
+        test('sets and clears the TTL and sets the auto-delete and auto-archive intervals', async () => {
+            const { api, requests } = lifecycle([]);
+            await api.setSandboxTtl('sandbox-1', 60);
+            await api.setSandboxTtl('sandbox-1', 0);
+            await api.setAutoDeleteInterval('sandbox-1', 10_080);
+            await api.setAutoDeleteInterval('sandbox-1', -1);
+            await api.setAutoArchiveInterval('sandbox-1', 10_081);
+            expect(requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual([
+                'POST /api/sandbox/sandbox-1/ttl/60',
+                'POST /api/sandbox/sandbox-1/ttl/0',
+                'POST /api/sandbox/sandbox-1/autodelete/10080',
+                'POST /api/sandbox/sandbox-1/autodelete/-1',
+                'POST /api/sandbox/sandbox-1/autoarchive/10081',
+            ]);
+            expect(requests.every((r) => r.body === undefined)).toBeTrue();
+        });
+
+        test('refuses an interval that is not a whole number of minutes', async () => {
+            const { api, requests } = lifecycle([]);
+            await expect(api.setSandboxTtl('sandbox-1', -1)).rejects.toThrow(
+                'Invalid Daytona interval: -1 minutes'
+            );
+            await expect(api.setAutoDeleteInterval('sandbox-1', 1.5)).rejects.toThrow(
+                'Invalid Daytona interval: 1.5 minutes'
+            );
+            expect(requests).toHaveLength(0);
+        });
+    });
+
     test('treats a missing sandbox as absent and a deleted one as gone', async () => {
         const { api } = client(() => json({ message: 'not found' }, 404));
         expect(await api.getSandbox('missing')).toBeUndefined();

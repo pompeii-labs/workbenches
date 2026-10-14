@@ -289,6 +289,19 @@ class GuardedRuntime implements PreparedRuntime {
         await this.runtime.finalizeOutcome?.();
     }
 
+    /** Present only when the guarded runtime can keep its sandbox. */
+    get suspend(): PreparedRuntime['suspend'] {
+        const suspend = this.runtime.suspend?.bind(this.runtime);
+        if (!suspend) return undefined;
+        return async (keepMinutes) => {
+            try {
+                await suspend(keepMinutes);
+            } catch (error) {
+                throw RuntimeError.from(this.name, 'cleanup', error);
+            }
+        };
+    }
+
     async cleanup(): Promise<void> {
         try {
             await this.runtime.cleanup();

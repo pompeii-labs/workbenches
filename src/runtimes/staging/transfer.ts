@@ -73,6 +73,19 @@ export interface NativeStateOptions {
     checkpoint?: (completed: Set<number>) => Promise<void>;
 }
 
+/**
+ * Where a transfer with no storage of its own hands runner-owned native state,
+ * such as a session database, when it copies it out of a sandbox.
+ */
+export interface NativeStateSink {
+    /**
+     * Receives one native state asset's files as a gzip tar, keyed by the host
+     * path the asset was staged from. Staging the same files from that path in
+     * a fresh sandbox resumes the runner's native session.
+     */
+    putNativeState(hostPath: string, archive: Uint8Array): Promise<void>;
+}
+
 export interface OutcomeCollector {
     /** Collects workspace changes and returned files. */
     collect(store: OutcomeSink): Promise<RuntimeOutcomeCollection>;
