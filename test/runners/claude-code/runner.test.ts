@@ -714,7 +714,7 @@ describe('Claude Code launch wrappers on a real shell', () => {
         await writeFile(
             path,
             [
-                '#!/usr/bin/env bun',
+                `#!${process.execPath}`,
                 'const args = process.argv.slice(2);',
                 'const prompt = args[args.indexOf("--append-system-prompt-file") + 1];',
                 'const fs = await import("node:fs/promises");',

@@ -185,7 +185,7 @@ describe('Claude Code connection', () => {
             await mkdir(bin);
             await writeFile(
                 join(bin, 'claude'),
-                `#!/usr/bin/env bun\nconsole.log(JSON.stringify({loggedIn:false}));process.exit(${code});\n`,
+                `#!${process.execPath}\nconsole.log(JSON.stringify({loggedIn:false}));process.exit(${code});\n`,
                 { mode: 0o755 }
             );
             await executableScript(join(bin, 'claude'));

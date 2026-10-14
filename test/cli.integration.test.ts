@@ -3663,7 +3663,7 @@ async function fakeDocker() {
             '  }',
             '  if (entry === "docker") process.exit(0);',
             '  if (entry === "opencode") {',
-            `    if (args.includes("serve")) { const child = Bun.spawn([process.execPath, ${JSON.stringify(server)}], {stdin:"inherit",stdout:"inherit",stderr:"inherit"}); process.exit(await child.exited); }`,
+            `    if (args.includes("serve")) { const child = Bun.spawn([process.execPath, ${JSON.stringify(server)}], {stdin:"inherit",stdout:"inherit",stderr:"inherit"}); const stop = () => child.kill(); process.on("SIGTERM", stop); process.on("SIGINT", stop); process.exit(await child.exited); }`,
             '    console.log(JSON.stringify({type:"step_start",part:{type:"step-start"}}));',
             '    console.log(JSON.stringify({type:"text",part:{type:"text",text:"fixture response"}}));',
             '    console.log(JSON.stringify({type:"step_finish",part:{type:"step-finish",reason:"stop",tokens:{total:9,input:4,output:5,reasoning:0,cache:{read:0,write:0}},cost:0.0001}})); process.exit(0);',

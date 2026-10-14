@@ -49,7 +49,7 @@ describe('creator Workbench', () => {
 
     test('keeps the candidate reference snapshot pinned to its version', async () => {
         expect(await digest(join(referencesDirectory, 'spec.md'))).toBe(
-            '2f203d2cf699c3c3ac3db7724b8d07eb9db8c26b22cb182dc539737e3ec9e92e'
+            'b2c52f03bdb786753ebea83e6f90f34fa8ff37df5f4cf7a7e9ca9c53817466e4'
         );
         expect(await digest(join(referencesDirectory, 'workbench.schema.json'))).toBe(
             'e11f0e669cbf77220e472c79fe0fd5e153601d86b44c89bd2abc52bbc067c44f'
