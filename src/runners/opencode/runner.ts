@@ -44,7 +44,10 @@ export class OpenCodeRunner extends Runner {
         file: 'opencode/auth.json',
         apiKeyEntryType: 'api',
         storeFirst: false,
-        environment: (root: string) => ({ XDG_DATA_HOME: root }),
+        environment: (root: string) => ({
+            XDG_DATA_HOME: root,
+            OPENCODE_DB: `${root}/opencode/opencode.db`,
+        }),
     };
     readonly connection = openCodeConnection;
     private readonly skills: OpenCodeSkillStaging;
@@ -178,6 +181,10 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
             },
             {
                 // Cloud proxy setup and cold native session loading share this
+                nativeDatabase: runtime.name === 'local',
+                ...(runtime.name !== 'local' && runtime.credentials
+                    ? { credentials: runtime.credentials }
+                    : {}),
                 // bounded readiness budget, not the ten-second local deadline.
                 ...(isRemoteRuntime(runtime.name) ? { startupTimeoutMs: 60_000 } : {}),
                 context: this.#staged.context.remap((path) => runtime.pathFor(path)),

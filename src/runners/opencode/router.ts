@@ -124,6 +124,14 @@ export class OpenCodeEventRouter {
             return;
         }
         if (!active) return;
+        if (type === 'session.succeeded') {
+            state.finish(this.emitted.completionReason());
+            return;
+        }
+        if (type === 'session.interrupted') {
+            state.finish('cancelled');
+            return;
+        }
         if (type === 'session.error') {
             const error = record(properties.error);
             const errorName = string(error?.name);

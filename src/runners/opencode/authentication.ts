@@ -37,7 +37,8 @@ export class OpenCodeAuthentication {
             return (
                 candidate?.type === 'oauth' &&
                 (!authentication.nativeMethod ||
-                    candidate.label === authentication.nativeMethod)
+                    candidate.label === authentication.nativeMethod ||
+                    candidate.id === v2Method(authentication.nativeMethod))
             );
         });
         if (method < 0) {
@@ -78,4 +79,11 @@ export class OpenCodeAuthentication {
             },
         });
     }
+}
+
+/** Legacy saved selections keep working against V2's stable method IDs. */
+export function v2Method(method: string): string {
+    if (method === 'ChatGPT Pro/Plus (browser)') return 'chatgpt-token-sharing';
+    if (method === 'ChatGPT Pro/Plus (headless)') return 'chatgpt-headless';
+    return method;
 }

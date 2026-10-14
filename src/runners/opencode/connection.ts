@@ -1,5 +1,6 @@
 import type { ModelCatalogHarnessProviderRoute } from '../../models/index.js';
 import type { RunnerConnection } from '../runner.js';
+import { v2Method } from './authentication.js';
 
 /** The OpenCode release whose provider capabilities Workbench reads from the catalog. */
 const OPENCODE_CATALOG_VERSION = '1.18.30';
@@ -74,16 +75,63 @@ export const openCodeConnection: RunnerConnection = {
     },
     hostSignIn: {
         executable: 'opencode',
-        arguments: (nativeProvider, nativeMethod) => [
-            'auth',
-            'login',
-            '--provider',
-            nativeProvider,
-            ...(nativeMethod ? ['--method', nativeMethod] : []),
-        ],
+        versionCommand: ['--version'],
+        arguments: (nativeProvider, nativeMethod, version) =>
+            isOpenCodeV2(version ?? '2.0.0')
+                ? [
+                      'auth',
+                      'login',
+                      nativeProvider,
+                      '--standalone',
+                      ...(nativeMethod && nativeMethod !== 'Manually enter API Key'
+                          ? ['--method', v2Method(nativeMethod)]
+                          : []),
+                  ]
+                : [
+                      'auth',
+                      'login',
+                      '--provider',
+                      nativeProvider,
+                      ...(nativeMethod ? ['--method', nativeMethod] : []),
+                  ],
+        async exportCredential(executable, environment, provider, version) {
+            if (!isOpenCodeV2(version)) return undefined;
+            const child = Bun.spawn(
+                [executable, 'auth', 'export', provider, '--standalone'],
+                {
+                    env: environment,
+                    stdout: 'pipe',
+                    stderr: 'ignore',
+                }
+            );
+            const output = await new Response(child.stdout).text();
+            if ((await child.exited) !== 0)
+                throw new Error('OpenCode could not export the private login');
+            const credentials: unknown = JSON.parse(output);
+            if (!Array.isArray(credentials))
+                throw new Error('OpenCode returned an invalid credential export');
+            const entry = credentials.find(
+                (entry) => entry.integrationID === provider && entry.active
+            );
+            const value = entry?.value;
+            if (!value) return undefined;
+            if (value.type === 'key') return { type: 'api', key: value.key };
+            if (value.type === 'oauth')
+                return {
+                    ...value,
+                    ...(value.metadata?.accountID
+                        ? { accountId: value.metadata.accountID }
+                        : {}),
+                };
+            throw new Error('OpenCode returned an unsupported credential type');
+        },
     },
     inRunSignIn: true,
 };
+
+export function isOpenCodeV2(version: string): boolean {
+    return /^(?:opencode\s+)?v?2\./.test(version.trim());
+}
 
 /** Each `●` line of the listing names a provider, then its method last. */
 function openCodeCredentials(listing: string): Map<string, string> {
@@ -91,7 +139,18 @@ function openCodeCredentials(listing: string): Map<string, string> {
     for (const line of listing
         .split(/\r?\n/)
         .map((line) => line.trim())
-        .filter((line) => line.startsWith('●'))) {
+        .filter(Boolean)) {
+        if (!line.startsWith('●')) {
+            const match = line.match(
+                /^(.+?)\s{2,}(OAuth|API key|External)\s{2,}(stored|environment)\s*$/i
+            );
+            if (match)
+                credentials.set(
+                    normalizeProvider(match[1] ?? ''),
+                    match[2]?.toLowerCase() === 'oauth' ? 'oauth' : 'api'
+                );
+            continue;
+        }
         const parts = line.slice(1).trim().split(/\s+/);
         const method = parts.pop()?.toLowerCase();
         const provider = normalizeProvider(parts.join(' '));

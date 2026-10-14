@@ -3722,6 +3722,7 @@ async function fakeBin(
             '  };',
             '  await Promise.all(Object.entries(fields).map(([name, value]) => Bun.write(record + "." + name, (value ?? "") + "\\n")));',
             '}',
+            'if (Bun.argv[2] === "--version") { console.log("1.18.30"); process.exit(0); }',
             'if (Bun.argv[2] !== "serve") {',
             '  if (block) await new Promise(() => {});',
             '  if (delay) await Bun.sleep(delay);',

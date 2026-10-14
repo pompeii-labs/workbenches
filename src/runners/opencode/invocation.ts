@@ -25,6 +25,9 @@ export function buildOpenCodeInvocation(
         undefined,
         context?.instructions
     );
+    // V2's native database also holds its credentials. CLI runs must not hide
+    // them behind the memory-only database formerly used for V1 automation.
+    environment.OPENCODE_DB = baseEnv.OPENCODE_DB;
 
     const invocation: RunnerInvocation = {
         command: [
@@ -92,13 +95,23 @@ export function buildOpenCodeServerInvocation(
         hostname: '127.0.0.1',
         port: 0,
     },
-    context?: RunnerContext
+    context?: RunnerContext,
+    nativeDatabase = true
 ): RunnerInvocation {
     if (!password) throw new Error('OpenCode server password must not be empty');
     const invocation: RunnerInvocation = {
         command: [
-            'opencode',
-            'serve',
+            ...(nativeDatabase
+                ? [
+                      'sh',
+                      '-c',
+                      // V2 stores credentials in the same database as sessions. On the
+                      // host, use its native database rather than an empty private one.
+                      // V1 still needs its per-Workbench session database for resume.
+                      'case "$(opencode --version)" in 2.*|v2.*|"opencode v2."*) if [ -n "$WORKBENCH_OPENCODE_NATIVE_DB" ]; then export OPENCODE_DB="$WORKBENCH_OPENCODE_NATIVE_DB"; else unset OPENCODE_DB; fi ;; esac\nexec opencode serve "$@"',
+                      'workbench-opencode',
+                  ]
+                : ['opencode', 'serve']),
             '--hostname',
             binding.hostname,
             '--port',
@@ -117,6 +130,9 @@ export function buildOpenCodeServerInvocation(
                 context?.instructions
             ),
             OPENCODE_SERVER_PASSWORD: password,
+            WORKBENCH_OPENCODE_NATIVE_DB: nativeDatabase
+                ? baseEnv.OPENCODE_DB
+                : undefined,
         },
     };
     return context ? context.apply(invocation, workbench) : invocation;

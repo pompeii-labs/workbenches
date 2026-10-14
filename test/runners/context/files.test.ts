@@ -126,7 +126,7 @@ describe('runner context files', () => {
                 );
             }
             expect(oneShot.command.at(-1)).toBe('user task');
-            expect(server.command).toContain('serve');
+            expect(server.command.join(' ')).toContain('opencode serve');
             expect(await readFile(workbench.instructionsPath, 'utf8')).toBe(
                 '# Authored behavior\n\nDo the requested work.\n'
             );

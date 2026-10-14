@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import type { RuntimeCredentialFiles } from '../../runtimes/contracts.js';
 import type { RunnerContext } from '../context/files.js';
 import { runtimeContext } from '../context/runtime.js';
 import type {
@@ -12,6 +13,7 @@ import type {
 import { normalizeRunnerInput } from '../session.js';
 import { OpenCodeAuthentication } from './authentication.js';
 import { OpenCodeChildren } from './children.js';
+import { OpenCodeV2Credentials } from './credentials.js';
 import { openCodeParts } from './input.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
 import { record, string } from './json.js';
@@ -33,6 +35,8 @@ export interface OpenCodeServerSessionOptions extends RunnerSessionStartOptions 
     authenticationTimeoutMs: number;
     configDirectory?: string;
     nativeConfigFile?: string;
+    nativeDatabase?: boolean;
+    credentials?: RuntimeCredentialFiles;
     launch: OpenCodeServerLauncher;
     cleanup: () => Promise<void>;
 }
@@ -46,6 +50,7 @@ export class OpenCodeServerSession implements RunnerSession {
     private readonly messageIds = new OpenCodeMessageIds();
     private readonly router: OpenCodeEventRouter;
     private readonly recovery: TurnRecovery;
+    private credentials: OpenCodeV2Credentials | undefined;
 
     constructor(options: OpenCodeServerSessionOptions) {
         this.options = options;
@@ -108,11 +113,23 @@ export class OpenCodeServerSession implements RunnerSession {
                         ? join(this.options.session.directory, 'opencode.sqlite')
                         : undefined,
                     binding,
-                    this.options.context
+                    this.options.context,
+                    this.options.nativeDatabase ?? true
                 ),
             (error) => this.state.fail(error)
         );
 
+        if (this.server.isV2 && this.options.credentials) {
+            this.credentials = new OpenCodeV2Credentials(
+                this.server,
+                this.options.credentials
+            );
+            await withTimeout(
+                this.credentials.load(),
+                'OpenCode credential import timed out',
+                this.options.startupTimeoutMs
+            );
+        }
         if (this.options.authentication)
             await withTimeout(
                 new OpenCodeAuthentication(this.server, this.options.host).complete(
@@ -142,7 +159,11 @@ export class OpenCodeServerSession implements RunnerSession {
             method: 'POST',
             body: JSON.stringify({
                 title: `Workbench: ${this.options.workbench.manifest.name}`,
-                model: { id: model.modelID, providerID: model.providerID },
+                model: {
+                    id: model.modelID,
+                    providerID: model.providerID,
+                    ...(model.variant ? { variant: model.variant } : {}),
+                },
             }),
         });
         const sessionId = string(record(created)?.id);
@@ -257,8 +278,17 @@ export class OpenCodeServerSession implements RunnerSession {
         if (this.state.closed) return;
         this.state.closed = true;
         this.state.finish('cancelled');
-        await this.server.close();
-        await this.options.cleanup();
+        try {
+            if (this.credentials)
+                await withTimeout(
+                    this.credentials.save(),
+                    'OpenCode credential export timed out',
+                    5000
+                );
+        } finally {
+            await this.server.close();
+            await this.options.cleanup();
+        }
     }
 
     /**
@@ -295,6 +325,7 @@ export class OpenCodeServerSession implements RunnerSession {
                     method: 'POST',
                     body: JSON.stringify({
                         messageID: messageId,
+                        delivery: 'steer',
                         model: parseModel(this.options.configuration.model),
                         parts: openCodeParts(input),
                     }),
@@ -315,7 +346,10 @@ function parseModel(model: string) {
     }
     return {
         providerID: model.slice(0, separator),
-        modelID: model.slice(separator + 1),
+        modelID: model.slice(separator + 1).split('#')[0],
+        ...(model.includes('#')
+            ? { variant: model.slice(model.indexOf('#') + 1) }
+            : {}),
     };
 }
 

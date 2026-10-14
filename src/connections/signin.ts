@@ -19,6 +19,7 @@ export interface HostSignInDependencies {
         env: Record<string, string | undefined>
     ) => Promise<number>;
     runners?: Pick<RunnerRegistry, 'find'>;
+    version?: (command: string[]) => Promise<string>;
 }
 
 /**
@@ -31,10 +32,20 @@ export class HostSignIn {
     readonly #which: NonNullable<HostSignInDependencies['which']>;
     readonly #interact: NonNullable<HostSignInDependencies['interact']>;
     readonly #runners: Pick<RunnerRegistry, 'find'>;
+    readonly #version: NonNullable<HostSignInDependencies['version']>;
 
     constructor(dependencies: HostSignInDependencies = {}) {
         this.#which = dependencies.which ?? Bun.which;
         this.#runners = dependencies.runners ?? RunnerRegistry.standard();
+        this.#version =
+            dependencies.version ??
+            (async (command) => {
+                const child = Bun.spawn(command, { stdout: 'pipe', stderr: 'ignore' });
+                const output = await new Response(child.stdout).text();
+                if ((await child.exited) !== 0)
+                    throw new Error('Could not determine runner version');
+                return output.trim();
+            });
         this.#interact =
             dependencies.interact ??
             ((command, env) =>
@@ -69,17 +80,38 @@ export class HostSignIn {
         process.on('SIGINT', ignore);
         process.on('SIGTERM', ignore);
         try {
+            const version = login.signIn.versionCommand
+                ? await this.#version([
+                      login.executable,
+                      ...login.signIn.versionCommand,
+                  ])
+                : '';
+            const env = { ...environment, ...login.credentials.environment(directory) };
             const code = await this.#interact(
                 [
                     login.executable,
                     ...login.signIn.arguments(
                         target.method.nativeProvider,
-                        target.method.nativeMethod
+                        target.method.nativeMethod,
+                        version
                     ),
                 ],
-                { ...environment, ...login.credentials.environment(directory) }
+                env
             );
             if (code !== 0) return undefined;
+            if (login.signIn.exportCredential) {
+                const value = await login.signIn.exportCredential(
+                    login.executable,
+                    env,
+                    target.method.nativeProvider,
+                    version
+                );
+                if (value)
+                    return {
+                        type: typeof value.type === 'string' ? value.type : undefined,
+                        value,
+                    };
+            }
             return await NativeCredentialFile.for(target.harness, this.#runners).find(
                 new HostCredentialFiles(directory),
                 target.method.nativeProvider
