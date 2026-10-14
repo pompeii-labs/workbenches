@@ -101,7 +101,7 @@ describe('OpenCode adapter translation', () => {
         const visible = publicInvocation(invocation);
 
         expect(invocation.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBeUndefined();
-        expect(invocation.env.OPENCODE_DB).toBe(':memory:');
+        expect(invocation.env.OPENCODE_DB).toBe('/tmp/shared-opencode.db');
         expect(visible.opencode_config).toMatchObject({
             autoupdate: false,
             share: 'disabled',
@@ -171,8 +171,10 @@ describe('OpenCode adapter translation', () => {
             '/workspace'
         );
         expect(invocation.command).toEqual([
-            'opencode',
-            'serve',
+            'sh',
+            '-c',
+            'case "$(opencode --version)" in 2.*|v2.*|"opencode v2."*) if [ -n "$WORKBENCH_OPENCODE_NATIVE_DB" ]; then export OPENCODE_DB="$WORKBENCH_OPENCODE_NATIVE_DB"; else unset OPENCODE_DB; fi ;; esac\nexec opencode serve "$@"',
+            'workbench-opencode',
             '--hostname',
             '127.0.0.1',
             '--port',

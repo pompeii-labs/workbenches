@@ -38,7 +38,17 @@ describe('runner credential environment', () => {
                 undefined
             );
             expect(volume.environment()).toEqual(
-                variable ? { [variable]: '/workbench-credentials' } : {}
+                variable
+                    ? {
+                          [variable]: '/workbench-credentials',
+                          ...(runner.name === 'opencode'
+                              ? {
+                                    OPENCODE_DB:
+                                        '/workbench-credentials/opencode/opencode.db',
+                                }
+                              : {}),
+                      }
+                    : {}
             );
         });
 

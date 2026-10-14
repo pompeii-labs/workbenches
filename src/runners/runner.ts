@@ -79,7 +79,20 @@ export interface RunnerHostSignIn {
     /** The harness CLI to find on the host. */
     executable: string;
     /** The login arguments for one native provider and, when given, its native method. */
-    arguments(nativeProvider: string, nativeMethod?: string): string[];
+    arguments(
+        nativeProvider: string,
+        nativeMethod?: string,
+        version?: string
+    ): string[];
+    /** Some harness releases changed their login arguments and credential storage. */
+    versionCommand?: string[];
+    /** Exports only a private temporary login, never the user's own credentials. */
+    exportCredential?: (
+        executable: string,
+        environment: Record<string, string | undefined>,
+        provider: string,
+        version: string
+    ) => Promise<Record<string, unknown> | undefined>;
 }
 
 /** How a runner lists the credentials it holds inside a runtime. */

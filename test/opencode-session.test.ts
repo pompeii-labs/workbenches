@@ -761,6 +761,7 @@ describe('OpenCode interactive server adapter', () => {
         await session.close();
 
         expect(server.promptBodies[1]).toEqual({
+            delivery: 'steer',
             messageID: expect.stringMatching(/^msg_[a-f0-9]{26}$/),
             model: {
                 providerID: 'openai',

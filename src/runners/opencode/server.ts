@@ -1,5 +1,7 @@
 import type { RunnerInvocation } from '../../types.js';
 import { RunnerProcessExit } from '../exit.js';
+import { record, string } from './json.js';
+import { OpenCodeV2Events, v2Message } from './v2.js';
 
 export interface SpawnedOpenCodeServer {
     exited: Promise<number>;
@@ -38,6 +40,9 @@ export interface OpenCodeServerOptions {
 }
 
 export class OpenCodeServer {
+    get isV2(): boolean {
+        return this.v2;
+    }
     private readonly abort: AbortController;
     private readonly options: OpenCodeServerOptions;
     private child: SpawnedOpenCodeServer | undefined;
@@ -51,6 +56,10 @@ export class OpenCodeServer {
     private stdoutLoop: Promise<void> | undefined;
     private stderrLoop: Promise<string> | undefined;
     private closed = false;
+    private v2 = false;
+    private readonly v2Events = new OpenCodeV2Events();
+    private readonly oauthMethods = new Map<string, string[]>();
+    private readonly oauthAttempts = new Map<string, string>();
 
     constructor(options: OpenCodeServerOptions) {
         this.options = options;
@@ -95,6 +104,25 @@ export class OpenCodeServer {
         });
         try {
             this.url = await launched.resolveUrl(await ready.promise);
+            const info = await this.authFetch(new URL('/api/info', this.url), {
+                signal: AbortSignal.any([
+                    this.abort.signal,
+                    AbortSignal.timeout(this.options.startupTimeoutMs),
+                ]),
+            });
+            if (
+                info.ok &&
+                info.headers.get('Content-Type')?.includes('application/json')
+            ) {
+                const body = record(await info.json());
+                this.v2 = /^2\./.test(string(body?.version) ?? '');
+            } else if (!info.ok && info.status !== 404) {
+                throw new Error(
+                    `OpenCode API discovery failed with HTTP ${info.status}`
+                );
+            } else {
+                await info.body?.cancel();
+            }
         } finally {
             clearTimeout(timeout);
         }
@@ -135,7 +163,11 @@ export class OpenCodeServer {
                 `OpenCode event stream failed with HTTP ${response.status}`
             );
         }
-        const loop: Promise<void> = consumeSse(response.body, consume)
+        const loop: Promise<void> = consumeSse(response.body, async (value) => {
+            for (const event of this.v2 ? this.v2Events.consume(value) : [value]) {
+                await consume(event);
+            }
+        })
             .catch((error) => {
                 if (
                     !this.closed &&
@@ -152,6 +184,35 @@ export class OpenCodeServer {
     }
 
     async request(path: string, init: RequestInit): Promise<Response> {
+        if (this.v2 && path.endsWith('/prompt_async')) {
+            const body = record(JSON.parse(String(init.body))) ?? {};
+            const parts = Array.isArray(body.parts) ? body.parts.map(record) : [];
+            path = path.replace(/\/prompt_async$/, '/prompt');
+            init = {
+                ...init,
+                body: JSON.stringify({
+                    id: body.messageID,
+                    text: parts
+                        .filter((part) => part?.type === 'text')
+                        .map((part) => part?.text)
+                        .join('\n\n'),
+                    files: parts
+                        .filter((part) => part?.type === 'file')
+                        .map((part) => ({ uri: part?.url, name: part?.filename })),
+                    ...(body.delivery ? { delivery: body.delivery } : {}),
+                }),
+            };
+        }
+        if (this.v2 && path === '/session' && init.method === 'POST') {
+            init = {
+                ...init,
+                body: JSON.stringify({
+                    ...record(JSON.parse(String(init.body))),
+                    location: { directory: this.options.workspaceDirectory },
+                }),
+            };
+        }
+        if (this.v2) path = path.replace(/\/abort$/, '/interrupt');
         const response = await this.authFetch(this.endpoint(path), init);
         if (!response.ok) {
             throw new Error(`OpenCode request failed with HTTP ${response.status}`);
@@ -161,14 +222,76 @@ export class OpenCodeServer {
 
     async requestJson(path: string, init: RequestInit): Promise<unknown> {
         const response = await this.request(path, init);
-        return response.json();
+        const body: unknown = await response.json();
+        if (!this.v2) return body;
+        if (/^\/session\/[^/]+\/message$/.test(path) && init.method === 'GET') {
+            const data = record(body)?.data;
+            const messages = Array.isArray(data) ? [...data] : [];
+            let cursor = string(record(record(body)?.cursor)?.next);
+            while (cursor) {
+                const page = record(
+                    await (
+                        await this.request(
+                            `${path}?cursor=${encodeURIComponent(cursor)}`,
+                            init
+                        )
+                    ).json()
+                );
+                if (Array.isArray(page?.data)) messages.push(...page.data);
+                cursor = string(record(page?.cursor)?.next);
+            }
+            const native = messages.map(record).filter((value) => value !== undefined);
+            const sessionID = decodeURIComponent(path.split('/')[2] as string);
+            this.v2Events.seed(native, sessionID);
+            let parentID: string | undefined;
+            return native.map((message) => {
+                if (message.type === 'user') parentID = string(message.id);
+                return v2Message(message, parentID);
+            });
+        }
+        return record(body)?.data ?? body;
     }
 
     async authenticationMethods(): Promise<unknown> {
+        if (this.v2) {
+            const integrations = await this.requestJson('/integration', {
+                method: 'GET',
+            });
+            return Object.fromEntries(
+                (Array.isArray(integrations) ? integrations : []).map((value) => {
+                    const integration = record(value) ?? {};
+                    const methods = Array.isArray(integration.methods)
+                        ? integration.methods.map(record)
+                        : [];
+                    this.oauthMethods.set(
+                        String(integration.id),
+                        methods.map((method) => String(method?.id ?? ''))
+                    );
+                    return [integration.id, methods];
+                })
+            );
+        }
         return this.requestJson('/provider/auth', { method: 'GET' });
     }
 
     async authorizeProvider(provider: string, method: number): Promise<unknown> {
+        if (this.v2) {
+            const authorization = record(
+                await this.requestJson(
+                    `/integration/${encodeURIComponent(provider)}/connect/oauth`,
+                    {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            methodID: this.oauthMethods.get(provider)?.[method],
+                        }),
+                    }
+                )
+            );
+            const attemptID = string(authorization?.attemptID);
+            if (!attemptID) throw new Error('OpenCode did not create an OAuth attempt');
+            this.oauthAttempts.set(provider, attemptID);
+            return { ...authorization, method: authorization?.mode };
+        }
         return this.requestJson(
             `/provider/${encodeURIComponent(provider)}/oauth/authorize`,
             {
@@ -182,6 +305,23 @@ export class OpenCodeServer {
         provider: string,
         method: number
     ): Promise<void> {
+        if (this.v2) {
+            const attempt = this.oauthAttempts.get(provider);
+            if (!attempt) throw new Error('OpenCode OAuth attempt is unavailable');
+            for (;;) {
+                const status = record(
+                    await this.requestJson(
+                        `/integration/${encodeURIComponent(provider)}/connect/oauth/${encodeURIComponent(attempt)}`,
+                        { method: 'GET' }
+                    )
+                );
+                if (status?.status === 'complete') return;
+                if (status?.status !== 'pending')
+                    throw new Error('OpenCode OAuth authentication failed or expired');
+                await new Promise<void>((resolve) => setTimeout(resolve, 500));
+                if (this.closed) throw new Error('OpenCode server is closed');
+            }
+        }
         await this.request(`/provider/${encodeURIComponent(provider)}/oauth/callback`, {
             method: 'POST',
             body: JSON.stringify({ method }),
@@ -189,6 +329,13 @@ export class OpenCodeServer {
     }
 
     async replyPermission(path: string, body: unknown): Promise<boolean> {
+        if (this.v2) {
+            const id = decodeURIComponent(path.split('/')[2] ?? '');
+            const sessionID = this.v2Events.permissions.get(id);
+            if (!sessionID) return false;
+            path = `/session/${encodeURIComponent(sessionID)}/permission/${encodeURIComponent(id)}/reply`;
+            body = { decision: record(body)?.reply };
+        }
         const response = await this.authFetch(this.endpoint(path), {
             method: 'POST',
             body: JSON.stringify(body),
@@ -203,8 +350,46 @@ export class OpenCodeServer {
     }
 
     async replyQuestion(path: string, body?: unknown): Promise<boolean> {
+        let method = 'POST';
+        if (this.v2) {
+            const id = decodeURIComponent(path.split('/')[2] ?? '');
+            const form = this.v2Events.forms.get(id);
+            if (!form) return false;
+            const base = `/session/${encodeURIComponent(String(form.sessionID))}/form/${encodeURIComponent(id)}`;
+            if (path.endsWith('/reject')) {
+                path = base;
+                method = 'DELETE';
+                body = undefined;
+            } else {
+                path = `${base}/reply`;
+                const answers = record(body)?.answers as string[][];
+                const fields = form.fields as Record<string, unknown>[];
+                body = {
+                    answer: Object.fromEntries(
+                        fields.map((field, index) => {
+                            const options = Array.isArray(field.options)
+                                ? field.options.map(record)
+                                : [];
+                            const values = (answers[index] ?? []).map((answer) => {
+                                const option = options.find(
+                                    (option) =>
+                                        (option?.label ?? option?.value) === answer
+                                );
+                                return option?.value ?? answer;
+                            });
+                            return [
+                                field.key,
+                                field.type === 'multiselect'
+                                    ? values
+                                    : (values[0] ?? ''),
+                            ];
+                        })
+                    ),
+                };
+            }
+        }
         const response = await this.authFetch(this.endpoint(path), {
-            method: 'POST',
+            method,
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         });
         if (response.status === 404) return false;
@@ -231,8 +416,16 @@ export class OpenCodeServer {
 
     private endpoint(path: string): URL {
         if (!this.url) throw new Error('OpenCode server is not ready');
-        const url = new URL(path, this.url);
-        url.searchParams.set('directory', this.options.workspaceDirectory);
+        const url = new URL(this.v2 ? `/api${path}` : path, this.url);
+        if (this.v2) {
+            if (path.startsWith('/integration'))
+                url.searchParams.set(
+                    'location[directory]',
+                    this.options.workspaceDirectory
+                );
+            if (/^\/session\/[^/]+\/message$/.test(path))
+                url.searchParams.set('order', 'asc');
+        } else url.searchParams.set('directory', this.options.workspaceDirectory);
         return url;
     }
 

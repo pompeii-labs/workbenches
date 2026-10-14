@@ -92,6 +92,21 @@ export class OpenCodeTranscript {
         for (const message of this.messages.slice(start + 1)) {
             const info = record(message.info);
             const id = string(info?.id);
+            if (info?.type === 'idle') {
+                const outcome = string(info.outcome);
+                return {
+                    answers,
+                    end:
+                        outcome === 'interrupted'
+                            ? { kind: 'cancelled' }
+                            : outcome === 'failed'
+                              ? { kind: 'failed' }
+                              : {
+                                    kind: 'completed',
+                                    finish: string(answers.at(-1)?.info.finish),
+                                },
+                };
+            }
             if (info?.role === 'user') {
                 if (!id || !inputs.has(id)) break;
                 lastInput = id;

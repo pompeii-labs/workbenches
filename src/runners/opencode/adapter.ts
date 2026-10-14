@@ -1,3 +1,4 @@
+import type { RuntimeCredentialFiles } from '../../runtimes/contracts.js';
 import type { RunnerContext } from '../context/files.js';
 import type {
     RunnerSession,
@@ -43,6 +44,8 @@ export interface PreparedOpenCodeSession {
     nativeConfigFile?: string;
     startupTimeoutMs?: number;
     launch: OpenCodeServerLauncher;
+    nativeDatabase?: boolean;
+    credentials?: RuntimeCredentialFiles;
 }
 
 export class OpenCodeSessionAdapter implements RunnerSessionAdapter {

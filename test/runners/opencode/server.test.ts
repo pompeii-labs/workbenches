@@ -58,8 +58,9 @@ describe('OpenCodeServer', () => {
         );
         try {
             await server.request('/session', { method: 'GET' });
-            expect(calls).toHaveLength(1);
-            expect(calls[0]).toContain('http://127.0.0.1:4096/session');
+            expect(calls).toHaveLength(2);
+            expect(calls[0]).toContain('http://127.0.0.1:4096/api/info');
+            expect(calls[1]).toContain('http://127.0.0.1:4096/session');
         } finally {
             await server.close();
         }
@@ -147,7 +148,10 @@ async function startedServer(
         workspaceDirectory: '/workspace',
         password: () => 'secret',
         startupTimeoutMs: 1000,
-        fetch,
+        fetch: async (input, init) =>
+            new URL(String(input)).pathname === '/api/info'
+                ? new Response(null, { status: 404 })
+                : fetch(input, init),
         launch: () => ({
             process: {
                 exited: new Promise<number>((resolve) => {
