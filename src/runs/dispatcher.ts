@@ -310,7 +310,15 @@ export class RunDispatcher {
                     return;
                 }
             }
-            this.store.assertWorkerAlive(run);
+            try {
+                this.store.assertWorkerAlive(run);
+            } catch (error) {
+                // A short-lived worker can publish its terminal result and exit
+                // after the read above. Do not replace that result with a crash.
+                const current = await this.store.read(id);
+                if (RunStore.isTerminal(current.status)) continue;
+                throw error;
+            }
             await Bun.sleep(25);
         }
         throw new Error(`Workbench session did not start in time: ${id}`);

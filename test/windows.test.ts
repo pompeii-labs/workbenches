@@ -1,10 +1,16 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
 import { launchEnvironment } from '../src/platform/environment.js';
-import { stopWindowsTree } from '../src/platform/process.js';
+import { hostCommand, stopWindowsTree } from '../src/platform/process.js';
 import { RepositoryInstructions } from '../src/runners/claude-code/instructions.js';
+import { buildOpenCodeServerInvocation } from '../src/runners/opencode/invocation.js';
 import { isOutboxPermission } from '../src/runners/opencode/outbox.js';
 import { isWindowsPath, windowsInvocation } from '../src/runners/windows.js';
 import { MemoryAssetSource } from '../src/runtimes/staging/memory/source.js';
+import type { ResolvedWorkbench } from '../src/types.js';
+import { executableScript } from './platform.js';
 
 describe('runtime path portability', () => {
     test('recognizes drive and UNC paths while preserving remote POSIX paths', () => {
@@ -53,6 +59,76 @@ describe('runtime path portability', () => {
 });
 
 describe.skipIf(process.platform !== 'win32')('Windows native wrappers', () => {
+    test.each([
+        ['1.4.0', undefined, 'private-session.db'],
+        ['2.0.0', undefined, undefined],
+        ['opencode v2.0.0', 'custom-native.db', 'custom-native.db'],
+    ])(
+        'selects the native OpenCode database for %s',
+        async (version, database, expected) => {
+            const directory = await mkdtemp(join(tmpdir(), 'wb-opencode-windows-'));
+            try {
+                const executable = join(directory, 'opencode');
+                await writeFile(
+                    executable,
+                    `if (process.argv.includes('--version')) console.log(${JSON.stringify(version)});\nelse console.log(JSON.stringify({ database: process.env.OPENCODE_DB, args: process.argv.slice(2) }));`
+                );
+                await executableScript(executable);
+                await writeFile(
+                    `${executable}.ps1`,
+                    "throw 'Do not run npm PowerShell shims'"
+                );
+                const workbench = {
+                    repositoryDirectory: directory,
+                    instructionsPath: join(directory, 'instructions.md'),
+                    skills: [],
+                    manifest: {
+                        runner: 'opencode',
+                        model: { id: 'openai/test' },
+                        env: {},
+                        mcps: [],
+                    },
+                } as unknown as ResolvedWorkbench;
+                const invocation = buildOpenCodeServerInvocation(
+                    workbench,
+                    'test-password',
+                    {
+                        ...process.env,
+                        PATH: `${directory}${delimiter}${process.env.PATH}`,
+                        OPENCODE_DB: database,
+                    },
+                    undefined,
+                    directory,
+                    'openai/test',
+                    undefined,
+                    'private-session.db'
+                );
+                const child = Bun.spawn(
+                    hostCommand(invocation.command, invocation.env),
+                    {
+                        cwd: invocation.cwd,
+                        env: launchEnvironment(invocation.env),
+                        stdout: 'pipe',
+                        stderr: 'pipe',
+                    }
+                );
+                const [stdout, stderr, code] = await Promise.all([
+                    new Response(child.stdout).text(),
+                    new Response(child.stderr).text(),
+                    child.exited,
+                ]);
+                expect(stderr, stderr).toBe('');
+                expect(code).toBe(0);
+                expect(JSON.parse(stdout)).toEqual({
+                    ...(expected ? { database: expected } : {}),
+                    args: ['serve', '--hostname', '127.0.0.1', '--port', '0'],
+                });
+            } finally {
+                await rm(directory, { recursive: true, force: true });
+            }
+        }
+    );
+
     test('preserves Unicode input and literal shell characters', async () => {
         const input = "Unicode: café 日本語; $env:PATH 'quoted' `literal`";
         const argument = "argument 'with' $shell; characters";

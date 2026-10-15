@@ -42,7 +42,10 @@ export class HostSignIn {
         this.#version =
             dependencies.version ??
             (async (command) => {
-                const child = Bun.spawn(command, { stdout: 'pipe', stderr: 'ignore' });
+                const child = Bun.spawn(hostCommand(command, process.env), {
+                    stdout: 'pipe',
+                    stderr: 'ignore',
+                });
                 const output = await new Response(child.stdout).text();
                 if ((await child.exited) !== 0)
                     throw new Error('Could not determine runner version');

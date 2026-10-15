@@ -2,7 +2,7 @@ import { modelLabel } from '../../models/label.js';
 import { relative } from '../../platform/paths.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
-import { isWindowsPath } from '../windows.js';
+import { isWindowsPath, windowsInvocation } from '../windows.js';
 import { isOutboxPermission } from './outbox.js';
 
 export function buildOpenCodeInvocation(
@@ -102,7 +102,7 @@ export function buildOpenCodeServerInvocation(
     if (!password) throw new Error('OpenCode server password must not be empty');
     const invocation: RunnerInvocation = {
         command: [
-            ...(nativeDatabase
+            ...(nativeDatabase && !isWindowsPath(workspaceDirectory)
                 ? [
                       'sh',
                       '-c',
@@ -136,7 +136,22 @@ export function buildOpenCodeServerInvocation(
                 : undefined,
         },
     };
-    return context ? context.apply(invocation, workbench) : invocation;
+    const launch =
+        nativeDatabase && isWindowsPath(workspaceDirectory)
+            ? windowsInvocation(
+                  invocation,
+                  [
+                      '$executable = (Get-Command opencode -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source',
+                      '$version = & $executable --version',
+                      'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
+                      'if ($version -match "^(?:v?2\\.|opencode v2\\.)") {',
+                      '  if ($env:WORKBENCH_OPENCODE_NATIVE_DB) { $env:OPENCODE_DB = $env:WORKBENCH_OPENCODE_NATIVE_DB }',
+                      '  else { Remove-Item Env:OPENCODE_DB -ErrorAction SilentlyContinue }',
+                      '}',
+                  ].join('\n')
+              )
+            : invocation;
+    return context ? context.apply(launch, workbench) : launch;
 }
 
 function buildOpenCodeEnvironment(

@@ -1,4 +1,5 @@
 import { launchEnvironment } from '../../platform/environment.js';
+import { hostCommand } from '../../platform/process.js';
 import type { RuntimeCommandResult } from '../../runtimes/contracts.js';
 import type { RunnerInvocation } from '../../types.js';
 
@@ -240,7 +241,7 @@ function asError(error: unknown): Error {
 export async function executeOnHost(
     invocation: RunnerInvocation
 ): Promise<RuntimeCommandResult> {
-    const child = Bun.spawn(invocation.command, {
+    const child = Bun.spawn(hostCommand(invocation.command, invocation.env), {
         cwd: invocation.cwd,
         env: launchEnvironment(invocation.env),
         stdin: invocation.input === undefined ? 'ignore' : 'pipe',

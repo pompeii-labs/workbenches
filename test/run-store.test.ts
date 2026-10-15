@@ -20,6 +20,47 @@ afterEach(async () => {
 });
 
 describe('durable Workbench runs', () => {
+    test.each(['completed', 'failed'] as const)(
+        'preserves a worker result published just before exit: %s',
+        async (status) => {
+            const home = await temporaryHome();
+            const dispatcher = new RunDispatcher(home);
+            const store = Reflect.get(dispatcher, 'store') as RunStore;
+            const run = await fixtureRun(home);
+            await store.update(run.id, { status });
+            await store.appendEvent(run.id, {
+                protocol: 0,
+                run_id: run.id,
+                sequence: 1,
+                timestamp: new Date().toISOString(),
+                type: 'run.failed',
+                runner: run.runner,
+                data: { message: 'Required CLI tool is unavailable: test-tool' },
+            });
+            const read = spyOn(store, 'read');
+            read.mockResolvedValueOnce({ ...run, status: 'dispatched' });
+            const alive = spyOn(store, 'assertWorkerAlive').mockImplementation(() => {
+                throw new Error('Worker exited');
+            });
+            try {
+                const wait = Reflect.get(dispatcher, 'waitUntilStarted') as (
+                    id: string,
+                    waitForInitialTurn: boolean
+                ) => Promise<void>;
+                const result = wait.call(dispatcher, run.id, false);
+                if (status === 'completed')
+                    await expect(result).resolves.toBeUndefined();
+                else
+                    await expect(result).rejects.toThrow(
+                        'Required CLI tool is unavailable: test-tool'
+                    );
+            } finally {
+                read.mockRestore();
+                alive.mockRestore();
+            }
+        }
+    );
+
     test('stores private metadata and consumes the task request once', async () => {
         const home = await temporaryHome();
         const store = new RunStore(home);

@@ -70,7 +70,7 @@ export class MemoryAssetSource implements AssetSource {
             const name = rules.normalizeArchivePath(entry.name).replace(/\/$/, '');
             if (entry.type === 'directory' && name === '') continue;
             rules.validateRelativePath(name);
-            const path = posix.join(directory, name);
+            const path = pathStyle(directory).join(directory, name);
             if (entry.type === 'directory') this.directory(path);
             else if (entry.type === 'file') this.file(path, entry.content, entry.mode);
             else {

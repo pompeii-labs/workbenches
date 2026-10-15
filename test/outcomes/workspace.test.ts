@@ -53,6 +53,7 @@ async function repository(): Promise<string> {
     await git(root, 'init', '-q');
     await git(root, 'config', 'user.email', 'workbench@localhost');
     await git(root, 'config', 'user.name', 'Workbench');
+    await git(root, 'config', 'commit.gpgsign', 'false');
     await writeFile(join(root, '.gitignore'), 'ignored.txt\nnode_modules/\n');
     await writeFile(join(root, 'modify.txt'), 'committed\n');
     await writeFile(join(root, 'delete.txt'), 'delete me\n');
