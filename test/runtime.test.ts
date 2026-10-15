@@ -40,9 +40,10 @@ let cancellationCount = 0;
 
 describe('local runtime provider contract', () => {
     test('registry forwards live repository snapshots and guards collection failures', async () => {
-        const native = await new LocalRuntimeProvider({ host: new NodeHost() }).prepare(
-            request
-        );
+        const native = await new LocalRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: (name) => `/bin/${name}`,
+        }).prepare(request);
         let calls = 0;
         let fail = false;
         native.snapshotRepository = async () => {

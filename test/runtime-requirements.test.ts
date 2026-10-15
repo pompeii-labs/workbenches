@@ -327,15 +327,24 @@ function prepareRequest(
 
 describe('providers apply requirements before preparing', () => {
     test('the local provider refuses an unsatisfied host requirement', async () => {
+        const looked: string[] = [];
+        const provider = new LocalRuntimeProvider({
+            host: macArm,
+            findExecutable: (name) => {
+                looked.push(name);
+                return `/bin/${name}`;
+            },
+        });
         const target = workbench(withRuntimes({ os: ['windows'] }), 'local');
-        await expect(
-            new LocalRuntimeProvider({ host: macArm }).prepare(prepareRequest(target))
-        ).rejects.toThrow('requires os windows but this host is macos');
-        await expect(
-            new LocalRuntimeProvider({ host: macArm }).prepare(
-                prepareRequest(workbench(withRuntimes({ os: ['macos'] }), 'local'))
-            )
-        ).resolves.toBeDefined();
+        await expect(provider.prepare(prepareRequest(target))).rejects.toThrow(
+            'requires os windows but this host is macos'
+        );
+        expect(looked).toEqual([]);
+        const runtime = await provider.prepare(
+            prepareRequest(workbench(withRuntimes({ os: ['macos'] }), 'local'))
+        );
+        expect(looked).toEqual(['opencode']);
+        await runtime.cleanup();
     });
 
     test('the local provider refuses a gpu requirement the request does not acknowledge', async () => {
