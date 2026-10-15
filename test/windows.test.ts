@@ -132,13 +132,20 @@ describe.skipIf(process.platform !== 'win32')('Windows native wrappers', () => {
     test('preserves Unicode input and literal shell characters', async () => {
         const input = "Unicode: café 日本語; $env:PATH 'quoted' `literal`";
         const argument = "argument 'with' $shell; characters";
+        const arguments_ = [
+            argument,
+            '',
+            'embedded"quote',
+            'C:\\space dir\\',
+            'backslash\\"quote',
+        ];
         const invocation = windowsInvocation(
             {
                 command: [
                     process.execPath,
                     '-e',
-                    'console.log(JSON.stringify({argument: process.argv[1], input: await Bun.stdin.text()}))',
-                    argument,
+                    'console.log(JSON.stringify({arguments: process.argv.slice(1), input: await Bun.stdin.text()}))',
+                    ...arguments_,
                 ],
                 cwd: process.cwd(),
                 env: {},
@@ -161,7 +168,7 @@ describe.skipIf(process.platform !== 'win32')('Windows native wrappers', () => {
         ]);
         expect(stderr).toBe('');
         expect(code).toBe(0);
-        expect(JSON.parse(stdout)).toEqual({ argument, input: `${input}\r\n` });
+        expect(JSON.parse(stdout)).toEqual({ arguments: arguments_, input });
     });
 
     test('forwards live RPC input through setup without waiting for EOF', async () => {
@@ -170,7 +177,7 @@ describe.skipIf(process.platform !== 'win32')('Windows native wrappers', () => {
                 command: [
                     process.execPath,
                     '-e',
-                    'for await (const chunk of Bun.stdin.stream()) { console.log(new TextDecoder().decode(chunk).trim()); break; }',
+                    'let count = 0; for await (const chunk of Bun.stdin.stream()) { console.log(new TextDecoder().decode(chunk).trim()); if (++count === 2) break; }',
                 ],
                 cwd: process.cwd(),
                 env: {},
@@ -191,6 +198,12 @@ describe.skipIf(process.platform !== 'win32')('Windows native wrappers', () => {
             const first = await reader.read();
             expect(new TextDecoder().decode(first.value).trim()).toBe(
                 '{"message":"café"}'
+            );
+            child.stdin.write('{"message":"second"}\n');
+            await child.stdin.flush();
+            const second = await reader.read();
+            expect(new TextDecoder().decode(second.value).trim()).toBe(
+                '{"message":"second"}'
             );
             await reader.cancel();
             await child.stdin.end();

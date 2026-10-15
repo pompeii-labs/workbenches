@@ -43,17 +43,13 @@ export const claudeCodeConnection: RunnerConnection = {
             isWindowsPath(cwd)
                 ? windowsInvocation(
                       {
-                          command: [
-                              process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe',
-                              '/d',
-                              '/c',
-                              'exit',
-                              '0',
-                          ],
+                          command: ['claude', 'auth', 'status', '--json'],
                           cwd,
                           env: {},
                       },
-                      '& claude auth status --json; if ($LASTEXITCODE -gt 1) { exit $LASTEXITCODE }'
+                      '',
+                      undefined,
+                      [0, 1]
                   ).command
                 : claudeCodeConnection.probe.command,
         failsClosed: false,

@@ -42,7 +42,7 @@ import type {
     WorkbenchWorkspaceBinding,
 } from '../../../src/types.js';
 import { modelCatalogFixture } from '../../model-catalog-fixture.js';
-import { diskMode, executableScript, symlink } from '../../platform.js';
+import { diskMode, executableScript, nativeCommand, symlink } from '../../platform.js';
 import { FakeClaudeCode } from './fixture.js';
 
 const catalog: ModelCatalogSnapshot = {
@@ -244,20 +244,7 @@ async function start(
 
 /** The `claude` argv inside the launch wrappers. */
 function claudeArguments(invocation: RunnerInvocation): string[] {
-    let command = invocation.command;
-    while (command.includes('-EncodedCommand')) {
-        const script = Buffer.from(
-            command[command.indexOf('-EncodedCommand') + 1] as string,
-            'base64'
-        ).toString('utf16le');
-        const launch = script
-            .split('\n')
-            .findLast((line) => line.startsWith('& ') || line.includes(' | & '));
-        if (!launch) break;
-        command = [...launch.matchAll(/'((?:[^']|'')*)'/g)].map((match) =>
-            (match[1] as string).replaceAll("''", "'")
-        );
-    }
+    const command = nativeCommand(invocation.command);
     return command.slice(
         command.findIndex(
             (value) =>

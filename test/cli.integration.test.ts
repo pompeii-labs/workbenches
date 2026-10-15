@@ -1393,7 +1393,7 @@ describe('CLI integration', () => {
             ],
             environment
         );
-        expect(ran.code).toBe(0);
+        expect(ran.code, ran.stderr).toBe(0);
         expect(ran.stdout).toContain('fixture reply');
         expect(await readFile(`${record}.claude-token`, 'utf8')).toBe('subscription\n');
 

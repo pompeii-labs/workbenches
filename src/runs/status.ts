@@ -1,5 +1,6 @@
-import { open, readFile, rename } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { rename } from '../platform/files.js';
 import { writeFile } from '../platform/permissions.js';
 
 import type { WorkbenchEvent } from './events.js';

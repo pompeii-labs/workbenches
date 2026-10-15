@@ -116,7 +116,12 @@ export function nativeCommand(input: string[]): string[] {
         ).toString('utf16le');
         const launch = script
             .split('\n')
-            .findLast((line) => line.startsWith('& ') || line.includes(' | & '));
+            .findLast(
+                (line) =>
+                    line.startsWith('$workbenchCommand = @(') ||
+                    line.startsWith('& ') ||
+                    line.includes(' | & ')
+            );
         if (!launch) break;
         command = [...launch.matchAll(/'((?:[^']|'')*)'/g)].map((match) =>
             (match[1] as string).replaceAll("''", "'")

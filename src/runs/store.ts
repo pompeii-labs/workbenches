@@ -6,13 +6,13 @@ import {
     open,
     readdir,
     readFile,
-    rename,
     rm,
     stat,
 } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { CatalogRegistryReference } from '../catalog/types.js';
 import { OutcomeStore } from '../outcomes/store.js';
+import { rename } from '../platform/files.js';
 import { writeFile } from '../platform/permissions.js';
 import type { RepositoryBinding } from '../repositories/contracts.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
