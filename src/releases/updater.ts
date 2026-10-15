@@ -1,19 +1,11 @@
 import { createHash } from 'node:crypto';
-import {
-    chmod,
-    copyFile,
-    mkdtemp,
-    realpath,
-    rename,
-    rm,
-    stat,
-    writeFile,
-} from 'node:fs/promises';
+import { copyFile, mkdtemp, realpath, rename, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-
+import { chmod, writeFile } from '../platform/permissions.js';
 import { WORKBENCH_USER_AGENT } from '../user-agent.js';
 import { ReleaseTarget, SemanticVersion } from './semantic-version.js';
+import { replaceWindowsExecutable } from './windows.js';
 
 const defaultRepository = 'pompeii-labs/workbenches';
 const maximumArchiveBytes = 250 * 1024 * 1024;
@@ -196,7 +188,14 @@ export class CliUpdater {
         targetName: string
     ): Promise<string> {
         const extraction = Bun.spawn(
-            ['tar', '-xzf', archive, '-C', temporary, `${targetName}/workbench`],
+            [
+                'tar',
+                '-xzf',
+                archive,
+                '-C',
+                temporary,
+                `${targetName}/${(this.options.platform ?? process.platform) === 'win32' ? 'workbench.exe' : 'workbench'}`,
+            ],
             { stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' }
         );
         const [code, stderr] = await Promise.all([
@@ -208,7 +207,13 @@ export class CliUpdater {
                 `Could not extract the Workbench update${stderr.trim() ? `: ${stderr.trim()}` : ''}`
             );
         }
-        const source = join(temporary, targetName, 'workbench');
+        const source = join(
+            temporary,
+            targetName,
+            (this.options.platform ?? process.platform) === 'win32'
+                ? 'workbench.exe'
+                : 'workbench'
+        );
         if (!(await stat(source).catch(() => null))) {
             throw new Error('The Workbench release archive does not contain the CLI');
         }
@@ -216,6 +221,8 @@ export class CliUpdater {
     }
 
     private async replace(source: string, target: string): Promise<string> {
+        if ((this.options.platform ?? process.platform) === 'win32')
+            return replaceWindowsExecutable(source, target);
         const staged = join(
             dirname(target),
             `.workbench-update-${crypto.randomUUID()}`
@@ -234,7 +241,7 @@ export class CliUpdater {
 
     private async installedExecutable(): Promise<string> {
         const name = basename(process.execPath).toLowerCase();
-        if (name === 'bun' || name === 'bunx') {
+        if (['bun', 'bunx', 'bun.exe', 'bunx.exe'].includes(name)) {
             throw new Error(
                 'CLI self-update is available only from an installed Workbench binary'
             );

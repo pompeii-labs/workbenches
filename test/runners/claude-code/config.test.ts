@@ -7,11 +7,10 @@ import {
     readFile,
     rm,
     stat,
-    symlink,
     writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
-
+import { tmpdir } from 'node:os';
+import { join } from '../../../src/platform/paths.js';
 import {
     type ClaudeCodeAccess,
     ClaudeCodeConfigStaging,
@@ -25,6 +24,7 @@ import { DiskRunnerFiles } from '../../../src/runners/files/disk.js';
 import { MemoryRunnerFiles } from '../../../src/runners/files/memory.js';
 import { DiskAssetSource } from '../../../src/runtimes/staging/disk.js';
 import type { ResolvedWorkbench, WorkbenchMcp } from '../../../src/types.js';
+import { diskMode, symlink } from '../../platform.js';
 
 const scratch: string[] = [];
 const staged: StagedClaudeCodeConfig[] = [];
@@ -105,7 +105,7 @@ function settings(config: StagedClaudeCodeConfig, access: ClaudeCodeAccess = {})
 
 /** A real package and workspace on disk, under the test scratch prefix. */
 async function disk() {
-    const root = await mkdtemp('/tmp/b2-claude-');
+    const root = await mkdtemp(join(tmpdir(), 'b2-claude-'));
     scratch.push(root);
     const packageDirectory = join(root, 'package');
     const workspace = join(root, 'workspace');
@@ -315,11 +315,15 @@ describe('Claude Code skills and system prompt', () => {
         const skill = join(config.configDirectory, 'skills', 'review');
 
         expect(await readFile(join(skill, 'SKILL.md'), 'utf8')).toBe('Review.');
-        expect((await stat(join(skill, 'SKILL.md'))).mode & 0o777).toBe(0o444);
-        expect((await stat(join(skill, 'notes', 'a.md'))).mode & 0o777).toBe(0o444);
-        expect((await stat(join(skill, 'notes'))).mode & 0o777).toBe(0o555);
+        expect((await stat(join(skill, 'SKILL.md'))).mode & 0o777).toBe(
+            diskMode(0o444)
+        );
+        expect((await stat(join(skill, 'notes', 'a.md'))).mode & 0o777).toBe(
+            diskMode(0o444)
+        );
+        expect((await stat(join(skill, 'notes'))).mode & 0o777).toBe(diskMode(0o555));
         expect((await stat(join(config.configDirectory, 'skills'))).mode & 0o777).toBe(
-            0o555
+            diskMode(0o555)
         );
         const prompt = await readFile(config.systemPromptPath, 'utf8');
         expect(prompt).toStartWith('<workbench_context>');
@@ -452,7 +456,7 @@ describe('Claude Code cleanup', () => {
         expect(
             await lstat(config.configDirectory).catch(() => undefined)
         ).toBeUndefined();
-        expect((await stat(outside)).mode & 0o777).toBe(0o555);
+        expect((await stat(outside)).mode & 0o777).toBe(diskMode(0o555));
         expect(await readFile(join(outside, 'file.md'), 'utf8')).toBe('outside');
         await chmod(outside, 0o755);
     });

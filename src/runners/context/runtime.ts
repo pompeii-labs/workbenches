@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join } from '../../platform/paths.js';
 
 import type { ResolvedWorkbench } from '../../types.js';
 import { isRemoteRuntime, selectedRuntime } from '../../workbench/runtimes.js';

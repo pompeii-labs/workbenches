@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from '../../../src/platform/paths.js';
 
 import { RunnerContext } from '../../../src/runners/context/files.js';
 import { RunnerContextStaging } from '../../../src/runners/context/stage.js';

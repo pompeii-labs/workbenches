@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join } from '../../platform/paths.js';
 
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
@@ -249,7 +249,10 @@ function accessRules(request: ClaudeCodeAccess): {
     const rules: string[] = [];
     const warnings: string[] = [];
     for (const target of targets) {
-        const path = target.path.replace(/\/+$/, '');
+        let path = target.path.replace(/[\\/]+$/, '');
+        if (/^[a-z]:[\\/]/i.test(path)) {
+            path = `/${path[0]?.toLowerCase()}/${path.slice(3).replaceAll('\\', '/')}`;
+        }
         if (!path.startsWith('/') || patternCharacters.test(path)) {
             warnings.push(
                 `No file rule granted for the ${target.label}: its path is not a plain absolute path`

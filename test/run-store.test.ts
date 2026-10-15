@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from '../src/platform/paths.js';
 import type { WorkbenchEvent } from '../src/runs/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
 import { RunReconciliationLease } from '../src/runs/reconciliation.js';
 import { SessionResolver, SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
+import { diskMode } from './platform.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -19,15 +20,60 @@ afterEach(async () => {
 });
 
 describe('durable Workbench runs', () => {
+    test.each(['completed', 'failed'] as const)(
+        'preserves a worker result published just before exit: %s',
+        async (status) => {
+            const home = await temporaryHome();
+            const dispatcher = new RunDispatcher(home);
+            const store = Reflect.get(dispatcher, 'store') as RunStore;
+            const run = await fixtureRun(home);
+            await store.update(run.id, { status });
+            await store.appendEvent(run.id, {
+                protocol: 0,
+                run_id: run.id,
+                sequence: 1,
+                timestamp: new Date().toISOString(),
+                type: 'run.failed',
+                runner: run.runner,
+                data: { message: 'Required CLI tool is unavailable: test-tool' },
+            });
+            const read = spyOn(store, 'read');
+            read.mockResolvedValueOnce({ ...run, status: 'dispatched' });
+            const alive = spyOn(store, 'assertWorkerAlive').mockImplementation(() => {
+                throw new Error('Worker exited');
+            });
+            try {
+                const wait = Reflect.get(dispatcher, 'waitUntilStarted') as (
+                    id: string,
+                    waitForInitialTurn: boolean
+                ) => Promise<void>;
+                const result = wait.call(dispatcher, run.id, false);
+                if (status === 'completed')
+                    await expect(result).resolves.toBeUndefined();
+                else
+                    await expect(result).rejects.toThrow(
+                        'Required CLI tool is unavailable: test-tool'
+                    );
+            } finally {
+                read.mockRestore();
+                alive.mockRestore();
+            }
+        }
+    );
+
     test('stores private metadata and consumes the task request once', async () => {
         const home = await temporaryHome();
         const store = new RunStore(home);
         const run = await fixtureRun(home, 'secret task');
         const directory = join(home, 'runs', run.id);
 
-        expect((await stat(directory)).mode & 0o777).toBe(0o700);
-        expect((await stat(join(directory, 'run.json'))).mode & 0o777).toBe(0o600);
-        expect((await stat(join(directory, 'request.json'))).mode & 0o777).toBe(0o600);
+        expect((await stat(directory)).mode & 0o777).toBe(diskMode(0o700));
+        expect((await stat(join(directory, 'run.json'))).mode & 0o777).toBe(
+            diskMode(0o600)
+        );
+        expect((await stat(join(directory, 'request.json'))).mode & 0o777).toBe(
+            diskMode(0o600)
+        );
         expect(await store.takeRequest(run.id)).toMatchObject({
             task: 'secret task',
         });

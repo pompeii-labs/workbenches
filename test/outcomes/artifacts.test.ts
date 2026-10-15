@@ -1,17 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import {
-    mkdir,
-    mkdtemp,
-    readFile,
-    rm,
-    stat,
-    symlink,
-    writeFile,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-
 import {
     OutcomeExporter,
     OutcomeLifecycle,
@@ -20,7 +10,9 @@ import {
     parseRunOutcome,
     type RunOutcome,
 } from '../../src/outcomes/index.js';
+import { dirname, join } from '../../src/platform/paths.js';
 import { RunStore } from '../../src/runs/store.js';
+import { diskMode, symlink } from '../platform.js';
 
 const homes: string[] = [];
 const sessionId = 'wb_artifactsession1234567890';
@@ -119,7 +111,7 @@ describe('artifact trees and resume working copies', () => {
         if (!artifact) throw new Error('Missing report');
         expect(artifact.path).toBe('reports/report.html');
         const path = await store.artifactPath(outcome.id, artifact.id);
-        expect(path).toEndWith('/files/reports/report.html');
+        expect(path.replaceAll('\\', '/')).toEndWith('/files/reports/report.html');
         expect(
             await readFile(new URL('../assets/logo.svg', pathToFileURL(path)), 'utf8')
         ).toBe(svg);
@@ -130,7 +122,7 @@ describe('artifact trees and resume working copies', () => {
             await readFile(new URL('../other/report.html', pathToFileURL(path)), 'utf8')
         ).toBe('<h1>Other</h1>');
         expect(await readFile(path, 'utf8')).toBe(html);
-        expect((await stat(path)).mode & 0o777).toBe(0o600);
+        expect((await stat(path)).mode & 0o777).toBe(diskMode(0o600));
         const exported = join(directory, 'export');
         await new OutcomeExporter(store).export(outcome, exported);
         expect(

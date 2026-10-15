@@ -39,7 +39,15 @@ export class WorkbenchPreflight {
     }
 
     private findExecutable(name: string): string | null {
-        return (this.locate ?? Bun.which)(name);
+        return this.locate
+            ? this.locate(name)
+            : Bun.which(name, {
+                  PATH:
+                      this.environment.PATH ??
+                      this.environment.Path ??
+                      process.env.PATH ??
+                      '',
+              });
     }
 
     /** Checks the host. `executable` is the runner CLI, by default named like the runner. */

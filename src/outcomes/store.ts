@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
-    chmod,
     copyFile,
     lstat,
     mkdir,
@@ -9,9 +8,9 @@ import {
     rename,
     rm,
     stat,
-    writeFile,
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { chmod, writeFile } from '../platform/permissions.js';
 
 import {
     digestFile,

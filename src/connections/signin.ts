@@ -1,6 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { launchEnvironment } from '../platform/environment.js';
+import { hostCommand } from '../platform/process.js';
 
 import { RunnerRegistry } from '../runners/registry.js';
 import type { RunnerCredentials, RunnerHostSignIn } from '../runners/runner.js';
@@ -40,7 +42,10 @@ export class HostSignIn {
         this.#version =
             dependencies.version ??
             (async (command) => {
-                const child = Bun.spawn(command, { stdout: 'pipe', stderr: 'ignore' });
+                const child = Bun.spawn(hostCommand(command, process.env), {
+                    stdout: 'pipe',
+                    stderr: 'ignore',
+                });
                 const output = await new Response(child.stdout).text();
                 if ((await child.exited) !== 0)
                     throw new Error('Could not determine runner version');
@@ -49,8 +54,8 @@ export class HostSignIn {
         this.#interact =
             dependencies.interact ??
             ((command, env) =>
-                Bun.spawn(command, {
-                    env,
+                Bun.spawn(hostCommand(command, env), {
+                    env: launchEnvironment(env),
                     stdin: 'inherit',
                     stdout: 'inherit',
                     stderr: 'inherit',

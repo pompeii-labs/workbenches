@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from '../src/platform/paths.js';
 
 import { RunnerRegistry } from '../src/runners/index.js';
 import { Workbench } from '../src/workbench/index.js';

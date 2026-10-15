@@ -1,8 +1,9 @@
-import { relative } from 'node:path';
-
 import { modelLabel } from '../../models/label.js';
+import { relative } from '../../platform/paths.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
+import { isWindowsPath, windowsInvocation } from '../windows.js';
+import { isOutboxPermission } from './outbox.js';
 
 export function buildOpenCodeInvocation(
     workbench: ResolvedWorkbench,
@@ -101,7 +102,7 @@ export function buildOpenCodeServerInvocation(
     if (!password) throw new Error('OpenCode server password must not be empty');
     const invocation: RunnerInvocation = {
         command: [
-            ...(nativeDatabase
+            ...(nativeDatabase && !isWindowsPath(workspaceDirectory)
                 ? [
                       'sh',
                       '-c',
@@ -135,7 +136,22 @@ export function buildOpenCodeServerInvocation(
                 : undefined,
         },
     };
-    return context ? context.apply(invocation, workbench) : invocation;
+    const launch =
+        nativeDatabase && isWindowsPath(workspaceDirectory)
+            ? windowsInvocation(
+                  invocation,
+                  [
+                      '$executable = (Get-Command opencode -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source',
+                      '$version = & $executable --version',
+                      'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
+                      'if ($version -match "^(?:v?2\\.|opencode v2\\.)") {',
+                      '  if ($env:WORKBENCH_OPENCODE_NATIVE_DB) { $env:OPENCODE_DB = $env:WORKBENCH_OPENCODE_NATIVE_DB }',
+                      '  else { Remove-Item Env:OPENCODE_DB -ErrorAction SilentlyContinue }',
+                      '}',
+                  ].join('\n')
+              )
+            : invocation;
+    return context ? context.apply(launch, workbench) : launch;
 }
 
 function buildOpenCodeEnvironment(
@@ -192,15 +208,22 @@ function buildOpenCodeEnvironment(
             ];
         })
     );
-    const instructionRelativePath = relative(workspaceDirectory, instructionsPath);
+    const instructionRelativePath = relative(
+        workspaceDirectory,
+        instructionsPath
+    ).replaceAll('\\', '/');
     const instructionPath = instructionRelativePath.startsWith('..')
-        ? instructionsPath
+        ? instructionsPath.replaceAll('\\', '/')
         : instructionRelativePath;
-    const outbox = baseEnv.WORKBENCH_OUTPUT_DIR;
+    const requestedOutbox = baseEnv.WORKBENCH_OUTPUT_DIR;
+    const outbox =
+        requestedOutbox && isWindowsPath(requestedOutbox)
+            ? requestedOutbox.replaceAll('\\', '/')
+            : requestedOutbox;
     // Approve only the engine-owned result directory. Keep all other native
     // permission defaults and package settings intact, including tool approval.
     const outboxPermission =
-        outbox && !/[?*\\]/.test(outbox)
+        outbox && isOutboxPermission('external_directory', [`${outbox}/*`], outbox)
             ? { permission: { external_directory: { [`${outbox}/*`]: 'allow' } } }
             : {};
     const config = {

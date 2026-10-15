@@ -1,13 +1,6 @@
-import {
-    lstat,
-    mkdir,
-    readdir,
-    readFile,
-    rename,
-    rm,
-    writeFile,
-} from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rename, rm, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 
 interface LeaseTicket {
     pid: number;
@@ -58,7 +51,7 @@ export class OutcomeStorageLease {
             }
             throw new Error('Timed out acquiring outcome storage lease');
         } finally {
-            await rm(path, { force: true });
+            await removeTicket(path);
         }
     }
 
@@ -75,7 +68,7 @@ export class OutcomeStorageLease {
                     details.size > 1_024
                 )
                     throw new Error('Invalid outcome storage lease ticket');
-                const ticket: LeaseTicket = JSON.parse(await readFile(path, 'utf8'));
+                const ticket: LeaseTicket = JSON.parse(await readTicket(path));
                 if (
                     !Number.isSafeInteger(ticket.pid) ||
                     ticket.pid <= 0 ||
@@ -87,7 +80,7 @@ export class OutcomeStorageLease {
                 )
                     throw new Error('Invalid outcome storage lease ticket');
                 if (processIsAlive(ticket.pid)) tickets.push([name, ticket]);
-                else await rm(path, { force: true });
+                else await removeDeadTicket(path);
             } catch (error) {
                 if (!hasCode(error, 'ENOENT')) throw error;
             }
@@ -102,7 +95,7 @@ export class OutcomeStorageLease {
                 mode: 0o600,
                 flag: 'wx',
             });
-            await rename(temporary, path);
+            await retryTransientWindowsTicketAccess(() => rename(temporary, path));
         } finally {
             await rm(temporary, { force: true });
         }
@@ -121,4 +114,40 @@ export function processIsAlive(pid: number): boolean {
 
 function hasCode(error: unknown, code: string): boolean {
     return error instanceof Error && 'code' in error && error.code === code;
+}
+
+async function readTicket(path: string): Promise<string> {
+    return await retryTransientWindowsTicketAccess(() => readFile(path, 'utf8'));
+}
+
+async function removeTicket(path: string): Promise<void> {
+    await retryTransientWindowsTicketAccess(async () => {
+        await unlink(path);
+    }).catch((error) => {
+        if (!hasCode(error, 'ENOENT')) throw error;
+    });
+}
+
+/** Windows can briefly deny access while another contender reads or replaces a ticket. */
+async function removeDeadTicket(path: string): Promise<void> {
+    await removeTicket(path);
+}
+
+async function retryTransientWindowsTicketAccess<T>(
+    operation: () => Promise<T>
+): Promise<T> {
+    for (let attempt = 0; ; attempt += 1) {
+        try {
+            return await operation();
+        } catch (error) {
+            if (hasCode(error, 'ENOENT')) throw error;
+            if (
+                process.platform !== 'win32' ||
+                attempt >= 10 ||
+                (!hasCode(error, 'EPERM') && !hasCode(error, 'EBUSY'))
+            )
+                throw error;
+            await Bun.sleep(10);
+        }
+    }
 }

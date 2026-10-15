@@ -1,9 +1,10 @@
-import { lstat, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, readdir, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RunOutcome } from '../../outcomes/contracts.js';
 import { outcomeStorageDirectory } from '../../outcomes/directories.js';
 import { OutcomeStorageLease, processIsAlive } from '../../outcomes/lease.js';
 import { OutcomeStore } from '../../outcomes/store.js';
+import { writeFile } from '../../platform/permissions.js';
 import { RunStore } from '../../runs/store.js';
 import { DiskOutcomeCollector } from '../remote/disk/collector.js';
 import { NativeStateCapture } from '../remote/disk/native.js';

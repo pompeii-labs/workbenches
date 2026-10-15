@@ -1,8 +1,8 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
-
 import packageMetadata from '../../package.json' with { type: 'json' };
 import type { CatalogRegistryReference } from '../catalog/index.js';
+import { writeFile } from '../platform/permissions.js';
 import { workbenchHome } from '../storage.js';
 import { WORKBENCH_USER_AGENT } from '../user-agent.js';
 import { RegistryKeyring } from './keyring.js';

@@ -1,5 +1,6 @@
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 
 export class RunReconciliationLease {
     readonly #directory: string;

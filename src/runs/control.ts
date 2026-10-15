@@ -1,5 +1,7 @@
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { rename } from '../platform/files.js';
+import { writeFile } from '../platform/permissions.js';
 
 import {
     normalizeRunnerInput,

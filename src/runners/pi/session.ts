@@ -1,3 +1,5 @@
+import { launchEnvironment } from '../../platform/environment.js';
+import { hostCommand, stopWindowsTree } from '../../platform/process.js';
 import type { RunnerContext } from '../context/files.js';
 import { runtimeContext } from '../context/runtime.js';
 import { RunnerProcessExit } from '../exit.js';
@@ -464,7 +466,22 @@ function defaultSpawn(
         stderr: 'pipe';
     }
 ): SpawnedPi {
-    return Bun.spawn(command, options) as unknown as SpawnedPi;
+    const child = Bun.spawn(hostCommand(command, options.env), {
+        ...options,
+        env: launchEnvironment(options.env),
+        windowsHide: true,
+    });
+    return {
+        exited: child.exited,
+        stdin: child.stdin,
+        stdout: child.stdout,
+        stderr: child.stderr,
+        kill: () => {
+            if (child.exitCode !== null) return;
+            if (process.platform === 'win32') stopWindowsTree(child.pid);
+            else child.kill();
+        },
+    } as unknown as SpawnedPi;
 }
 
 async function consumeLines(

@@ -1,6 +1,5 @@
-import { join } from 'node:path';
-
 import { modelLabel } from '../../models/index.js';
+import { join } from '../../platform/paths.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
 import type { RunnerSessionContext } from '../session.js';

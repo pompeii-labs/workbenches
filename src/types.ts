@@ -123,6 +123,8 @@ export interface ResolvedWorkbench {
 }
 
 export interface RunnerInvocation {
+    /** Optional UTF-8 input for a one-shot native command. */
+    input?: string;
     command: string[];
     cwd: string;
     env: Record<string, string | undefined>;

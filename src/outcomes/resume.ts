@@ -1,5 +1,6 @@
-import { chmod, copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { chmod } from '../platform/permissions.js';
 
 import { RunStore } from '../runs/store.js';
 import { verifyBlob } from './content.js';

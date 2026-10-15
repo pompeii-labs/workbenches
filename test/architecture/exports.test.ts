@@ -1,7 +1,5 @@
 import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-
 import type { WorkbenchEvent } from '@pompeii-labs/workbench/events';
 import { WORKBENCH_EVENT_TYPES } from '@pompeii-labs/workbench/events';
 import { WorkbenchManifestParser } from '@pompeii-labs/workbench/manifest';
@@ -50,6 +48,7 @@ import {
     TransferRules,
 } from '@pompeii-labs/workbench/runtimes/staging';
 import type { ResolvedWorkbench } from '@pompeii-labs/workbench/types';
+import { join } from '../../src/platform/paths.js';
 
 const root = join(import.meta.dir, '..', '..');
 

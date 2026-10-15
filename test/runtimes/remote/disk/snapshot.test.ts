@@ -1,22 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import {
-    mkdir,
-    mkdtemp,
-    readFile,
-    rm,
-    symlink,
-    truncate,
-    writeFile,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { OutcomeApplier, OutcomeStore } from '../../../../src/outcomes/index.js';
+import { join } from '../../../../src/platform/paths.js';
 import { SandboxArchive } from '../../../../src/runtimes/remote/disk/archive.js';
 import { DiskAssetSnapshot } from '../../../../src/runtimes/remote/disk/snapshot.js';
 import { DiskAssetSource } from '../../../../src/runtimes/staging/disk.js';
 import { TransferRules } from '../../../../src/runtimes/staging/rules.js';
 import type { AssetBinding } from '../../../../src/runtimes/staging/transfer.js';
+import { symlink } from '../../../platform.js';
 
 const diskAssetSource = new DiskAssetSource();
 const rules = new TransferRules('E2B');
@@ -140,6 +132,7 @@ describe('E2B workspace snapshots', () => {
                 '-c',
                 'user.email=test@example.com',
                 'commit',
+                '--no-gpg-sign',
                 '-qm',
                 'baseline',
             ],
@@ -274,6 +267,7 @@ describe('E2B workspace snapshots', () => {
                 '-c',
                 'user.email=workbench@localhost',
                 'commit',
+                '--no-gpg-sign',
                 '-q',
                 '-m',
                 'nested fixture',

@@ -9,8 +9,8 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { OutcomeStore } from '../../src/outcomes/store.js';
+import { join } from '../../src/platform/paths.js';
 import { type WorkbenchEvent, WorkbenchRun } from '../../src/runs/index.js';
 import { RunStore } from '../../src/runs/store.js';
 import { DockerManagedContainers } from '../../src/runtimes/docker/containers.js';

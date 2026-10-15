@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-
 import packageMetadata from '../package.json' with { type: 'json' };
 import { resolveReleaseTarget, verifyReleaseTag } from '../scripts/release-support.js';
+import { join, resolve } from '../src/platform/paths.js';
 
 const binary = process.env.WORKBENCH_TEST_BINARY;
 const directories: string[] = [];
@@ -25,10 +24,11 @@ describe('release contract', () => {
             'workbench-linux-arm64'
         );
         expect(resolveReleaseTarget('linux', 'x64').name).toBe('workbench-linux-x64');
+        expect(resolveReleaseTarget('win32', 'x64').name).toBe('workbench-windows-x64');
     });
 
     test('rejects unsupported operating systems and architectures', () => {
-        expect(() => resolveReleaseTarget('win32', 'x64')).toThrow(
+        expect(() => resolveReleaseTarget('freebsd', 'x64')).toThrow(
             'Unsupported release operating system'
         );
         expect(() => resolveReleaseTarget('linux', 'ia32')).toThrow(

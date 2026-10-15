@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { AuthoringJob, type AuthoringJobRecord } from '../../src/authoring/job.js';
 import { AuthoringOperation } from '../../src/authoring/operation.js';
+import { join } from '../../src/platform/paths.js';
 import { RunEvents } from '../../src/runs/events.js';
 import { RunStore } from '../../src/runs/store.js';
 import { SessionStore } from '../../src/sessions/store.js';
 import { SessionSupervision } from '../../src/sessions/supervision.js';
+import { diskMode } from '../platform.js';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -118,7 +119,7 @@ describe('authoring verification supervision', () => {
             }),
             { mode: 0o600 }
         );
-        expect((await stat(request)).mode & 0o777).toBe(0o600);
+        expect((await stat(request)).mode & 0o777).toBe(diskMode(0o600));
         expect(await f.jobs.execute(f.record.operation_id)).toBe(1);
         await expect(stat(request)).rejects.toMatchObject({ code: 'ENOENT' });
         const record = await f.jobs.forRun(f.run.id);

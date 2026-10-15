@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { posix, win32 } from 'node:path';
 
 import { PathPlan } from '../../../../src/runtimes/remote/paths.js';
 import { MemoryAssetSource } from '../../../../src/runtimes/staging/memory/source.js';
@@ -57,6 +58,35 @@ describe('memory source unpack', () => {
     async function gzip(entries: TarEntry[]): Promise<Uint8Array> {
         return new TarArchive(TarArchive.pack(entries).bytes).gzip();
     }
+
+    test.each(['/host/state', 'C:\\host\\state', '\\\\server\\share\\state'])(
+        'restores nested files using the destination path style: %s',
+        async (directory) => {
+            const source = await new MemoryAssetSource().unpack(
+                directory,
+                await gzip([
+                    {
+                        name: 'opencode/session.json',
+                        type: 'file',
+                        mode: 0o600,
+                        content: new TextEncoder().encode('saved session'),
+                    },
+                ]),
+                rules
+            );
+            expect(
+                new TextDecoder().decode(
+                    await source.read(
+                        (directory.startsWith('/') ? posix : win32).join(
+                            directory,
+                            'opencode',
+                            'session.json'
+                        )
+                    )
+                )
+            ).toBe('saved session');
+        }
+    );
 
     test('restores only regular files beneath the directory', async () => {
         await expect(

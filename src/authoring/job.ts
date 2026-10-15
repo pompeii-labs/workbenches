@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 import { RunDispatcher } from '../runs/dispatcher.js';
 import { StoredRunHandle } from '../runs/handle.js';
 import { RunStore } from '../runs/store.js';

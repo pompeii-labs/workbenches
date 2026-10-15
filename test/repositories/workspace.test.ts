@@ -6,11 +6,11 @@ import {
     readdir,
     readFile,
     rm,
-    symlink,
     writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join } from '../../src/platform/paths.js';
 import { RepositoryWorkspace } from '../../src/repositories/workspace.js';
+import { diskMode, symlink } from '../platform.js';
 import { checkoutFixture, fixtureIdentity, git } from './fixture.js';
 
 describe('engine-owned repository checkout', () => {
@@ -54,7 +54,7 @@ describe('engine-owned repository checkout', () => {
                     'remote add origin https://github.com/example/project.git'
             )
         ).toBeTrue();
-        expect((await lstat(workspace.directory)).mode & 0o777).toBe(0o700);
+        expect((await lstat(workspace.directory)).mode & 0o777).toBe(diskMode(0o700));
     });
 
     test('keeps agent Git state across remote resumptions without trusting it on the host', async () => {

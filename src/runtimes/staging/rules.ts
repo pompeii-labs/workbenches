@@ -1,4 +1,5 @@
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { sep } from 'node:path';
+import { isAbsolute, relative, resolve } from '../../platform/paths.js';
 
 export interface SymlinkCheck {
     /** The directory the link sits in. */
@@ -32,7 +33,7 @@ export class TransferRules {
         const suffix = relative(resolve(parent), resolve(child));
         return (
             suffix === '' ||
-            (!suffix.startsWith(`..${sep}`) && suffix !== '..' && !isAbsolute(suffix))
+            (!/^\.\.[\\/]/.test(suffix) && suffix !== '..' && !isAbsolute(suffix))
         );
     }
 

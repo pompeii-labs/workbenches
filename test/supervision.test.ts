@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { CliInput } from '../src/commands/input.js';
+import { join } from '../src/platform/paths.js';
 import { RunControl } from '../src/runs/control.js';
 import { RunEvents, type WorkbenchEventType } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/store.js';

@@ -104,7 +104,7 @@ Install on macOS or Linux:
 curl -fsSL https://workbenches.dev/install.sh | sh
 ```
 
-Release binaries are available for arm64 and x64. To inspect the installer before running it:
+Windows x64 uses the PowerShell installer documented in [the README](../README.md#windows). macOS and Linux release binaries are available for arm64 and x64. To inspect their installer before running it:
 
 ```sh
 curl -fsSLO https://workbenches.dev/install.sh
@@ -443,7 +443,7 @@ Publishing requires a Workbench registry account with access to the selected pub
 
 Published tags are pulled and execution uses the resolved repository digest. Local builds use a content-addressed cache and a staged build context that excludes common credential stores and secret-bearing files. The target workspace is mounted read-write and the Workbench package is read-only. Named workspaces are mounted beneath `/workspaces/<name>` with their declared read-only or read-write access. Generated runner state is isolated in a writable, ephemeral mount because some runners update their own configuration at launch. The container root filesystem is read-only and `/tmp` is a writable temporary filesystem. The engine does not impose a CPU, memory, or temporary-filesystem size limit in execution protocol 0 beyond the declared `requirements`.
 
-The reference binaries currently support macOS and Linux. On platforms that expose a numeric host user and group, containers run under that identity so workspace writes retain host ownership. Docker Desktop still mediates bind mounts through its virtual machine, so filesystem performance and permission details can differ from native Linux. Images must tolerate a read-only root and write caches beneath the provided temporary `HOME`.
+The reference binaries support macOS, Linux, and Windows x64. Windows Docker execution requires Docker Desktop with Linux containers. On platforms that expose a numeric host user and group, containers run under that identity so workspace writes retain host ownership. Docker Desktop still mediates bind mounts through its virtual machine, so filesystem performance and permission details can differ from native Linux. Images must tolerate a read-only root and write caches beneath the provided temporary `HOME`.
 
 Multi-turn Docker sessions keep the runner inside the container. A runner that reads standard input gets piped input, and a runner's native HTTP service listens inside the container and is published only to a dynamically assigned host loopback port. Native session files live in the Workbench session's private host directory and are mounted read-write so a later container can resume the same native context.
 

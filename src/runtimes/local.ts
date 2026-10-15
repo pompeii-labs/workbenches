@@ -1,5 +1,7 @@
 import type { OutcomeSink, RuntimeOutcomeCollection } from '../outcomes/collection.js';
 import { HostOutcomeCapture } from '../outcomes/runtime.js';
+import { launchEnvironment } from '../platform/environment.js';
+import { hostCommand, stopWindowsTree } from '../platform/process.js';
 import type { RunnerInvocation, SpawnedRunner } from '../types.js';
 import { workspaceEnvironment } from '../workbench/bindings.js';
 import type { HostDescriber } from '../workbench/host.js';
@@ -70,6 +72,12 @@ export class LocalRuntimeProvider implements RuntimeProvider {
             );
         }
         this.checkRequirements(request);
+        // Fail missing tools before capturing the workspace baseline.
+        await new LocalRuntime(
+            request,
+            this.dependencies,
+            this.requirements
+        ).preflight();
         const outcome = request.outcome
             ? await HostOutcomeCapture.create(request, {
                   bestEffortWorkspaceChanges: !request.repository,
@@ -176,11 +184,15 @@ export class LocalRuntime implements PreparedRuntime {
         this.assertAvailable('launch');
         const child = this.dependencies.spawn(invocation.command, {
             cwd: invocation.cwd,
-            env: invocation.env,
-            stdin: 'ignore',
+            env: launchEnvironment(invocation.env),
+            stdin: invocation.input === undefined ? 'ignore' : 'pipe',
             stdout: 'pipe',
             stderr: 'pipe',
         });
+        if (invocation.input !== undefined) {
+            await child.stdin?.write(invocation.input);
+            await child.stdin?.end?.();
+        }
         const [code, stdout, stderr] = await Promise.all([
             child.exited,
             LocalRuntime.read(child.stdout),
@@ -283,7 +295,7 @@ export class LocalRuntime implements PreparedRuntime {
         command: string[],
         options: Parameters<NonNullable<LocalRuntimeDependencies['spawn']>>[1]
     ): SpawnedRunner {
-        const child = Bun.spawn(command, options);
+        const child = Bun.spawn(hostCommand(command, options.env), options);
         let forceTermination: ReturnType<typeof setTimeout> | undefined;
         const exited = child.exited.finally(() => clearTimeout(forceTermination));
         return {
@@ -293,6 +305,12 @@ export class LocalRuntime implements PreparedRuntime {
             ...(child.stderr ? { stderr: child.stderr } : {}),
             kill: () => {
                 if (child.exitCode !== null) return;
+                if (process.platform === 'win32') {
+                    // A native command shim or PowerShell setup wrapper may own
+                    // the actual runner. Stop its tree so inherited pipes close.
+                    stopWindowsTree(child.pid);
+                    return;
+                }
                 child.kill('SIGTERM');
                 if (forceTermination) return;
                 // Native harnesses can handle SIGTERM without exiting. Do not
@@ -309,7 +327,11 @@ export class LocalRuntime implements PreparedRuntime {
         command: string[],
         options: Parameters<NonNullable<LocalRuntimeDependencies['interact']>>[1]
     ): Promise<number> {
-        return Bun.spawn(command, options).exited;
+        return Bun.spawn(hostCommand(command, options.env), {
+            ...options,
+            env: launchEnvironment(options.env),
+            windowsHide: true,
+        }).exited;
     }
 
     private static async read(

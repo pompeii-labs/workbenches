@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from '../src/platform/paths.js';
 
 import { RunnerRegistry } from '../src/runners/registry.js';
 import type { PreparedRuntime } from '../src/runtimes/contracts.js';
@@ -254,7 +254,7 @@ function preparedRuntime(
             WORKBENCH_CREDENTIALS_DIR: '/workbench-credentials',
         },
         workspaces: [],
-        pathFor: (path) => `/runtime/${path.split('/').at(-1)}`,
+        pathFor: (path) => `/runtime/${path.split(/[\\/]/).at(-1)}`,
         preflight: () => Promise.reject(new Error('unused')),
         execute: () => Promise.reject(new Error('unused')),
         interact: () => Promise.reject(new Error('unused')),

@@ -1,5 +1,6 @@
-import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative } from 'node:path';
+import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 import { SessionStore } from '../sessions/store.js';
 import { WorkbenchPackage } from './package.js';
 import type { SnapshotFile } from './types.js';
@@ -39,7 +40,7 @@ export class CatalogSnapshots {
         const root = join(this.home, 'packages', digest.slice('sha256:'.length));
         if (
             (await new SessionStore(this.home).list()).some((session) =>
-                session.workbench_path.startsWith(`${root}/`)
+                session.workbench_path.startsWith(`${root}${sep}`)
             )
         )
             return;

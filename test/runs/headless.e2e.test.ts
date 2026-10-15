@@ -9,8 +9,9 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter } from 'node:path';
 import { OutcomeStore } from '../../src/outcomes/store.js';
+import { join } from '../../src/platform/paths.js';
 import type { RunControlReceipt } from '../../src/runs/control.js';
 import { StoredRunHandle } from '../../src/runs/handle.js';
 import { RunStore } from '../../src/runs/store.js';
@@ -131,7 +132,7 @@ describe.skipIf(!enabled)('Real headless CLI supervision', () => {
                         )
                     );
                     Object.assign(environment, {
-                        PATH: `${bin}:${environment.PATH}`,
+                        PATH: `${bin}${delimiter}${environment.PATH}`,
                         WORKBENCH_HOME: home,
                     });
                     const invoke = async <T = RunSnapshot>(args: string[]) => {

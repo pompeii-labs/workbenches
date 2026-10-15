@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { ModelRouter } from '../../src/models/index.js';
 import { MemoryOutcomeSink } from '../../src/outcomes/memory.js';
+import { join } from '../../src/platform/paths.js';
 import { RunnerContextStaging } from '../../src/runners/context/stage.js';
 import { MemoryRunnerFiles } from '../../src/runners/files/memory.js';
 import { OpenCodeRunner } from '../../src/runners/opencode/runner.js';
@@ -242,7 +241,7 @@ describe('a host with only fetch', () => {
         expect(files.text('/pkg/instructions.md')).toBe('Be precise.');
         expect(sink.digests().length).toBeGreaterThan(0);
         // Nothing reached the local disk, by a relative path or the temporary directory.
-        expect(process.cwd()).toBe(await realpath(scratch));
+        expect(await realpath(process.cwd())).toBe(await realpath(scratch));
         expect(await readdir(scratch)).toEqual([]);
     });
 });

@@ -1,5 +1,6 @@
-import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { chmod, writeFile } from '../platform/permissions.js';
 
 import { RunnerRegistry } from '../runners/registry.js';
 import type {

@@ -8,13 +8,10 @@ import {
     readlink,
     rm,
     stat,
-    symlink,
     unlink,
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import {
     OutcomeApplier,
     OutcomeExporter,
@@ -23,6 +20,8 @@ import {
     WorkspaceSnapshot,
 } from '../../src/outcomes/index.js';
 import { OutcomeTransition } from '../../src/outcomes/transitions.js';
+import { join } from '../../src/platform/paths.js';
+import { diskMode, symlink } from '../platform.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -51,7 +50,7 @@ async function pendingOutcome(): Promise<{
     await writeFile(join(root, 'modify.txt'), 'before\n');
     await writeFile(join(root, 'delete.txt'), 'delete\n');
     await writeFile(join(root, 'mode.sh'), '#!/bin/sh\n');
-    await chmod(join(root, 'mode.sh'), 0o644);
+    await chmod(join(root, 'mode.sh'), process.platform === 'win32' ? 0o444 : 0o644);
     const snapshot = await WorkspaceSnapshot.create(root, {
         workspace: { kind: 'primary' },
     });
@@ -79,7 +78,10 @@ async function pendingOutcome(): Promise<{
         await writeFile(join(root, 'modify.txt'), 'before\n');
         await rm(join(root, 'added.txt'), { force: true });
         await writeFile(join(root, 'delete.txt'), 'delete\n');
-        await chmod(join(root, 'mode.sh'), 0o644);
+        await chmod(
+            join(root, 'mode.sh'),
+            process.platform === 'win32' ? 0o444 : 0o644
+        );
         await rm(join(root, 'link'), { force: true });
         return { root, home, store, outcome };
     } finally {
@@ -167,7 +169,7 @@ describe('OutcomeApplier', () => {
                     direction === 'fileToDirectory' ? path : join(path, 'index.ts');
                 expect(await readFile(before, 'utf8')).toBe('before\n');
                 if (direction === 'directoryToFile')
-                    expect((await stat(path)).mode & 0o777).toBe(0o750);
+                    expect((await stat(path)).mode & 0o777).toBe(diskMode(0o750));
                 expect((await store.receipt(outcome.id)).state).toBe('pending');
                 store.markApplied = mark;
                 expect(
@@ -346,7 +348,7 @@ describe('OutcomeApplier', () => {
         expect(
             await lstat(join(root, 'delete.txt')).catch(() => undefined)
         ).toBeUndefined();
-        expect((await stat(join(root, 'mode.sh'))).mode & 0o777).toBe(0o755);
+        expect((await stat(join(root, 'mode.sh'))).mode & 0o777).toBe(diskMode(0o755));
         expect(await readlink(join(root, 'link'))).toBe('added.txt');
         expect((await store.receipt(outcome.id)).state).toBe('applied');
 
@@ -381,7 +383,9 @@ describe('OutcomeApplier', () => {
         ).rejects.toThrow('quota exceeded');
         expect(await readFile(join(root, 'modify.txt'), 'utf8')).toBe('before\n');
         expect(await readFile(join(root, 'delete.txt'), 'utf8')).toBe('delete\n');
-        expect((await stat(join(root, 'mode.sh'))).mode & 0o777).toBe(0o644);
+        expect((await stat(join(root, 'mode.sh'))).mode & 0o777).toBe(
+            diskMode(process.platform === 'win32' ? 0o444 : 0o644)
+        );
         for (const path of ['added.txt', 'link']) {
             expect(
                 await lstat(join(root, path)).catch(() => undefined)

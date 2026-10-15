@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
+import { join } from '../src/platform/paths.js';
 import { RunControl } from '../src/runs/control.js';
 import { StoredRunHandle } from '../src/runs/handle.js';
 import { RunStore, type StoredRun } from '../src/runs/store.js';
+import { diskMode } from './platform.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -36,7 +36,7 @@ describe('durable run control', () => {
             input: { text: 'private prompt value', images: [] },
         });
         expect((await stat(join(home, 'runs', run.id, 'control'))).mode & 0o777).toBe(
-            0o700
+            diskMode(0o700)
         );
         await control.resolve(required(request), {
             outcome: 'accepted',

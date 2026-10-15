@@ -1,35 +1,30 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
-import {
-    mkdir,
-    mkdtemp,
-    readFile,
-    rm,
-    stat,
-    symlink,
-    writeFile,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
 import { ConnectionCheck } from '../src/connections/check.js';
 import { NativeCredentialFile } from '../src/connections/nativecredentials.js';
 import { ConnectionSetup } from '../src/connections/setup.js';
 import { OutcomeOutput } from '../src/outcomes/output.js';
+import { dirname, join } from '../src/platform/paths.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import type { PreparedRunner } from '../src/runners/runner.js';
 import { RunEvents } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/index.js';
 import { ExecutionPreparation } from '../src/runs/preparation.js';
 import { DockerBuildContext } from '../src/runtimes/docker/build-context.js';
+import { DockerClient } from '../src/runtimes/docker/client.js';
 import { DockerCredentialVolume } from '../src/runtimes/docker/credentials.js';
 import {
     type DockerCommandResult,
     DockerManagedContainers,
     DockerRuntimeProvider,
 } from '../src/runtimes/docker/index.js';
+import { DockerMountPlan } from '../src/runtimes/docker/mounts.js';
 import { RuntimeRegistry } from '../src/runtimes/index.js';
 import type { ResolvedWorkbench, SpawnedRunner } from '../src/types.js';
 import { NodeHost } from '../src/workbench/host.js';
+import { diskMode, symlink } from './platform.js';
 import { runtimeProviderContract } from './runtime-provider-contract.js';
 
 const temporaryDirectories: string[] = [];
@@ -254,6 +249,73 @@ describe('Docker runtime provider', () => {
             await runtime.cleanup();
         }
     });
+
+    test.skipIf(process.platform !== 'win32')(
+        'maps Docker Desktop drive paths and its daemon socket',
+        async () => {
+            const client = new DockerClient(
+                'docker',
+                {
+                    command: async (args) =>
+                        result(
+                            0,
+                            args[1] === 'context'
+                                ? 'npipe:////./pipe/dockerDesktopLinuxEngine'
+                                : JSON.stringify({
+                                      OSType: 'linux',
+                                      OperatingSystem: 'Docker Desktop',
+                                  })
+                        ),
+                },
+                []
+            );
+            const socket = await client.resolveHostSocket();
+            expect(socket).toEqual({
+                path: '/var/run/docker.sock',
+                gid: 0,
+                desktop: true,
+            });
+            const fixture = await createFixture({
+                image: 'ghcr.io/example/lux:0.1.0',
+                dockerEngine: true,
+            });
+            const mounts = new DockerMountPlan(request(fixture), socket);
+            await mounts.verify();
+            expect(mounts.pathFor(fixture.root)).toBe(
+                '/run/desktop/mnt/host/' +
+                    fixture.root[0]?.toLowerCase() +
+                    fixture.root.slice(2).replaceAll('\\', '/')
+            );
+            expect(mounts.arguments()).toContain(
+                '/var/run/docker.sock:/var/run/docker.sock'
+            );
+        }
+    );
+
+    test.skipIf(process.platform !== 'win32')(
+        'rejects a Windows-container Desktop engine',
+        async () => {
+            const client = new DockerClient(
+                'docker',
+                {
+                    command: async (args) =>
+                        result(
+                            0,
+                            args[1] === 'context'
+                                ? 'npipe:////./pipe/docker_engine'
+                                : JSON.stringify({
+                                      OSType: 'windows',
+                                      OperatingSystem: 'Docker Desktop',
+                                  })
+                        ),
+                },
+                []
+            );
+            await expect(client.resolveHostSocket()).rejects.toThrow(
+                'requires Docker Desktop Linux containers'
+            );
+        }
+    );
 
     test('rejects a non-Unix Docker context without falling back', async () => {
         const fixture = await createFixture({
@@ -1008,7 +1070,7 @@ describe('Docker runtime provider', () => {
             expect(spawnedCommand).toContain(
                 `${DockerCredentialVolume.nameFor('opencode')}:/workbench-credentials`
             );
-            expect(environmentFileMode).toBe(0o600);
+            expect(environmentFileMode).toBe(diskMode(0o600));
             expect(spawnedCommand.join(' ')).not.toContain('super-secret-value');
             expect(spawnedEnvironment.OPENROUTER_API_KEY).toBeUndefined();
             expect(containerEnvironment).toContain(

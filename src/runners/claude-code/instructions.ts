@@ -1,7 +1,7 @@
-import { dirname, join } from 'node:path';
-
+import { posix, win32 } from 'node:path';
 import type { AssetSource } from '../../runtimes/staging/source.js';
 import { escapeXml } from '../context/runtime.js';
+import { isWindowsPath } from '../windows.js';
 
 /** What reading repository instructions needs from the store that holds the workspace. */
 export type RepositoryInstructionSource = Pick<
@@ -67,11 +67,17 @@ export class RepositoryInstructions {
         root: string,
         location: string
     ): Promise<{ block?: string; warning?: string }> {
-        const path = join(root, location);
+        const paths = isWindowsPath(root) ? win32 : posix;
+        const path = paths.join(root, location);
         if (!(await this.source.lstat(path))) return {};
         const real = await this.resolve(path);
         if (!real) return { warning: 'it does not resolve' };
-        if (real !== root && !real.startsWith(`${root}/`)) {
+        const relative = paths.relative(root, real);
+        if (
+            relative === '..' ||
+            relative.startsWith(`..${paths.sep}`) ||
+            paths.isAbsolute(relative)
+        ) {
             return { warning: 'it resolves outside the workspace' };
         }
         const found = await this.source.lstat(real);
@@ -101,17 +107,19 @@ export class RepositoryInstructions {
 
     /** The absolute path with every symbolic link resolved, or `undefined` when it does not exist. */
     private async resolve(path: string): Promise<string | undefined> {
-        const pending = path.split('/').filter(Boolean);
-        let resolved = '/';
+        const paths = isWindowsPath(path) ? win32 : posix;
+        const root = paths.parse(path).root;
+        const pending = path.slice(root.length).split(/[\\/]/).filter(Boolean);
+        let resolved = root;
         let links = 0;
         while (pending.length > 0) {
             const part = pending.shift() as string;
             if (part === '.') continue;
             if (part === '..') {
-                resolved = dirname(resolved);
+                resolved = paths.dirname(resolved);
                 continue;
             }
-            const next = join(resolved, part);
+            const next = paths.join(resolved, part);
             const found = await this.source.lstat(next);
             if (!found) return undefined;
             if (found.kind !== 'symlink') {
@@ -121,8 +129,11 @@ export class RepositoryInstructions {
             links += 1;
             if (links > linkLimit) return undefined;
             const target = await this.source.readLink(next);
-            pending.unshift(...target.split('/').filter(Boolean));
-            if (target.startsWith('/')) resolved = '/';
+            const targetRoot = paths.parse(target).root;
+            pending.unshift(
+                ...target.slice(targetRoot.length).split(/[\\/]/).filter(Boolean)
+            );
+            if (targetRoot) resolved = targetRoot;
         }
         return resolved;
     }

@@ -1,17 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import {
-    mkdir,
-    mkdtemp,
-    readFile,
-    rm,
-    stat,
-    symlink,
-    writeFile,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { SavedWorkbenchCatalog } from '../src/catalog/index.js';
+import { join } from '../src/platform/paths.js';
 import { RunnerRegistry } from '../src/runners/index.js';
 import { GitHubWorkbenchSource } from '../src/sources/index.js';
 import { workbenchHome } from '../src/storage.js';
@@ -20,6 +11,7 @@ import {
     WorkbenchResolver,
     WorkbenchSource,
 } from '../src/workbench/index.js';
+import { symlink } from './platform.js';
 
 const runners = RunnerRegistry.standard();
 const temporaryDirectories: string[] = [];
@@ -312,7 +304,7 @@ describe('sources and saved catalog', () => {
 
     test('keeps the storage override separate from the process home', () => {
         expect(workbenchHome({ WORKBENCH_HOME: './fixture-home' })).toEndWith(
-            '/fixture-home'
+            process.platform === 'win32' ? '\\fixture-home' : '/fixture-home'
         );
     });
 });

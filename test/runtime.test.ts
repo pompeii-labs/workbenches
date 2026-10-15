@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { OutcomeStore } from '../src/outcomes/store.js';
+import { join } from '../src/platform/paths.js';
 import type {
     RuntimePrepareRequest,
     RuntimeProvider,
@@ -40,9 +40,10 @@ let cancellationCount = 0;
 
 describe('local runtime provider contract', () => {
     test('registry forwards live repository snapshots and guards collection failures', async () => {
-        const native = await new LocalRuntimeProvider({ host: new NodeHost() }).prepare(
-            request
-        );
+        const native = await new LocalRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: (name) => `/bin/${name}`,
+        }).prepare(request);
         let calls = 0;
         let fail = false;
         native.snapshotRepository = async () => {
@@ -98,9 +99,10 @@ describe('local runtime provider contract', () => {
             );
             const started = Date.now();
             child.kill?.();
-            expect(new TextDecoder().decode((await reader.read()).value)).toContain(
-                'ignored'
-            );
+            if (process.platform !== 'win32')
+                expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+                    'ignored'
+                );
             expect(await child.exited).not.toBe(0);
             expect(Date.now() - started).toBeLessThan(4_000);
         } finally {

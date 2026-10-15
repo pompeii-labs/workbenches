@@ -97,6 +97,8 @@ export interface RunnerHostSignIn {
 
 /** How a runner lists the credentials it holds inside a runtime. */
 export interface RunnerCredentialProbe {
+    /** Selects a native probe for the runtime OS when its shell differs. */
+    commandFor?(workspaceDirectory: string): string[];
     /** The native command that lists them. It runs read-only without network. */
     command: string[];
     /** A failed listing fails inspection even when other routes are ready directly. */

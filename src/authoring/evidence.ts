@@ -1,5 +1,6 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { writeFile } from '../platform/permissions.js';
 
 import type { StoredRun, WorkbenchEvent } from '../runs/index.js';
 import { RunStore } from '../runs/index.js';

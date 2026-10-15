@@ -1,5 +1,6 @@
-import { dirname, posix } from 'node:path';
+import { posix } from 'node:path';
 import ts from 'typescript';
+import { dirname } from '../../src/platform/paths.js';
 
 export type ImportGraph = Map<string, string[]>;
 

@@ -61,7 +61,7 @@ export class ReleaseTarget {
     private constructor(readonly name: string) {}
 
     static from(platform: string, architecture: string): ReleaseTarget {
-        if (platform !== 'darwin' && platform !== 'linux') {
+        if (platform !== 'darwin' && platform !== 'linux' && platform !== 'win32') {
             throw new Error(`Unsupported release operating system: ${platform}`);
         }
         const normalizedArchitecture =
@@ -73,6 +73,11 @@ export class ReleaseTarget {
         if (!normalizedArchitecture) {
             throw new Error(`Unsupported release architecture: ${architecture}`);
         }
-        return new ReleaseTarget(`workbench-${platform}-${normalizedArchitecture}`);
+        if (platform === 'win32' && normalizedArchitecture !== 'x64') {
+            throw new Error(`Unsupported release architecture: ${architecture}`);
+        }
+        return new ReleaseTarget(
+            `workbench-${platform === 'win32' ? 'windows' : platform}-${normalizedArchitecture}`
+        );
     }
 }

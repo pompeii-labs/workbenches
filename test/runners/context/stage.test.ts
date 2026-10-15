@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from '../../../src/platform/paths.js';
 import { RunnerContextStaging } from '../../../src/runners/context/stage.js';
 import { DiskRunnerFiles } from '../../../src/runners/files/disk.js';
+import { symlink } from '../../platform.js';
 import { fixture, removeFixtures } from './fixture.js';
 
 afterEach(removeFixtures);

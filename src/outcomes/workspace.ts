@@ -341,6 +341,8 @@ export class WorkspaceSnapshot {
 }
 
 async function selectedPaths(root: string, excludedPaths: string[]): Promise<string[]> {
+    if (!Bun.which('git', { PATH: process.env.PATH ?? '' }))
+        return walk(root, '', excludedPaths);
     const git = Bun.spawn(
         [
             'git',
@@ -545,6 +547,7 @@ async function digestFileWithGit(
 }
 
 async function gitRevision(root: string): Promise<string | undefined> {
+    if (!Bun.which('git', { PATH: process.env.PATH ?? '' })) return undefined;
     const child = Bun.spawn(['git', 'rev-parse', 'HEAD'], {
         cwd: root,
         stdin: 'ignore',

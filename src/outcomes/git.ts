@@ -1,5 +1,6 @@
-import { chmod, mkdir, open, rm } from 'node:fs/promises';
+import { mkdir, open, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { chmod } from '../platform/permissions.js';
 
 import type { OutcomeDigest } from './contracts.js';
 

@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, posix } from 'node:path';
+import { posix } from 'node:path';
+import { join } from '../../../src/platform/paths.js';
 
 import { RunnerRegistry } from '../../../src/runners/registry.js';
 import type {

@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
 import {
-    chmod,
     copyFile,
     mkdir,
     mkdtemp,
@@ -8,10 +7,10 @@ import {
     rm,
     symlink,
     unlink,
-    writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { chmod, writeFile } from '../platform/permissions.js';
 
 import type {
     OutcomeChangeEntry,
@@ -251,7 +250,48 @@ export class OutcomeApplier {
                 await symlink(after.target, temporary);
             }
             await assertUnchanged(operation);
-            await rename(temporary, operation.destination);
+            const original = operation.current;
+            const readOnly =
+                process.platform === 'win32' &&
+                original?.kind === 'file' &&
+                (original.mode & 0o200) === 0;
+            if (readOnly) await chmod(operation.destination, original.mode | 0o200);
+            try {
+                if (readOnly) {
+                    const current = await fingerprint(
+                        operation.destination,
+                        operation.root,
+                        operation.entry.path
+                    );
+                    if (
+                        !sameFingerprint(current, {
+                            ...original,
+                            mode: original.mode | 0o200,
+                        })
+                    )
+                        throw new Error(
+                            'Workspace changed during outcome application: ' +
+                                operation.entry.path
+                        );
+                }
+                await rename(temporary, operation.destination);
+            } catch (error) {
+                if (readOnly) {
+                    const current = await fingerprint(
+                        operation.destination,
+                        operation.root,
+                        operation.entry.path
+                    );
+                    if (
+                        sameFingerprint(current, {
+                            ...original,
+                            mode: original.mode | 0o200,
+                        })
+                    )
+                        await chmod(operation.destination, original.mode);
+                }
+                throw error;
+            }
         } finally {
             await rm(temporary, { force: true });
         }

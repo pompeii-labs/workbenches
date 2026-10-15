@@ -1,9 +1,9 @@
 import { basename, join } from 'node:path';
-
 import { WorkbenchPackage } from '../catalog/index.js';
 import { CatalogSnapshots } from '../catalog/snapshots.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
 import { modelLabel } from '../models/index.js';
+import { hostEnvironment } from '../platform/environment.js';
 import { RepositoryGitHub, RepositoryWorkspace } from '../repositories/index.js';
 import { RunnerRegistry } from '../runners/index.js';
 import {
@@ -227,15 +227,14 @@ export class RunDispatcher {
         try {
             const child = Bun.spawn(this.workerCommand(options.id), {
                 cwd: options.cwd,
-                env: {
-                    ...process.env,
-                    ...options.environment,
+                env: hostEnvironment(process.env, options.environment ?? {}, {
                     WORKBENCH_HOME: this.home,
-                },
+                }),
                 stdin: 'ignore',
                 stdout: 'ignore',
                 stderr: 'ignore',
                 detached: true,
+                windowsHide: true,
             });
             child.unref();
             pid = child.pid;
@@ -311,7 +310,15 @@ export class RunDispatcher {
                     return;
                 }
             }
-            this.store.assertWorkerAlive(run);
+            try {
+                this.store.assertWorkerAlive(run);
+            } catch (error) {
+                // A short-lived worker can publish its terminal result and exit
+                // after the read above. Do not replace that result with a crash.
+                const current = await this.store.read(id);
+                if (RunStore.isTerminal(current.status)) continue;
+                throw error;
+            }
             await Bun.sleep(25);
         }
         throw new Error(`Workbench session did not start in time: ${id}`);

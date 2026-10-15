@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from '../src/platform/paths.js';
 import { type WorkbenchEvent, WorkbenchRun } from '../src/runs/index.js';
 import { type RuntimeAsset, RuntimeRegistry } from '../src/runtimes/index.js';
+import { nativeCommand } from './platform.js';
 
 const temporaryDirectories: string[] = [];
 const TEST_ENVIRONMENT = {
@@ -191,8 +192,8 @@ describe('local run lifecycle', () => {
         );
 
         expect(code).toBe(7);
-        expect(command).toContain('opencode');
-        expect(command.at(-1)).toBe('inspect');
+        expect(nativeCommand(command)).toContain('opencode');
+        expect(nativeCommand(command).at(-1)).toBe('inspect');
         expect(cwd).toBe(fixture.root);
         expect(JSON.parse(config)).toMatchObject({
             instructions: [expect.stringContaining('/.workbench-context/system.md')],
@@ -257,10 +258,13 @@ describe('local run lifecycle', () => {
         );
 
         expect(code).toBe(0);
-        expect(command.slice(command.indexOf('pi'), command.indexOf('pi') + 3)).toEqual(
-            ['pi', '--mode', 'json']
-        );
-        expect(command.at(-1)).toBe('inspect');
+        expect(
+            nativeCommand(command).slice(
+                nativeCommand(command).indexOf('pi'),
+                nativeCommand(command).indexOf('pi') + 3
+            )
+        ).toEqual(['pi', '--mode', 'json']);
+        expect(nativeCommand(command).at(-1)).toBe('inspect');
         expect(events[0]).toMatchObject({
             type: 'run.started',
             data: {

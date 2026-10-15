@@ -1,16 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import {
-    chmod,
-    copyFile,
-    lstat,
-    mkdir,
-    readdir,
-    rename,
-    rm,
-    symlink,
-    writeFile,
-} from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, rename, rm, symlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { chmod, writeFile } from '../platform/permissions.js';
 import type { RunOutcome } from './contracts.js';
 import { assertArtifactPaths, outcomeArtifactPath } from './paths.js';
 import type { OutcomeStore } from './store.js';

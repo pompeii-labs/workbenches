@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { OutcomeStore } from '../../src/outcomes/store.js';
+import { join } from '../../src/platform/paths.js';
 import { RunStore } from '../../src/runs/store.js';
 import {
     type E2BRecoveryRecord,
@@ -15,6 +15,7 @@ import type {
 } from '../../src/runtimes/e2b/contracts.js';
 import { E2BOutcomeRecovery } from '../../src/runtimes/e2b/recovery.js';
 import { SessionRetention } from '../../src/sessions/retention.js';
+import { diskMode, symlink } from '../platform.js';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -194,7 +195,7 @@ describe('E2B outcome recovery safety', () => {
         );
         expect(
             (await stat(join(f.recovery.directory, 'recovery.json'))).mode & 0o777
-        ).toBe(0o600);
+        ).toBe(diskMode(0o600));
         const retention = new SessionRetention(f.home);
         const policy = {
             before: new Date(),

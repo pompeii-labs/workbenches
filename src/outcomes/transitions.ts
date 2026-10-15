@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
 import {
-    chmod,
     copyFile,
     link,
     lstat,
@@ -12,6 +11,7 @@ import {
     symlink,
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { chmod } from '../platform/permissions.js';
 import type { OutcomeChangeEntry, OutcomePathFingerprint } from './contracts.js';
 import {
     fingerprint,
@@ -100,6 +100,13 @@ export class OutcomeTransition {
                 // Claim an absent directory. Rename may replace only this empty
                 // reservation; any newly written child makes the rename fail.
                 await this.reserveDirectory();
+                if (process.platform === 'win32') {
+                    // Windows refuses to rename over an empty directory.
+                    // rmdir refuses concurrent children; rename refuses a
+                    // destination recreated before installation.
+                    await rmdir(this.destination);
+                    this.reservation = undefined;
+                }
                 await rename(this.temporary, this.destination);
                 this.reservation = undefined;
             } else {

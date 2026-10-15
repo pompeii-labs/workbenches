@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
 import { RunnerCredentialStore } from '../src/connections/credentials.js';
 import {
     OutcomeApplier,
@@ -9,6 +8,7 @@ import {
     OutcomeStore,
     type RunOutcome,
 } from '../src/outcomes/index.js';
+import { join, resolve } from '../src/platform/paths.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import {
     InteractiveRun,

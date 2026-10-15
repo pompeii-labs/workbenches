@@ -11,10 +11,9 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { OutcomeStore, type RunOutcome } from '../../src/outcomes/index.js';
 import { processIsAlive } from '../../src/outcomes/lease.js';
+import { join } from '../../src/platform/paths.js';
 import { isOutboxPermission } from '../../src/runners/opencode/outbox.js';
 import {
     InteractiveRun,
@@ -25,6 +24,7 @@ import {
 import { E2BSdkClient } from '../../src/runtimes/e2b/sdk.js';
 import { WorkbenchResolver } from '../../src/workbench/index.js';
 import { seedModelCatalogFixture } from '../model-catalog-fixture.js';
+import { diskMode } from '../platform.js';
 
 const enabled = process.env.WORKBENCH_OUTCOME_HARNESS_E2E === '1';
 const testModel = process.env.WORKBENCH_OUTCOME_MODEL ?? 'anthropic/claude-sonnet-4-5';
@@ -571,7 +571,7 @@ describe.skipIf(!enabled)('Real harness outcomes across runtimes', () => {
                     ).toBeUndefined();
                     expect(
                         (await stat(join(fixture.root, 'mode.sh'))).mode & 0o777
-                    ).toBe(0o755);
+                    ).toBe(diskMode(0o755));
                     expect(
                         await readFile(join(fixture.notes, 'notes.txt'), 'utf8')
                     ).toBe('after notes\n');

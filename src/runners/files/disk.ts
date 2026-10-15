@@ -1,6 +1,5 @@
 import type { Stats } from 'node:fs';
 import {
-    chmod,
     cp,
     lstat,
     mkdir,
@@ -10,10 +9,10 @@ import {
     rm,
     stat,
     symlink,
-    writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { chmod, writeFile } from '../../platform/permissions.js';
 
 import type { RunnerFileStat, RunnerFiles } from '../types.js';
 

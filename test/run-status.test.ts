@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { appendFile, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
+import { join } from '../src/platform/paths.js';
 import { renderStatusLine } from '../src/rendering/status-line.js';
 import type { WorkbenchEvent, WorkbenchEventType } from '../src/runs/index.js';
 import { RunStore } from '../src/runs/index.js';
 import { type RunStatus, RunStatusReader } from '../src/runs/status.js';
+import { diskMode } from './platform.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -60,7 +60,7 @@ describe('run status', () => {
         expect((await reader.read(run)).cost_usd).toBe(1);
 
         const cache = join(home, 'runs', run.id, 'status-cache.json');
-        expect((await stat(cache)).mode & 0o777).toBe(0o600);
+        expect((await stat(cache)).mode & 0o777).toBe(diskMode(0o600));
         const offset = JSON.parse(await readFile(cache, 'utf8')).offset;
 
         // A line still being written is left for the next read.

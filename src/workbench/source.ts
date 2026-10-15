@@ -127,6 +127,7 @@ export class WorkbenchSource {
             source.startsWith('.') ||
             source.startsWith('/') ||
             source.startsWith('~') ||
+            /^[a-z]:[\\/]/i.test(source) ||
             source.includes('\\')
         );
     }
@@ -138,6 +139,7 @@ export class WorkbenchSource {
     }
 
     private async gitRevision(directory: string): Promise<string | undefined> {
+        if (!Bun.which('git', { PATH: process.env.PATH ?? '' })) return undefined;
         const child = Bun.spawn(['git', '-C', directory, 'rev-parse', 'HEAD'], {
             stdout: 'pipe',
             stderr: 'ignore',

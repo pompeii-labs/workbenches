@@ -1,9 +1,9 @@
 import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseEnv } from 'node:util';
-
 import { ModelCatalog } from '../models/catalog.js';
 import { ModelRouter } from '../models/routing.js';
+import { hostEnvironment } from '../platform/environment.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { selectedRuntime } from './runtimes.js';
@@ -39,7 +39,7 @@ export class WorkbenchEnvironment {
         overrides: EnvironmentOverrides,
         inherited: Record<string, string | undefined> = process.env
     ): Record<string, string | undefined> {
-        const environment = { ...inherited };
+        const environment = hostEnvironment(inherited);
         const declared = new Set(Object.keys(workbench.manifest.env));
         const catalog = ModelCatalog.active();
         const allowed = new Set([

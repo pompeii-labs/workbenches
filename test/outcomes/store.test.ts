@@ -7,17 +7,17 @@ import {
     readFile,
     rm,
     stat,
-    symlink,
+    unlink,
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import {
     type OutcomeContentDescriptor,
     OutcomeStore,
     type RunOutcome,
 } from '../../src/outcomes/index.js';
+import { join } from '../../src/platform/paths.js';
+import { diskMode, symlink } from '../platform.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -215,7 +215,9 @@ describe('OutcomeStore', () => {
             removed_bytes: 0,
             retained_blobs: 1,
         });
-        expect((await stat(await store.blob(retained))).mode & 0o777).toBe(0o600);
+        expect((await stat(await store.blob(retained))).mode & 0o777).toBe(
+            diskMode(0o600)
+        );
     });
 
     test('the final closing capture reclaims abandoned bytes without disrupting concurrent capture', async () => {
@@ -248,7 +250,7 @@ describe('OutcomeStore', () => {
         await symlink(other, join(home, 'outcomes', id));
         await expect(store.collectGarbage()).rejects.toThrow('real directories');
         expect(await store.blob(descriptor)).toBeString();
-        await rm(join(home, 'outcomes', id));
+        await unlink(join(home, 'outcomes', id));
         await writeFile(
             join(home, 'blobs', '.captures', `${crypto.randomUUID()}.json`),
             '{"pid":-1}'
@@ -344,10 +346,12 @@ describe('OutcomeStore', () => {
         const descriptor = await store.putBytes('private', 'text/plain');
         const id = 'wbo_1234567890abcdefghij';
         await store.commit(outcome(id, descriptor), 'pending');
-        expect((await stat(join(home, 'outcomes', id))).mode & 0o777).toBe(0o700);
+        expect((await stat(join(home, 'outcomes', id))).mode & 0o777).toBe(
+            diskMode(0o700)
+        );
         expect(
             (await stat(join(home, 'outcomes', id, 'outcome.json'))).mode & 0o777
-        ).toBe(0o600);
+        ).toBe(diskMode(0o600));
     });
 
     test('rejects aggregate capture overflow before copying another blob', async () => {

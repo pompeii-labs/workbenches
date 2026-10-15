@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join } from '../../../src/platform/paths.js';
 
 import { RunnerContext } from '../../../src/runners/context/files.js';
 import { RunnerContextStaging } from '../../../src/runners/context/stage.js';
@@ -34,10 +34,9 @@ describe('runner context files', () => {
         const invocation = context.apply(
             {
                 command: [
-                    '/bin/sh',
-                    '-c',
-                    'printf "%s" "$1"',
-                    'probe',
+                    process.execPath,
+                    '-e',
+                    'process.stdout.write(process.argv[1]);',
                     'original task',
                 ],
                 cwd: root,
@@ -59,7 +58,7 @@ describe('runner context files', () => {
         const resumed = context.apply(
             {
                 ...invocation,
-                command: ['true'],
+                command: [process.execPath, '-e', 'process.exit(0)'],
                 env: { WORKBENCH_OUTPUT_DIR: '/new-outbox' },
             },
             workbench
@@ -115,7 +114,7 @@ describe('runner context files', () => {
                 expect(
                     JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT ?? '{}')
                         .instructions
-                ).toEqual([staged.context.instructions]);
+                ).toEqual([staged.context.instructions.replaceAll('\\', '/')]);
                 expect(
                     JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT ?? '{}')
                         .permission

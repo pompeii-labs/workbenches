@@ -1,5 +1,6 @@
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { chmod, writeFile } from '../platform/permissions.js';
 
 /** A key for one organization, as stored per API URL. */
 export interface RegistryOrganizationKey {

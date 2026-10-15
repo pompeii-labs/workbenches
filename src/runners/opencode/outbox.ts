@@ -1,10 +1,12 @@
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { isAbsolute, pathStyle, relative, resolve } from '../../platform/paths.js';
+import { isWindowsPath } from '../windows.js';
 
 export function isOutboxPermission(
     action: string,
     resources: string[],
     outbox: string | undefined
 ): boolean {
+    if (outbox && isWindowsPath(outbox)) outbox = outbox.replaceAll('\\', '/');
     if (
         action !== 'external_directory' ||
         !outbox ||
@@ -14,10 +16,11 @@ export function isOutboxPermission(
     )
         return false;
     const root = resolve(outbox);
-    if (root === sep) return false;
+    if (root === pathStyle(root).parse(root).root) return false;
     return resources.every((resource) => {
         if (!resource.endsWith('/*')) return false;
-        const directory = resource.slice(0, -2);
+        const source = resource.slice(0, -2);
+        const directory = isWindowsPath(source) ? source.replaceAll('\\', '/') : source;
         if (
             !isAbsolute(directory) ||
             /[?*\\\0]/u.test(directory) ||
@@ -27,7 +30,7 @@ export function isOutboxPermission(
         const path = relative(root, resolve(directory));
         return (
             path === '' ||
-            (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
+            (path !== '..' && !/^\.\.[\\/]/.test(path) && !isAbsolute(path))
         );
     });
 }

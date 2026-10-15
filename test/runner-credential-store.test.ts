@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, stat, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { RunnerCredentialStore } from '../src/connections/credentials.js';
+import { join } from '../src/platform/paths.js';
+import { diskMode, symlink } from './platform.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -31,12 +31,12 @@ describe('runner credential storage', () => {
             directory: join(home, 'runtime-credentials', 'e2b', 'opencode'),
         });
         expect((await stat(join(home, 'runtime-credentials'))).mode & 0o777).toBe(
-            0o700
+            diskMode(0o700)
         );
         expect(
             (await stat(join(home, 'runtime-credentials', 'e2b'))).mode & 0o777
-        ).toBe(0o700);
-        expect((await stat(first.directory)).mode & 0o777).toBe(0o700);
+        ).toBe(diskMode(0o700));
+        expect((await stat(first.directory)).mode & 0o777).toBe(diskMode(0o700));
     });
 
     test('rejects a runner name that could escape the credential root', () => {

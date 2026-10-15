@@ -1,17 +1,9 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import {
-    chmod,
-    lstat,
-    mkdir,
-    readdir,
-    readFile,
-    rename,
-    rm,
-    writeFile,
-} from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, mkdir, readdir, readFile, rename, rm } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { OutcomeStorageLease } from '../../../outcomes/lease.js';
+import { chmod, writeFile } from '../../../platform/permissions.js';
 import type { SandboxArchive } from './archive.js';
 import { StateSelection } from './selection.js';
 
@@ -97,9 +89,10 @@ export class StateStore {
                 await rename(pointerTemporary, join(this.root, 'current.json'));
                 // Keep one predecessor for interrupted staging. Never prune the canonical input.
                 const previous = current.directory.startsWith(
-                    `${this.root}/generations/`
+                    join(this.root, 'generations') +
+                        (process.platform === 'win32' ? '\\' : '/')
                 )
-                    ? current.directory.slice(`${this.root}/generations/`.length)
+                    ? basename(current.directory)
                     : undefined;
                 for (const entry of await readdir(join(this.root, 'generations'), {
                     withFileTypes: true,

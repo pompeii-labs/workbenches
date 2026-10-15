@@ -1,11 +1,11 @@
-import { lstat, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
-
 import {
     SavedWorkbenchCatalog,
     type SnapshotFile,
     WorkbenchPackage,
 } from '../catalog/index.js';
+import { writeFile } from '../platform/permissions.js';
 import { SemanticVersion } from '../releases/index.js';
 import { RunnerRegistry } from '../runners/index.js';
 import { RuntimeSmoke } from '../runtimes/index.js';

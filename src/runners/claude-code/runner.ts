@@ -1,10 +1,9 @@
-import { join } from 'node:path';
-
 import {
     type ModelCatalogSnapshot,
     ModelRouter,
     type ResolvedRunnerConfiguration,
 } from '../../models/index.js';
+import { join } from '../../platform/paths.js';
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import {

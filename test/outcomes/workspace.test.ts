@@ -7,15 +7,14 @@ import {
     readFile,
     rename,
     rm,
-    symlink,
     truncate,
     unlink,
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { OutcomeStore, WorkspaceSnapshot } from '../../src/outcomes/index.js';
+import { join } from '../../src/platform/paths.js';
+import { symlink } from '../platform.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -54,6 +53,7 @@ async function repository(): Promise<string> {
     await git(root, 'init', '-q');
     await git(root, 'config', 'user.email', 'workbench@localhost');
     await git(root, 'config', 'user.name', 'Workbench');
+    await git(root, 'config', 'commit.gpgsign', 'false');
     await writeFile(join(root, '.gitignore'), 'ignored.txt\nnode_modules/\n');
     await writeFile(join(root, 'modify.txt'), 'committed\n');
     await writeFile(join(root, 'delete.txt'), 'delete me\n');
@@ -146,6 +146,7 @@ describe('WorkspaceSnapshot', () => {
         const root = await repository();
         await writeFile(join(root, 'modify.txt'), 'dirty before run\n');
         await writeFile(join(root, 'preexisting.txt'), 'already here\n');
+        if (process.platform === 'win32') await chmod(join(root, 'mode.sh'), 0o444);
         const snapshot = await WorkspaceSnapshot.create(root, {
             workspace: { kind: 'primary' },
         });

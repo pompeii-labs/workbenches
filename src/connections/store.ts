@@ -1,5 +1,6 @@
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
+import { chmod, writeFile } from '../platform/permissions.js';
 
 import type { ResolvedWorkbench } from '../types.js';
 import { selectedRuntime } from '../workbench/runtimes.js';

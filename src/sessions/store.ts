@@ -1,16 +1,8 @@
-import {
-    lstat,
-    mkdir,
-    readdir,
-    readFile,
-    rename,
-    rm,
-    stat,
-    writeFile,
-} from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-
 import type { CatalogRegistryReference } from '../catalog/types.js';
+import { rename } from '../platform/files.js';
+import { writeFile } from '../platform/permissions.js';
 import type { RepositoryBinding } from '../repositories/contracts.js';
 import { RunStore } from '../runs/store.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';

@@ -2,12 +2,13 @@ import {
     createReadStream as readStream,
     createWriteStream as writeStream,
 } from 'node:fs';
-import { chmod, lstat, mkdir, rm, symlink } from 'node:fs/promises';
+import { lstat, mkdir, rm, symlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
 import tar from 'tar-stream';
 import { formatOutcomeBytes } from '../../../outcomes/presentation.js';
+import { chmod } from '../../../platform/permissions.js';
 import type { TransferRules } from '../../staging/rules.js';
 
 export interface ExtractLimits {

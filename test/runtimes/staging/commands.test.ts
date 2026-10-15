@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
+import { join } from '../../../src/platform/paths.js';
 import { CollectionCommands } from '../../../src/runtimes/staging/commands.js';
 import { TransferRules } from '../../../src/runtimes/staging/rules.js';
+import { posixShell } from '../../platform.js';
 
 const commands = new CollectionCommands(new TransferRules('E2B'));
 const directories: string[] = [];
@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 async function shell(command: string, cwd: string): Promise<string> {
-    const process = Bun.spawn(['sh', '-c', command], {
+    const process = Bun.spawn(await posixShell(command), {
         cwd,
         stdout: 'pipe',
         stderr: 'pipe',

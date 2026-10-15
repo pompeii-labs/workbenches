@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { ModelRouter } from '../src/models/index.js';
+import { join } from '../src/platform/paths.js';
 import { RunnerContextStaging } from '../src/runners/context/stage.js';
 import { DiskRunnerFiles } from '../src/runners/files/disk.js';
 import { PiConfigStaging } from '../src/runners/pi/config.js';

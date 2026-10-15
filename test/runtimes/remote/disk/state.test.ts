@@ -6,17 +6,17 @@ import {
     readFile,
     rm,
     stat,
-    symlink,
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { nativeCredentialPaths } from '../../../../src/connections/index.js';
+import { join } from '../../../../src/platform/paths.js';
 import { SandboxArchive } from '../../../../src/runtimes/remote/disk/archive.js';
 import { DiskAssetSnapshot } from '../../../../src/runtimes/remote/disk/snapshot.js';
 import { StateStore } from '../../../../src/runtimes/remote/disk/state.js';
 import { DiskAssetSource } from '../../../../src/runtimes/staging/disk.js';
 import { TransferRules } from '../../../../src/runtimes/staging/rules.js';
+import { diskMode, symlink } from '../../../platform.js';
 
 const diskAssetSource = new DiskAssetSource();
 const rules = new TransferRules('E2B');
@@ -240,7 +240,7 @@ describe('E2B managed native state', () => {
         );
         expect(
             (await stat(join(source.directory, 'opencode', 'auth.json'))).mode & 0o777
-        ).toBe(0o600);
+        ).toBe(diskMode(0o600));
         const next = await DiskAssetSnapshot.create(
             {
                 hostPath: root,

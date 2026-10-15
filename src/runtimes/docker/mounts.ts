@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-
+import { posix } from 'node:path';
 import { ActiveModelCatalog, ModelRouter } from '../../models/index.js';
+import { isAbsolute, join, relative, resolve } from '../../platform/paths.js';
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RuntimePrepareRequest } from '../contracts.js';
 import type { DockerHostSocket } from './contracts.js';
@@ -11,6 +11,7 @@ interface DockerMount {
     runtimePath: string;
     access: 'read-only' | 'read-write';
     translate?: boolean;
+    daemonPath?: boolean;
 }
 
 export class DockerMountPlan {
@@ -23,15 +24,29 @@ export class DockerMountPlan {
         const workspace = resolve(request.workspaceDirectory);
         const packageDirectory = resolve(request.workbench.packageDirectory);
         const unique = new Map<string, DockerMount>();
+        const enginePath = (path: string) => {
+            if (!hostSocket?.desktop) return path;
+            const match = path.replaceAll('\\', '/').match(/^([a-z]):\/(.*)$/i);
+            if (!match)
+                throw new Error(
+                    'Docker Desktop host engine workspaces require a Windows drive path'
+                );
+            return `/run/desktop/mnt/host/${match[1]?.toLowerCase()}/${match[2]}`;
+        };
         for (const asset of request.assets) {
             const hostPath = resolve(asset.path);
             let runtimePath: string;
             if (asset.git) {
-                runtimePath = join(hostSocket ? workspace : '/workspace', '.git');
+                runtimePath = join(
+                    hostSocket ? enginePath(workspace) : '/workspace',
+                    '.git'
+                );
             } else if (asset.workspace) {
-                runtimePath = hostSocket ? hostPath : `/workspaces/${asset.workspace}`;
+                runtimePath = hostSocket
+                    ? enginePath(hostPath)
+                    : `/workspaces/${asset.workspace}`;
             } else if (hostPath === workspace) {
-                runtimePath = hostSocket ? hostPath : '/workspace';
+                runtimePath = hostSocket ? enginePath(hostPath) : '/workspace';
             } else if (hostPath === packageDirectory) {
                 runtimePath = '/workbench';
             } else {
@@ -58,7 +73,10 @@ export class DockerMountPlan {
         }
         if (hostSocket) {
             unique.set(resolve(hostSocket.path), {
-                hostPath: resolve(hostSocket.path),
+                hostPath: hostSocket.desktop
+                    ? hostSocket.path
+                    : resolve(hostSocket.path),
+                daemonPath: hostSocket.desktop === true,
                 runtimePath: '/var/run/docker.sock',
                 access: 'read-write',
             });
@@ -74,7 +92,7 @@ export class DockerMountPlan {
                 hostPath: packageDirectory,
                 runtimePath: join(
                     primary.runtimePath,
-                    relative(workspace, packageDirectory)
+                    relative(workspace, packageDirectory).replaceAll('\\', '/')
                 ),
                 access: 'read-only',
                 translate: false,
@@ -84,6 +102,7 @@ export class DockerMountPlan {
 
     async verify(): Promise<void> {
         for (const mount of this.mounts) {
+            if (mount.daemonPath) continue;
             const entry = await stat(mount.hostPath).catch(() => null);
             if (!entry) {
                 throw new Error(`Runtime asset does not exist: ${mount.hostPath}`);
@@ -91,7 +110,7 @@ export class DockerMountPlan {
             if (mount.hostPath.includes('\n') || mount.hostPath.includes('\r')) {
                 throw new Error('Runtime asset paths must not contain newlines');
             }
-            if (mount.hostPath.includes(':')) {
+            if (mount.hostPath.replace(/^[a-z]:/i, '').includes(':')) {
                 throw new Error('Runtime asset paths must not contain colons');
             }
         }
@@ -109,7 +128,9 @@ export class DockerMountPlan {
             throw new Error(`Path is not staged in Docker runtime: ${hostPath}`);
         }
         const suffix = relative(match.hostPath, requested);
-        return suffix ? join(match.runtimePath, suffix) : match.runtimePath;
+        return suffix
+            ? posix.join(match.runtimePath, ...suffix.split(/[\\/]/))
+            : match.runtimePath;
     }
 
     arguments(): string[] {
@@ -196,6 +217,6 @@ function contains(parent: string, child: string): boolean {
     const suffix = relative(parent, child);
     return (
         suffix === '' ||
-        (!suffix.startsWith(`..${sep}`) && suffix !== '..' && !isAbsolute(suffix))
+        (!/^\.\.[\\/]/.test(suffix) && suffix !== '..' && !isAbsolute(suffix))
     );
 }

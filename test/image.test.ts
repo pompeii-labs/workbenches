@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { pack } from 'tar-stream';
-
 import { loginCommand, pushCommand } from '../src/commands/image.js';
+import { join, resolve } from '../src/platform/paths.js';
 import {
     RegistryClient,
     RegistryImagePublisher,
     registryImageReference,
 } from '../src/registry/index.js';
+import { executableScript } from './platform.js';
 
 const projectDirectory = resolve(import.meta.dir, '..');
 const cliPath = join(projectDirectory, 'src', 'cli.ts');
@@ -428,7 +428,7 @@ if (args[0] === 'image' && args[1] === 'save' && args[2] === '--output' && args[
 process.exit(Number(process.env.WB_IMAGE_CLIENT_EXIT ?? 0));
 `
     );
-    await chmod(client, 0o755);
+    await executableScript(client);
     return {
         apiUrl,
         client,

@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { OutcomeStore } from '../../../src/outcomes/index.js';
+import { join } from '../../../src/platform/paths.js';
 import { RuntimeRegistry } from '../../../src/runtimes/index.js';
 import { DiskTransfer } from '../../../src/runtimes/remote/disk/transfer.js';
 import { MemoryAssetSource } from '../../../src/runtimes/staging/memory/source.js';

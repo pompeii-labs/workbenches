@@ -9,8 +9,7 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
-
+import { delimiter } from 'node:path';
 import {
     AuthoringCli,
     AuthoringCreateIncompleteError,
@@ -21,12 +20,14 @@ import {
     WorkbenchAuthoring,
 } from '../src/authoring/index.js';
 import { WorkbenchPackage } from '../src/catalog/index.js';
+import { join } from '../src/platform/paths.js';
 import type { RegistryPackage } from '../src/registry/index.js';
 import { RunnerRegistry } from '../src/runners/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
 import { SessionStore } from '../src/sessions/index.js';
 import type { WorkbenchManifest } from '../src/types.js';
 import { Workbench } from '../src/workbench/index.js';
+import { diskMode } from './platform.js';
 
 const runners = RunnerRegistry.standard();
 const temporaryDirectories: string[] = [];
@@ -57,8 +58,16 @@ describe('native Workbench authoring', () => {
         });
         const shimDirectory = environment.PATH?.split(delimiter)[0];
         expect(shimDirectory).toBe(join(home, 'authoring', 'author_exact_cli', 'bin'));
-        expect(await readFile(join(shimDirectory as string, 'wb'), 'utf8')).toStartWith(
-            '#!/bin/sh\nexec '
+        expect(
+            await readFile(
+                join(
+                    shimDirectory as string,
+                    process.platform === 'win32' ? 'wb.cmd' : 'wb'
+                ),
+                'utf8'
+            )
+        ).toStartWith(
+            process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\nexec '
         );
 
         const child = Bun.spawn(
@@ -647,9 +656,7 @@ describe('native Workbench authoring', () => {
             )
         ) as Record<string, unknown>;
         expect(record.status).toBe('invalid');
-        expect(record.changed_files).toEqual([
-            join('.workbenches', 'core', 'instructions.md'),
-        ]);
+        expect(record.changed_files).toEqual(['.workbenches/core/instructions.md']);
     });
 
     test('accepts a valid candidate after its package version advances', async () => {
@@ -818,7 +825,7 @@ describe('native Workbench authoring', () => {
         );
         await operation.checkpoint();
         const path = join(home, 'authoring', operation.id, 'baseline.json');
-        expect((await stat(path)).mode & 0o777).toBe(0o600);
+        expect((await stat(path)).mode & 0o777).toBe(diskMode(0o600));
         expect(await readFile(path, 'utf8')).not.toContain(
             'private-value-not-for-checkpoint'
         );
@@ -991,8 +998,8 @@ describe('native Workbench authoring', () => {
         expect(await operation.finish()).toMatchObject({
             status: 'completed',
             changedFiles: [
-                join('.workbenches', 'core', 'instructions.md'),
-                join('.workbenches', 'core', 'workbench.yml'),
+                '.workbenches/core/instructions.md',
+                '.workbenches/core/workbench.yml',
             ],
         });
     });
@@ -1033,8 +1040,8 @@ describe('native Workbench authoring', () => {
         expect(await operation.finish()).toMatchObject({
             status: 'completed',
             changedFiles: [
-                join('.workbenches', 'core', 'instructions.md'),
-                join('.workbenches', 'core', 'workbench.yml'),
+                '.workbenches/core/instructions.md',
+                '.workbenches/core/workbench.yml',
             ],
         });
     });

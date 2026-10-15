@@ -26,7 +26,7 @@ export const upgradeCommand = defineCommand({
                   .filter(
                       (entry) =>
                           entry.registry ||
-                          (!entry.localPath && !entry.source.startsWith('/'))
+                          (!entry.localPath && !isAbsolute(entry.source))
                   )
                   .map((entry) => entry.alias);
         if (aliases.length === 0) {
@@ -77,3 +77,5 @@ export const upgradeCommand = defineCommand({
         }
     },
 });
+
+import { isAbsolute } from 'node:path';
