@@ -241,7 +241,7 @@ describe('a host with only fetch', () => {
         expect(files.text('/pkg/instructions.md')).toBe('Be precise.');
         expect(sink.digests().length).toBeGreaterThan(0);
         // Nothing reached the local disk, by a relative path or the temporary directory.
-        expect(process.cwd()).toBe(await realpath(scratch));
+        expect(await realpath(process.cwd())).toBe(await realpath(scratch));
         expect(await readdir(scratch)).toEqual([]);
     });
 });

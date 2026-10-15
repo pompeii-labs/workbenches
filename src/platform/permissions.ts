@@ -78,7 +78,7 @@ export function isPrivateWindowsFile(path: string): boolean {
     const script = [
         "$ErrorActionPreference = 'Stop'",
         "$ProgressPreference = 'SilentlyContinue'",
-        '$acl = Get-Acl -LiteralPath $env:WORKBENCH_ACL_PATH',
+        '$acl = [IO.File]::GetAccessControl($env:WORKBENCH_ACL_PATH)',
         '$ids = @($acl.Access | Where-Object { $_.AccessControlType -eq "Allow" } | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value })',
         'ConvertTo-Json -Compress -InputObject $ids',
     ].join('\n');
@@ -87,6 +87,8 @@ export function isPrivateWindowsFile(path: string): boolean {
             systemTool('WindowsPowerShell\\v1.0\\powershell.exe'),
             '-NoProfile',
             '-NonInteractive',
+            '-InputFormat',
+            'None',
             '-EncodedCommand',
             Buffer.from(script, 'utf16le').toString('base64'),
         ],

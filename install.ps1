@@ -32,7 +32,11 @@ try {
     $checksums = (Invoke-WebRequest "$root/checksums.txt" -UseBasicParsing).Content
     $checksum = $checksums -split '\r?\n' | Where-Object { $_ -match ('^[a-fA-F0-9]{64}\s+\*?' + [regex]::Escape($archiveName) + '$') } | Select-Object -First 1
     if (-not $checksum) { throw "Checksum is missing for $archiveName." }
-    if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne ($checksum -split '\s+')[0]) { throw 'Checksum verification failed.' }
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($archive)
+    try { $digest = ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '') }
+    finally { $stream.Dispose(); $hasher.Dispose() }
+    if ($digest -ne ($checksum -split '\s+')[0]) { throw 'Checksum verification failed.' }
     & tar.exe -xzf $archive -C $temporary "$name/workbench.exe" "$name/LICENSE" "$name/NOTICE"
     if ($LASTEXITCODE -ne 0) { throw 'Could not extract the Workbench release.' }
     $source = Join-Path $temporary "$name\workbench.exe"

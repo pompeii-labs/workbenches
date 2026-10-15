@@ -158,12 +158,14 @@ describe('CLI integration', () => {
                     packages: [
                         {
                             selector: 'core',
-                            path: join(await realpath(root), '.workbenches', 'core'),
                         },
                     ],
                 },
             },
         });
+        expect(await realpath(result.authoring.result.packages[0].path)).toBe(
+            join(await realpath(root), '.workbenches', 'core')
+        );
         expect(result.authoring.result.changed_files).toContain(
             '.workbenches/core/workbench.yml'
         );
@@ -2452,7 +2454,7 @@ describe('CLI integration', () => {
         );
         expect(translated.code).toBe(0);
         const invocation = JSON.parse(translated.stdout);
-        expect(invocation.cwd).toBe(await realpath(workspace));
+        expect(await realpath(invocation.cwd)).toBe(await realpath(workspace));
         expect(invocation.opencode_config.instructions[0]).toContain(
             '/.workbench-context/system.md'
         );

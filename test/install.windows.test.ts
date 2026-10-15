@@ -68,6 +68,7 @@ async function run(
         harness,
         `
 $ErrorActionPreference = 'Stop'
+function Get-FileHash { throw 'The installer must not depend on optional PowerShell cmdlets' }
 function Invoke-RestMethod { param($Uri, $Headers)
     Add-Content -LiteralPath $env:FIXTURE_LOG -Value $Uri
     return (ConvertFrom-Json $env:FIXTURE_RELEASES)

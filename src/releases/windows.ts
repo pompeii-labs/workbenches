@@ -74,6 +74,8 @@ function removeAfterExit(backup: string): void {
             ),
             '-NoProfile',
             '-NonInteractive',
+            '-InputFormat',
+            'None',
             '-EncodedCommand',
             Buffer.from(script, 'utf16le').toString('base64'),
         ],

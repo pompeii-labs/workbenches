@@ -63,6 +63,8 @@ export function windowsInvocation(
             '-NoLogo',
             '-NoProfile',
             '-NonInteractive',
+            '-InputFormat',
+            'None',
             '-EncodedCommand',
             Buffer.from(script, 'utf16le').toString('base64'),
         ],
