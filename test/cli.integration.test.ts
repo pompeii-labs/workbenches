@@ -1276,7 +1276,7 @@ describe('CLI integration', () => {
         expect(await readFile(`${record}.undeclared-token`, 'utf8')).toBe('\n');
         expect(`${result.stdout}\n${result.stderr}`).not.toContain(fileSecret);
         expect(`${result.stdout}\n${result.stderr}`).not.toContain(explicitSecret);
-        expect(await readTextTree(join(home, 'runs'))).not.toContain(explicitSecret);
+        expect(await storageText(home)).not.toContain(explicitSecret);
     });
 
     test('accepts selected provider credentials from an environment file without a manifest declaration', async () => {
@@ -1308,7 +1308,7 @@ describe('CLI integration', () => {
         expect(result.code).toBe(0);
         expect(await readFile(`${record}.openai-key`, 'utf8')).toBe(`${secret}\n`);
         expect(`${result.stdout}\n${result.stderr}`).not.toContain(secret);
-        expect(await readTextTree(join(home, 'runs'))).not.toContain(secret);
+        expect(await storageText(home)).not.toContain(secret);
     });
 
     test('admits a Claude Code token from an environment file and ends a failed startup with its reason', async () => {
@@ -1513,7 +1513,7 @@ describe('CLI integration', () => {
         );
         expect(attached.code).toBe(0);
         expect(await readFile(`${record}.project-token`, 'utf8')).toBe(`${secret}\n`);
-        expect(await readTextTree(join(home, 'runs'))).not.toContain(secret);
+        expect(await storageText(home)).not.toContain(secret);
     });
 
     test('auto-colors human output when forced and honors --no-color', async () => {
@@ -1707,12 +1707,7 @@ describe('CLI integration', () => {
         expect(replayed.code).toBe(0);
         expect(replayed.stdout).toBe('fixture response\n');
         expect(
-            JSON.parse(
-                await readFile(
-                    join(home, 'sessions', dispatched.stdout.trim(), 'session.json'),
-                    'utf8'
-                )
-            )
+            await new SessionStore(home).read(dispatched.stdout.trim())
         ).toMatchObject({
             id: dispatched.stdout.trim(),
             latest_run_id: dispatched.stdout.trim(),
@@ -1863,9 +1858,7 @@ describe('CLI integration', () => {
         const listed = await executeCli(['ps', '--json'], environment);
         const original = JSON.parse(listed.stdout.trim());
         const sessionId = original.session_id as string;
-        const before = JSON.parse(
-            await readFile(join(home, 'sessions', sessionId, 'session.json'), 'utf8')
-        );
+        const before = await new SessionStore(home).read(sessionId);
 
         const resumed = await executeCli(
             [
@@ -1886,22 +1879,13 @@ describe('CLI integration', () => {
         expect(await readFile(`${record}.project-token`, 'utf8')).toBe(
             `${resumedSecret}\n`
         );
-        expect(await readTextTree(join(home, 'runs'))).not.toContain(resumedSecret);
+        expect(await storageText(home)).not.toContain(resumedSecret);
 
-        const after = JSON.parse(
-            await readFile(join(home, 'sessions', sessionId, 'session.json'), 'utf8')
-        );
+        const after = await new SessionStore(home).read(sessionId);
         expect(after.id).toBe(sessionId);
         expect(after.native_session_id).toBe(before.native_session_id);
         expect(after.latest_run_id).not.toBe(sessionId);
-        expect(
-            JSON.parse(
-                await readFile(
-                    join(home, 'runs', after.latest_run_id, 'run.json'),
-                    'utf8'
-                )
-            )
-        ).toMatchObject({
+        expect(await new RunStore(home).read(after.latest_run_id)).toMatchObject({
             session_id: sessionId,
             resumed_from: sessionId,
             execution: 'session',
@@ -1939,10 +1923,7 @@ describe('CLI integration', () => {
         expect(first).toMatchObject({ code: 0, stdout: 'fixture response\n' });
         expect(second).toMatchObject({ code: 0, stdout: 'fixture response\n' });
 
-        const runs = (await readdir(join(home, 'runs'))).filter((entry) =>
-            entry.startsWith('wb_')
-        );
-        expect(runs).toHaveLength(2);
+        expect(await new RunStore(home).list()).toHaveLength(2);
         const replayed = await executeCli(['attach', sessionId, '--json'], environment);
         const events = replayed.stdout
             .trim()
@@ -1992,7 +1973,7 @@ describe('CLI integration', () => {
             type: 'run.cancelled',
             data: { reason: 'requested' },
         });
-        expect(await stat(join(home, 'sessions', id, 'session.json'))).toBeTruthy();
+        expect((await new SessionStore(home).read(id)).id).toBe(id);
 
         const repeated = await executeCli(['kill', id], environment);
         expect(repeated.code).toBe(1);
@@ -3020,8 +3001,8 @@ describe('CLI exit 3 for missing credentials', () => {
         expect(`${foreground.stdout}${foreground.stderr}`).toContain(
             'No authenticated route is available'
         );
-        const [runId] = await readdir(join(home, 'runs'));
-        const failed = (await new RunStore(home).readEvents(runId ?? '')).find(
+        const [run] = await new RunStore(home).list();
+        const failed = (await new RunStore(home).readEvents(run?.id ?? '')).find(
             (event) => event.type === 'run.failed'
         );
         expect(failed?.data).toMatchObject({
@@ -3323,28 +3304,13 @@ async function launchCli(
 async function waitForActiveSession(home: string): Promise<string> {
     const started = Date.now();
     while (Date.now() - started < 5_000) {
-        const sessions = await readdir(join(home, 'sessions')).catch(() => []);
-        const sessionId = sessions.find((entry) => entry.startsWith('wb_'));
-        if (sessionId) {
-            const sessionSource = await readFile(
-                join(home, 'sessions', sessionId, 'session.json'),
-                'utf8'
-            ).catch(() => undefined);
-            if (sessionSource) {
-                const session = JSON.parse(sessionSource) as {
-                    latest_run_id: string;
-                    native_session_id?: string;
-                };
-                const runSource = await readFile(
-                    join(home, 'runs', session.latest_run_id, 'run.json'),
-                    'utf8'
-                ).catch(() => undefined);
-                const run = runSource
-                    ? (JSON.parse(runSource) as { status: string })
-                    : undefined;
-                if (run?.status === 'running' && session.native_session_id) {
-                    return sessionId;
-                }
+        const [session] = await new SessionStore(home).list();
+        if (session) {
+            const run = await new RunStore(home)
+                .read(session.latest_run_id)
+                .catch(() => undefined);
+            if (run?.status === 'running' && session.native_session_id) {
+                return session.id;
             }
         }
         await Bun.sleep(25);
@@ -3376,7 +3342,7 @@ async function temporaryDirectory(prefix: string) {
 }
 
 async function readTextTree(directory: string): Promise<string> {
-    const entries = await readdir(directory, { withFileTypes: true });
+    const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
     const contents = await Promise.all(
         entries.map((entry) => {
             const path = join(directory, entry.name);
@@ -3384,6 +3350,17 @@ async function readTextTree(directory: string): Promise<string> {
         })
     );
     return contents.join('\n');
+}
+
+/** Everything the engine stores for sessions and runs: the database, its journal, and files. */
+async function storageText(home: string): Promise<string> {
+    const database = (name: string) =>
+        readFile(join(home, name), 'utf8').catch(() => '');
+    return [
+        await database('wb.db'),
+        await database('wb.db-wal'),
+        await readTextTree(join(home, 'files')),
+    ].join('\n');
 }
 
 async function createFixture(

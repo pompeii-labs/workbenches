@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { WorkbenchDatabase } from '../src/database/workbenchdatabase.js';
 import { RunControl } from '../src/runs/control.js';
 import { StoredRunHandle } from '../src/runs/handle.js';
 import { RunStore, type StoredRun } from '../src/runs/store.js';
@@ -35,9 +36,7 @@ describe('durable run control', () => {
             kind: 'send',
             input: { text: 'private prompt value', images: [] },
         });
-        expect((await stat(join(home, 'runs', run.id, 'control'))).mode & 0o777).toBe(
-            0o700
-        );
+        expect(await readdir(home)).not.toContain('runs');
         await control.resolve(required(request), {
             outcome: 'accepted',
             disposition: 'delivered',
@@ -251,29 +250,29 @@ function fixtureRun(home: string): Promise<StoredRun> {
 }
 
 async function waitForPending(home: string, runId: string, count: number) {
-    const directory = join(home, 'runs', runId, 'control', 'pending');
     for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((await readdir(directory)).length >= count) return;
+        if ((await pendingCount(home, runId)) >= count) return;
         await Bun.sleep(1);
     }
     throw new Error(`Timed out waiting for ${count} control requests`);
 }
 
 async function pendingCount(home: string, runId: string): Promise<number> {
-    return (
-        await readdir(join(home, 'runs', runId, 'control', 'pending')).catch(() => [])
-    ).length;
+    const row = WorkbenchDatabase.forHome(home).one(
+        "SELECT count(*) AS n FROM control_requests WHERE run_id = ? AND state = 'pending'",
+        runId
+    );
+    return Number(row?.n ?? 0);
 }
 
 async function controlText(home: string, runId: string): Promise<string> {
-    const root = join(home, 'runs', runId, 'control');
-    const contents: string[] = [];
-    for (const directory of ['pending', 'active', 'receipts']) {
-        for (const file of await readdir(join(root, directory))) {
-            contents.push(await readFile(join(root, directory, file), 'utf8'));
-        }
-    }
-    return contents.join('\n');
+    const database = WorkbenchDatabase.forHome(home);
+    return [
+        ...database.all('SELECT payload FROM control_requests WHERE run_id = ?', runId),
+        ...database.all('SELECT payload FROM control_receipts WHERE run_id = ?', runId),
+    ]
+        .map((row) => String(row.payload))
+        .join('\n');
 }
 
 function required<T>(value: T | undefined): T {

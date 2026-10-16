@@ -1,3 +1,4 @@
+import { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import { OutcomeStore } from '../outcomes/store.js';
 import { RunStore, type StoredRun } from '../runs/store.js';
 import {
@@ -215,6 +216,9 @@ export class SessionRetention {
                         return;
                     }
                     await this.#sessions.remove(session.id);
+                    await new SavedWorkbenchCatalog(this.home).releaseSnapshot(
+                        session.workbench_digest
+                    );
                     removedSessions.push(session.id);
                     removedBytes += sessionBytes.get(session.id) ?? 0;
                     for (const run of runs) {

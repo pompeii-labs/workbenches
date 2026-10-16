@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { appendFile, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { WorkbenchDatabase } from '../src/database/workbenchdatabase.js';
 import { renderStatusLine } from '../src/rendering/status-line.js';
 import type { WorkbenchEvent, WorkbenchEventType } from '../src/runs/index.js';
 import { RunStore } from '../src/runs/index.js';
@@ -53,25 +54,25 @@ describe('run status', () => {
         expect((await new RunStatusReader(home).read(run)).pending_input).toBeNull();
     });
 
-    test('folds only appended complete lines, from a private cache', async () => {
-        const { home, run, write, log } = await runningFixture();
+    test('folds only newly appended events, from a cache row', async () => {
+        const { home, run, write } = await runningFixture();
         await write(['usage.updated', { kind: 'delta', cost_usd: 1 }]);
         const reader = new RunStatusReader(home);
+        const database = WorkbenchDatabase.forHome(home);
+        const cached = () =>
+            database.one('SELECT last_event FROM run_status WHERE run_id = ?', run.id)
+                ?.last_event;
         expect((await reader.read(run)).cost_usd).toBe(1);
+        const first = cached();
+        expect(first).toBeGreaterThan(0);
 
-        const cache = join(home, 'runs', run.id, 'status-cache.json');
-        expect((await stat(cache)).mode & 0o777).toBe(0o600);
-        const offset = JSON.parse(await readFile(cache, 'utf8')).offset;
-
-        // A line still being written is left for the next read.
-        const next = JSON.stringify(
-            event(run.id, 99, 'usage.updated', { kind: 'delta', cost_usd: 2 })
-        );
-        await appendFile(log, next.slice(0, 20));
+        // Reading again with nothing new leaves the cache where it was.
         expect((await reader.read(run)).cost_usd).toBe(1);
-        expect(JSON.parse(await readFile(cache, 'utf8')).offset).toBe(offset);
-        await appendFile(log, `${next.slice(20)}\n`);
+        expect(cached()).toBe(first);
+
+        await write(['usage.updated', { kind: 'delta', cost_usd: 2 }]);
         expect((await reader.read(run)).cost_usd).toBe(3);
+        expect(cached()).toBeGreaterThan(Number(first));
     });
 
     test('marks an active run whose worker is gone as lost', async () => {
@@ -242,7 +243,7 @@ async function runningFixture() {
             await store.appendEvent(run.id, event(run.id, ++sequence, type, data));
         }
     };
-    return { home, run, write, log: join(home, 'runs', run.id, 'events.ndjson') };
+    return { home, run, write };
 }
 
 function plan(...items: string[][]) {

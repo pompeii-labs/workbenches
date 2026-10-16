@@ -1,7 +1,11 @@
+import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SavedWorkbenchCatalog } from '../src/catalog/saved.js';
+import { CatalogSnapshots } from '../src/catalog/snapshots.js';
+import { WorkbenchDatabase } from '../src/database/workbenchdatabase.js';
 import type { WorkbenchEvent } from '../src/runs/index.js';
 import { RunDispatcher, RunStore } from '../src/runs/index.js';
 import { RunReconciliationLease } from '../src/runs/reconciliation.js';
@@ -23,20 +27,26 @@ describe('durable Workbench runs', () => {
         const home = await temporaryHome();
         const store = new RunStore(home);
         const run = await fixtureRun(home, 'secret task');
-        const directory = join(home, 'runs', run.id);
+        const database = new Database(join(home, 'wb.db'), { readonly: true });
 
-        expect((await stat(directory)).mode & 0o777).toBe(0o700);
-        expect((await stat(join(directory, 'run.json'))).mode & 0o777).toBe(0o600);
-        expect((await stat(join(directory, 'request.json'))).mode & 0o777).toBe(0o600);
+        expect((await stat(join(home, 'wb.db'))).mode & 0o777).toBe(0o600);
+        expect(await readdir(home)).not.toContain('runs');
+        expect(database.query('SELECT count(*) AS n FROM run_requests').get()).toEqual({
+            n: 1,
+        });
         expect(await store.takeRequest(run.id)).toMatchObject({
             task: 'secret task',
         });
         await expect(store.takeRequest(run.id)).rejects.toThrow(
             'request is unavailable'
         );
-        expect(await readFile(join(directory, 'run.json'), 'utf8')).not.toContain(
-            'secret task'
-        );
+        expect(database.query('SELECT count(*) AS n FROM run_requests').get()).toEqual({
+            n: 0,
+        });
+        expect(
+            JSON.stringify(database.query('SELECT * FROM runs').all())
+        ).not.toContain('secret task');
+        database.close();
     });
 
     test('replays events in order and stops after terminal metadata', async () => {
@@ -179,29 +189,37 @@ describe('durable Workbench runs', () => {
 
     test('does not steal a reconciliation lease from an inaccessible process', async () => {
         const home = await temporaryHome();
-        const directory = join(home, 'lease');
-        const lock = join(directory, '.reconcile');
-        await mkdir(lock, { recursive: true });
-        const owner = JSON.stringify({ token: 'existing', pid: process.pid });
-        await writeFile(join(lock, 'owner.json'), owner);
+        const database = WorkbenchDatabase.forHome(home);
+        database.run(
+            'INSERT INTO leases (name, token, pid, acquired_at) VALUES (?, ?, ?, ?)',
+            'reconcile:test',
+            'existing',
+            process.pid,
+            Date.now()
+        );
         const inspected = Promise.withResolvers<void>();
         const probe = spyOn(process, 'kill').mockImplementation(() => {
             inspected.resolve();
-            throw Object.assign(new Error('inspection denied'), { code: 'EPERM' });
+            throw Object.assign(new Error('inspection failed'), { code: 'EPERM' });
         });
         let entered = false;
-        const pending = new RunReconciliationLease('test', directory).exclusive(
+        const pending = new RunReconciliationLease('test', database).exclusive(
             async () => {
                 entered = true;
             }
         );
         try {
             await inspected.promise;
-            expect(await readFile(join(lock, 'owner.json'), 'utf8')).toBe(owner);
+            expect(
+                database.one(
+                    'SELECT token FROM leases WHERE name = ?',
+                    'reconcile:test'
+                )
+            ).toEqual({ token: 'existing' });
             expect(entered).toBeFalse();
         } finally {
             probe.mockRestore();
-            await rm(lock, { recursive: true, force: true });
+            database.run('DELETE FROM leases WHERE name = ?', 'reconcile:test');
             await pending;
         }
         expect(entered).toBeTrue();
@@ -434,6 +452,64 @@ describe('durable Workbench runs', () => {
             session: ready,
         });
         expect((await runs.takeRequest(second.id)).allow_unchecked_gpu).toBeUndefined();
+    });
+
+    test('refuses to start a run while a worker of the earlier file layout is alive', async () => {
+        const home = await temporaryHome();
+        const resolved = await fixtureReference(home, 'opencode');
+        // The shell stays the parent of sleep, so the old worker argv is its own.
+        const worker = Bun.spawn([
+            'sh',
+            '-c',
+            'sleep 30; true',
+            '__worker',
+            home,
+            'wb_oldlayoutworker123456789',
+        ]);
+        try {
+            const old = join(home, 'runs', 'wb_oldlayoutworker123456789');
+            await mkdir(old, { recursive: true });
+            await writeFile(
+                join(old, 'run.json'),
+                JSON.stringify({ status: 'running', pid: worker.pid })
+            );
+
+            await expect(
+                new RunDispatcher(home).prepare({
+                    resolved,
+                    mode: 'detached',
+                    task: 'go',
+                })
+            ).rejects.toThrow('earlier version of Workbench is still active');
+            expect(await new RunStore(home).list()).toEqual([]);
+        } finally {
+            worker.kill();
+        }
+    });
+
+    test('does not wait on the snapshot lease again when acquiring it timed out', async () => {
+        const home = await temporaryHome();
+        const resolved = await fixtureReference(home, 'opencode');
+        const acquire = spyOn(
+            CatalogSnapshots.prototype,
+            'exclusive'
+        ).mockRejectedValue(
+            new Error('Timed out waiting for Workbench package snapshot')
+        );
+        const release = spyOn(SavedWorkbenchCatalog.prototype, 'releaseSnapshot');
+        try {
+            await expect(
+                new RunDispatcher(home).prepare({
+                    resolved,
+                    mode: 'detached',
+                    task: 'go',
+                })
+            ).rejects.toThrow('Timed out waiting for Workbench package snapshot');
+            expect(release).not.toHaveBeenCalled();
+        } finally {
+            acquire.mockRestore();
+            release.mockRestore();
+        }
     });
 
     test('rejects resuming a session with a different locked Workbench', async () => {

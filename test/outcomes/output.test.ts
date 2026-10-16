@@ -46,18 +46,23 @@ describe('OutcomeOutput', () => {
         const firstId = RunStore.createId();
         const first = await output(directory, firstId);
         const second = await output(directory);
-        expect(first.directory).toBe(join(directory, 'runs', firstId, 'outbox'));
+        expect(first.directory).toBe(
+            join(directory, 'files', 'work', firstId, 'outbox')
+        );
         expect(first.directory).not.toBe(second.directory);
         expect(first.directory).toBe(await realpath(first.directory));
         expect((await lstat(first.directory)).mode & 0o777).toBe(0o700);
         expect((await lstat(dirname(first.directory))).mode & 0o777).toBe(0o700);
-        const metadata = join(dirname(first.directory), 'run.json');
-        await writeFile(metadata, 'retained run metadata');
+        const sibling = join(dirname(first.directory), 'sibling.json');
+        await writeFile(sibling, 'retained sibling');
         await first.cleanup();
         await expect(lstat(first.directory)).rejects.toThrow();
-        expect(await readFile(metadata, 'utf8')).toBe('retained run metadata');
+        expect(await readFile(sibling, 'utf8')).toBe('retained sibling');
         expect((await lstat(second.directory)).isDirectory()).toBeTrue();
         await first.cleanup();
+        // An outbox that was the run's only content takes its scratch directory with it.
+        await second.cleanup();
+        await expect(lstat(dirname(second.directory))).rejects.toThrow();
     });
 
     test('rejects invalid run IDs before creating run storage', async () => {
@@ -67,7 +72,7 @@ describe('OutcomeOutput', () => {
                 'Outcome run ID'
             );
         }
-        await expect(lstat(join(directory, 'runs'))).rejects.toThrow();
+        await expect(lstat(join(directory, 'files'))).rejects.toThrow();
     });
 
     test('does not replace or delete an existing outbox for the same run', async () => {
@@ -85,7 +90,8 @@ describe('OutcomeOutput', () => {
     test('rejects symlinked run storage without touching its target', async () => {
         const directory = await home();
         const target = await home();
-        await symlink(target, join(directory, 'runs'));
+        await mkdir(join(directory, 'files'));
+        await symlink(target, join(directory, 'files', 'work'));
         await expect(
             OutcomeOutput.create(directory, RunStore.createId())
         ).rejects.toThrow('real directories');

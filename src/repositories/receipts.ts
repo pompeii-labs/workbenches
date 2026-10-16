@@ -1,44 +1,85 @@
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { RowReader } from '../database/rowreader.js';
+import { WorkbenchDatabase } from '../database/workbenchdatabase.js';
 import {
     parseRepository,
     type RepositoryDeliveryReceipt,
     validRepositoryRef,
 } from './contracts.js';
 
+const MAXIMUM_RECEIPT_BYTES = 32_768;
+
+/** Delivery receipts, one per run and one per session (the latest attempt). */
 export class RepositoryDeliveryStore {
-    constructor(private readonly home: string) {}
+    readonly #database: WorkbenchDatabase;
+
+    constructor(home: string) {
+        this.#database = WorkbenchDatabase.forHome(home);
+    }
 
     async read(runId: string): Promise<RepositoryDeliveryReceipt | undefined> {
-        return this.readPath(this.path(runId), runId);
+        this.assertIdentifier(runId);
+        return this.load('run', runId, runId);
     }
 
     async readSession(
         sessionId: string
     ): Promise<RepositoryDeliveryReceipt | undefined> {
-        this.path(sessionId);
-        const receipt = await this.readPath(
-            join(this.home, 'sessions', sessionId, 'github.json')
-        );
+        this.assertIdentifier(sessionId);
+        const receipt = this.load('session', sessionId);
         if (receipt && receipt.session_id !== sessionId)
             throw new Error('GitHub receipt belongs to a different session');
         return receipt;
     }
 
-    private async readPath(
-        path: string,
-        runId?: string
-    ): Promise<RepositoryDeliveryReceipt | undefined> {
-        const details = await lstat(path).catch((error) => {
-            if (error?.code === 'ENOENT') return undefined;
-            throw error;
+    async write(receipt: RepositoryDeliveryReceipt): Promise<void> {
+        this.assertIdentifier(receipt.run_id);
+        if (receipt.session_id) this.assertIdentifier(receipt.session_id);
+        const payload = JSON.stringify(receipt);
+        this.#database.transaction(() => {
+            if (receipt.session_id) this.save('session', receipt.session_id, payload);
+            this.save('run', receipt.run_id, payload);
         });
-        if (!details) return undefined;
-        if (!details.isFile() || details.isSymbolicLink() || details.size > 32_768)
+    }
+
+    private save(scope: 'run' | 'session', id: string, payload: string): void {
+        this.#database.run(
+            `INSERT INTO repository_receipts (scope, id, payload) VALUES (?, ?, ?)
+             ON CONFLICT (scope, id) DO UPDATE SET payload = excluded.payload`,
+            scope,
+            id,
+            payload
+        );
+    }
+
+    private load(
+        scope: 'run' | 'session',
+        id: string,
+        runId?: string
+    ): RepositoryDeliveryReceipt | undefined {
+        const row = this.#database.one(
+            'SELECT payload FROM repository_receipts WHERE scope = ? AND id = ?',
+            scope,
+            id
+        );
+        if (!row) return undefined;
+        if (
+            typeof row.payload !== 'string' ||
+            Buffer.byteLength(row.payload) > MAXIMUM_RECEIPT_BYTES
+        )
             throw new Error('Invalid repository delivery receipt');
-        const receipt = JSON.parse(
-            await readFile(path, 'utf8')
-        ) as RepositoryDeliveryReceipt;
+        let value: unknown;
+        try {
+            value = JSON.parse(row.payload);
+        } catch {
+            throw new Error('Invalid repository delivery receipt');
+        }
+        return this.validate(value, runId);
+    }
+
+    private validate(value: unknown, runId?: string): RepositoryDeliveryReceipt {
+        if (!RowReader.isRecord(value))
+            throw new Error('Invalid repository delivery receipt');
+        const receipt = value as unknown as RepositoryDeliveryReceipt;
         parseRepository(receipt.repository);
         if (
             receipt.version !== 1 ||
@@ -56,9 +97,9 @@ export class RepositoryDeliveryStore {
             (receipt.parent !== undefined && !/^[a-f0-9]{40}$/.test(receipt.parent)) ||
             (receipt.updated !== undefined && typeof receipt.updated !== 'boolean') ||
             [receipt.title, receipt.body, receipt.commit_message].some(
-                (value) =>
-                    value !== undefined &&
-                    (typeof value !== 'string' || value.length > 16_384)
+                (entry) =>
+                    entry !== undefined &&
+                    (typeof entry !== 'string' || entry.length > 16_384)
             ) ||
             !/^wbo_[a-z0-9]{20,64}$/.test(receipt.outcome_id) ||
             !/^[a-f0-9]{40}$/.test(receipt.revision) ||
@@ -80,40 +121,8 @@ export class RepositoryDeliveryStore {
         return receipt;
     }
 
-    async write(receipt: RepositoryDeliveryReceipt): Promise<void> {
-        if (receipt.session_id) {
-            this.path(receipt.session_id);
-            await mkdir(join(this.home, 'sessions', receipt.session_id), {
-                recursive: true,
-                mode: 0o700,
-            });
-            await this.writePath(
-                join(this.home, 'sessions', receipt.session_id, 'github.json'),
-                receipt
-            );
-        }
-        await this.writePath(this.path(receipt.run_id), receipt);
-    }
-
-    private async writePath(
-        path: string,
-        receipt: RepositoryDeliveryReceipt
-    ): Promise<void> {
-        const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-        try {
-            await writeFile(temporary, `${JSON.stringify(receipt)}\n`, {
-                flag: 'wx',
-                mode: 0o600,
-            });
-            await rename(temporary, path);
-        } finally {
-            await rm(temporary, { force: true });
-        }
-    }
-
-    private path(runId: string): string {
-        if (!/^wb_[a-z0-9]{20,64}$/.test(runId))
+    private assertIdentifier(id: string): void {
+        if (!/^wb_[a-z0-9]{20,64}$/.test(id))
             throw new Error('Invalid repository run ID');
-        return join(this.home, 'runs', runId, 'delivery.json');
     }
 }

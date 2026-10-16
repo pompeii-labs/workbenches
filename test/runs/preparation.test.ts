@@ -94,7 +94,8 @@ describe('shared execution preparation', () => {
                         const repository = fixture.repository;
                         const directory = join(
                             fixture.home,
-                            'sessions',
+                            'files',
+                            'repositories',
                             fixture.repository.binding.session_id,
                             'repository'
                         );
@@ -114,7 +115,8 @@ describe('shared execution preparation', () => {
                                     ? join(directory, '.git')
                                     : join(
                                           fixture.home,
-                                          'sessions',
+                                          'files',
+                                          'repositories',
                                           fixture.repository.binding.session_id,
                                           'agent-git'
                                       ),
@@ -145,7 +147,7 @@ describe('shared execution preparation', () => {
                         if (runtime === 'docker') {
                             const plan = new DockerMountPlan(request);
                             expect(plan.arguments()).toContain(
-                                `${fixture.home}/sessions/${fixture.repository.binding.session_id}/agent-git:/workspace/.git`
+                                `${fixture.home}/files/repositories/${fixture.repository.binding.session_id}/agent-git:/workspace/.git`
                             );
                             expect(plan.containerEnvironment()).toMatchObject({
                                 WORKBENCH_REPOSITORY: 'example/project',
@@ -162,7 +164,8 @@ describe('shared execution preparation', () => {
                                         asset.hostPath ===
                                         join(
                                             fixture.home,
-                                            'sessions',
+                                            'files',
+                                            'repositories',
                                             repository.binding.session_id,
                                             'agent-git'
                                         )

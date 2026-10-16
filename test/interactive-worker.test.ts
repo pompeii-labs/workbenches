@@ -1,9 +1,10 @@
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ConnectionStore } from '../src/connections/store.js';
+import { WorkbenchDatabase } from '../src/database/workbenchdatabase.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import { type PreparedRunner, Runner } from '../src/runners/runner.js';
 import {
@@ -1323,9 +1324,7 @@ async function waitForReady(home: string, runId: string): Promise<void> {
         const run = await store.read(runId);
         if (run.runner_session_id) return;
         if (RunStore.isTerminal(run.status)) {
-            const events = await Bun.file(
-                join(home, 'runs', runId, 'events.ndjson')
-            ).text();
+            const events = JSON.stringify(await store.readEvents(runId));
             throw new Error(`Interactive run became ${run.status}: ${events}`);
         }
         await Bun.sleep(2);
@@ -1387,14 +1386,13 @@ async function collect(events: AsyncIterable<WorkbenchEvent>) {
 }
 
 async function storedControlText(home: string, runId: string): Promise<string> {
-    const root = join(home, 'runs', runId, 'control');
-    const contents: string[] = [];
-    for (const directory of ['pending', 'active', 'receipts']) {
-        for (const file of await readdir(join(root, directory))) {
-            contents.push(await readFile(join(root, directory, file), 'utf8'));
-        }
-    }
-    return contents.join('\n');
+    const database = WorkbenchDatabase.forHome(home);
+    return [
+        ...database.all('SELECT payload FROM control_requests WHERE run_id = ?', runId),
+        ...database.all('SELECT payload FROM control_receipts WHERE run_id = ?', runId),
+    ]
+        .map((row) => String(row.payload))
+        .join('\n');
 }
 
 function field(value: unknown, key: string): string | undefined {

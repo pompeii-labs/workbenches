@@ -223,7 +223,13 @@ describe('saved-source contract', () => {
         const saved = await sessions.update(first.id, {
             native_session_id: 'native-fixture',
         });
-        expect(saved.workbench_path).toStartWith(join(home, 'sessions', first.id));
+        expect(saved.workbench_path).toStartWith(
+            join(
+                home,
+                'packages',
+                (saved.workbench_digest ?? '').slice('sha256:'.length)
+            )
+        );
         expect(saved.source_workbench_path).toBe(path);
         expect(saved.workspace).toBe(root);
         expect(

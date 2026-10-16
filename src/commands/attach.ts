@@ -6,6 +6,7 @@ import { RepositoryDeliveryStore } from '../repositories/receipts.js';
 import { RunStore } from '../runs/index.js';
 import { SessionLifecycle } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
+import { LegacyNotice } from './legacynotice.js';
 
 export const attachCommand = defineCommand({
     meta: {
@@ -39,6 +40,7 @@ export const attachCommand = defineCommand({
             throw new Error('--json and --final cannot be used together');
         }
         const home = workbenchHome();
+        new LegacyNotice(home).show();
         const store = new RunStore(home);
         const lifecycle = new SessionLifecycle(home);
         const activity = args.session
