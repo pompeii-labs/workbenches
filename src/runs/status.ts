@@ -1,8 +1,9 @@
-import { open, readFile, rename, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-
-import type { WorkbenchEvent } from './events.js';
-import { RunStore, type StoredRun, type StoredRunStatus } from './store.js';
+import type { Connection } from '../database/connection.js';
+import { RunEventStore } from '../database/runs/events.js';
+import { RunStatusStore } from '../database/runs/statuses.js';
+import type { ProcessProbe } from '../processes/probe.js';
+import { RunFold, type RunFoldState } from './fold.js';
+import type { RunStore, StoredRun, StoredRunStatus } from './store.js';
 
 /** What the run is doing right now, from its latest activity event. */
 export type RunActivity =
@@ -40,44 +41,30 @@ export interface RunStatus {
     steps: { item: string | null; current: number; completed: number[] };
 }
 
-/** Folded event state, cached beside the log with the byte offset it covers. */
-interface Fold {
-    cost_usd: number;
-    last_activity_at?: string;
-    activity: RunActivity;
-    open_tools: Record<string, { title: string; started_at: string }>;
-    pending: Record<string, { id: string; kind: string; action?: string }>;
-    plan: RunStatus['plan'];
-    steps: RunStatus['steps'];
-    /** Set by a terminal run event; it outranks a stale `run.json`. */
-    terminal?: StoredRunStatus;
-}
-
-interface Cache {
-    version: 1;
-    offset: number;
-    fold: Fold;
-}
-
-const CACHE = 'status-cache.json';
 const ACTIVE: ReadonlySet<string> = new Set(['dispatched', 'running']);
 
 /**
- * Reads run status for status lines. Each call folds only the event-log bytes
- * appended since the last call; the fold is cached in the run directory, so a
- * once-a-second status line stays cheap however long the run gets. Old runs
- * need no migration: the first read folds their whole log once.
+ * Reads run status for status lines. Each call folds only the events
+ * appended since the last call; the fold is cached in the database, so a
+ * once-a-second status line stays cheap however long the run gets.
  */
 export class RunStatusReader {
-    private readonly store: RunStore;
+    private readonly events: RunEventStore;
+    private readonly cache: RunStatusStore;
 
-    constructor(private readonly home: string) {
-        this.store = new RunStore(home);
+    constructor(
+        private readonly store: Pick<RunStore, 'list'>,
+        database: Pick<Connection, 'run' | 'one' | 'all'>,
+        private readonly probe: Pick<ProcessProbe, 'alive'>,
+        private readonly clock: () => number = Date.now
+    ) {
+        this.events = new RunEventStore(database);
+        this.cache = new RunStatusStore(database);
     }
 
     /** Active runs, plus runs that finished within `recentMs`, newest first. */
-    async list(options: { recentMs: number; now?: number }): Promise<RunStatus[]> {
-        const now = options.now ?? Date.now();
+    async list(options: { recentMs: number }): Promise<RunStatus[]> {
+        const now = this.clock();
         const runs = (await this.store.list()).filter((run) => {
             if (ACTIVE.has(run.status)) return true;
             const finished = run.finished_at ? Date.parse(run.finished_at) : Number.NaN;
@@ -88,9 +75,9 @@ export class RunStatusReader {
 
     async read(run: StoredRun): Promise<RunStatus> {
         const fold = await this.fold(run.id);
-        // A crashed worker can leave `run.json` active after the log ended.
+        // A crashed worker can leave the run recorded as active after the log ended.
         const active = ACTIVE.has(run.status);
-        const gone = run.pid !== undefined && !processAlive(run.pid);
+        const gone = run.pid !== undefined && !this.probe.alive(run.pid);
         const status =
             (active && fold.terminal) || (active && gone ? 'lost' : run.status);
         const { open_tools: _tools, pending, terminal: _terminal, ...rest } = fold;
@@ -125,39 +112,15 @@ export class RunStatusReader {
         return median(counts);
     }
 
-    private async fold(id: string): Promise<Fold> {
-        const directory = join(this.home, 'runs', id);
-        const cachePath = join(directory, CACHE);
-        let cache = await readCache(cachePath);
-        const handle = await open(join(directory, 'events.ndjson'), 'r').catch(
-            () => null
-        );
-        if (!handle) return cache?.fold ?? emptyFold();
-        try {
-            const { size } = await handle.stat();
-            // A log shorter than the cached offset was replaced: fold it again.
-            if (!cache || size < cache.offset)
-                cache = { version: 1, offset: 0, fold: emptyFold() };
-            if (size === cache.offset) return cache.fold;
-            const buffer = Buffer.alloc(size - cache.offset);
-            await handle.read(buffer, 0, buffer.length, cache.offset);
-            // Fold complete lines only; a partly written line waits for the next read.
-            const end = buffer.lastIndexOf(0x0a) + 1;
-            if (end === 0) return cache.fold;
-            for (const line of buffer.subarray(0, end).toString('utf8').split('\n')) {
-                if (!line) continue;
-                try {
-                    apply(cache.fold, JSON.parse(line) as WorkbenchEvent);
-                } catch {
-                    // A malformed line carries no status.
-                }
-            }
-            cache.offset += end;
-            await writeCache(cachePath, cache);
-            return cache.fold;
-        } finally {
-            await handle.close();
-        }
+    private async fold(id: string): Promise<RunFoldState> {
+        const cached = this.cache.read(id) ?? { cursor: 0, fold: RunFold.empty() };
+        const logged = this.events.after(id, cached.cursor);
+        const last = logged.at(-1);
+        if (!last) return cached.fold.state;
+        for (const entry of logged) cached.fold.apply(entry.event);
+        cached.cursor = last.cursor;
+        this.cache.write(id, cached);
+        return cached.fold.state;
     }
 }
 
@@ -165,155 +128,4 @@ export function median(values: number[]): number | undefined {
     if (values.length === 0) return undefined;
     const sorted = values.toSorted((left, right) => left - right);
     return sorted[Math.floor(sorted.length / 2)];
-}
-
-function emptyFold(): Fold {
-    return {
-        cost_usd: 0,
-        activity: { kind: 'starting' },
-        open_tools: {},
-        pending: {},
-        plan: null,
-        steps: { item: null, current: 0, completed: [] },
-    };
-}
-
-function apply(fold: Fold, event: WorkbenchEvent): void {
-    const data = (event.data ?? {}) as Record<string, unknown>;
-    const id = typeof data.id === 'string' ? data.id : undefined;
-    switch (event.type) {
-        case 'usage.updated':
-            if (data.kind === 'delta' && typeof data.cost_usd === 'number') {
-                fold.cost_usd += data.cost_usd;
-            }
-            return;
-        case 'plan.updated':
-            plan(fold, data);
-            return;
-        case 'input.requested':
-        case 'question.requested':
-            if (id) {
-                fold.pending[id] = {
-                    id,
-                    kind:
-                        event.type === 'question.requested'
-                            ? 'question'
-                            : String(data.kind ?? 'input'),
-                    ...(typeof data.action === 'string' ? { action: data.action } : {}),
-                };
-            }
-            return;
-        case 'input.accepted':
-        case 'input.rejected':
-        case 'question.answered':
-        case 'question.rejected':
-            if (id) delete fold.pending[id];
-            touch(fold, event, { kind: 'thinking' });
-            return;
-        case 'tool.started': {
-            const title =
-                typeof data.title === 'string'
-                    ? data.title
-                    : String(data.name ?? 'tool');
-            if (id) fold.open_tools[id] = { title, started_at: event.timestamp };
-            if (fold.steps.item !== null) fold.steps.current += 1;
-            touch(fold, event, { kind: 'tool', title, started_at: event.timestamp });
-            return;
-        }
-        case 'tool.completed':
-            if (id) delete fold.open_tools[id];
-            touch(fold, event, latestTool(fold) ?? { kind: 'thinking' });
-            return;
-        case 'file.changed':
-            touch(fold, event, {
-                kind: 'file',
-                operation: String(data.operation ?? 'edit'),
-                path: String(data.path ?? ''),
-            });
-            return;
-        case 'output.text':
-            touch(fold, event, { kind: 'writing' });
-            return;
-        case 'turn.started':
-            touch(fold, event, { kind: 'thinking' });
-            return;
-        case 'run.completed':
-            fold.terminal = 'completed';
-            return;
-        case 'run.failed':
-            fold.terminal = 'failed';
-            return;
-        case 'run.cancelled':
-            fold.terminal = 'cancelled';
-            return;
-        default:
-            return;
-    }
-}
-
-function touch(fold: Fold, event: WorkbenchEvent, activity: RunActivity): void {
-    fold.last_activity_at = event.timestamp;
-    // An open tool outranks text or edits that stream while it runs.
-    fold.activity = latestTool(fold) ?? activity;
-}
-
-function latestTool(fold: Fold): RunActivity | undefined {
-    const open = Object.values(fold.open_tools).at(-1);
-    return open ? { kind: 'tool', ...open } : undefined;
-}
-
-function plan(fold: Fold, data: Record<string, unknown>): void {
-    const items = (Array.isArray(data.items) ? data.items : [])
-        .map((item) => item as Record<string, unknown>)
-        .filter((item) => typeof item.text === 'string')
-        .map((item) => ({
-            text: String(item.text),
-            status: String(item.status ?? 'pending'),
-        }));
-    fold.plan = {
-        items,
-        completed: Number(data.completed ?? 0),
-        total: Number(data.total ?? items.length),
-    };
-    const current = items.find((item) => item.status === 'in_progress')?.text ?? null;
-    if (current === fold.steps.item) return;
-    const finished = items.some(
-        (item) => item.text === fold.steps.item && item.status === 'completed'
-    );
-    if (finished && fold.steps.current > 0)
-        fold.steps.completed.push(fold.steps.current);
-    fold.steps.item = current;
-    fold.steps.current = 0;
-}
-
-async function readCache(path: string): Promise<Cache | undefined> {
-    try {
-        const cache = JSON.parse(await readFile(path, 'utf8')) as Cache;
-        return cache.version === 1 && Number.isSafeInteger(cache.offset)
-            ? cache
-            : undefined;
-    } catch {
-        return undefined;
-    }
-}
-
-/** Atomic replace: concurrent status lines may race, but never read half a file. */
-async function writeCache(path: string, cache: Cache): Promise<void> {
-    const temporary = `${path}.${process.pid}.tmp`;
-    try {
-        await writeFile(temporary, JSON.stringify(cache), { mode: 0o600 });
-        await rename(temporary, path);
-    } catch {
-        // A read-only or vanished run directory only costs the cache.
-    }
-}
-
-function processAlive(pid: number): boolean {
-    try {
-        process.kill(pid, 0);
-        return true;
-    } catch (error) {
-        // EPERM does not prove an exit.
-        return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
-    }
 }

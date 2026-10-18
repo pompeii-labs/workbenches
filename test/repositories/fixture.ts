@@ -3,16 +3,33 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
+import { RepositoryCheckoutStore } from '../../src/database/checkouts.js';
+import { Connection } from '../../src/database/connection.js';
 import type { OutcomeChangeEntry, RunOutcome } from '../../src/outcomes/contracts.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
 import { WorkspaceSnapshot } from '../../src/outcomes/workspace.js';
+import { ProcessProbe } from '../../src/processes/probe.js';
 import type { RepositoryBinding } from '../../src/repositories/contracts.js';
 import { RepositoryGit } from '../../src/repositories/git.js';
 import { RepositoryGitHub } from '../../src/repositories/github.js';
 import { RunStore } from '../../src/runs/store.js';
 
 const directories: string[] = [];
+const connections = new Map<string, Connection>();
+
+/** The one connection a test opens on a temporary home, closed after the test. */
+export function connect(home: string): Connection {
+    let connection = connections.get(home);
+    if (!connection) {
+        connection = Connection.open(home);
+        connections.set(home, connection);
+    }
+    return connection;
+}
+
 afterEach(async () => {
+    for (const connection of connections.values()) connection.close();
+    connections.clear();
     await Promise.all(directories.splice(0).map(removeTemporary));
 });
 
@@ -136,7 +153,17 @@ export async function checkoutFixture() {
         revision: await git(source, ['rev-parse', 'HEAD']),
         tree: await git(source, ['rev-parse', 'HEAD^{tree}']),
     };
-    return { root, source, home, binding: selected, git: new FixtureGit(source) };
+    const connection = connect(home);
+    return {
+        root,
+        source,
+        home,
+        connection,
+        checkouts: new RepositoryCheckoutStore(connection),
+        runs: new RunStore(connection, home, new ProcessProbe()),
+        binding: selected,
+        git: new FixtureGit(source),
+    };
 }
 
 export async function saveRun(
@@ -146,7 +173,7 @@ export async function saveRun(
     outcome?: RunOutcome,
     previous?: string
 ) {
-    const runs = new RunStore(home);
+    const runs = new RunStore(connect(home), home, new ProcessProbe());
     await runs.create({
         id,
         metadata: {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Connection } from '../../src/database/connection.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
 import { RunStore } from '../../src/runs/store.js';
 import {
@@ -15,9 +16,12 @@ import type {
 } from '../../src/runtimes/e2b/contracts.js';
 import { E2BOutcomeRecovery } from '../../src/runtimes/e2b/recovery.js';
 import { SessionRetention } from '../../src/sessions/retention.js';
+import { Services } from '../../src/workbench/services.js';
 
 const directories: string[] = [];
+const connections: Connection[] = [];
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         directories
             .splice(0)
@@ -28,7 +32,10 @@ afterEach(async () => {
 async function fixture() {
     const home = await mkdtemp(join(tmpdir(), 'workbench-recovery-test-'));
     directories.push(home);
-    const runs = new RunStore(home);
+    const connection = Connection.open(home);
+    connections.push(connection);
+    const services = new Services(home, connection);
+    const runs = services.runs;
     const run = await runs.create({
         metadata: {
             workbench: 'fixture',
@@ -104,6 +111,8 @@ async function fixture() {
     await recovery.checkpoint(sandbox, [], new Map(), 1_024);
     return {
         home,
+        connection,
+        services,
         runs,
         run,
         identity,
@@ -143,14 +152,14 @@ describe('E2B outcome recovery safety', () => {
             'present'
         );
         await store.close();
-        await expect(f.recovery.recover(f.client)).rejects.toThrow(
+        await expect(f.recovery.recover(f.client, f.runs)).rejects.toThrow(
             'Already committed work must not reconnect'
         );
         expect(f.counts().connects).toBe(1);
         expect(f.killed).toEqual([]);
         expect(await f.recovery.exists()).toBeTrue();
         f.client.connectSandbox = async () => f.sandbox;
-        const recovered = await f.recovery.recover(f.client);
+        const recovered = await f.recovery.recover(f.client, f.runs);
         expect(recovered.id).not.toBe(checkpoint.id);
         expect(recovered.turn_index).toBeUndefined();
         expect(
@@ -166,7 +175,9 @@ describe('E2B outcome recovery safety', () => {
         await expect(f.recovery.discardPending(f.client)).rejects.toThrow(
             'worker is active'
         );
-        await expect(f.recovery.recover(f.client)).rejects.toThrow('worker is active');
+        await expect(f.recovery.recover(f.client, f.runs)).rejects.toThrow(
+            'worker is active'
+        );
         expect(f.counts()).toEqual({ lists: 0, connects: 0 });
         expect(f.killed).toEqual([]);
         expect(await f.recovery.exists()).toBe(true);
@@ -195,7 +206,12 @@ describe('E2B outcome recovery safety', () => {
         expect(
             (await stat(join(f.recovery.directory, 'recovery.json'))).mode & 0o777
         ).toBe(0o600);
-        const retention = new SessionRetention(f.home);
+        const retention = new SessionRetention(
+            f.home,
+            f.runs,
+            f.services.sessions,
+            f.services.writer
+        );
         const policy = {
             before: new Date(),
             includeResumableSessions: true,
@@ -259,15 +275,19 @@ describe('E2B outcome recovery safety', () => {
             'pending'
         );
         await store.close();
-        const recordPath = join(f.home, 'runs', f.run.id, 'run.json');
-        const originalRecord = await readFile(recordPath);
-        await writeFile(recordPath, '{broken');
-        await expect(f.recovery.recover(f.client)).rejects.toThrow();
+        const database = f.connection;
+        const originalStatus = (await f.runs.read(f.run.id)).status;
+        database.run('UPDATE runs SET status = ? WHERE id = ?', 'broken', f.run.id);
+        await expect(f.recovery.recover(f.client, f.runs)).rejects.toThrow();
         expect(await f.recovery.exists()).toBe(true);
         expect(f.killed).toEqual([]);
         expect(f.counts().connects).toBe(0);
-        await writeFile(recordPath, originalRecord);
-        expect(await f.recovery.recover(f.client)).toEqual(outcome);
+        database.run(
+            'UPDATE runs SET status = ? WHERE id = ?',
+            originalStatus,
+            f.run.id
+        );
+        expect(await f.recovery.recover(f.client, f.runs)).toEqual(outcome);
         expect((await f.runs.read(f.run.id)).outcome_id).toBe(outcome.id);
         expect(await store.list()).toHaveLength(1);
         expect(await readFile(await store.blob(content))).toEqual(

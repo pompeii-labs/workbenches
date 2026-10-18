@@ -6,6 +6,7 @@ import {
     ConnectionStore,
     type RunnerConnectionSelection,
 } from '../connections/store.js';
+import type { RepositoryCheckoutStore } from '../database/checkouts.js';
 import {
     connectAdvice,
     connectCommand,
@@ -58,6 +59,9 @@ interface ExecutionPreparationDependencies {
     runners?: RunnerRegistry;
     runtimes: RuntimeRegistry;
     now?: () => Date;
+    /** The run records of the Workbench home, for runs that link outcomes and retain edits. */
+    runs?: Pick<RunStore, 'read' | 'update' | 'list'>;
+    checkouts?: Pick<RepositoryCheckoutStore, 'find' | 'record' | 'forget'>;
     repositories?: (
         home: string,
         binding: RepositoryBinding,
@@ -115,7 +119,12 @@ export class ExecutionPreparation {
                 await new OutcomeApplier(store).apply(outcome, {
                     primary: this.repository.directory,
                 });
-                await publishRunOutcome(home, events, outcome, 'applied');
+                await publishRunOutcome(
+                    this.dependencies.runs,
+                    events,
+                    outcome,
+                    'applied'
+                );
             }
             return outcome;
         } finally {
@@ -151,7 +160,8 @@ export class ExecutionPreparation {
                 throw new Error(
                     'Repository execution requires durable outcome capture'
                 );
-            if (!home)
+            const { runs, checkouts } = this.dependencies;
+            if (!home || !runs || !checkouts)
                 throw new Error(
                     'Repository execution requires a persistent Workbench home'
                 );
@@ -162,7 +172,7 @@ export class ExecutionPreparation {
             this.repository = (
                 this.dependencies.repositories ??
                 ((home, binding, environment) =>
-                    new RepositoryWorkspace(home, binding, environment))
+                    new RepositoryWorkspace(home, checkouts, binding, environment))
             )(home, this.options.repository, environment);
             this.repository.assertCredentialsOwnedByEngine(workbench);
             await this.options.events.emit('repository.preparing', {
@@ -170,7 +180,7 @@ export class ExecutionPreparation {
                 revision: this.options.repository.revision,
             });
             const identity = await this.repository.prepare(runtimeName);
-            await new RepositoryRetention(home, this.options.repository).restore(
+            await new RepositoryRetention(home, runs, this.options.repository).restore(
                 this.options.events.runId,
                 this.repository.directory
             );
@@ -209,10 +219,16 @@ export class ExecutionPreparation {
             this.outcomes = await OutcomeLifecycle.create({
                 home,
                 runId: this.options.events.runId,
+                ...(this.dependencies.runs ? { runs: this.dependencies.runs } : {}),
                 ...(session?.nativeSessionId ? { resumeSessionId: session.id } : {}),
                 ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
                 onAvailable: (outcome, state) =>
-                    publishRunOutcome(home, this.options.events, outcome, state),
+                    publishRunOutcome(
+                        this.dependencies.runs,
+                        this.options.events,
+                        outcome,
+                        state
+                    ),
             });
         }
         const runners = this.dependencies.runners ?? RunnerRegistry.standard();

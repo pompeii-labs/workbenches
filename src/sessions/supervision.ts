@@ -1,7 +1,7 @@
-import { AuthoringJob, type AuthoringJobRecord } from '../authoring/job.js';
-import { RunStore, type StoredRun } from '../runs/store.js';
-import { type RunSnapshot, RunSupervision } from '../runs/supervision.js';
-import { SessionStore } from './store.js';
+import type { AuthoringJob, AuthoringJobRecord } from '../authoring/job.js';
+import type { RunStore, StoredRun } from '../runs/store.js';
+import type { RunSnapshot, RunSupervision } from '../runs/supervision.js';
+import type { SessionStore } from './store.js';
 
 export interface SessionSnapshot extends RunSnapshot {
     run_state?: RunSnapshot['state'];
@@ -9,20 +9,22 @@ export interface SessionSnapshot extends RunSnapshot {
 }
 
 export class SessionSupervision {
-    constructor(private readonly home: string) {}
+    constructor(
+        private readonly runs: Pick<RunStore, 'read'>,
+        private readonly sessions: Pick<SessionStore, 'read'>,
+        private readonly jobs: Pick<AuthoringJob, 'forRun' | 'wait'>,
+        private readonly supervision: Pick<RunSupervision, 'wait'>
+    ) {}
 
     async resolve(
         id: string,
         options: { exactRun?: boolean } = {}
     ): Promise<StoredRun> {
-        const runs = new RunStore(this.home);
-        if (options.exactRun) return runs.read(id);
+        if (options.exactRun) return this.runs.read(id);
         // The session and its first run share an ID. Only a direct session
         // lookup follows the latest execution; linked run IDs remain exact.
-        const session = await new SessionStore(this.home)
-            .read(id)
-            .catch(() => undefined);
-        return runs.read(session?.latest_run_id ?? id);
+        const session = await this.sessions.read(id).catch(() => undefined);
+        return this.runs.read(session?.latest_run_id ?? id);
     }
 
     async wait(
@@ -34,9 +36,8 @@ export class SessionSupervision {
         } = {}
     ): Promise<SessionSnapshot> {
         const started = performance.now();
-        const jobs = new AuthoringJob(this.home);
-        let authoring = await jobs.forRun(run.id);
-        const result = await new RunSupervision(this.home).wait(run, {
+        let authoring = await this.jobs.forRun(run.id);
+        const result = await this.supervision.wait(run, {
             ...options,
             // Authoring's result includes post-execution package verification.
             terminalOnly:
@@ -45,7 +46,7 @@ export class SessionSupervision {
         });
         if (!authoring) return result;
         if (result.state === 'completed' && !result.interrupted) {
-            authoring = await jobs.wait(authoring, {
+            authoring = await this.jobs.wait(authoring, {
                 ...(options.timeoutMilliseconds !== undefined
                     ? {
                           timeoutMilliseconds: Math.max(

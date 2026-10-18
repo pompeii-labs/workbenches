@@ -2,11 +2,11 @@ import { stat } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 
 import { RunnerRegistry } from '../runners/index.js';
-import { SessionLifecycle, type StoredSession } from '../sessions/index.js';
+import type { SessionLifecycle, StoredSession } from '../sessions/index.js';
 import { Workbench, WorkbenchResolver } from '../workbench/index.js';
 import type { ResolvedWorkbenchReference } from '../workbench/resolver.js';
 import { AuthoringCli } from './cli.js';
-import { ImprovementEvidence } from './evidence.js';
+import type { ImprovementEvidence } from './evidence.js';
 import { OfficialWorkbenchResolver } from './official.js';
 import {
     type AuthoringFinishOptions,
@@ -18,9 +18,9 @@ import { AuthoringTarget } from './target.js';
 
 interface WorkbenchAuthoringDependencies {
     official?: Pick<OfficialWorkbenchResolver, 'creator'>;
-    sessions?: Pick<SessionLifecycle, 'resolve'>;
+    sessions: Pick<SessionLifecycle, 'resolve'>;
     resolver?: Pick<WorkbenchResolver, 'resolve'>;
-    evidence?: Pick<ImprovementEvidence, 'write'>;
+    evidence: Pick<ImprovementEvidence, 'write'>;
     cli?: Pick<AuthoringCli, 'environment'>;
     smoke?: AuthoringSmoke;
     environment?: Record<string, string | undefined>;
@@ -54,13 +54,13 @@ export class WorkbenchAuthoring {
 
     constructor(
         readonly home: string,
-        dependencies: WorkbenchAuthoringDependencies = {}
+        dependencies: WorkbenchAuthoringDependencies
     ) {
         this.#environment = dependencies.environment ?? process.env;
         this.#official = dependencies.official ?? new OfficialWorkbenchResolver(home);
-        this.#sessions = dependencies.sessions ?? new SessionLifecycle(home);
+        this.#sessions = dependencies.sessions;
         this.#resolver = dependencies.resolver ?? new WorkbenchResolver();
-        this.#evidence = dependencies.evidence ?? new ImprovementEvidence(home);
+        this.#evidence = dependencies.evidence;
         this.#cli = dependencies.cli ?? new AuthoringCli(home);
         this.#smoke = dependencies.smoke;
         this.#verification = {

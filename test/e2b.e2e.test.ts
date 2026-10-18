@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { RunnerCredentialStore } from '../src/connections/credentials.js';
+import { Connection } from '../src/database/connection.js';
 import {
     OutcomeApplier,
     OutcomeLifecycle,
@@ -29,6 +30,7 @@ import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
 import { TransferRules } from '../src/runtimes/staging/rules.js';
 import { SessionRetention } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import { Services } from '../src/workbench/services.js';
 import { seedModelCatalogFixture } from './model-catalog-fixture.js';
 
 const diskAssetSource = new DiskAssetSource();
@@ -41,6 +43,32 @@ const cliPath = join(projectDirectory, 'src', 'cli.ts');
 const temporaryDirectories: string[] = [];
 const activeRuntimes = new Set<PreparedRuntime>();
 const activeSessions = new Set<InteractiveRunSession>();
+const openServices = new Map<string, { connection: Connection; services: Services }>();
+
+/** One connection per temporary home, closed after the test. */
+function servicesFor(home: string): Services {
+    let open = openServices.get(home);
+    if (!open) {
+        const connection = Connection.open(home);
+        open = { connection, services: new Services(home, connection) };
+        openServices.set(home, open);
+    }
+    return open.services;
+}
+
+function retentionFor(
+    home: string,
+    dependencies: ConstructorParameters<typeof SessionRetention>[4]
+): SessionRetention {
+    const services = servicesFor(home);
+    return new SessionRetention(
+        home,
+        services.runs,
+        services.sessions,
+        services.writer,
+        dependencies
+    );
+}
 
 afterEach(async () => {
     await Promise.allSettled(
@@ -55,6 +83,8 @@ afterEach(async () => {
             await runtime.cleanup();
         })
     );
+    for (const { connection } of openServices.values()) connection.close();
+    openServices.clear();
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -108,7 +138,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
         const apiKey = process.env.E2B_API_KEY;
         if (!apiKey) throw new Error('E2B_API_KEY is required for this test');
         const client = new InterruptingArtifactClient(apiKey);
-        const runs = new RunStore(home);
+        const runs = servicesFor(home).runs;
         const run = await runs.create({
             metadata: {
                 workbench: workbench.manifest.name,
@@ -179,7 +209,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             expect(await recovery.exists()).toBeTrue();
             const sandboxes = E2BManagedSandboxes.connect(scope, {}, { client });
             if (!sandboxes) throw new Error('Expected managed E2B sandbox inventory');
-            const review = await new SessionRetention(home, {
+            const review = await retentionFor(home, {
                 sandboxes,
             }).review({ before: new Date() });
             expect(review.sandboxes).toHaveLength(0);
@@ -385,7 +415,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                     { client }
                 );
                 if (!sandboxes) throw new Error('Managed E2B cleanup unavailable');
-                const retention = new SessionRetention(home, { sandboxes });
+                const retention = retentionFor(home, { sandboxes });
                 const policy = { before: new Date() };
                 expect((await retention.review(policy)).sandboxes).toContainEqual({
                     id: orphan.id,
@@ -743,7 +773,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
             const apiKey = process.env.E2B_API_KEY;
             if (!apiKey) throw new Error('E2B_API_KEY is required for this test');
             const client = new E2BSdkClient(apiKey);
-            const store = new RunStore(home);
+            const store = servicesFor(home).runs;
             const runId = RunStore.createId();
             const scope = RunStore.scope(home);
             await store.create({
@@ -827,7 +857,7 @@ describe.skipIf(!enabled)('E2B runtime end to end', () => {
                     { client }
                 );
                 if (!sandboxes) throw new Error('Managed E2B cleanup unavailable');
-                const result = await new SessionRetention(home, {
+                const result = await retentionFor(home, {
                     sandboxes,
                 }).apply({ before: new Date() });
                 expect(result.removedSandboxes).toContain(sandbox.id);
@@ -1031,7 +1061,7 @@ describe.skipIf(!sessionEnabled)('E2B CLI end to end', () => {
             await seedModelCatalogFixture(home);
             const client = new E2BSdkClient(process.env.E2B_API_KEY);
             const scope = RunStore.scope(home);
-            const store = new RunStore(home);
+            const store = servicesFor(home).runs;
             let workerPid: number | undefined;
             let runId: string | undefined;
             try {

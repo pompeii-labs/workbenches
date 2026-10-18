@@ -1,26 +1,27 @@
 import { RegistryClient } from '../registry/client.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
-import { SavedWorkbenchCatalog } from './saved.js';
+import type { SavedWorkbenchCatalog } from './saved.js';
 import type { CatalogEntry, CatalogUpgradeResult } from './types.js';
+import type { CatalogWriter } from './writer.js';
 
 export interface SavedWorkbenchUpgradeOptions {
     fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 }
 
 export class SavedWorkbenchUpgrade {
-    readonly #catalog: SavedWorkbenchCatalog;
     readonly #fetch?: SavedWorkbenchUpgradeOptions['fetch'];
 
     constructor(
         readonly home: string,
+        private readonly catalog: Pick<SavedWorkbenchCatalog, 'find'>,
+        private readonly writer: Pick<CatalogWriter, 'upgrade'>,
         options: SavedWorkbenchUpgradeOptions = {}
     ) {
-        this.#catalog = new SavedWorkbenchCatalog(home);
         this.#fetch = options.fetch;
     }
 
     async upgrade(alias: string): Promise<CatalogUpgradeResult> {
-        const entry = await this.#catalog.find(alias);
+        const entry = await this.catalog.find(alias);
         if (!entry) throw new Error(`Saved Workbench does not exist: ${alias}`);
         return entry.registry ? this.upgradeRegistry(entry) : this.upgradeSource(entry);
     }
@@ -51,7 +52,7 @@ export class SavedWorkbenchUpgrade {
             : await this.github().fetch(registry.source, registry.selector, {
                   revision: registry.revision,
               });
-        return this.#catalog.upgrade(entry.alias, {
+        return this.writer.upgrade(entry.alias, {
             source: workbench.source,
             revision: workbench.revision,
             selector: workbench.selector,
@@ -80,7 +81,7 @@ export class SavedWorkbenchUpgrade {
             entry.selector,
             entry.ref ? { revision: entry.ref } : {}
         );
-        return this.#catalog.upgrade(entry.alias, {
+        return this.writer.upgrade(entry.alias, {
             source: workbench.source,
             revision: workbench.revision,
             selector: workbench.selector,

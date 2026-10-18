@@ -13,12 +13,13 @@ const maximumRestoredBytes = 512 * 1_024 * 1_024;
 /** The session's retained file library, never another session or an edited preview. */
 export async function restoreSessionArtifacts(
     home: string,
+    allRuns: Pick<RunStore, 'list'>,
     sessionId: string,
     runId: string,
     output: OutcomeOutput
 ): Promise<number> {
     RunStore.validateId(sessionId);
-    const runs = (await new RunStore(home).list())
+    const runs = (await allRuns.list())
         .filter(
             (run) =>
                 run.id !== runId &&

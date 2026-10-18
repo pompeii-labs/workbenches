@@ -1,10 +1,10 @@
 import { defineCommand } from 'citty';
 
 import { WorkbenchAuthoring } from '../authoring/index.js';
-import { AuthoringJob } from '../authoring/job.js';
-import { RunStore } from '../runs/store.js';
+import { Connection } from '../database/connection.js';
 import { workbenchHome } from '../storage.js';
 import { WorkbenchEnvironment, WorkbenchWorkspaces } from '../workbench/index.js';
+import { Services } from '../workbench/services.js';
 import { CliInput } from './input.js';
 import { CliWait } from './waiting.js';
 
@@ -111,44 +111,51 @@ export const createCommand = defineCommand({
         });
         const workspaceOverrides = new WorkbenchWorkspaces().parse(rawArgs);
         const home = workbenchHome();
-        const launch = await new WorkbenchAuthoring(home, {
-            verification: {
-                environment: process.env,
-                environmentOverrides,
-                workspaceOverrides,
-                workspaceDirectory: process.cwd(),
-                ...(args['allow-host-docker'] ? { allowHostDocker: true } : {}),
-                ...(args.runtime ? { runtime: args.runtime } : {}),
-                ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
-            },
-        }).create({
-            ...(args.target ? { target: args.target } : {}),
-            ...(args.dir ? { directory: args.dir } : {}),
-            ...(args.from ? { from: args.from } : {}),
-            ...(args.feedback ? { feedback: args.feedback } : {}),
-        });
+        const connection = Connection.open(home);
         try {
-            const prompt = [launch.prompt, brief].filter(Boolean).join('\n\n');
-            const job = await new AuthoringJob(home).start(launch, prompt, {
-                detached: args.detach,
+            const services = new Services(home, connection);
+            const launch = await new WorkbenchAuthoring(home, {
+                sessions: services.lifecycle,
+                evidence: services.evidence,
+                verification: {
+                    environment: process.env,
+                    environmentOverrides,
+                    workspaceOverrides,
+                    workspaceDirectory: process.cwd(),
+                    ...(args['allow-host-docker'] ? { allowHostDocker: true } : {}),
+                    ...(args.runtime ? { runtime: args.runtime } : {}),
+                    ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
+                },
+            }).create({
+                ...(args.target ? { target: args.target } : {}),
+                ...(args.dir ? { directory: args.dir } : {}),
+                ...(args.from ? { from: args.from } : {}),
+                ...(args.feedback ? { feedback: args.feedback } : {}),
             });
-            if (args.detach) {
-                process.stdout.write(
-                    args.json
-                        ? `${JSON.stringify({ session_id: job.session_id, run_id: job.run_id, operation_id: job.operation_id, input_id: `input_${job.run_id}`, after_sequence: 0 })}\n`
-                        : `${job.session_id}\n`
-                );
-            } else {
-                await new CliWait().execute(
-                    home,
-                    await new RunStore(home).read(job.run_id),
-                    {
-                        json: args.json,
-                    }
-                );
+            try {
+                const prompt = [launch.prompt, brief].filter(Boolean).join('\n\n');
+                const job = await services.jobs.start(launch, prompt, {
+                    detached: args.detach,
+                });
+                if (args.detach) {
+                    process.stdout.write(
+                        args.json
+                            ? `${JSON.stringify({ session_id: job.session_id, run_id: job.run_id, operation_id: job.operation_id, input_id: `input_${job.run_id}`, after_sequence: 0 })}\n`
+                            : `${job.session_id}\n`
+                    );
+                } else {
+                    await new CliWait(services.sessionSupervision).execute(
+                        await services.runs.read(job.run_id),
+                        {
+                            json: args.json,
+                        }
+                    );
+                }
+            } finally {
+                await launch.resolved.cleanup();
             }
         } finally {
-            await launch.resolved.cleanup();
+            connection.close();
         }
     },
 });

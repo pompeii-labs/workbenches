@@ -1,17 +1,18 @@
-import {
-    lstat,
-    mkdir,
-    readdir,
-    readFile,
-    rename,
-    rm,
-    stat,
-    writeFile,
-} from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
 import type { CatalogRegistryReference } from '../catalog/types.js';
-import type { RepositoryBinding } from '../repositories/contracts.js';
+import { RepositoryCheckoutStore } from '../database/checkouts.js';
+import type { Connection } from '../database/connection.js';
+import { LeaseStore } from '../database/leases.js';
+import { type Row, RowReader } from '../database/rows.js';
+import { WorkbenchFiles } from '../files/layout.js';
+import type { ProcessProbe } from '../processes/probe.js';
+import {
+    isRepositoryBinding,
+    type RepositoryBinding,
+} from '../repositories/contracts.js';
+import { isStoredRegistry, isStoredWorkspaces } from '../runs/bindings.js';
 import { RunStore } from '../runs/store.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
 import { SessionIdentity } from './identity.js';
@@ -51,34 +52,38 @@ export type CreateStoredSessionOptions = Omit<
 
 export class SessionStore {
     readonly #identity = new SessionIdentity();
+    readonly #files: WorkbenchFiles;
+    readonly #leases: LeaseStore;
+    readonly #checkouts: RepositoryCheckoutStore;
 
-    constructor(private readonly home: string) {}
+    constructor(
+        private readonly database: Pick<
+            Connection,
+            'run' | 'one' | 'all' | 'transaction'
+        >,
+        home: string,
+        probe: Pick<ProcessProbe, 'alive'>
+    ) {
+        this.#files = new WorkbenchFiles(home);
+        this.#leases = new LeaseStore(database, probe);
+        this.#checkouts = new RepositoryCheckoutStore(database);
+    }
 
     async exclusive<T>(id: string, operation: () => Promise<T>): Promise<T> {
         RunStore.validateId(id);
-        const token = crypto.randomUUID();
-        const directory = this.continuationLeaseDirectory(id);
-        await this.acquireLease(
-            directory,
-            token,
-            `Timed out waiting to continue Workbench session: ${id}`
+        return this.#leases.exclusive(
+            `session:${id}`,
+            {
+                timeoutMilliseconds: 30_000,
+                pollMilliseconds: 25,
+                timeoutMessage: `Timed out waiting to continue Workbench session: ${id}`,
+            },
+            operation
         );
-        try {
-            return await operation();
-        } finally {
-            await this.releaseLease(directory, token);
-        }
     }
 
     async create(options: CreateStoredSessionOptions): Promise<StoredSession> {
         RunStore.validateId(options.id);
-        if (await stat(this.directory(options.id)).catch(() => null)) {
-            throw new Error(`Session already exists: ${options.id}`);
-        }
-        await mkdir(this.nativeDirectory(options.id), {
-            recursive: true,
-            mode: 0o700,
-        });
         const timestamp = new Date().toISOString();
         const { name, ...metadata } = options;
         const session: StoredSession = {
@@ -89,48 +94,51 @@ export class SessionStore {
             created_at: timestamp,
             updated_at: timestamp,
         };
-        await this.write(session);
+        const native = this.nativeDirectory(session.id);
+        const inserted = this.database.run(
+            `INSERT OR IGNORE INTO sessions (
+                id, name, workbench, workbench_version, runner, model, runtime, reference,
+                workbench_path, source_workbench_path, workbench_digest, workspace,
+                repository, workspaces, registry, allow_unchecked_gpu, native_path,
+                native_session_id, latest_run_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            session.id,
+            session.name ?? null,
+            session.workbench,
+            session.workbench_version,
+            session.runner,
+            session.model,
+            session.runtime,
+            session.reference,
+            session.workbench_path,
+            session.source_workbench_path ?? null,
+            session.workbench_digest ?? null,
+            session.workspace,
+            session.repository ? JSON.stringify(session.repository) : null,
+            JSON.stringify(session.workspaces),
+            session.registry ? JSON.stringify(session.registry) : null,
+            session.allow_unchecked_gpu === undefined
+                ? null
+                : Number(session.allow_unchecked_gpu),
+            native,
+            session.native_session_id ?? null,
+            session.latest_run_id,
+            session.created_at,
+            session.updated_at
+        );
+        if (inserted.changes === 0)
+            throw new Error(`Session already exists: ${session.id}`);
+        try {
+            await mkdir(native, { recursive: true, mode: 0o700 });
+        } catch (error) {
+            this.database.run('DELETE FROM sessions WHERE id = ?', session.id);
+            throw error;
+        }
         return session;
     }
 
     async read(id: string): Promise<StoredSession> {
-        RunStore.validateId(id);
-        const source = await readFile(this.metadataPath(id), 'utf8').catch(() => null);
-        if (!source) throw new Error(`Workbench session does not exist: ${id}`);
-        const value = JSON.parse(source) as Partial<StoredSession>;
-        const runtime = value.runtime ?? 'local';
-        if (
-            value.version !== 1 ||
-            value.id !== id ||
-            (value.name !== undefined &&
-                (typeof value.name !== 'string' ||
-                    !this.#identity.isNormalized(value.name))) ||
-            typeof value.workbench !== 'string' ||
-            typeof value.workbench_version !== 'string' ||
-            typeof value.runner !== 'string' ||
-            typeof value.model !== 'string' ||
-            typeof runtime !== 'string' ||
-            runtime.length === 0 ||
-            typeof value.reference !== 'string' ||
-            typeof value.workbench_path !== 'string' ||
-            (value.source_workbench_path !== undefined &&
-                typeof value.source_workbench_path !== 'string') ||
-            (value.workbench_digest !== undefined &&
-                (typeof value.workbench_digest !== 'string' ||
-                    !/^sha256:[0-9a-f]{64}$/.test(value.workbench_digest))) ||
-            typeof value.workspace !== 'string' ||
-            !Array.isArray(value.workspaces) ||
-            (value.allow_unchecked_gpu !== undefined &&
-                typeof value.allow_unchecked_gpu !== 'boolean') ||
-            (value.native_session_id !== undefined &&
-                typeof value.native_session_id !== 'string') ||
-            typeof value.latest_run_id !== 'string' ||
-            typeof value.created_at !== 'string' ||
-            typeof value.updated_at !== 'string'
-        ) {
-            throw new Error(`Invalid Workbench session record: ${id}`);
-        }
-        return { ...value, runtime } as StoredSession;
+        return this.load(id);
     }
 
     async update(
@@ -170,62 +178,93 @@ export class SessionStore {
     async list(
         options: { resumableOnly?: boolean; workspace?: string } = {}
     ): Promise<StoredSession[]> {
-        const entries = await readdir(this.root, { withFileTypes: true }).catch(
-            () => []
-        );
         const workspace = options.workspace ? resolve(options.workspace) : undefined;
-        const sessions = await Promise.all(
-            entries
-                .filter((entry) => entry.isDirectory() && entry.name.startsWith('wb_'))
-                .map((entry) => this.read(entry.name).catch(() => null))
-        );
-        return sessions
-            .filter((session): session is StoredSession => session !== null)
+        return this.database
+            .all('SELECT * FROM sessions ORDER BY updated_at DESC, id DESC')
+            .flatMap((row) => {
+                try {
+                    return [this.parse(row)];
+                } catch {
+                    return [];
+                }
+            })
             .filter(
                 (session) =>
                     !options.resumableOnly || Boolean(session.native_session_id)
             )
-            .filter((session) => !workspace || resolve(session.workspace) === workspace)
-            .toSorted((left, right) => right.updated_at.localeCompare(left.updated_at));
+            .filter(
+                (session) => !workspace || resolve(session.workspace) === workspace
+            );
     }
 
     async remove(id: string): Promise<void> {
         RunStore.validateId(id);
-        await rm(this.directory(id), { recursive: true, force: true });
+        this.database.transaction(() => {
+            this.database.run('DELETE FROM sessions WHERE id = ?', id);
+            this.database.run(
+                "DELETE FROM repository_receipts WHERE scope = 'session' AND id = ?",
+                id
+            );
+            this.#checkouts.forget(id);
+        });
+        await this.#files.removeSession(id);
     }
 
     async size(id: string): Promise<number> {
         await this.read(id);
-        return this.directorySize(this.directory(id));
+        return this.#files.sessionBytes(id);
     }
 
     nativeDirectory(id: string): string {
         RunStore.validateId(id);
-        return join(this.directory(id), 'native');
+        return this.#files.nativeDirectory(id);
     }
 
-    private get root(): string {
-        return join(this.home, 'sessions');
+    private load(id: string): StoredSession {
+        RunStore.validateId(id);
+        const row = this.database.one('SELECT * FROM sessions WHERE id = ?', id);
+        if (!row) throw new Error(`Workbench session does not exist: ${id}`);
+        return this.parse(row);
     }
 
-    private directory(id: string): string {
-        return join(this.root, id);
-    }
-
-    private metadataPath(id: string): string {
-        return join(this.directory(id), 'session.json');
-    }
-
-    private continuationLeaseDirectory(id: string): string {
-        return join(this.directory(id), '.lease');
-    }
-
-    private metadataLeaseDirectory(id: string): string {
-        return join(this.directory(id), '.metadata-lease');
-    }
-
-    private leaseOwnerPath(directory: string): string {
-        return join(directory, 'owner.json');
+    private parse(row: Row): StoredSession {
+        const reader = new RowReader(row, 'Workbench session record');
+        const name = reader.optionalText('name');
+        const digest = reader.optionalText('workbench_digest');
+        if (name !== undefined && !this.#identity.isNormalized(name))
+            throw new Error('Invalid Workbench session record: column name');
+        if (digest !== undefined && !/^sha256:[0-9a-f]{64}$/.test(digest))
+            throw new Error(
+                'Invalid Workbench session record: column workbench_digest'
+            );
+        const repository = reader.optionalJson('repository', isRepositoryBinding);
+        const registry = reader.optionalJson('registry', isStoredRegistry);
+        const gpu = reader.optionalFlag('allow_unchecked_gpu');
+        const native = reader.optionalText('native_session_id');
+        const source = reader.optionalText('source_workbench_path');
+        return {
+            version: 1,
+            id: reader.text('id'),
+            ...(name !== undefined ? { name } : {}),
+            workbench: reader.text('workbench'),
+            workbench_version: reader.text('workbench_version'),
+            runner: reader.text('runner'),
+            model: reader.text('model'),
+            runtime: reader.text('runtime'),
+            reference: reader.text('reference'),
+            workbench_path: reader.text('workbench_path'),
+            ...(source !== undefined ? { source_workbench_path: source } : {}),
+            ...(digest !== undefined ? { workbench_digest: digest } : {}),
+            workspace: reader.text('workspace'),
+            ...(repository ? { repository } : {}),
+            workspaces: reader.json('workspaces', isStoredWorkspaces),
+            ...(registry ? { registry } : {}),
+            ...(gpu !== undefined ? { allow_unchecked_gpu: gpu } : {}),
+            ...(native !== undefined ? { native_session_id: native } : {}),
+            latest_run_id: reader.text('latest_run_id'),
+            created_at: reader.text('created_at'),
+            updated_at: reader.text('updated_at'),
+        };
     }
 
     private async mutate(
@@ -233,127 +272,18 @@ export class SessionStore {
         operation: (current: StoredSession) => StoredSession
     ): Promise<StoredSession> {
         RunStore.validateId(id);
-        await this.read(id);
-        const directory = this.metadataLeaseDirectory(id);
-        const token = crypto.randomUUID();
-        await this.acquireLease(
-            directory,
-            token,
-            `Timed out updating Workbench session: ${id}`
-        );
-        try {
-            const next = operation(await this.read(id));
-            await this.write(next);
+        return this.database.transaction(() => {
+            const next = operation(this.load(id));
+            this.database.run(
+                `UPDATE sessions SET name = ?, native_session_id = ?, latest_run_id = ?,
+                    updated_at = ? WHERE id = ?`,
+                next.name ?? null,
+                next.native_session_id ?? null,
+                next.latest_run_id,
+                next.updated_at,
+                id
+            );
             return next;
-        } finally {
-            await this.releaseLease(directory, token);
-        }
-    }
-
-    private async acquireLease(
-        directory: string,
-        token: string,
-        timeoutMessage: string
-    ): Promise<void> {
-        const started = Date.now();
-        while (Date.now() - started < 30_000) {
-            try {
-                await mkdir(directory, { mode: 0o700 });
-                try {
-                    await writeFile(
-                        this.leaseOwnerPath(directory),
-                        `${JSON.stringify({ version: 1, token, pid: process.pid })}\n`,
-                        { mode: 0o600 }
-                    );
-                } catch (error) {
-                    await rm(directory, {
-                        recursive: true,
-                        force: true,
-                    });
-                    throw error;
-                }
-                return;
-            } catch (error) {
-                if (!isAlreadyExists(error)) throw error;
-                if (await this.recoverAbandonedLease(directory)) continue;
-                await Bun.sleep(25);
-            }
-        }
-        throw new Error(timeoutMessage);
-    }
-
-    private async recoverAbandonedLease(directory: string): Promise<boolean> {
-        const source = await readFile(this.leaseOwnerPath(directory), 'utf8').catch(
-            () => undefined
-        );
-        if (source) {
-            try {
-                const owner = JSON.parse(source) as { pid?: unknown };
-                if (typeof owner.pid === 'number' && processIsAlive(owner.pid)) {
-                    return false;
-                }
-                await rm(directory, { recursive: true, force: true });
-                return true;
-            } catch {
-                // A partially written owner is handled by the age check below.
-            }
-        }
-        const details = await stat(directory).catch(() => undefined);
-        if (!details || Date.now() - details.mtimeMs < 5_000) return false;
-        await rm(directory, { recursive: true, force: true });
-        return true;
-    }
-
-    private async releaseLease(directory: string, token: string): Promise<void> {
-        const source = await readFile(this.leaseOwnerPath(directory), 'utf8').catch(
-            () => undefined
-        );
-        if (!source) return;
-        try {
-            const owner = JSON.parse(source) as { token?: unknown };
-            if (owner.token !== token) return;
-        } catch {
-            return;
-        }
-        await rm(directory, { recursive: true, force: true });
-    }
-
-    private async write(session: StoredSession): Promise<void> {
-        const path = this.metadataPath(session.id);
-        await mkdir(this.directory(session.id), { recursive: true, mode: 0o700 });
-        const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-        await writeFile(temporary, `${JSON.stringify(session, null, 2)}\n`, {
-            mode: 0o600,
         });
-        await rename(temporary, path);
     }
-
-    private async directorySize(path: string): Promise<number> {
-        const details = await lstat(path).catch(() => undefined);
-        if (!details) return 0;
-        if (!details.isDirectory()) return details.size;
-        const entries = await readdir(path).catch(() => []);
-        const sizes = await Promise.all(
-            entries.map((entry) => this.directorySize(join(path, entry)))
-        );
-        return sizes.reduce((total, size) => total + size, 0);
-    }
-}
-
-function processIsAlive(pid: number): boolean {
-    try {
-        process.kill(pid, 0);
-        return true;
-    } catch (error) {
-        // An inaccessible process still owns its session lease.
-        return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
-    }
-}
-
-function isAlreadyExists(error: unknown): boolean {
-    return (
-        error instanceof Error &&
-        'code' in error &&
-        (error as NodeJS.ErrnoException).code === 'EEXIST'
-    );
 }

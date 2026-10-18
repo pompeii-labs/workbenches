@@ -35,8 +35,10 @@ export const WORKBENCH_EVENT_TYPES = [
 
 export type WorkbenchEventType = (typeof WORKBENCH_EVENT_TYPES)[number];
 
+export const WORKBENCH_EVENT_PROTOCOL = 0;
+
 export interface WorkbenchEvent<T = unknown> {
-    protocol: 0;
+    protocol: typeof WORKBENCH_EVENT_PROTOCOL;
     run_id: string;
     sequence: number;
     timestamp: string;
@@ -87,7 +89,7 @@ export class RunEvents {
     private create<T>(type: WorkbenchEventType, data: T): WorkbenchEvent<T> {
         this.sequence += 1;
         return {
-            protocol: 0,
+            protocol: WORKBENCH_EVENT_PROTOCOL,
             run_id: this.runId,
             sequence: this.sequence,
             timestamp: this.now().toISOString(),

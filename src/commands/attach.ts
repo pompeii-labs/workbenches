@@ -1,11 +1,10 @@
 import { defineCommand } from 'citty';
 
 import { AuthenticationRequiredError } from '../connections/error.js';
+import { Connection } from '../database/connection.js';
 import { createEventRenderer } from '../rendering/index.js';
-import { RepositoryDeliveryStore } from '../repositories/receipts.js';
-import { RunStore } from '../runs/index.js';
-import { SessionLifecycle } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
+import { Services } from '../workbench/services.js';
 
 export const attachCommand = defineCommand({
     meta: {
@@ -39,36 +38,40 @@ export const attachCommand = defineCommand({
             throw new Error('--json and --final cannot be used together');
         }
         const home = workbenchHome();
-        const store = new RunStore(home);
-        const lifecycle = new SessionLifecycle(home);
-        const activity = args.session
-            ? await lifecycle.resolve(args.session)
-            : await lifecycle.latest();
-        const initial = activity.run;
-        const renderer = createEventRenderer({
-            mode: args.json ? 'json' : args.final ? 'final' : 'human',
-            ...(args.color === undefined ? {} : { color: args.color }),
-        });
-        let failureExitCode = 1;
+        const connection = Connection.open(home);
         try {
-            for await (const event of store.follow(initial.id)) {
-                renderer.render(event);
-                if (event.type === 'run.failed') {
-                    failureExitCode = AuthenticationRequiredError.exitCodeFor(
-                        event.data
-                    );
+            const services = new Services(home, connection);
+            services.legacy.show();
+            const store = services.runs;
+            const lifecycle = services.lifecycle;
+            const activity = args.session
+                ? await lifecycle.resolve(args.session)
+                : await lifecycle.latest();
+            const initial = activity.run;
+            const renderer = createEventRenderer({
+                mode: args.json ? 'json' : args.final ? 'final' : 'human',
+                ...(args.color === undefined ? {} : { color: args.color }),
+            });
+            let failureExitCode = 1;
+            try {
+                for await (const event of store.follow(initial.id)) {
+                    renderer.render(event);
+                    if (event.type === 'run.failed') {
+                        failureExitCode = AuthenticationRequiredError.exitCodeFor(
+                            event.data
+                        );
+                    }
                 }
+            } finally {
+                renderer.finish();
             }
+            const completed = await store.read(initial.id);
+            if (completed.status === 'failed') process.exitCode = failureExitCode;
+            if (completed.status === 'cancelled') process.exitCode = 130;
+            if ((await services.receipts.read(completed.id))?.state === 'failed')
+                process.exitCode = 1;
         } finally {
-            renderer.finish();
+            connection.close();
         }
-        const completed = await store.read(initial.id);
-        if (completed.status === 'failed') process.exitCode = failureExitCode;
-        if (completed.status === 'cancelled') process.exitCode = 130;
-        if (
-            (await new RepositoryDeliveryStore(home).read(completed.id))?.state ===
-            'failed'
-        )
-            process.exitCode = 1;
     },
 });

@@ -1,6 +1,7 @@
 import { defineCommand } from 'citty';
-import { SessionSupervision } from '../sessions/supervision.js';
+import { Connection } from '../database/connection.js';
 import { workbenchHome } from '../storage.js';
+import { Services } from '../workbench/services.js';
 import { CliWait } from './waiting.js';
 
 export const waitCommand = defineCommand({
@@ -37,15 +38,23 @@ export const waitCommand = defineCommand({
     },
     async run({ args }) {
         const home = workbenchHome();
-        const run = await new SessionSupervision(home).resolve(args.session, {
-            exactRun: args.run,
-        });
-        await new CliWait().execute(home, run, {
-            json: args.json,
-            ...(args.after !== undefined ? { afterSequence: Number(args.after) } : {}),
-            ...(args.timeout !== undefined
-                ? { timeoutMilliseconds: Number(args.timeout) * 1000 }
-                : {}),
-        });
+        const connection = Connection.open(home);
+        try {
+            const supervision = new Services(home, connection).sessionSupervision;
+            const run = await supervision.resolve(args.session, {
+                exactRun: args.run,
+            });
+            await new CliWait(supervision).execute(run, {
+                json: args.json,
+                ...(args.after !== undefined
+                    ? { afterSequence: Number(args.after) }
+                    : {}),
+                ...(args.timeout !== undefined
+                    ? { timeoutMilliseconds: Number(args.timeout) * 1000 }
+                    : {}),
+            });
+        } finally {
+            connection.close();
+        }
     },
 });

@@ -1,14 +1,22 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { RunStore } from '../src/runs/index.js';
-import { SessionResolver, SessionStore } from '../src/sessions/index.js';
+import { Connection } from '../src/database/connection.js';
+import { Services } from '../src/workbench/services.js';
 
 const homes: string[] = [];
+const connections: Connection[] = [];
+
+function open(home: string) {
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return Object.assign(new Services(home, connection), { connection });
+}
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         homes.splice(0).map((home) => rm(home, { recursive: true, force: true }))
     );
@@ -18,7 +26,7 @@ describe('session storage', () => {
     for (const inaccessible of [false, true]) {
         test(`serializes session operations when owner is ${inaccessible ? 'inaccessible' : 'accessible'}`, async () => {
             const home = await temporaryHome();
-            const store = new SessionStore(home);
+            const { sessions: store, connection } = open(home);
             const session = await store.create({
                 id: 'wb_sessionlease1234567890123',
                 workbench: 'creator',
@@ -61,17 +69,13 @@ describe('session storage', () => {
                 await Promise.all([first, second]);
             }
             expect(order).toEqual(['first', 'second']);
-            expect(
-                await stat(join(home, 'sessions', session.id, '.lease')).catch(
-                    () => undefined
-                )
-            ).toBeUndefined();
+            expect(connection.all('SELECT name FROM leases')).toEqual([]);
         });
     }
 
     test('stores resumable metadata separately from native runner state', async () => {
         const home = await temporaryHome();
-        const store = new SessionStore(home);
+        const { sessions: store, connection } = open(home);
         const session = await store.create({
             id: 'wb_sessionstorage1234567890',
             workbench: 'creator',
@@ -87,17 +91,16 @@ describe('session storage', () => {
 
         expect(await store.read(session.id)).toEqual(session);
         expect(store.nativeDirectory(session.id)).toBe(
-            join(home, 'sessions', session.id, 'native')
+            join(home, 'files', 'native', session.id)
         );
-
-        const metadataPath = join(home, 'sessions', session.id, 'session.json');
-        const legacy = JSON.parse(await readFile(metadataPath, 'utf8')) as Record<
-            string,
-            unknown
-        >;
-        delete legacy.runtime;
-        await writeFile(metadataPath, `${JSON.stringify(legacy)}\n`);
-        expect(await store.read(session.id)).toMatchObject({ runtime: 'local' });
+        expect((await stat(store.nativeDirectory(session.id))).isDirectory()).toBe(
+            true
+        );
+        expect(
+            connection.one('SELECT native_path FROM sessions WHERE id = ?', session.id)
+        ).toEqual({ native_path: store.nativeDirectory(session.id) });
+        expect(await readdir(home)).not.toContain('sessions');
+        expect(session.runtime).toBe('local');
 
         const updated = await store.update(session.id, {
             native_session_id: 'ses_native_1',
@@ -112,11 +115,14 @@ describe('session storage', () => {
         await expect(store.read(session.id)).rejects.toThrow(
             'Workbench session does not exist'
         );
+        expect(
+            await stat(store.nativeDirectory(session.id)).catch(() => undefined)
+        ).toBe(undefined);
     });
 
     test('persists a presentation-only session name without changing identity', async () => {
         const home = await temporaryHome();
-        const store = new SessionStore(home);
+        const { sessions: store } = open(home);
         const session = await store.create({
             id: 'wb_namedsession123456789012',
             workbench: 'creator',
@@ -145,7 +151,7 @@ describe('session storage', () => {
 
     test('uses the first prompt as the default session name without replacing an explicit name', async () => {
         const home = await temporaryHome();
-        const store = new SessionStore(home);
+        const { sessions: store } = open(home);
         const session = await store.create({
             id: 'wb_promptnamedsession123456789',
             workbench: 'creator',
@@ -175,7 +181,7 @@ describe('session storage', () => {
 
     test('preserves concurrent identity and resume metadata updates', async () => {
         const home = await temporaryHome();
-        const store = new SessionStore(home);
+        const { sessions: store, connection } = open(home);
         const session = await store.create({
             id: 'wb_concurrentname12345678901',
             workbench: 'creator',
@@ -203,16 +209,12 @@ describe('session storage', () => {
             native_session_id: 'ses_concurrent',
             latest_run_id: 'wb_concurrentrun123456789012',
         });
-        expect(
-            await stat(join(home, 'sessions', session.id, '.metadata-lease')).catch(
-                () => undefined
-            )
-        ).toBeUndefined();
+        expect(connection.all('SELECT name FROM leases')).toEqual([]);
     });
 
     test('rejects unsafe or unusable session names', async () => {
         const home = await temporaryHome();
-        const store = new SessionStore(home);
+        const { sessions: store } = open(home);
         const session = await store.create({
             id: 'wb_invalidname1234567890123',
             workbench: 'creator',
@@ -240,7 +242,7 @@ describe('session storage', () => {
 
     test('lists only sessions that reached a native resumable state', async () => {
         const home = await temporaryHome();
-        const store = new SessionStore(home);
+        const { sessions: store, resolver } = open(home);
         const pending = await store.create({
             id: 'wb_pendingsession1234567890',
             workbench: 'creator',
@@ -255,7 +257,7 @@ describe('session storage', () => {
         });
 
         expect(await store.list({ resumableOnly: true })).toEqual([]);
-        await expect(new SessionResolver(home).resolve(pending.id)).rejects.toThrow(
+        await expect(resolver.resolve(pending.id)).rejects.toThrow(
             'never reached a resumable runner state'
         );
         await store.update(pending.id, { native_session_id: 'ses_ready' });
@@ -264,7 +266,7 @@ describe('session storage', () => {
 
     test('scopes resumable sessions to the requested workspace', async () => {
         const home = await temporaryHome();
-        const store = new SessionStore(home);
+        const { sessions: store } = open(home);
         const current = await store.create({
             id: 'wb_currentscoped12345678901',
             workbench: 'creator',
@@ -301,7 +303,8 @@ describe('session storage', () => {
 
     test('refuses to present old interactive runs as resumable sessions', async () => {
         const home = await temporaryHome();
-        const run = await new RunStore(home).create({
+        const { runs, resolver } = open(home);
+        const run = await runs.create({
             id: 'wb_legacyrunrecord123456789',
             metadata: {
                 workbench: 'creator',
@@ -318,7 +321,7 @@ describe('session storage', () => {
             },
         });
 
-        await expect(new SessionResolver(home).resolve(run.id)).rejects.toThrow(
+        await expect(resolver.resolve(run.id)).rejects.toThrow(
             'predates resumable Workbench sessions'
         );
     });
@@ -342,7 +345,7 @@ describe('session storage', () => {
             ].join('\n')
         );
         await writeFile(join(packageDirectory, 'instructions.md'), 'Create things.\n');
-        const sessions = new SessionStore(home);
+        const { sessions, runs, resolver } = open(home);
         const session = await sessions.create({
             id: 'wb_linkedsession12345678901',
             workbench: 'creator',
@@ -356,7 +359,7 @@ describe('session storage', () => {
             native_session_id: 'ses_native_linked',
             latest_run_id: 'wb_linkedrunrecord123456789',
         });
-        const run = await new RunStore(home).create({
+        const run = await runs.create({
             id: 'wb_linkedrunrecord123456789',
             metadata: {
                 workbench: 'creator',
@@ -374,7 +377,7 @@ describe('session storage', () => {
             },
         });
 
-        const resolved = await new SessionResolver(home).resolve(run.id);
+        const resolved = await resolver.resolve(run.id);
         expect(resolved.session.id).toBe(session.id);
         expect(resolved.alias).toBe('creator');
         expect(resolved.resolved.workbench.manifest.name).toBe('creator');

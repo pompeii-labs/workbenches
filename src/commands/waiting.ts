@@ -1,9 +1,10 @@
 import type { StoredRun } from '../runs/store.js';
-import { type SessionSnapshot, SessionSupervision } from '../sessions/supervision.js';
+import type { SessionSnapshot, SessionSupervision } from '../sessions/supervision.js';
 
 export class CliWait {
+    constructor(private readonly supervision: Pick<SessionSupervision, 'wait'>) {}
+
     async execute(
-        home: string,
         run: StoredRun,
         options: { json: boolean; afterSequence?: number; timeoutMilliseconds?: number }
     ): Promise<void> {
@@ -11,7 +12,7 @@ export class CliWait {
         const stop = () => abort.abort();
         process.on('SIGINT', stop);
         try {
-            const result = await new SessionSupervision(home).wait(run, {
+            const result = await this.supervision.wait(run, {
                 ...options,
                 signal: abort.signal,
             });

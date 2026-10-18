@@ -3,14 +3,24 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { Connection } from '../../src/database/connection.js';
 import { OutcomeStore, type RunOutcome } from '../../src/outcomes/index.js';
+import { ProcessProbe } from '../../src/processes/probe.js';
 import { RunStore } from '../../src/runs/index.js';
 
 const projectDirectory = resolve(import.meta.dir, '..', '..');
 const cliPath = join(projectDirectory, 'src', 'cli.ts');
 const temporaryDirectories: string[] = [];
+const connections: Connection[] = [];
+
+function runStore(home: string) {
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return new RunStore(connection, home, new ProcessProbe());
+}
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -26,7 +36,7 @@ describe('wb outcome', () => {
         );
         const store = new OutcomeStore(home);
         const content = await store.putBytes('from the sandbox\n', 'text/plain');
-        const runs = new RunStore(home);
+        const runs = runStore(home);
         const run = await runs.create({
             metadata: {
                 workbench: 'fixture',
@@ -120,7 +130,7 @@ describe('wb outcome', () => {
         const workspace = await temporaryDirectory(
             'workbench-outcome-command-workspace-'
         );
-        const run = await new RunStore(home).create({
+        const run = await runStore(home).create({
             metadata: {
                 workbench: 'fixture',
                 workbench_version: '0.1.0',

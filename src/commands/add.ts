@@ -6,10 +6,12 @@ import {
     SavedWorkbenchCatalog,
     WorkbenchPackage,
 } from '../catalog/index.js';
+import { Connection } from '../database/connection.js';
 import { RegistryClient, RegistryTelemetry } from '../registry/index.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
 import { WorkbenchSource } from '../workbench/index.js';
+import { Services } from '../workbench/services.js';
 import { CliPresenter } from './presenter.js';
 
 export const addCommand = defineCommand({
@@ -71,35 +73,41 @@ export const addCommand = defineCommand({
                 visibility: registry.visibility,
             };
             const alias = args.as ?? workbench.manifest.name;
-            const saved = await saveCandidate({
-                catalog,
-                alias,
-                digest: WorkbenchPackage.digest(workbench.files),
-                force: args.force,
-                save: () =>
-                    catalog.addRemote({
-                        alias,
-                        workbench,
-                        expectedDigest: registry.digest,
-                        registry: catalogRegistry,
-                    }),
-                upgrade: () =>
-                    catalog.upgrade(alias, {
-                        source: workbench.source,
-                        selector: workbench.selector,
-                        manifest: workbench.manifest,
-                        files: workbench.files,
-                        revision: workbench.revision,
-                        expectedDigest: registry.digest,
-                        registry: catalogRegistry,
-                    }),
-            });
-            presentSaved(output, saved);
-            if (saved.status !== 'current')
-                await new RegistryTelemetry({ home }).report({
-                    registry: catalogRegistry,
-                    kind: 'save',
+            const connection = Connection.open(home);
+            try {
+                const { writer } = new Services(home, connection);
+                const saved = await saveCandidate({
+                    catalog,
+                    alias,
+                    digest: WorkbenchPackage.digest(workbench.files),
+                    force: args.force,
+                    save: () =>
+                        writer.addRemote({
+                            alias,
+                            workbench,
+                            expectedDigest: registry.digest,
+                            registry: catalogRegistry,
+                        }),
+                    upgrade: () =>
+                        writer.upgrade(alias, {
+                            source: workbench.source,
+                            selector: workbench.selector,
+                            manifest: workbench.manifest,
+                            files: workbench.files,
+                            revision: workbench.revision,
+                            expectedDigest: registry.digest,
+                            registry: catalogRegistry,
+                        }),
                 });
+                presentSaved(output, saved);
+                if (saved.status !== 'current')
+                    await new RegistryTelemetry({ home }).report({
+                        registry: catalogRegistry,
+                        kind: 'save',
+                    });
+            } finally {
+                connection.close();
+            }
             return;
         }
 
@@ -121,30 +129,36 @@ export const addCommand = defineCommand({
             }
             const workbench = await github.fetch(args.source, selector, options);
             const alias = args.as ?? workbench.manifest.name;
-            presentSaved(
-                output,
-                await saveCandidate({
-                    catalog,
-                    alias,
-                    digest: WorkbenchPackage.digest(workbench.files),
-                    force: args.force,
-                    save: () =>
-                        catalog.addRemote({
-                            alias,
-                            workbench,
-                            ...(args.ref ? { ref: args.ref } : {}),
-                        }),
-                    upgrade: () =>
-                        catalog.upgrade(alias, {
-                            source: workbench.source,
-                            selector: workbench.selector,
-                            manifest: workbench.manifest,
-                            files: workbench.files,
-                            revision: workbench.revision,
-                            ...(args.ref ? { ref: args.ref } : {}),
-                        }),
-                })
-            );
+            const connection = Connection.open(home);
+            try {
+                const { writer } = new Services(home, connection);
+                presentSaved(
+                    output,
+                    await saveCandidate({
+                        catalog,
+                        alias,
+                        digest: WorkbenchPackage.digest(workbench.files),
+                        force: args.force,
+                        save: () =>
+                            writer.addRemote({
+                                alias,
+                                workbench,
+                                ...(args.ref ? { ref: args.ref } : {}),
+                            }),
+                        upgrade: () =>
+                            writer.upgrade(alias, {
+                                source: workbench.source,
+                                selector: workbench.selector,
+                                manifest: workbench.manifest,
+                                files: workbench.files,
+                                revision: workbench.revision,
+                                ...(args.ref ? { ref: args.ref } : {}),
+                            }),
+                    })
+                );
+            } finally {
+                connection.close();
+            }
             return;
         }
 

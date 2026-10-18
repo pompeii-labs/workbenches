@@ -1,14 +1,15 @@
+import type { Connection } from '../database/connection.js';
 import type {
     RunnerQuestionPrompt,
     RunnerQuestionResponse,
 } from '../runners/session.js';
-import { RunContinuation } from '../runs/continuation.js';
+import type { RunContinuation } from '../runs/continuation.js';
 import type { RunControlReceipt } from '../runs/control.js';
 import { StoredRunHandle } from '../runs/handle.js';
 import { RunStore } from '../runs/store.js';
-import { RunSupervision } from '../runs/supervision.js';
-import { SessionLifecycle } from './lifecycle.js';
-import { SessionResolver } from './resolver.js';
+import type { RunSupervision } from '../runs/supervision.js';
+import type { SessionLifecycle } from './lifecycle.js';
+import type { SessionResolver } from './resolver.js';
 
 export interface SessionInputResult {
     session_id: string;
@@ -19,13 +20,14 @@ export interface SessionInputResult {
 }
 
 export class SessionControl {
-    private readonly lifecycle: SessionLifecycle;
-    private readonly runs: RunStore;
-
-    constructor(private readonly home: string) {
-        this.lifecycle = new SessionLifecycle(home);
-        this.runs = new RunStore(home);
-    }
+    constructor(
+        private readonly connection: Connection,
+        private readonly lifecycle: Pick<SessionLifecycle, 'resolve'>,
+        private readonly runs: RunStore,
+        private readonly supervision: Pick<RunSupervision, 'snapshot'>,
+        private readonly continuation: Pick<RunContinuation, 'submit'>,
+        private readonly resolver: Pick<SessionResolver, 'resolve'>
+    ) {}
 
     async send(
         id: string,
@@ -39,9 +41,9 @@ export class SessionControl {
                 throw new Error(
                     `${delivery} requires an active execution; use send to resume this session`
                 );
-            const target = await new SessionResolver(this.home).resolve(activity.id);
+            const target = await this.resolver.resolve(activity.id);
             try {
-                const result = await new RunContinuation(this.home).submit({
+                const result = await this.continuation.submit({
                     ...target,
                     task,
                     delivery: 'send',
@@ -61,7 +63,7 @@ export class SessionControl {
         }
         const afterSequence =
             (await this.runs.readEvents(run.id)).at(-1)?.sequence ?? 0;
-        const handle = new StoredRunHandle(this.home, run.id);
+        const handle = new StoredRunHandle(this.runs, this.connection, run.id);
         const receipt =
             delivery === 'steer'
                 ? await handle.steer(task)
@@ -83,7 +85,7 @@ export class SessionControl {
         response: string
     ): Promise<SessionInputResult> {
         const activity = await this.lifecycle.resolve(id);
-        const view = await new RunSupervision(this.home).snapshot(activity.run);
+        const view = await this.supervision.snapshot(activity.run);
         const request = view.pending_requests.find(
             (pending) => pending.id === requestId
         );
@@ -95,7 +97,7 @@ export class SessionControl {
             throw new Error(
                 'Complete authentication using the reported URL and instructions; answer cannot supply credentials'
             );
-        const handle = new StoredRunHandle(this.home, activity.run.id);
+        const handle = new StoredRunHandle(this.runs, this.connection, activity.run.id);
         let receipt: RunControlReceipt;
         if (request.kind === 'permission') {
             const decision =

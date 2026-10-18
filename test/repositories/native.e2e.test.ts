@@ -69,6 +69,7 @@ describe.skipIf(process.env.WORKBENCH_REPOSITORY_NATIVE_E2E !== '1')(
             const binding = fixture.binding;
             const workspace = new RepositoryWorkspace(
                 fixture.home,
+                fixture.checkouts,
                 binding,
                 { PATH: process.env.PATH, GH_TOKEN: 'fixture-token' },
                 fixture.git,
@@ -197,6 +198,7 @@ describe.skipIf(process.env.WORKBENCH_REPOSITORY_DOCKER_E2E !== '1')(
             const binding = fixture.binding;
             const workspace = new RepositoryWorkspace(
                 fixture.home,
+                fixture.checkouts,
                 binding,
                 { PATH: process.env.PATH, GH_TOKEN: 'fixture-token' },
                 fixture.git,

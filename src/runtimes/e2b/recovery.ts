@@ -156,7 +156,10 @@ export class E2BOutcomeRecovery {
         this.record = undefined;
     }
 
-    async recover(client: E2BClient): Promise<RunOutcome> {
+    async recover(
+        client: E2BClient,
+        runs: Pick<RunStore, 'read' | 'update'>
+    ): Promise<RunOutcome> {
         await outcomeStorageDirectory(
             this.home,
             ['recovery', '.leases', this.run.id],
@@ -242,7 +245,7 @@ export class E2BOutcomeRecovery {
                         'pending'
                     );
                 }
-                await this.linkRun(outcome);
+                await this.linkRun(outcome, runs);
                 if (sandbox) await sandbox.kill();
                 else if (managed) await client.killSandbox(record.sandboxId);
                 await this.discard();
@@ -256,8 +259,10 @@ export class E2BOutcomeRecovery {
         });
     }
 
-    private async linkRun(outcome: RunOutcome): Promise<void> {
-        const runs = new RunStore(this.home);
+    private async linkRun(
+        outcome: RunOutcome,
+        runs: Pick<RunStore, 'read' | 'update'>
+    ): Promise<void> {
         const run = await runs.read(outcome.run_id).catch((error) => {
             if (
                 error instanceof Error &&

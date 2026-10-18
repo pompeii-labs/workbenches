@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { RepositoryChecks } from '../../src/repositories/checks.js';
 import { RepositoryGitHub } from '../../src/repositories/github.js';
 import { RepositoryDeliveryStore } from '../../src/repositories/receipts.js';
-import { binding, result, temporary } from './fixture.js';
+import { binding, connect, result, temporary } from './fixture.js';
 
 async function fixture() {
     const home = await temporary();
@@ -10,7 +10,7 @@ async function fixture() {
     const head = 'f'.repeat(40);
     const branch = `workbenches/${binding.session_id}`;
     const url = 'https://github.com/example/project/pull/1';
-    const receipts = new RepositoryDeliveryStore(home);
+    const receipts = new RepositoryDeliveryStore(connect(home));
     await receipts.write({
         version: 1,
         run_id: outcome.run_id,

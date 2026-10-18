@@ -2,10 +2,12 @@ import { basename } from 'node:path';
 
 import { defineCommand } from 'citty';
 
+import { Connection } from '../database/connection.js';
 import { renderStatusLine } from '../rendering/status-line.js';
 import { sanitizeTerminalText } from '../rendering/terminal-text.js';
 import { median, type RunStatus, RunStatusReader } from '../runs/status.js';
 import { workbenchHome } from '../storage.js';
+import { Services } from '../workbench/services.js';
 
 /** Finished runs stay visible this long. */
 const RECENT_MS = 10 * 60_000;
@@ -31,39 +33,51 @@ export const statusCommand = defineCommand({
         },
     },
     async run({ args }) {
-        const reader = new RunStatusReader(workbenchHome());
         const now = Date.now();
-        const runs = rank(await reader.list({ recentMs: RECENT_MS, now }));
-        if (args.json) {
-            process.stdout.write(`${JSON.stringify(runs)}\n`);
-            return;
-        }
-        const color =
-            !process.env.NO_COLOR && (args.line || process.stdout.isTTY === true);
-        const line = async (run: RunStatus) =>
-            renderStatusLine(run, {
-                now,
-                color,
-                typicalStep: await typicalStep(reader, run),
-            });
-
-        if (args.line) {
-            const [first] = runs;
-            if (!first) {
-                process.stdout.write(`${idle(await statusLineSession(), color)}\n`);
+        const home = workbenchHome();
+        const connection = Connection.open(home);
+        try {
+            const services = new Services(home, connection);
+            const reader = new RunStatusReader(
+                services.runs,
+                connection,
+                services.probe,
+                () => now
+            );
+            const runs = rank(await reader.list({ recentMs: RECENT_MS }));
+            if (args.json) {
+                process.stdout.write(`${JSON.stringify(runs)}\n`);
                 return;
             }
-            const more = runs.slice(1).filter(active).length;
-            const suffix = more ? ` ${dim(`+${more} more`, color)}` : '';
-            process.stdout.write(`${await line(first)}${suffix}\n`);
-            return;
+            const color =
+                !process.env.NO_COLOR && (args.line || process.stdout.isTTY === true);
+            const line = async (run: RunStatus) =>
+                renderStatusLine(run, {
+                    now,
+                    color,
+                    typicalStep: await typicalStep(reader, run),
+                });
+
+            if (args.line) {
+                const [first] = runs;
+                if (!first) {
+                    process.stdout.write(`${idle(await statusLineSession(), color)}\n`);
+                    return;
+                }
+                const more = runs.slice(1).filter(active).length;
+                const suffix = more ? ` ${dim(`+${more} more`, color)}` : '';
+                process.stdout.write(`${await line(first)}${suffix}\n`);
+                return;
+            }
+            if (runs.length === 0) {
+                process.stdout.write('No active or recent Workbench runs.\n');
+                return;
+            }
+            for (const run of runs)
+                process.stdout.write(`${await line(run)}  ${dim(run.run_id, color)}\n`);
+        } finally {
+            connection.close();
         }
-        if (runs.length === 0) {
-            process.stdout.write('No active or recent Workbench runs.\n');
-            return;
-        }
-        for (const run of runs)
-            process.stdout.write(`${await line(run)}  ${dim(run.run_id, color)}\n`);
     },
 });
 

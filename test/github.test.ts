@@ -3,13 +3,16 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SavedWorkbenchCatalog } from '../src/catalog/index.js';
+import { Connection } from '../src/database/connection.js';
 import { GitHubWorkbenchSource } from '../src/sources/index.js';
 import { WorkbenchPreflight } from '../src/workbench/index.js';
+import { Services } from '../src/workbench/services.js';
 
 const temporaryDirectories: string[] = [];
+const connections: Connection[] = [];
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -113,8 +116,10 @@ describe('GitHub Workbench provider', () => {
             env: {},
         }).fetch('lux-db/lux', 'migrations');
         const home = await temporaryDirectory();
-        const catalog = new SavedWorkbenchCatalog(home);
-        const entry = await catalog.addRemote({
+        const connection = Connection.open(home);
+        connections.push(connection);
+        const { catalog, writer } = new Services(home, connection);
+        const entry = await writer.addRemote({
             alias: 'lux-migrations',
             workbench,
         });

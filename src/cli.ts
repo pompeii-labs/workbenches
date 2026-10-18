@@ -10,7 +10,6 @@ import {
 } from 'citty';
 import pc from 'picocolors';
 import packageMetadata from '../package.json' with { type: 'json' };
-import { AuthoringJob } from './authoring/job.js';
 
 import { addCommand } from './commands/add.js';
 import { answerCommand } from './commands/answer.js';
@@ -45,10 +44,11 @@ import { viewCommand } from './commands/view.js';
 import { waitCommand } from './commands/wait.js';
 import { whoamiCommand } from './commands/whoami.js';
 import { AuthenticationRequiredError } from './connections/error.js';
+import { Connection } from './database/connection.js';
 import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
-import { RunWorker } from './runs/index.js';
 import { workbenchHome } from './storage.js';
+import { Services } from './workbench/services.js';
 
 let bareInvocation = import.meta.main && process.argv.length === 2;
 
@@ -101,14 +101,28 @@ if (import.meta.main) {
         const id = process.argv[4];
         if (!home || !id) process.exit(2);
         await new ModelCatalog({ home }).loadCached();
-        process.exit(await new AuthoringJob(home).execute(id));
+        const connection = Connection.open(home);
+        let code: number;
+        try {
+            code = await new Services(home, connection).jobs.execute(id);
+        } finally {
+            connection.close();
+        }
+        process.exit(code);
     }
     if (process.argv[2] === '__worker') {
         const home = process.argv[3];
         const id = process.argv[4];
         if (!home || !id) process.exit(2);
         await new ModelCatalog({ home }).loadCached();
-        process.exit(await new RunWorker(home).executeDispatched(id));
+        const connection = Connection.open(home);
+        let code: number;
+        try {
+            code = await new Services(home, connection).worker.executeDispatched(id);
+        } finally {
+            connection.close();
+        }
+        process.exit(code);
     }
     const defaultConsoleError = console.error;
     const colors = pc.createColors(

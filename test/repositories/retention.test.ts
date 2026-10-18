@@ -12,6 +12,7 @@ describe('repository continuation retention', () => {
         const selected = fixture.binding;
         const workspace = new RepositoryWorkspace(
             fixture.home,
+            fixture.checkouts,
             selected,
             { GH_TOKEN: 'fixture' },
             fixture.git,
@@ -28,7 +29,7 @@ describe('repository continuation retention', () => {
         await writeFile(join(workspace.directory, 'original.txt'), 'original\n');
         const runId = 'wb_2234567890abcdefghij';
         await saveRun(fixture.home, selected, runId, undefined, selected.session_id);
-        await new RepositoryRetention(fixture.home, selected).restore(
+        await new RepositoryRetention(fixture.home, fixture.runs, selected).restore(
             runId,
             workspace.directory
         );
@@ -38,7 +39,7 @@ describe('repository continuation retention', () => {
         const store = new OutcomeStore(fixture.home);
         expect((await store.receipt(outcome.id)).state).toBe('applied');
         await store.close();
-        await new RepositoryRetention(fixture.home, selected).restore(
+        await new RepositoryRetention(fixture.home, fixture.runs, selected).restore(
             runId,
             workspace.directory
         );
@@ -52,6 +53,7 @@ describe('repository continuation retention', () => {
         const selected = fixture.binding;
         const workspace = new RepositoryWorkspace(
             fixture.home,
+            fixture.checkouts,
             selected,
             { GH_TOKEN: 'fixture' },
             fixture.git,
@@ -69,7 +71,7 @@ describe('repository continuation retention', () => {
         const runId = 'wb_2234567890abcdefghij';
         await saveRun(fixture.home, selected, runId, undefined, selected.session_id);
         await expect(
-            new RepositoryRetention(fixture.home, selected).restore(
+            new RepositoryRetention(fixture.home, fixture.runs, selected).restore(
                 runId,
                 workspace.directory
             )

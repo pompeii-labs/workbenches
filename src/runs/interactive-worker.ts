@@ -1,9 +1,11 @@
 import type { CatalogRegistryReference } from '../catalog/index.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
+import type { RepositoryCheckoutStore } from '../database/checkouts.js';
+import type { Connection } from '../database/connection.js';
 import { RunnerRegistry } from '../runners/registry.js';
 import type { NormalizedRunnerInput } from '../runners/session.js';
 import { normalizeRunnerInput } from '../runners/session.js';
-import { SessionStore } from '../sessions/index.js';
+import type { SessionStore } from '../sessions/index.js';
 import type { ResolvedWorkbench } from '../types.js';
 import { withRuntime } from '../workbench/runtimes.js';
 import { Workbench } from '../workbench/workbench.js';
@@ -16,7 +18,7 @@ import {
     type InteractiveRunSession,
 } from './interactive-run.js';
 import { NativeRequests } from './native-requests.js';
-import { RunStore } from './store.js';
+import type { RunStore } from './store.js';
 
 export interface ExecuteInteractiveRunOptions {
     environment?: Record<string, string | undefined>;
@@ -32,8 +34,6 @@ export interface InteractiveRunWorkerDependencies extends InteractiveRunDependen
 }
 
 export class InteractiveRunWorker {
-    private readonly store: RunStore;
-    private readonly sessions: SessionStore;
     private readonly control: RunControl;
     private readonly receiveAbort = new AbortController();
     private readonly audience = new RunAudience();
@@ -57,12 +57,17 @@ export class InteractiveRunWorker {
 
     constructor(
         private readonly home: string,
+        connection: Connection,
+        private readonly store: RunStore,
+        private readonly sessions: SessionStore,
+        private readonly checkouts: Pick<
+            RepositoryCheckoutStore,
+            'find' | 'record' | 'forget'
+        >,
         private readonly runId: string,
         dependencies: InteractiveRunWorkerDependencies = {}
     ) {
-        this.store = new RunStore(home);
-        this.sessions = new SessionStore(home);
-        this.control = new RunControl(home, runId);
+        this.control = new RunControl(connection, runId);
         this.dependencies = dependencies;
     }
 
@@ -137,6 +142,8 @@ export class InteractiveRunWorker {
                 onWithdraw: (id) => this.nativeRequests.withdraw(id),
                 dependencies: {
                     env: options.environment ?? process.env,
+                    runs: this.store,
+                    checkouts: this.checkouts,
                     ...(this.dependencies.findExecutable
                         ? { findExecutable: this.dependencies.findExecutable }
                         : {}),

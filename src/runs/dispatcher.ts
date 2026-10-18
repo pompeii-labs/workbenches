@@ -1,14 +1,18 @@
-import { basename, join } from 'node:path';
-
+import { basename } from 'node:path';
+import type { SnapshotGuard } from '../catalog/guard.js';
 import { WorkbenchPackage } from '../catalog/index.js';
-import { CatalogSnapshots } from '../catalog/snapshots.js';
+import type { CatalogSnapshots } from '../catalog/snapshots.js';
+import type { CatalogWriter } from '../catalog/writer.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
+import type { RepositoryCheckoutStore } from '../database/checkouts.js';
+import type { Connection } from '../database/connection.js';
+import type { LegacyLayout } from '../legacy/layout.js';
 import { modelLabel } from '../models/index.js';
 import { RepositoryGitHub, RepositoryWorkspace } from '../repositories/index.js';
 import { RunnerRegistry } from '../runners/index.js';
 import {
     SessionIdentity,
-    SessionStore,
+    type SessionStore,
     type StoredSession,
 } from '../sessions/index.js';
 import type { WorkbenchWorkspaceBinding } from '../types.js';
@@ -43,16 +47,28 @@ export interface DispatchRunOptions {
 }
 
 export class RunDispatcher {
-    private readonly store: RunStore;
-    private readonly sessions: SessionStore;
     private readonly identity = new SessionIdentity();
 
-    constructor(private readonly home: string) {
-        this.store = new RunStore(home);
-        this.sessions = new SessionStore(home);
-    }
+    constructor(
+        private readonly home: string,
+        private readonly connection: Connection,
+        private readonly store: RunStore,
+        private readonly sessions: SessionStore,
+        private readonly legacy: Pick<LegacyLayout, 'assertNoLiveWorker'>,
+        private readonly snapshots: Pick<
+            CatalogSnapshots,
+            'packagePath' | 'materialize'
+        >,
+        private readonly guard: Pick<SnapshotGuard, 'exclusive'>,
+        private readonly catalog: Pick<CatalogWriter, 'releaseSnapshot'>,
+        private readonly checkouts: Pick<
+            RepositoryCheckoutStore,
+            'find' | 'record' | 'forget'
+        >
+    ) {}
 
     async prepare(options: PrepareRunOptions): Promise<StoredRun> {
+        await this.legacy.assertNoLiveWorker();
         const workbench = withRuntime(
             !options.session && options.resolved.source === 'local'
                 ? await Workbench.load(
@@ -90,25 +106,18 @@ export class RunDispatcher {
                 );
             new RepositoryWorkspace(
                 this.home,
+                this.checkouts,
                 repository,
                 process.env
             ).assertCredentialsOwnedByEngine(workbench);
         }
         // Capture package bytes only. Workspace ownership and identity are unchanged.
+        // Snapshots are content addressed and shared, so identical packages are stored once.
         const packagePath =
             options.session?.workbench_path ??
-            join(
-                this.home,
-                'sessions',
-                id,
-                'packages',
-                digest.slice('sha256:'.length),
-                '.workbenches',
-                basename(workbench.packageDirectory)
-            );
-        const session =
-            options.session ??
-            (await this.sessions.create({
+            this.snapshots.packagePath(digest, basename(workbench.packageDirectory));
+        const createSession = () =>
+            this.sessions.create({
                 id,
                 ...(suggestedName ? { name: suggestedName } : {}),
                 workbench: workbench.manifest.name,
@@ -130,15 +139,33 @@ export class RunDispatcher {
                     ? { registry: options.resolved.registry }
                     : {}),
                 latest_run_id: id,
-            }));
+            });
+        let session: StoredSession;
+        if (options.session) {
+            session = options.session;
+        } else {
+            let acquired = false;
+            try {
+                // The snapshot must exist from the moment a session refers to it, and
+                // must not be released in between.
+                session = await this.guard.exclusive(digest, async () => {
+                    acquired = true;
+                    await this.snapshots.materialize(
+                        basename(workbench.packageDirectory),
+                        files,
+                        digest
+                    );
+                    return createSession();
+                });
+            } catch (error) {
+                // Never wait on the lease again when acquiring it is what failed.
+                if (acquired)
+                    await this.catalog.releaseSnapshot(digest).catch(() => {});
+                throw error;
+            }
+        }
         let stored: StoredRun;
         try {
-            if (!options.session)
-                await new CatalogSnapshots(join(this.home, 'sessions', id)).materialize(
-                    basename(workbench.packageDirectory),
-                    files,
-                    digest
-                );
             stored = await this.store.create({
                 id,
                 metadata: {
@@ -180,7 +207,10 @@ export class RunDispatcher {
                 },
             });
         } catch (error) {
-            if (!options.session) await this.sessions.remove(session.id);
+            if (!options.session) {
+                await this.sessions.remove(session.id);
+                await this.catalog.releaseSnapshot(digest);
+            }
             throw error;
         }
         if (options.session) {
@@ -219,7 +249,7 @@ export class RunDispatcher {
     }
 
     handle(id: string): RunHandle {
-        return new StoredRunHandle(this.home, id);
+        return new StoredRunHandle(this.store, this.connection, id);
     }
 
     async dispatch(options: DispatchRunOptions): Promise<number> {

@@ -1,16 +1,30 @@
+import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SnapshotGuard } from '../src/catalog/guard.js';
+import { CatalogWriter } from '../src/catalog/writer.js';
+import { Connection } from '../src/database/connection.js';
+import { LeaseStore } from '../src/database/leases.js';
+import { ProcessProbe } from '../src/processes/probe.js';
 import type { WorkbenchEvent } from '../src/runs/index.js';
-import { RunDispatcher, RunStore } from '../src/runs/index.js';
+import { RunStore } from '../src/runs/index.js';
 import { RunReconciliationLease } from '../src/runs/reconciliation.js';
-import { SessionResolver, SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
+import { Services } from '../src/workbench/services.js';
 
 const temporaryDirectories: string[] = [];
+const connections: Connection[] = [];
+
+function open(home: string) {
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return Object.assign(new Services(home, connection), { connection });
+}
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -21,28 +35,34 @@ afterEach(async () => {
 describe('durable Workbench runs', () => {
     test('stores private metadata and consumes the task request once', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
-        const run = await fixtureRun(home, 'secret task');
-        const directory = join(home, 'runs', run.id);
+        const { runs: store } = open(home);
+        const run = await fixtureRun(store, 'secret task');
+        const database = new Database(join(home, 'wb.db'), { readonly: true });
 
-        expect((await stat(directory)).mode & 0o777).toBe(0o700);
-        expect((await stat(join(directory, 'run.json'))).mode & 0o777).toBe(0o600);
-        expect((await stat(join(directory, 'request.json'))).mode & 0o777).toBe(0o600);
+        expect((await stat(join(home, 'wb.db'))).mode & 0o777).toBe(0o600);
+        expect(await readdir(home)).not.toContain('runs');
+        expect(database.query('SELECT count(*) AS n FROM run_requests').get()).toEqual({
+            n: 1,
+        });
         expect(await store.takeRequest(run.id)).toMatchObject({
             task: 'secret task',
         });
         await expect(store.takeRequest(run.id)).rejects.toThrow(
             'request is unavailable'
         );
-        expect(await readFile(join(directory, 'run.json'), 'utf8')).not.toContain(
-            'secret task'
-        );
+        expect(database.query('SELECT count(*) AS n FROM run_requests').get()).toEqual({
+            n: 0,
+        });
+        expect(
+            JSON.stringify(database.query('SELECT * FROM runs').all())
+        ).not.toContain('secret task');
+        database.close();
     });
 
     test('replays events in order and stops after terminal metadata', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
-        const run = await fixtureRun(home);
+        const { runs: store } = open(home);
+        const run = await fixtureRun(store);
         await store.appendEvent(run.id, event(run.id, 1, 'run.started'));
         await store.appendEvent(run.id, event(run.id, 2, 'run.completed'));
         await store.update(run.id, {
@@ -63,8 +83,8 @@ describe('durable Workbench runs', () => {
 
     test('continues event observation after a persisted sequence cursor', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
-        const run = await fixtureRun(home);
+        const { runs: store } = open(home);
+        const run = await fixtureRun(store);
         await store.appendEvent(run.id, event(run.id, 1, 'run.started'));
         await store.appendEvent(run.id, event(run.id, 2, 'run.started'));
         await store.appendEvent(run.id, event(run.id, 3, 'run.completed'));
@@ -83,8 +103,8 @@ describe('durable Workbench runs', () => {
 
     test('drains events appended before terminal metadata becomes visible', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
-        const run = await fixtureRun(home);
+        const { runs: store } = open(home);
+        const run = await fixtureRun(store);
         await store.appendEvent(run.id, event(run.id, 1, 'run.started'));
         const iterator = store
             .follow(run.id, { pollMilliseconds: 1 })
@@ -106,8 +126,8 @@ describe('durable Workbench runs', () => {
 
     test('stops live event observation when its client detaches', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
-        const run = await fixtureRun(home);
+        const { runs: store } = open(home);
+        const run = await fixtureRun(store);
         const controller = new AbortController();
         const iterator = store
             .follow(run.id, {
@@ -125,10 +145,10 @@ describe('durable Workbench runs', () => {
 
     test('selects the latest dispatched run and rejects malformed IDs', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
-        const first = await fixtureRun(home);
+        const { runs: store } = open(home);
+        const first = await fixtureRun(store);
         await new Promise((resolve) => setTimeout(resolve, 2));
-        const second = await fixtureRun(home);
+        const second = await fixtureRun(store);
 
         expect((await store.latest()).id).toBe(second.id);
         expect(first.id).not.toBe(second.id);
@@ -137,8 +157,8 @@ describe('durable Workbench runs', () => {
 
     test('marks abandoned worker records as failed during reconciliation', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
-        const run = await fixtureRun(home);
+        const { runs: store } = open(home);
+        const run = await fixtureRun(store);
         await store.update(run.id, {
             status: 'running',
             pid: 2_147_483_647,
@@ -158,8 +178,8 @@ describe('durable Workbench runs', () => {
     for (const code of ['EPERM', 'EACCES', 'EIO']) {
         test(`does not fail a worker when process inspection returns ${code}`, async () => {
             const home = await temporaryHome();
-            const store = new RunStore(home);
-            const run = await fixtureRun(home);
+            const { runs: store } = open(home);
+            const run = await fixtureRun(store);
             const running = await store.update(run.id, {
                 status: 'running',
                 pid: process.pid,
@@ -179,29 +199,39 @@ describe('durable Workbench runs', () => {
 
     test('does not steal a reconciliation lease from an inaccessible process', async () => {
         const home = await temporaryHome();
-        const directory = join(home, 'lease');
-        const lock = join(directory, '.reconcile');
-        await mkdir(lock, { recursive: true });
-        const owner = JSON.stringify({ token: 'existing', pid: process.pid });
-        await writeFile(join(lock, 'owner.json'), owner);
+        const database = Connection.open(home);
+        connections.push(database);
+        database.run(
+            'INSERT INTO leases (name, token, pid, acquired_at) VALUES (?, ?, ?, ?)',
+            'reconcile:test',
+            'existing',
+            process.pid,
+            Date.now()
+        );
         const inspected = Promise.withResolvers<void>();
         const probe = spyOn(process, 'kill').mockImplementation(() => {
             inspected.resolve();
-            throw Object.assign(new Error('inspection denied'), { code: 'EPERM' });
+            throw Object.assign(new Error('inspection failed'), { code: 'EPERM' });
         });
         let entered = false;
-        const pending = new RunReconciliationLease('test', directory).exclusive(
-            async () => {
-                entered = true;
-            }
-        );
+        const pending = new RunReconciliationLease(
+            'test',
+            new LeaseStore(database, new ProcessProbe())
+        ).exclusive(async () => {
+            entered = true;
+        });
         try {
             await inspected.promise;
-            expect(await readFile(join(lock, 'owner.json'), 'utf8')).toBe(owner);
+            expect(
+                database.one(
+                    'SELECT token FROM leases WHERE name = ?',
+                    'reconcile:test'
+                )
+            ).toEqual({ token: 'existing' });
             expect(entered).toBeFalse();
         } finally {
             probe.mockRestore();
-            await rm(lock, { recursive: true, force: true });
+            database.run('DELETE FROM leases WHERE name = ?', 'reconcile:test');
             await pending;
         }
         expect(entered).toBeTrue();
@@ -209,8 +239,8 @@ describe('durable Workbench runs', () => {
 
     test('reconciles an abandoned worker exactly once across concurrent readers', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
-        const run = await fixtureRun(home);
+        const { runs: store } = open(home);
+        const run = await fixtureRun(store);
         await store.update(run.id, {
             status: 'running',
             pid: 2_147_483_647,
@@ -233,14 +263,14 @@ describe('durable Workbench runs', () => {
 
     test('recovers terminal metadata from the event written before a worker exit', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
+        const { runs: store } = open(home);
         const cases = [
             { type: 'run.completed' as const, status: 'completed', exitCode: 0 },
             { type: 'run.cancelled' as const, status: 'cancelled', exitCode: 130 },
             { type: 'run.failed' as const, status: 'failed', exitCode: 17 },
         ];
         for (const candidate of cases) {
-            const run = await fixtureRun(home);
+            const run = await fixtureRun(store);
             await store.update(run.id, {
                 status: 'running',
                 pid: 2_147_483_647,
@@ -263,9 +293,9 @@ describe('durable Workbench runs', () => {
 
     test('measures and removes only terminal run storage', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
-        const active = await fixtureRun(home);
-        const terminal = await fixtureRun(home);
+        const { runs: store } = open(home);
+        const active = await fixtureRun(store);
+        const terminal = await fixtureRun(store);
         await store.update(terminal.id, { status: 'completed' });
 
         expect(await store.size(terminal.id)).toBeGreaterThan(0);
@@ -281,13 +311,13 @@ describe('durable Workbench runs', () => {
 
     test('lists runs newest first across execution modes', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
-        const foreground = await fixtureRun(home, 'task', 'foreground');
+        const { runs: store } = open(home);
+        const foreground = await fixtureRun(store, 'task', 'foreground');
         await new Promise((resolve) => setTimeout(resolve, 2));
-        const completed = await fixtureRun(home);
+        const completed = await fixtureRun(store);
         await store.update(completed.id, { status: 'completed' });
         await new Promise((resolve) => setTimeout(resolve, 2));
-        const active = await fixtureRun(home);
+        const active = await fixtureRun(store);
 
         expect((await store.list()).map((run) => run.id)).toEqual([
             active.id,
@@ -298,9 +328,9 @@ describe('durable Workbench runs', () => {
 
     test('stores the Workbench reference without derived routes or credentials', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
+        const { runs: store, dispatcher } = open(home);
         const resolved = await fixtureReference(home, 'pi');
-        const run = await new RunDispatcher(home).prepare({
+        const run = await dispatcher.prepare({
             resolved,
             task: 'inspect',
             mode: 'detached',
@@ -320,9 +350,9 @@ describe('durable Workbench runs', () => {
 
     test('carries a named connection override across the detached worker boundary', async () => {
         const home = await temporaryHome();
-        const store = new RunStore(home);
+        const { runs: store, dispatcher } = open(home);
         const resolved = await fixtureReference(home, 'opencode');
-        const run = await new RunDispatcher(home).prepare({
+        const run = await dispatcher.prepare({
             resolved,
             task: 'inspect',
             mode: 'detached',
@@ -336,9 +366,7 @@ describe('durable Workbench runs', () => {
 
     test('links every interactive execution to one stable native session', async () => {
         const home = await temporaryHome();
-        const dispatcher = new RunDispatcher(home);
-        const runs = new RunStore(home);
-        const sessions = new SessionStore(home);
+        const { dispatcher, runs, sessions, resolver } = open(home);
         const resolved = await fixtureReference(home, 'opencode');
         const first = await dispatcher.prepare({
             resolved,
@@ -369,7 +397,7 @@ describe('durable Workbench runs', () => {
             native_session_id: 'ses_native_1',
         });
         const second = await dispatcher.prepare({
-            resolved: (await new SessionResolver(home).resolve(ready.id)).resolved,
+            resolved: (await resolver.resolve(ready.id)).resolved,
             mode: 'interactive',
             session: ready,
         });
@@ -387,9 +415,7 @@ describe('durable Workbench runs', () => {
 
     test('a resumed session inherits the original gpu acknowledgement', async () => {
         const home = await temporaryHome();
-        const dispatcher = new RunDispatcher(home);
-        const runs = new RunStore(home);
-        const sessions = new SessionStore(home);
+        const { dispatcher, runs, sessions, resolver } = open(home);
         const resolved = await fixtureReference(home, 'opencode');
         const first = await dispatcher.prepare({
             resolved,
@@ -405,7 +431,7 @@ describe('durable Workbench runs', () => {
         expect(ready.allow_unchecked_gpu).toBe(true);
 
         const second = await dispatcher.prepare({
-            resolved: (await new SessionResolver(home).resolve(ready.id)).resolved,
+            resolved: (await resolver.resolve(ready.id)).resolved,
             task: 'continue',
             mode: 'detached',
             session: ready,
@@ -417,9 +443,7 @@ describe('durable Workbench runs', () => {
 
     test('a session started without the acknowledgement does not gain it on resume', async () => {
         const home = await temporaryHome();
-        const dispatcher = new RunDispatcher(home);
-        const runs = new RunStore(home);
-        const sessions = new SessionStore(home);
+        const { dispatcher, runs, sessions, resolver } = open(home);
         const first = await dispatcher.prepare({
             resolved: await fixtureReference(home, 'opencode'),
             mode: 'interactive',
@@ -428,7 +452,7 @@ describe('durable Workbench runs', () => {
             native_session_id: 'ses_native_1',
         });
         const second = await dispatcher.prepare({
-            resolved: (await new SessionResolver(home).resolve(ready.id)).resolved,
+            resolved: (await resolver.resolve(ready.id)).resolved,
             task: 'continue',
             mode: 'detached',
             session: ready,
@@ -436,15 +460,72 @@ describe('durable Workbench runs', () => {
         expect((await runs.takeRequest(second.id)).allow_unchecked_gpu).toBeUndefined();
     });
 
+    test('refuses to start a run while a worker of the earlier file layout is alive', async () => {
+        const home = await temporaryHome();
+        const { dispatcher, runs } = open(home);
+        const resolved = await fixtureReference(home, 'opencode');
+        // The shell stays the parent of sleep, so the old worker argv is its own.
+        const worker = Bun.spawn([
+            'sh',
+            '-c',
+            'sleep 30; true',
+            '__worker',
+            home,
+            'wb_oldlayoutworker123456789',
+        ]);
+        try {
+            const old = join(home, 'runs', 'wb_oldlayoutworker123456789');
+            await mkdir(old, { recursive: true });
+            await writeFile(
+                join(old, 'run.json'),
+                JSON.stringify({ status: 'running', pid: worker.pid })
+            );
+
+            await expect(
+                dispatcher.prepare({
+                    resolved,
+                    mode: 'detached',
+                    task: 'go',
+                })
+            ).rejects.toThrow('earlier version of Workbench is still active');
+            expect(await runs.list()).toEqual([]);
+        } finally {
+            worker.kill();
+        }
+    });
+
+    test('does not wait on the snapshot lease again when acquiring it timed out', async () => {
+        const home = await temporaryHome();
+        const { dispatcher } = open(home);
+        const resolved = await fixtureReference(home, 'opencode');
+        const acquire = spyOn(SnapshotGuard.prototype, 'exclusive').mockRejectedValue(
+            new Error('Timed out waiting for Workbench package snapshot')
+        );
+        const release = spyOn(CatalogWriter.prototype, 'releaseSnapshot');
+        try {
+            await expect(
+                dispatcher.prepare({
+                    resolved,
+                    mode: 'detached',
+                    task: 'go',
+                })
+            ).rejects.toThrow('Timed out waiting for Workbench package snapshot');
+            expect(release).not.toHaveBeenCalled();
+        } finally {
+            acquire.mockRestore();
+            release.mockRestore();
+        }
+    });
+
     test('rejects resuming a session with a different locked Workbench', async () => {
         const home = await temporaryHome();
-        const dispatcher = new RunDispatcher(home);
+        const { dispatcher, sessions } = open(home);
         const resolved = await fixtureReference(home, 'opencode');
         const first = await dispatcher.prepare({
             resolved,
             mode: 'interactive',
         });
-        const session = await new SessionStore(home).update(first.id, {
+        const session = await sessions.update(first.id, {
             native_session_id: 'ses_native_1',
         });
         const changed = await fixtureReference(home, 'pi');
@@ -466,11 +547,11 @@ async function temporaryHome() {
 }
 
 function fixtureRun(
-    home: string,
+    store: RunStore,
     task = 'task',
     mode: 'foreground' | 'detached' = 'detached'
 ) {
-    return new RunStore(home).create({
+    return store.create({
         metadata: {
             workbench: 'fixture-core',
             workbench_version: '0.1.0',

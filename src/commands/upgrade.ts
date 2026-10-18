@@ -1,7 +1,9 @@
 import { defineCommand } from 'citty';
 
 import { SavedWorkbenchCatalog, SavedWorkbenchUpgrade } from '../catalog/index.js';
+import { Connection } from '../database/connection.js';
 import { workbenchHome } from '../storage.js';
+import { Services } from '../workbench/services.js';
 import { CliPresenter } from './presenter.js';
 
 export const upgradeCommand = defineCommand({
@@ -35,45 +37,58 @@ export const upgradeCommand = defineCommand({
         }
 
         const failures: string[] = [];
-        const upgrade = new SavedWorkbenchUpgrade(home);
-        for (const alias of aliases) {
-            try {
-                output.progress(`Checking ${alias} for updates`);
-                const result = await upgrade.upgrade(alias);
-                if (!result.changed) {
-                    output.record({
-                        machine: ['current', alias, result.entry.version],
-                        title: `${alias} is current`,
-                        details: [result.entry.version],
-                    });
-                    continue;
-                }
-                output.record({
-                    machine: [
-                        'upgraded',
-                        alias,
-                        result.previous.version,
-                        result.entry.version,
-                    ],
-                    title: `Upgraded ${alias}`,
-                    details: [`${result.previous.version} to ${result.entry.version}`],
-                });
-            } catch (error) {
-                const detail = error instanceof Error ? error.message : String(error);
-                failures.push(alias);
-                output.record({
-                    machine: ['failed', alias, detail],
-                    title: `Could not upgrade ${alias}`,
-                    details: [detail],
-                    tone: 'error',
-                    stream: 'stderr',
-                });
-            }
-        }
-        if (failures.length > 0) {
-            throw new Error(
-                `${failures.length} saved Workbench${failures.length === 1 ? '' : 'es'} could not be upgraded`
+        const connection = Connection.open(home);
+        try {
+            const services = new Services(home, connection);
+            const upgrade = new SavedWorkbenchUpgrade(
+                home,
+                services.catalog,
+                services.writer
             );
+            for (const alias of aliases) {
+                try {
+                    output.progress(`Checking ${alias} for updates`);
+                    const result = await upgrade.upgrade(alias);
+                    if (!result.changed) {
+                        output.record({
+                            machine: ['current', alias, result.entry.version],
+                            title: `${alias} is current`,
+                            details: [result.entry.version],
+                        });
+                        continue;
+                    }
+                    output.record({
+                        machine: [
+                            'upgraded',
+                            alias,
+                            result.previous.version,
+                            result.entry.version,
+                        ],
+                        title: `Upgraded ${alias}`,
+                        details: [
+                            `${result.previous.version} to ${result.entry.version}`,
+                        ],
+                    });
+                } catch (error) {
+                    const detail =
+                        error instanceof Error ? error.message : String(error);
+                    failures.push(alias);
+                    output.record({
+                        machine: ['failed', alias, detail],
+                        title: `Could not upgrade ${alias}`,
+                        details: [detail],
+                        tone: 'error',
+                        stream: 'stderr',
+                    });
+                }
+            }
+            if (failures.length > 0) {
+                throw new Error(
+                    `${failures.length} saved Workbench${failures.length === 1 ? '' : 'es'} could not be upgraded`
+                );
+            }
+        } finally {
+            connection.close();
         }
     },
 });

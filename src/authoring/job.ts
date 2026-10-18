@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { RunDispatcher } from '../runs/dispatcher.js';
+import type { Connection } from '../database/connection.js';
+import type { RunDispatcher } from '../runs/dispatcher.js';
 import { StoredRunHandle } from '../runs/handle.js';
 import { RunStore } from '../runs/store.js';
 import type { AuthoringLaunch } from './authoring.js';
@@ -42,15 +43,19 @@ interface VerificationRequest {
 
 /** Supervises creator verification outside the generic execution engine. */
 export class AuthoringJob {
-    constructor(private readonly home: string) {}
+    constructor(
+        private readonly home: string,
+        private readonly connection: Connection,
+        private readonly runs: RunStore,
+        private readonly dispatcher: Pick<RunDispatcher, 'prepare' | 'dispatch'>
+    ) {}
 
     async start(
         launch: AuthoringLaunch,
         task: string,
         options: { detached: boolean }
     ): Promise<AuthoringJobRecord> {
-        const dispatcher = new RunDispatcher(this.home);
-        const run = await dispatcher.prepare({
+        const run = await this.dispatcher.prepare({
             resolved: launch.resolved,
             reference: launch.alias,
             task,
@@ -73,7 +78,7 @@ export class AuthoringJob {
                 JSON.stringify({ operation_id: record.operation_id }),
                 { mode: 0o600 }
             );
-            await dispatcher.dispatch({
+            await this.dispatcher.dispatch({
                 id: run.id,
                 cwd: launch.resolved.workspaceDirectory,
                 environment: launch.environment,
@@ -137,11 +142,11 @@ export class AuthoringJob {
             await this.write(record);
             return record;
         } catch (error) {
-            const store = new RunStore(this.home);
+            const store = this.runs;
             const current = await store.reconcile(await store.read(run.id));
             if (!RunStore.isTerminal(current.status)) {
                 if (current.pid)
-                    await new StoredRunHandle(this.home, run.id)
+                    await new StoredRunHandle(store, this.connection, run.id)
                         .cancel('Creator startup failed')
                         .catch(() => {});
                 else
@@ -202,7 +207,11 @@ export class AuthoringJob {
                 ...(request.runtime ? { runtime: request.runtime } : {}),
                 ...(request.allow_unchecked_gpu ? { allowUncheckedGpu: true } : {}),
             });
-            const run = await new StoredRunHandle(this.home, record.run_id).result;
+            const run = await new StoredRunHandle(
+                this.runs,
+                this.connection,
+                record.run_id
+            ).result;
             if (run.status !== 'completed')
                 throw new Error(`Creator execution ${run.status}`);
             const result = await operation.finish();

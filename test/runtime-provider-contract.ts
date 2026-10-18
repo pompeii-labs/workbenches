@@ -2,15 +2,15 @@ import { expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Connection } from '../src/database/connection.js';
 import { RunnerRegistry } from '../src/runners/index.js';
-import { RunDispatcher } from '../src/runs/dispatcher.js';
 import {
     type RuntimePrepareRequest,
     type RuntimeProvider,
     RuntimeRegistry,
 } from '../src/runtimes/index.js';
-import { SessionResolver, SessionStore } from '../src/sessions/index.js';
 import { Workbench } from '../src/workbench/index.js';
+import { Services } from '../src/workbench/services.js';
 
 export function runtimeProviderContract(options: {
     createProvider: () => RuntimeProvider;
@@ -27,6 +27,7 @@ export function runtimeProviderContract(options: {
         const home = join(root, 'home');
         const template = await resolveRequest(options.request);
         const candidate = options.createProvider();
+        let connection: Connection | undefined;
         try {
             await mkdir(source, { recursive: true });
             await mkdir(workspace);
@@ -55,7 +56,9 @@ export function runtimeProviderContract(options: {
                     })
                 )
             );
-            const run = await new RunDispatcher(home).prepare({
+            connection = Connection.open(home);
+            const services = new Services(home, connection);
+            const run = await services.dispatcher.prepare({
                 resolved: {
                     workbench: await Workbench.load(source, RunnerRegistry.standard()),
                     workspaceDirectory: workspace,
@@ -64,11 +67,11 @@ export function runtimeProviderContract(options: {
                 },
                 mode: 'interactive',
             });
-            await new SessionStore(home).update(run.id, {
+            await services.sessions.update(run.id, {
                 native_session_id: 'native-fixture',
             });
             await rm(source, { recursive: true });
-            const { resolved } = await new SessionResolver(home).resolve(run.id);
+            const { resolved } = await services.resolver.resolve(run.id);
             const pinned = resolved.workbench;
             expect(await readFile(pinned.instructionsPath, 'utf8')).toBe(
                 'Pinned runtime instructions'
@@ -100,6 +103,7 @@ export function runtimeProviderContract(options: {
                 await runtime.cleanup();
             }
         } finally {
+            connection?.close();
             await rm(root, { recursive: true, force: true });
         }
     });

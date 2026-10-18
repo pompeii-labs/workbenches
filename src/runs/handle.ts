@@ -1,3 +1,4 @@
+import type { Connection } from '../database/connection.js';
 import type {
     RunnerInput,
     RunnerPermissionDecision,
@@ -55,17 +56,16 @@ export class RunAlreadyTerminal extends Error {}
 
 export class StoredRunHandle implements RunHandle {
     readonly events: AsyncIterable<WorkbenchEvent>;
-    private readonly store: RunStore;
     private readonly control: RunControl;
     private readonly clientId = `client_${crypto.randomUUID()}`;
     private submissions: Promise<void> = Promise.resolve();
 
     constructor(
-        home: string,
+        private readonly store: Pick<RunStore, 'follow' | 'read' | 'assertWorkerAlive'>,
+        connection: Connection,
         readonly runId: string
     ) {
-        this.store = new RunStore(home);
-        this.control = new RunControl(home, runId);
+        this.control = new RunControl(connection, runId);
         this.events = this.store.follow(runId);
     }
 

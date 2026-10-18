@@ -70,6 +70,16 @@ export function assertRepositoryBinding(binding: RepositoryBinding): void {
     }
 }
 
+export function isRepositoryBinding(value: unknown): value is RepositoryBinding {
+    if (typeof value !== 'object' || value === null) return false;
+    try {
+        assertRepositoryBinding(value as RepositoryBinding);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 export function validRepositoryRef(value: unknown): value is string {
     return (
         typeof value === 'string' &&

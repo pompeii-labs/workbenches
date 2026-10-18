@@ -1,16 +1,20 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { appendFile, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { Connection } from '../src/database/connection.js';
+import { ProcessProbe } from '../src/processes/probe.js';
 import { renderStatusLine } from '../src/rendering/status-line.js';
 import type { WorkbenchEvent, WorkbenchEventType } from '../src/runs/index.js';
 import { RunStore } from '../src/runs/index.js';
 import { type RunStatus, RunStatusReader } from '../src/runs/status.js';
 
 const temporaryDirectories: string[] = [];
+const connections: Connection[] = [];
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -20,7 +24,7 @@ afterEach(async () => {
 
 describe('run status', () => {
     test('folds cost, plan, steps, activity, and open input from the event log', async () => {
-        const { home, run, write } = await runningFixture();
+        const { reader, run, write } = await runningFixture();
         await write(
             ['usage.updated', { kind: 'delta', cost_usd: 0.25 }],
             ['plan.updated', plan(['Build', 'in_progress'], ['Test', 'pending'])],
@@ -37,7 +41,7 @@ describe('run status', () => {
             ]
         );
 
-        const status = await new RunStatusReader(home).read(run);
+        const status = await reader.read(run);
         expect(status.status).toBe('running');
         expect(status.cost_usd).toBeCloseTo(0.75);
         expect(status.plan).toMatchObject({ completed: 1, total: 2 });
@@ -50,58 +54,53 @@ describe('run status', () => {
         });
 
         await write(['input.accepted', { id: 'r1', kind: 'permission' }]);
-        expect((await new RunStatusReader(home).read(run)).pending_input).toBeNull();
+        expect((await reader.read(run)).pending_input).toBeNull();
     });
 
-    test('folds only appended complete lines, from a private cache', async () => {
-        const { home, run, write, log } = await runningFixture();
+    test('folds only newly appended events, from a cache row', async () => {
+        const { connection, reader, run, write } = await runningFixture();
         await write(['usage.updated', { kind: 'delta', cost_usd: 1 }]);
-        const reader = new RunStatusReader(home);
+        const cached = () =>
+            connection.one('SELECT last_event FROM run_status WHERE run_id = ?', run.id)
+                ?.last_event;
         expect((await reader.read(run)).cost_usd).toBe(1);
+        const first = cached();
+        expect(first).toBeGreaterThan(0);
 
-        const cache = join(home, 'runs', run.id, 'status-cache.json');
-        expect((await stat(cache)).mode & 0o777).toBe(0o600);
-        const offset = JSON.parse(await readFile(cache, 'utf8')).offset;
-
-        // A line still being written is left for the next read.
-        const next = JSON.stringify(
-            event(run.id, 99, 'usage.updated', { kind: 'delta', cost_usd: 2 })
-        );
-        await appendFile(log, next.slice(0, 20));
+        // Reading again with nothing new leaves the cache where it was.
         expect((await reader.read(run)).cost_usd).toBe(1);
-        expect(JSON.parse(await readFile(cache, 'utf8')).offset).toBe(offset);
-        await appendFile(log, `${next.slice(20)}\n`);
+        expect(cached()).toBe(first);
+
+        await write(['usage.updated', { kind: 'delta', cost_usd: 2 }]);
         expect((await reader.read(run)).cost_usd).toBe(3);
+        expect(cached()).toBeGreaterThan(Number(first));
     });
 
     test('marks an active run whose worker is gone as lost', async () => {
-        const home = await temporaryHome();
-        const store = new RunStore(home);
-        const created = await fixtureRun(home);
+        const { store, reader } = await environment();
+        const created = await fixtureRun(store);
         const run = await store.update(created.id, {
             status: 'running',
             pid: 2 ** 22 + 7,
         });
-        expect((await new RunStatusReader(home).read(run)).status).toBe('lost');
+        expect((await reader.read(run)).status).toBe('lost');
     });
 
     test('a terminal event outranks a stale running record', async () => {
-        const home = await temporaryHome();
-        const store = new RunStore(home);
-        const created = await fixtureRun(home);
+        const { store, reader } = await environment();
+        const created = await fixtureRun(store);
         const run = await store.update(created.id, {
             status: 'running',
             pid: 2 ** 22 + 7,
         });
         await store.appendEvent(run.id, event(run.id, 1, 'run.failed', {}));
-        expect((await new RunStatusReader(home).read(run)).status).toBe('failed');
+        expect((await reader.read(run)).status).toBe('failed');
     });
 
     test('typical step is the median over finished runs of the same workbench', async () => {
-        const home = await temporaryHome();
-        const store = new RunStore(home);
+        const { store, reader } = await environment();
         const finished = async (workbench: string, counts: number[]) => {
-            const run = await fixtureRun(home, workbench);
+            const run = await fixtureRun(store, workbench);
             let sequence = 0;
             const items = counts.map((_, index) => `item ${index}`);
             for (const [index, count] of counts.entries()) {
@@ -141,7 +140,6 @@ describe('run status', () => {
         await finished('game', [20]);
         await finished('other', [100, 100, 100]);
 
-        const reader = new RunStatusReader(home);
         expect(await reader.typicalStep('game')).toBe(10);
         expect(await reader.typicalStep('missing')).toBeUndefined();
     });
@@ -230,9 +228,8 @@ describe('status line', () => {
 });
 
 async function runningFixture() {
-    const home = await temporaryHome();
-    const store = new RunStore(home);
-    const created = await fixtureRun(home);
+    const { connection, store, reader } = await environment();
+    const created = await fixtureRun(store);
     const run = await store.update(created.id, { status: 'running', pid: process.pid });
     let sequence = 0;
     const write = async (
@@ -242,7 +239,7 @@ async function runningFixture() {
             await store.appendEvent(run.id, event(run.id, ++sequence, type, data));
         }
     };
-    return { home, run, write, log: join(home, 'runs', run.id, 'events.ndjson') };
+    return { connection, reader, run, write };
 }
 
 function plan(...items: string[][]) {
@@ -253,14 +250,18 @@ function plan(...items: string[][]) {
     };
 }
 
-async function temporaryHome() {
-    const directory = await mkdtemp(join(tmpdir(), 'workbench-status-'));
-    temporaryDirectories.push(directory);
-    return directory;
+async function environment() {
+    const home = await mkdtemp(join(tmpdir(), 'workbench-status-'));
+    temporaryDirectories.push(home);
+    const connection = Connection.open(home);
+    connections.push(connection);
+    const probe = new ProcessProbe();
+    const store = new RunStore(connection, home, probe);
+    return { connection, store, reader: new RunStatusReader(store, connection, probe) };
 }
 
-function fixtureRun(home: string, workbench = 'fixture-core') {
-    return new RunStore(home).create({
+function fixtureRun(store: RunStore, workbench = 'fixture-core') {
+    return store.create({
         metadata: {
             workbench,
             workbench_version: '0.1.0',

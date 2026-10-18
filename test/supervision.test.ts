@@ -3,14 +3,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CliInput } from '../src/commands/input.js';
+import { Connection } from '../src/database/connection.js';
 import { RunControl } from '../src/runs/control.js';
 import { RunEvents, type WorkbenchEventType } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/store.js';
-import { RunSupervision } from '../src/runs/supervision.js';
-import { SessionControl } from '../src/sessions/control.js';
+import { Services } from '../src/workbench/services.js';
 
 const directories: string[] = [];
+const connections: Connection[] = [];
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))
     );
@@ -19,7 +21,10 @@ afterEach(async () => {
 async function fixture(mode: 'interactive' | 'detached' = 'interactive') {
     const home = await mkdtemp(join(tmpdir(), 'supervision-'));
     directories.push(home);
-    const store = new RunStore(home);
+    const connection = Connection.open(home);
+    connections.push(connection);
+    const services = new Services(home, connection);
+    const store = services.runs;
     const run = await store.create({
         metadata: {
             workbench: 'probe',
@@ -41,10 +46,12 @@ async function fixture(mode: 'interactive' | 'detached' = 'interactive') {
         events.emit(type, data);
     return {
         home,
+        connection,
         store,
         run: await store.read(run.id),
         emit,
-        supervision: new RunSupervision(home),
+        supervision: services.supervision,
+        control: services.control,
     };
 }
 
@@ -416,12 +423,8 @@ describe('session answers and explicit input sources', () => {
             kind: 'permission',
             options: ['allow_once', 'reject'],
         });
-        const control = new RunControl(f.home, f.run.id);
-        const answering = new SessionControl(f.home).answer(
-            f.run.id,
-            'permission',
-            'allow'
-        );
+        const control = new RunControl(f.connection, f.run.id);
+        const answering = f.control.answer(f.run.id, 'permission', 'allow');
         const request = await control.receive();
         expect(request?.permission).toEqual({
             id: 'permission',
@@ -437,9 +440,9 @@ describe('session answers and explicit input sources', () => {
             'decision'
         );
         await f.emit('input.accepted', { id: 'permission', kind: 'permission' });
-        await expect(
-            new SessionControl(f.home).answer(f.run.id, 'permission', 'allow')
-        ).rejects.toThrow('no longer pending');
+        await expect(f.control.answer(f.run.id, 'permission', 'allow')).rejects.toThrow(
+            'no longer pending'
+        );
     });
 
     test('refuses unoffered permission scopes and authentication credentials', async () => {
@@ -449,7 +452,7 @@ describe('session answers and explicit input sources', () => {
             kind: 'permission',
             options: ['allow_once', 'reject'],
         });
-        const control = new SessionControl(f.home);
+        const control = f.control;
         await expect(
             control.answer(f.run.id, 'permission', 'allow_always')
         ).rejects.toThrow('offered');
@@ -478,7 +481,7 @@ describe('session answers and explicit input sources', () => {
                 },
             ],
         });
-        const sessions = new SessionControl(f.home);
+        const sessions = f.control;
         await expect(sessions.answer(f.run.id, 'q', 'A')).rejects.toThrow(
             'every question'
         );
@@ -486,7 +489,7 @@ describe('session answers and explicit input sources', () => {
             sessions.answer(f.run.id, 'q', '[["unknown"],["B"]]')
         ).rejects.toThrow('offered');
         const answering = sessions.answer(f.run.id, 'q', '[["A"],["B","C"]]');
-        const control = new RunControl(f.home, f.run.id);
+        const control = new RunControl(f.connection, f.run.id);
         const request = await control.receive();
         expect(request?.question?.response).toEqual({
             outcome: 'answered',
