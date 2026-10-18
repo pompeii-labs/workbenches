@@ -23,7 +23,7 @@ Remote adds fetch only the selected package and store an immutable snapshot. Loc
 
 ## Session ownership
 
-At session creation the engine captures package bytes in session-owned storage. It does not snapshot, copy, or hash the workspace for this purpose. Resumes use that package even after source edits, upgrade, alias removal, or source deletion. Legacy sessions keep their exact available original package; the engine does not substitute a newer alias when their original package is missing or changed.
+At session creation the engine captures package bytes in content-addressed snapshot storage shared with saved aliases. It does not snapshot, copy, or hash the workspace for this purpose. Resumes use that package even after source edits, upgrade, alias removal, or source deletion. The engine never substitutes a newer alias when a session's original package is missing or changed.
 
 `wb upgrade` updates saved remotes only. Local registrations need no upgrade. `wb update` checks or replaces the CLI itself. Removing an alias never removes the original live source or a package still owned by a resumable session.
 
