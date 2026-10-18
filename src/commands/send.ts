@@ -1,6 +1,7 @@
 import { defineCommand } from 'citty';
-import { SessionControl } from '../sessions/control.js';
+import { Connection } from '../database/connection.js';
 import { workbenchHome } from '../storage.js';
+import { Services } from '../workbench/services.js';
 import { CliInput } from './input.js';
 import { CliReceipt } from './receipt.js';
 
@@ -48,11 +49,17 @@ export const sendCommand = defineCommand({
                 file: args['task-file'],
                 stdin: args.stdin,
             });
-            return new SessionControl(workbenchHome()).send(
-                args.session,
-                input,
-                args.steer ? 'steer' : args.queue ? 'queue' : 'send'
-            );
+            const home = workbenchHome();
+            const connection = Connection.open(home);
+            try {
+                return await new Services(home, connection).control.send(
+                    args.session,
+                    input,
+                    args.steer ? 'steer' : args.queue ? 'queue' : 'send'
+                );
+            } finally {
+                connection.close();
+            }
         });
     },
 });

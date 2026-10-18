@@ -1,4 +1,5 @@
 import { AuthenticationRequiredError } from '../connections/error.js';
+import type { RepositoryCheckoutStore } from '../database/checkouts.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
 import type { OutcomeCompleteness } from '../outcomes/contracts.js';
 import type { RepositoryBinding } from '../repositories/contracts.js';
@@ -65,6 +66,9 @@ export interface WorkbenchRunDependencies {
     write?: (value: string) => void;
     now?: () => Date;
     runtimeRegistry?: RuntimeRegistry;
+    /** The records of the Workbench home `options.home` names. */
+    runs?: Pick<RunStore, 'read' | 'update' | 'list'>;
+    checkouts?: Pick<RepositoryCheckoutStore, 'find' | 'record' | 'forget'>;
 }
 
 export class WorkbenchRun {
@@ -127,6 +131,10 @@ export class WorkbenchRun {
                 environment: this.environment,
                 runtimes: this.runtimeRegistry,
                 ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
+                ...(this.dependencies.runs ? { runs: this.dependencies.runs } : {}),
+                ...(this.dependencies.checkouts
+                    ? { checkouts: this.dependencies.checkouts }
+                    : {}),
             }
         );
         this.preparation = preparation;

@@ -3,18 +3,24 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-    SavedWorkbenchCatalog,
-    SavedWorkbenchUpgrade,
-    WorkbenchPackage,
-} from '../src/catalog/index.js';
+import { SavedWorkbenchUpgrade, WorkbenchPackage } from '../src/catalog/index.js';
+import { Connection } from '../src/database/connection.js';
 import { RunnerRegistry } from '../src/runners/index.js';
 import { Workbench } from '../src/workbench/index.js';
+import { Services } from '../src/workbench/services.js';
 
 const runners = RunnerRegistry.standard();
 const temporaryDirectories: string[] = [];
+const connections: Connection[] = [];
+
+function services(home: string): Services {
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return new Services(home, connection);
+}
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -26,7 +32,8 @@ describe('saved Workbench upgrades', () => {
     test('keeps legacy local aliases frozen until explicitly re-added', async () => {
         const fixture = await localFixture('0.1.0');
         const home = await temporaryDirectory('workbench-upgrade-local-');
-        const saved = await new SavedWorkbenchCatalog(home).add({
+        const { catalog, writer } = services(home);
+        const saved = await writer.add({
             alias: 'fixture-core',
             source: fixture.root,
             workbench: await Workbench.load(fixture.packageDirectory, runners),
@@ -34,12 +41,10 @@ describe('saved Workbench upgrades', () => {
 
         await fixture.writeVersion('0.2.0', '# updated\n');
         await expect(
-            new SavedWorkbenchUpgrade(home).upgrade('fixture-core')
+            new SavedWorkbenchUpgrade(home, catalog, writer).upgrade('fixture-core')
         ).rejects.toThrow('Local Workbenches are not upgraded');
-        expect(await new SavedWorkbenchCatalog(home).find('fixture-core')).toEqual(
-            saved
-        );
-        const live = await new SavedWorkbenchCatalog(home).addLocal({
+        expect(await catalog.find('fixture-core')).toEqual(saved);
+        const live = await catalog.addLocal({
             alias: 'fixture-core',
             workbench: await Workbench.load(fixture.packageDirectory, runners),
         });
@@ -50,14 +55,14 @@ describe('saved Workbench upgrades', () => {
     test('does not rewrite an alias when its package is already current', async () => {
         const fixture = await localFixture('0.1.0');
         const home = await temporaryDirectory('workbench-upgrade-current-');
-        const catalog = new SavedWorkbenchCatalog(home);
-        const saved = await catalog.add({
+        const { catalog, writer } = services(home);
+        const saved = await writer.add({
             alias: 'fixture-core',
             source: fixture.root,
             workbench: await Workbench.load(fixture.packageDirectory, runners),
         });
 
-        const result = await catalog.upgrade('fixture-core', {
+        const result = await writer.upgrade('fixture-core', {
             source: fixture.root,
             selector: 'core',
             manifest: (await Workbench.load(fixture.packageDirectory, runners))
@@ -75,14 +80,14 @@ describe('saved Workbench upgrades', () => {
     test('keeps shared snapshots until the final alias moves away', async () => {
         const fixture = await localFixture('0.1.0');
         const home = await temporaryDirectory('workbench-upgrade-shared-');
-        const catalog = new SavedWorkbenchCatalog(home);
+        const { writer } = services(home);
         const workbench = await Workbench.load(fixture.packageDirectory, runners);
-        const first = await catalog.add({
+        const first = await writer.add({
             alias: 'fixture-one',
             source: fixture.root,
             workbench,
         });
-        await catalog.add({
+        await writer.add({
             alias: 'fixture-two',
             source: fixture.root,
             workbench,
@@ -96,17 +101,17 @@ describe('saved Workbench upgrades', () => {
             manifest: candidate.manifest,
             files: await new WorkbenchPackage(candidate).files(),
         };
-        await catalog.upgrade('fixture-one', upgrade);
+        await writer.upgrade('fixture-one', upgrade);
         expect((await stat(first.packagePath)).isDirectory()).toBeTrue();
-        await catalog.upgrade('fixture-two', upgrade);
+        await writer.upgrade('fixture-two', upgrade);
         await expect(stat(first.packagePath)).rejects.toThrow();
     });
 
     test('preserves the existing alias when a candidate package is invalid', async () => {
         const fixture = await localFixture('0.1.0');
         const home = await temporaryDirectory('workbench-upgrade-invalid-');
-        const catalog = new SavedWorkbenchCatalog(home);
-        const saved = await catalog.add({
+        const { catalog, writer } = services(home);
+        const saved = await writer.add({
             alias: 'fixture-core',
             source: fixture.root,
             workbench: await Workbench.load(fixture.packageDirectory, runners),
@@ -114,7 +119,7 @@ describe('saved Workbench upgrades', () => {
         await writeFile(join(fixture.packageDirectory, 'workbench.yml'), 'spec: 99\n');
 
         await expect(
-            new SavedWorkbenchUpgrade(home).upgrade('fixture-core')
+            new SavedWorkbenchUpgrade(home, catalog, writer).upgrade('fixture-core')
         ).rejects.toThrow();
         expect(await catalog.list()).toEqual([saved]);
         expect((await stat(saved.packagePath)).isDirectory()).toBeTrue();
@@ -122,9 +127,9 @@ describe('saved Workbench upgrades', () => {
 
     test('resolves and verifies a newer registry artifact', async () => {
         const home = await temporaryDirectory('workbench-upgrade-registry-');
-        const catalog = new SavedWorkbenchCatalog(home);
+        const { catalog, writer } = services(home);
         const initial = remotePackage('0.1.0', 'a'.repeat(40));
-        const saved = await catalog.addRemote({
+        const saved = await writer.addRemote({
             alias: 'registry-core',
             workbench: initial.workbench,
             registry: {
@@ -165,7 +170,7 @@ describe('saved Workbench upgrades', () => {
             return new Response('not found', { status: 404 });
         };
 
-        const result = await new SavedWorkbenchUpgrade(home, {
+        const result = await new SavedWorkbenchUpgrade(home, catalog, writer, {
             fetch: fetcher,
         }).upgrade('registry-core');
 
@@ -178,9 +183,9 @@ describe('saved Workbench upgrades', () => {
 
     test('refreshes a GitHub-backed snapshot from the default branch', async () => {
         const home = await temporaryDirectory('workbench-upgrade-github-');
-        const catalog = new SavedWorkbenchCatalog(home);
+        const { catalog, writer } = services(home);
         const initial = remotePackage('0.1.0', 'a'.repeat(40));
-        await catalog.addRemote({
+        await writer.addRemote({
             alias: 'github-core',
             workbench: initial.workbench,
         });
@@ -221,7 +226,7 @@ describe('saved Workbench upgrades', () => {
             return new Response('not found', { status: 404 });
         };
 
-        const result = await new SavedWorkbenchUpgrade(home, {
+        const result = await new SavedWorkbenchUpgrade(home, catalog, writer, {
             fetch: fetcher,
         }).upgrade('github-core');
 

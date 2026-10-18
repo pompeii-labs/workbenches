@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Connection } from '../src/database/connection.js';
 import { OutcomeStore } from '../src/outcomes/index.js';
 import type { RepositoryBinding } from '../src/repositories/contracts.js';
 import { RunStore, type StoredRunStatus } from '../src/runs/index.js';
@@ -13,12 +14,21 @@ import {
     type ManagedContainerStorage,
     type ManagedSandboxStorage,
     SessionRetention,
-    SessionStore,
+    type SessionStore,
 } from '../src/sessions/index.js';
+import { Services } from '../src/workbench/services.js';
 
 const homes: string[] = [];
+const connections: Connection[] = [];
+
+function open(home: string) {
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return new Services(home, connection);
+}
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         homes.splice(0).map((home) => rm(home, { recursive: true, force: true }))
     );
@@ -27,8 +37,7 @@ afterEach(async () => {
 describe('Workbench session retention', () => {
     test('removes linked outcomes while retaining content referenced by surviving history', async () => {
         const home = await temporaryHome();
-        const runs = new RunStore(home);
-        const sessions = new SessionStore(home);
+        const { runs, sessions, writer } = open(home);
         const outcomes = new OutcomeStore(home);
         const old = RunStore.createId();
         const retained = RunStore.createId();
@@ -86,7 +95,7 @@ describe('Workbench session retention', () => {
             baseRunBytes + (await outcomes.metadataSize(checkpoint.id))
         );
         await Bun.sleep(2);
-        const retention = new SessionRetention(home);
+        const retention = new SessionRetention(home, runs, sessions, writer);
         const policy = { before: new Date() };
         const review = await retention.review(policy);
         const result = await retention.apply(policy);
@@ -99,13 +108,12 @@ describe('Workbench session retention', () => {
     });
     test('keeps terminal history newer than the cutoff', async () => {
         const home = await temporaryHome();
-        const runs = new RunStore(home);
-        const sessions = new SessionStore(home);
+        const { runs, sessions, writer } = open(home);
         const id = RunStore.createId();
         await fixtureSession(sessions, id, id);
         await fixtureRun(runs, id, id, 'completed');
 
-        const retention = new SessionRetention(home);
+        const retention = new SessionRetention(home, runs, sessions, writer);
         const review = await retention.review({
             before: new Date(Date.now() - 60_000),
         });
@@ -117,8 +125,7 @@ describe('Workbench session retention', () => {
 
     test('removes old terminal history while protecting active and resumable sessions', async () => {
         const home = await temporaryHome();
-        const runs = new RunStore(home);
-        const sessions = new SessionStore(home);
+        const { runs, sessions, writer } = open(home);
 
         const disposableId = RunStore.createId();
         await fixtureSession(sessions, disposableId, disposableId);
@@ -152,7 +159,7 @@ describe('Workbench session retention', () => {
         ]);
         await Bun.sleep(2);
         const policy = { before: new Date() };
-        const retention = new SessionRetention(home, {
+        const retention = new SessionRetention(home, runs, sessions, writer, {
             containers: containerStorage,
             sandboxes: sandboxStorage,
         });
@@ -205,11 +212,12 @@ describe('Workbench session retention', () => {
 
     test('does not remove a running sandbox whose run is absent locally', async () => {
         const home = await temporaryHome();
+        const { runs, sessions, writer } = open(home);
         const missingRunId = RunStore.createId();
         const sandboxStorage = new FixtureSandboxes([
             sandbox('sandbox-running', missingRunId, 'running'),
         ]);
-        const retention = new SessionRetention(home, {
+        const retention = new SessionRetention(home, runs, sessions, writer, {
             sandboxes: sandboxStorage,
         });
 
@@ -222,8 +230,7 @@ describe('Workbench session retention', () => {
 
     test('retains repository attempt history until its session is explicitly removed', async () => {
         const home = await temporaryHome();
-        const runs = new RunStore(home);
-        const sessions = new SessionStore(home);
+        const { runs, sessions, writer } = open(home);
         const sessionId = RunStore.createId();
         const historicalId = RunStore.createId();
         const latestId = RunStore.createId();
@@ -244,7 +251,7 @@ describe('Workbench session retention', () => {
             latest_run_id: latestId,
         });
         await Bun.sleep(2);
-        const retention = new SessionRetention(home);
+        const retention = new SessionRetention(home, runs, sessions, writer);
         const policy = { before: new Date() };
         const review = await retention.review(policy);
         expect(review.runs).toEqual([]);
@@ -266,15 +273,14 @@ describe('Workbench session retention', () => {
 
     test('requires an explicit policy to remove resumable native context', async () => {
         const home = await temporaryHome();
-        const runs = new RunStore(home);
-        const sessions = new SessionStore(home);
+        const { runs, sessions, writer } = open(home);
         const id = RunStore.createId();
         await fixtureSession(sessions, id, id);
         await fixtureRun(runs, id, id, 'completed');
         await sessions.update(id, { native_session_id: 'ses_native_explicit' });
         await Bun.sleep(2);
 
-        const retention = new SessionRetention(home);
+        const retention = new SessionRetention(home, runs, sessions, writer);
         expect((await retention.review({ before: new Date() })).sessions).toEqual([]);
         const result = await retention.apply({
             before: new Date(),

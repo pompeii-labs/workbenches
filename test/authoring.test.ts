@@ -21,18 +21,40 @@ import {
     WorkbenchAuthoring,
 } from '../src/authoring/index.js';
 import { WorkbenchPackage } from '../src/catalog/index.js';
+import { Connection } from '../src/database/connection.js';
 import type { RegistryPackage } from '../src/registry/index.js';
 import { RunnerRegistry } from '../src/runners/index.js';
-import { RunDispatcher, RunStore } from '../src/runs/index.js';
-import { SessionStore } from '../src/sessions/index.js';
 import type { WorkbenchManifest } from '../src/types.js';
 import { Workbench } from '../src/workbench/index.js';
+import { Services } from '../src/workbench/services.js';
 
 const runners = RunnerRegistry.standard();
 const temporaryDirectories: string[] = [];
+const connections: Connection[] = [];
 const smoke = async () => {};
 
+/** Session and evidence collaborators for authoring that never reads a session. */
+const idle = {
+    sessions: {
+        resolve: async () => {
+            throw new Error('No session expected');
+        },
+    },
+    evidence: {
+        write: async () => {
+            throw new Error('No evidence expected');
+        },
+    },
+};
+
+function services(home: string): Services {
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return new Services(home, connection);
+}
+
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -86,6 +108,7 @@ describe('native Workbench authoring', () => {
         const remote = creatorPackage();
         let candidatePath: string | undefined;
         const authoring = new WorkbenchAuthoring(home, {
+            ...idle,
             environment: { PATH: '/host/bin' },
             smoke: async (_workbench, options) => {
                 candidatePath = options.environment.PATH;
@@ -123,7 +146,13 @@ describe('native Workbench authoring', () => {
                 fetchWorkbench: async () => remote,
             },
         });
-        const authoring = new WorkbenchAuthoring(home, { official, smoke });
+        const s = services(home);
+        const authoring = new WorkbenchAuthoring(home, {
+            sessions: s.lifecycle,
+            evidence: s.evidence,
+            official,
+            smoke,
+        });
 
         const blank = await authoring.create({ directory: repository });
         expect(blank.prompt).toBeUndefined();
@@ -147,7 +176,7 @@ describe('native Workbench authoring', () => {
         await edit.operation.finish();
 
         const workbench = await Workbench.load(packageDirectory, runners);
-        const run = await new RunDispatcher(home).prepare({
+        const run = await s.dispatcher.prepare({
             resolved: {
                 workbench,
                 workspaceDirectory: repository,
@@ -156,7 +185,7 @@ describe('native Workbench authoring', () => {
             },
             mode: 'interactive',
         });
-        await new RunStore(home).update(run.id, { status: 'completed' });
+        await s.runs.update(run.id, { status: 'completed' });
         const improve = await authoring.create({
             from: run.id,
             feedback: 'The expert missed a repository convention.',
@@ -177,7 +206,8 @@ describe('native Workbench authoring', () => {
             verificationManifest('core', '0.1.0')
         );
         const workbench = await Workbench.load(packageDirectory, runners);
-        const run = await new RunDispatcher(home).prepare({
+        const s = services(home);
+        const run = await s.dispatcher.prepare({
             resolved: {
                 workbench,
                 workspaceDirectory: repository,
@@ -193,6 +223,8 @@ describe('native Workbench authoring', () => {
         let observed: AuthoringSmokeOptions | undefined;
         const remote = creatorPackage();
         const authoring = new WorkbenchAuthoring(home, {
+            sessions: s.lifecycle,
+            evidence: s.evidence,
             environment: {
                 PATH: '/usr/bin',
                 REQUIRED_TOKEN: 'inherited-secret',
@@ -232,6 +264,7 @@ describe('native Workbench authoring', () => {
         const packageDirectory = await writeWorkbench(repository, 'core', '0.1.0');
         const workbench = await Workbench.load(packageDirectory, runners);
         const authoring = new WorkbenchAuthoring(home, {
+            ...idle,
             smoke,
             resolver: {
                 resolve: async () => ({
@@ -251,7 +284,7 @@ describe('native Workbench authoring', () => {
     test('keeps target authoring and session improvement in one unambiguous call', async () => {
         const home = await temporaryDirectory('workbench-authoring-home-');
         const repository = await temporaryDirectory('workbench-authoring-repo-');
-        const authoring = new WorkbenchAuthoring(home);
+        const authoring = new WorkbenchAuthoring(home, idle);
 
         await expect(
             authoring.create({
@@ -284,6 +317,7 @@ describe('native Workbench authoring', () => {
         const remote = creatorPackage();
         const registry = registryPackage(WorkbenchPackage.digest(remote.files));
         const authoring = new WorkbenchAuthoring(home, {
+            ...idle,
             smoke,
             official: new OfficialWorkbenchResolver(home, {
                 registry: {
@@ -420,7 +454,7 @@ describe('native Workbench authoring', () => {
     test('writes bounded normalized improvement evidence and redacts credentials', async () => {
         const home = await temporaryDirectory('workbench-evidence-');
         const sessionId = 'wb_authorevidence1234567890';
-        const sessions = new SessionStore(home);
+        const { sessions, runs } = services(home);
         const session = await sessions.create({
             id: sessionId,
             workbench: 'lux-ops',
@@ -436,7 +470,6 @@ describe('native Workbench authoring', () => {
             workspaces: [],
             latest_run_id: sessionId,
         });
-        const runs = new RunStore(home);
         await runs.create({
             id: sessionId,
             metadata: {
@@ -490,7 +523,7 @@ describe('native Workbench authoring', () => {
             });
         }
 
-        const result = await new ImprovementEvidence(home).write({
+        const result = await new ImprovementEvidence(home, runs).write({
             operationId: 'author_evidence',
             session,
             feedback: 'The agent ignored the safe migration workflow.',
@@ -506,7 +539,7 @@ describe('native Workbench authoring', () => {
         expect(evidence).not.toContain('secret-value');
         expect(evidence).not.toContain('abcdefghijklmnop');
 
-        const bounded = await new ImprovementEvidence(home, 1_000).write({
+        const bounded = await new ImprovementEvidence(home, runs, 1_000).write({
             operationId: 'author_bounded',
             session,
             feedback: 'x'.repeat(10_000),
@@ -519,7 +552,7 @@ describe('native Workbench authoring', () => {
         const home = await temporaryDirectory('workbench-run-evidence-');
         const sessionId = 'wb_canonicalsession1234567890';
         const runId = 'wb_canonicalrun1234567890123';
-        const sessions = new SessionStore(home);
+        const { sessions, runs } = services(home);
         const session = await sessions.create({
             id: sessionId,
             workbench: 'lux-ops',
@@ -535,7 +568,6 @@ describe('native Workbench authoring', () => {
             workspaces: [],
             latest_run_id: runId,
         });
-        const runs = new RunStore(home);
         await runs.create({
             id: runId,
             metadata: {
@@ -600,7 +632,7 @@ describe('native Workbench authoring', () => {
         }
         await runs.update(runId, { status: 'completed' });
 
-        const result = await new ImprovementEvidence(home).write({
+        const result = await new ImprovementEvidence(home, runs).write({
             operationId: 'author_canonical_evidence',
             session,
             feedback: '',
@@ -1143,7 +1175,7 @@ describe('native Workbench authoring', () => {
         const repository = await temporaryDirectory('workbench-pinned-repo-');
         const packageDirectory = await writeWorkbench(repository, 'core', '0.1.0');
         const workbench = await Workbench.load(packageDirectory, runners);
-        const dispatcher = new RunDispatcher(home);
+        const { dispatcher, sessions } = services(home);
         const run = await dispatcher.prepare({
             resolved: {
                 workbench,
@@ -1153,7 +1185,7 @@ describe('native Workbench authoring', () => {
             },
             mode: 'interactive',
         });
-        const session = await new SessionStore(home).read(run.session_id as string);
+        const session = await sessions.read(run.session_id as string);
 
         expect(session.source_workbench_path).toBe(packageDirectory);
         expect(session.workbench_digest).toMatch(/^sha256:[0-9a-f]{64}$/);

@@ -1,5 +1,6 @@
+import type { RepositoryCheckoutStore } from '../database/checkouts.js';
 import { OutcomeStore } from '../outcomes/index.js';
-import { RunStore } from '../runs/store.js';
+import type { RunStore } from '../runs/store.js';
 import { isRemoteRuntime } from '../workbench/runtimes.js';
 import { RepositoryChecks } from './checks.js';
 import {
@@ -8,7 +9,7 @@ import {
     type RepositoryDeliveryReceipt,
 } from './contracts.js';
 import { RepositoryGitHub } from './github.js';
-import { RepositoryDeliveryStore } from './receipts.js';
+import type { RepositoryDeliveryStore } from './receipts.js';
 import { RepositoryWorkspace } from './workspace.js';
 
 export type RepositoryCheckReport = Awaited<ReturnType<RepositoryChecks['read']>>;
@@ -22,23 +23,26 @@ export type RepositoryInspectionState = Awaited<
 export class RepositoryInspection {
     constructor(
         private readonly home: string,
+        private readonly runs: Pick<RunStore, 'read'>,
+        private readonly receipts: RepositoryDeliveryStore,
+        private readonly checkouts: Pick<
+            RepositoryCheckoutStore,
+            'find' | 'record' | 'forget'
+        >,
         readonly runId: string,
         private readonly environment: Record<string, string | undefined>,
         private readonly github?: RepositoryGitHub
     ) {}
 
     async load() {
-        const run = await new RunStore(this.home).read(this.runId);
+        const run = await this.runs.read(this.runId);
         const binding = run.repository;
         if (!binding)
             throw new Error('This session is not running on a GitHub repository');
         assertRepositoryBinding(binding);
         const native = await this.nativePull(run, binding);
         const receipt =
-            native?.receipt ??
-            (await new RepositoryDeliveryStore(this.home).readSession(
-                binding.session_id
-            ));
+            native?.receipt ?? (await this.receipts.readSession(binding.session_id));
         if (
             receipt &&
             (receipt.repository.toLowerCase() !==
@@ -47,8 +51,12 @@ export class RepositoryInspection {
                 receipt.base_branch !== binding.base_branch)
         )
             throw new Error('GitHub receipt has different repository provenance');
-        const checkout = new RepositoryWorkspace(this.home, binding, this.environment)
-            .directory;
+        const checkout = new RepositoryWorkspace(
+            this.home,
+            this.checkouts,
+            binding,
+            this.environment
+        ).directory;
         return {
             run,
             binding,
@@ -75,12 +83,7 @@ export class RepositoryInspection {
         const github =
             this.github ??
             (await RepositoryGitHub.forEnvironment(this.environment, true));
-        return new RepositoryChecks(
-            binding,
-            new RepositoryDeliveryStore(this.home),
-            github,
-            native_pull
-        );
+        return new RepositoryChecks(binding, this.receipts, github, native_pull);
     }
 
     private async nativePull(
@@ -93,7 +96,6 @@ export class RepositoryInspection {
           }
         | undefined
     > {
-        const runs = new RunStore(this.home);
         const outcomes = new OutcomeStore(this.home);
         const seen = new Set<string>();
         let run: typeof current | undefined = current;
@@ -142,7 +144,9 @@ export class RepositoryInspection {
                         };
                     }
                 }
-                run = run.resumed_from ? await runs.read(run.resumed_from) : undefined;
+                run = run.resumed_from
+                    ? await this.runs.read(run.resumed_from)
+                    : undefined;
             }
             return undefined;
         } finally {

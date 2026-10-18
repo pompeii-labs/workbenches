@@ -1,11 +1,10 @@
 import { defineCommand } from 'citty';
 
+import { Connection } from '../database/connection.js';
 import { createEventRenderer } from '../rendering/index.js';
-import { RepositoryDeliveryStore } from '../repositories/receipts.js';
-import { RunContinuation } from '../runs/index.js';
-import { SessionResolver } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
 import { selectedRuntime, WorkbenchEnvironment } from '../workbench/index.js';
+import { Services } from '../workbench/services.js';
 import { CliInput } from './input.js';
 import { CliRunClient } from './run-client.js';
 
@@ -99,94 +98,97 @@ export const resumeCommand = defineCommand({
               })
             : '';
         const home = workbenchHome();
-        const target = await new SessionResolver(home).resolve(args.session);
-        const workbenchEnvironment = new WorkbenchEnvironment();
-        const overrides = await workbenchEnvironment.load({
-            ...(args['env-file'] ? { envFile: args['env-file'] } : {}),
-            rawArgs,
-        });
-        const environment = workbenchEnvironment.bind(
-            target.resolved.workbench,
-            overrides
-        );
-        if (
-            selectedRuntime(target.resolved.workbench).docker?.engine &&
-            !args['allow-host-docker']
-        ) {
-            throw new Error(
-                'This Workbench requests host Docker engine access. Re-run with --allow-host-docker to authorize it.'
-            );
-        }
-        if (!task) {
-            throw new Error(
-                `Session ${target.session.id} needs new input. Use wb send ${target.session.id} <task> or pass --task, --task-file, or --stdin.`
-            );
-        }
-        if (args.detach && args.final) {
-            throw new Error('--detach cannot be combined with --final');
-        }
-        const continuation = await new RunContinuation(home).submit({
-            resolved: target.resolved,
-            session: target.session,
-            task,
-            mode: args.detach ? 'detached' : 'foreground',
-            environment,
-            environmentOverrides: Boolean(
-                args['env-file'] || overrides.explicit.size > 0
-            ),
-            workspaces: target.session.workspaces,
-            allowHostDocker: args['allow-host-docker'],
-            ...(args.connection ? { connection: args.connection } : {}),
-        });
-        if (args.detach) {
-            console.log(
-                args.json
-                    ? JSON.stringify({
-                          session_id: target.session.id,
-                          run_id: continuation.run.id,
-                          input_id: continuation.inputId,
-                          after_sequence: continuation.afterSequence,
-                          ...(continuation.receipt
-                              ? { receipt: continuation.receipt }
-                              : {}),
-                      })
-                    : target.session.id
-            );
-            return;
-        }
-        const renderer = createEventRenderer({
-            mode: args.json ? 'json' : args.final ? 'final' : 'human',
-            ...(args.color === undefined ? {} : { color: args.color }),
-        });
-        let followed: Awaited<ReturnType<CliRunClient['followInput']>>;
+        const connection = Connection.open(home);
         try {
-            followed = await new CliRunClient().followInput(
-                continuation.handle,
-                continuation.inputId,
-                (event) => renderer.render(event),
-                continuation.afterSequence,
-                continuation.receipt === undefined
+            const services = new Services(home, connection);
+            const target = await services.resolver.resolve(args.session);
+            const workbenchEnvironment = new WorkbenchEnvironment();
+            const overrides = await workbenchEnvironment.load({
+                ...(args['env-file'] ? { envFile: args['env-file'] } : {}),
+                rawArgs,
+            });
+            const environment = workbenchEnvironment.bind(
+                target.resolved.workbench,
+                overrides
             );
+            if (
+                selectedRuntime(target.resolved.workbench).docker?.engine &&
+                !args['allow-host-docker']
+            ) {
+                throw new Error(
+                    'This Workbench requests host Docker engine access. Re-run with --allow-host-docker to authorize it.'
+                );
+            }
+            if (!task) {
+                throw new Error(
+                    `Session ${target.session.id} needs new input. Use wb send ${target.session.id} <task> or pass --task, --task-file, or --stdin.`
+                );
+            }
+            if (args.detach && args.final) {
+                throw new Error('--detach cannot be combined with --final');
+            }
+            const continuation = await services.continuation.submit({
+                resolved: target.resolved,
+                session: target.session,
+                task,
+                mode: args.detach ? 'detached' : 'foreground',
+                environment,
+                environmentOverrides: Boolean(
+                    args['env-file'] || overrides.explicit.size > 0
+                ),
+                workspaces: target.session.workspaces,
+                allowHostDocker: args['allow-host-docker'],
+                ...(args.connection ? { connection: args.connection } : {}),
+            });
+            if (args.detach) {
+                console.log(
+                    args.json
+                        ? JSON.stringify({
+                              session_id: target.session.id,
+                              run_id: continuation.run.id,
+                              input_id: continuation.inputId,
+                              after_sequence: continuation.afterSequence,
+                              ...(continuation.receipt
+                                  ? { receipt: continuation.receipt }
+                                  : {}),
+                          })
+                        : target.session.id
+                );
+                return;
+            }
+            const renderer = createEventRenderer({
+                mode: args.json ? 'json' : args.final ? 'final' : 'human',
+                ...(args.color === undefined ? {} : { color: args.color }),
+            });
+            let followed: Awaited<ReturnType<CliRunClient['followInput']>>;
+            try {
+                followed = await new CliRunClient().followInput(
+                    continuation.handle,
+                    continuation.inputId,
+                    (event) => renderer.render(event),
+                    continuation.afterSequence,
+                    continuation.receipt === undefined
+                );
+            } finally {
+                renderer.finish();
+            }
+            if (followed.interrupted) {
+                process.exitCode = 130;
+                return;
+            }
+            if (followed.terminalStatus === 'failed') {
+                process.exitCode = followed.failureExitCode ?? 1;
+            } else if (followed.terminalStatus === 'cancelled') {
+                process.exitCode = 130;
+            } else if (!followed.reachedBoundary) {
+                throw new Error(
+                    `Session ${target.session.id} ended before completing the task`
+                );
+            }
+            if ((await services.receipts.read(continuation.run.id))?.state === 'failed')
+                process.exitCode = 1;
         } finally {
-            renderer.finish();
+            connection.close();
         }
-        if (followed.interrupted) {
-            process.exitCode = 130;
-            return;
-        }
-        if (followed.terminalStatus === 'failed') {
-            process.exitCode = followed.failureExitCode ?? 1;
-        } else if (followed.terminalStatus === 'cancelled') {
-            process.exitCode = 130;
-        } else if (!followed.reachedBoundary) {
-            throw new Error(
-                `Session ${target.session.id} ended before completing the task`
-            );
-        }
-        if (
-            (await new RepositoryDeliveryStore(home).read(continuation.run.id))
-                ?.state === 'failed'
-        )
-            process.exitCode = 1;
     },
 });

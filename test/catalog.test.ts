@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { SavedWorkbenchCatalog } from '../src/catalog/index.js';
+import { Connection } from '../src/database/connection.js';
 import { RunnerRegistry } from '../src/runners/index.js';
 import { GitHubWorkbenchSource } from '../src/sources/index.js';
 import { workbenchHome } from '../src/storage.js';
@@ -20,11 +21,20 @@ import {
     WorkbenchResolver,
     WorkbenchSource,
 } from '../src/workbench/index.js';
+import { Services } from '../src/workbench/services.js';
 
 const runners = RunnerRegistry.standard();
 const temporaryDirectories: string[] = [];
+const connections: Connection[] = [];
+
+function services(home: string): Services {
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return new Services(home, connection);
+}
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -113,18 +123,18 @@ describe('sources and saved catalog', () => {
     test('saves content-addressed packages, reuses snapshots, and removes safely', async () => {
         const fixture = await createRepository(['core']);
         const home = await temporaryDirectory('workbench-catalog-');
-        const catalog = new SavedWorkbenchCatalog(home);
+        const { catalog, writer } = services(home);
         const workbench = await Workbench.load(
             fixture.packages.core as string,
             runners
         );
 
-        const first = await catalog.add({
+        const first = await writer.add({
             alias: 'fixture-core',
             source: fixture.root,
             workbench,
         });
-        const second = await catalog.add({
+        const second = await writer.add({
             alias: 'fixture-copy',
             source: fixture.root,
             workbench,
@@ -141,23 +151,23 @@ describe('sources and saved catalog', () => {
         ]);
         expect(await catalog.find('fixture-core')).toEqual(first);
 
-        await catalog.remove('fixture-core');
+        await writer.remove('fixture-core');
         expect((await stat(first.packagePath)).isDirectory()).toBeTrue();
-        await catalog.remove('fixture-copy');
+        await writer.remove('fixture-copy');
         await expect(stat(first.packagePath)).rejects.toThrow();
-        await expect(catalog.remove('missing')).rejects.toThrow('does not exist');
+        await expect(writer.remove('missing')).rejects.toThrow('does not exist');
     });
 
     test('resolves saved and local Workbench references without changing their workspace', async () => {
         const fixture = await createRepository(['core']);
         const home = await temporaryDirectory('workbench-reference-');
-        const catalog = new SavedWorkbenchCatalog(home);
+        const { writer } = services(home);
         const workspace = await temporaryDirectory('workbench-workspace-');
         const workbench = await Workbench.load(
             fixture.packages.core as string,
             runners
         );
-        const saved = await catalog.add({
+        const saved = await writer.add({
             alias: 'fixture-core',
             source: fixture.root,
             workbench,
@@ -211,37 +221,37 @@ describe('sources and saved catalog', () => {
     test('reuses identical aliases and rejects invalid aliases and package symlinks', async () => {
         const fixture = await createRepository(['core']);
         const home = await temporaryDirectory('workbench-catalog-invalid-');
-        const catalog = new SavedWorkbenchCatalog(home);
+        const { writer } = services(home);
         const packageDirectory = fixture.packages.core as string;
         const workbench = await Workbench.load(packageDirectory, runners);
-        await catalog.add({
+        await writer.add({
             alias: 'fixture-core',
             source: fixture.root,
             workbench,
         });
 
         await expect(
-            catalog.add({
+            writer.add({
                 alias: 'fixture-core',
                 source: fixture.root,
                 workbench,
             })
         ).resolves.toMatchObject({ alias: 'fixture-core' });
         await expect(
-            catalog.add({ alias: 'Bad Alias', source: fixture.root, workbench })
+            writer.add({ alias: 'Bad Alias', source: fixture.root, workbench })
         ).rejects.toThrow('Invalid saved Workbench alias');
 
         await symlink('/tmp', join(packageDirectory, 'escape'));
         await expect(
-            catalog.add({ alias: 'with-link', source: fixture.root, workbench })
+            writer.add({ alias: 'with-link', source: fixture.root, workbench })
         ).rejects.toThrow('may not contain symlinks');
     });
 
     test('rejects registry packages whose downloaded contents do not match', async () => {
         const home = await temporaryDirectory('workbench-registry-digest-');
-        const catalog = new SavedWorkbenchCatalog(home);
+        const { catalog, writer } = services(home);
         await expect(
-            catalog.addRemote({
+            writer.addRemote({
                 alias: 'registry-core',
                 expectedDigest: `sha256:${'0'.repeat(64)}`,
                 registry: {
@@ -302,7 +312,7 @@ describe('sources and saved catalog', () => {
         );
         const portableHome = await temporaryDirectory('workbench-portable-');
         await expect(
-            new SavedWorkbenchCatalog(portableHome).add({
+            services(portableHome).writer.add({
                 alias: 'external-reference',
                 source: fixture.root,
                 workbench,

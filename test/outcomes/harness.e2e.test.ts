@@ -12,18 +12,14 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
+import { Connection } from '../../src/database/connection.js';
 import { OutcomeStore, type RunOutcome } from '../../src/outcomes/index.js';
 import { processIsAlive } from '../../src/outcomes/lease.js';
 import { isOutboxPermission } from '../../src/runners/opencode/outbox.js';
-import {
-    InteractiveRun,
-    RunDispatcher,
-    RunStore,
-    type WorkbenchEvent,
-} from '../../src/runs/index.js';
+import { InteractiveRun, RunStore, type WorkbenchEvent } from '../../src/runs/index.js';
 import { E2BSdkClient } from '../../src/runtimes/e2b/sdk.js';
 import { WorkbenchResolver } from '../../src/workbench/index.js';
+import { Services } from '../../src/workbench/services.js';
 import { seedModelCatalogFixture } from '../model-catalog-fixture.js';
 
 const enabled = process.env.WORKBENCH_OUTCOME_HARNESS_E2E === '1';
@@ -34,14 +30,42 @@ const selectedRuntimes = (
 const cli = join(import.meta.dir, '..', '..', 'src', 'cli.ts');
 const directories: string[] = [];
 const homes: Array<{ path: string; runtime: string }> = [];
+const connections: Connection[] = [];
+const wired = new Map<string, Services>();
+
+/** The stores of one fixture home, over a connection closed after the test. */
+function servicesFor(home: string): Services {
+    let services = wired.get(home);
+    if (!services) {
+        const connection = Connection.open(home);
+        connections.push(connection);
+        services = new Services(home, connection);
+        wired.set(home, services);
+    }
+    return services;
+}
 
 afterEach(async () => {
+    try {
+        await cleanFixtures();
+    } finally {
+        wired.clear();
+        for (const connection of connections.splice(0)) connection.close();
+        await Promise.all(
+            directories
+                .splice(0)
+                .map((path) => rm(path, { recursive: true, force: true }))
+        );
+    }
+});
+
+async function cleanFixtures(): Promise<void> {
     for (const home of homes.splice(0)) {
-        const runs = await new RunStore(home.path).list();
+        const runs = await servicesFor(home.path).runs.list();
         for (const run of runs) {
             if (RunStore.isTerminal(run.status)) continue;
-            const cancellation = new RunDispatcher(home.path)
-                .handle(run.id)
+            const cancellation = servicesFor(home.path)
+                .dispatcher.handle(run.id)
                 .cancel('Harness outcomes test cleanup')
                 .catch(() => {});
             await Promise.race([cancellation, Bun.sleep(2_000)]);
@@ -77,10 +101,7 @@ afterEach(async () => {
             }
         }
     }
-    await Promise.all(
-        directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))
-    );
-});
+}
 
 function signalFixtureGroup(pid: number, signal: NodeJS.Signals): void {
     try {
@@ -120,7 +141,11 @@ describe.skipIf(!enabled)('Real harness outcomes across runtimes', () => {
                                 access: 'read-write',
                             },
                         ],
-                        dependencies: { env },
+                        dependencies: {
+                            env,
+                            runs: servicesFor(fixture.home).runs,
+                            checkouts: servicesFor(fixture.home).checkouts,
+                        },
                         onPermission: ({ action, resources }) =>
                             isOutboxPermission(
                                 action,
@@ -288,7 +313,7 @@ describe.skipIf(!enabled)('Real harness outcomes across runtimes', () => {
                     const events = parseEvents(result.stdout);
                     const runId = events[0]?.run_id;
                     if (!runId) throw new Error('Run identity missing');
-                    const run = await new RunStore(fixture.home).read(runId);
+                    const run = await servicesFor(fixture.home).runs.read(runId);
                     if (!run.outcome_id || !run.session_id)
                         throw new Error('Outcome or session identity missing');
                     const store = new OutcomeStore(fixture.home);
@@ -328,7 +353,7 @@ describe.skipIf(!enabled)('Real harness outcomes across runtimes', () => {
                     expect(resumed.code, resumed.stderr).toBe(0);
                     const resumedRunId = parseEvents(resumed.stdout)[0]?.run_id;
                     if (!resumedRunId) throw new Error('Resumed run identity missing');
-                    const resumedRun = await new RunStore(fixture.home).read(
+                    const resumedRun = await servicesFor(fixture.home).runs.read(
                         resumedRunId
                     );
                     if (!resumedRun.outcome_id)
@@ -387,7 +412,7 @@ describe.skipIf(!enabled)('Real harness outcomes across runtimes', () => {
                     expect(result.code, result.stderr).toBe(0);
                     const runId = parseEvents(result.stdout)[0]?.run_id;
                     if (!runId) throw new Error('Initial run missing');
-                    const initialRun = await new RunStore(fixture.home).read(runId);
+                    const initialRun = await servicesFor(fixture.home).runs.read(runId);
                     if (!initialRun.outcome_id || !initialRun.session_id)
                         throw new Error('Initial result or session missing');
                     const store = new OutcomeStore(fixture.home);
@@ -418,7 +443,9 @@ describe.skipIf(!enabled)('Real harness outcomes across runtimes', () => {
                     expect(resumed.code, resumed.stderr).toBe(0);
                     const secondId = parseEvents(resumed.stdout)[0]?.run_id;
                     if (!secondId) throw new Error('Resumed run missing');
-                    const secondRun = await new RunStore(fixture.home).read(secondId);
+                    const secondRun = await servicesFor(fixture.home).runs.read(
+                        secondId
+                    );
                     if (!secondRun.outcome_id)
                         throw new Error('Resumed outcome missing');
                     const second = await store.read(secondRun.outcome_id);
@@ -501,7 +528,7 @@ describe.skipIf(!enabled)('Real harness outcomes across runtimes', () => {
                     );
                     const runId = events[0]?.run_id;
                     if (!runId) throw new Error('Run identity missing');
-                    const run = await new RunStore(fixture.home).read(runId);
+                    const run = await servicesFor(fixture.home).runs.read(runId);
                     const localEnv = testEnvironment(fixture.home, false, false);
                     const inspected = await command(fixture.root, localEnv, [
                         'outcome',
@@ -848,8 +875,8 @@ async function command(cwd: string, env: Record<string, string>, args: string[])
                     // mistyped paths, earlier outboxes or parent run directories.
                     rejectedDirectories++;
                     try {
-                        await new RunDispatcher(env.WORKBENCH_HOME as string)
-                            .handle(event.run_id)
+                        await servicesFor(env.WORKBENCH_HOME as string)
+                            .dispatcher.handle(event.run_id)
                             .respondToPermission(request.id, 'reject');
                         continue;
                     } catch {

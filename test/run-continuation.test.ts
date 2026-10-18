@@ -391,22 +391,22 @@ function fixtureContinuation(options: {
     prepare: (options: PrepareRunOptions) => Promise<StoredRun>;
     dispatch?: (options: DispatchRunOptions) => Promise<number>;
 }): RunContinuation {
-    return new RunContinuation('/tmp/workbench-run-continuation-tests', {
-        dispatcher: {
+    return new RunContinuation(
+        {
             prepare: options.prepare,
             dispatch: options.dispatch ?? (async () => 1),
             handle: () => options.handle,
         },
-        runs: {
+        {
             read: async () => options.run,
             readEvents: async () => options.events ?? [],
             reconcile: async () => options.run,
         },
-        sessions: {
+        {
             read: async () => options.session,
             exclusive: async (_id, operation) => operation(),
-        },
-    });
+        }
+    );
 }
 
 function fakeHandle(runId: string): RunHandle {

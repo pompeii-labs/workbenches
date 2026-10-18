@@ -1,3 +1,4 @@
+export type { StoredRunRequest } from '../database/runs/requests.js';
 export {
     type ContinuedRun,
     type ContinueRunOptions,
@@ -46,7 +47,6 @@ export {
     type CreateStoredRunOptions,
     RunStore,
     type StoredRun,
-    type StoredRunRequest,
     type StoredRunStatus,
 } from './store.js';
 export {

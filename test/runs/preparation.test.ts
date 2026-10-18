@@ -3,7 +3,10 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConnectionStore } from '../../src/connections/store.js';
+import { RepositoryCheckoutStore } from '../../src/database/checkouts.js';
+import { Connection } from '../../src/database/connection.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
+import { ProcessProbe } from '../../src/processes/probe.js';
 import { RepositoryWorkspace } from '../../src/repositories/workspace.js';
 import { runtimeContext } from '../../src/runners/context/runtime.js';
 import { RunnerRegistry } from '../../src/runners/registry.js';
@@ -25,7 +28,9 @@ import { checkoutFixture, fixtureIdentity } from '../repositories/fixture.js';
 
 const rules = new TransferRules('E2B');
 const directories: string[] = [];
+const connections: Connection[] = [];
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))
     );
@@ -94,7 +99,8 @@ describe('shared execution preparation', () => {
                         const repository = fixture.repository;
                         const directory = join(
                             fixture.home,
-                            'sessions',
+                            'files',
+                            'repositories',
                             fixture.repository.binding.session_id,
                             'repository'
                         );
@@ -114,7 +120,8 @@ describe('shared execution preparation', () => {
                                     ? join(directory, '.git')
                                     : join(
                                           fixture.home,
-                                          'sessions',
+                                          'files',
+                                          'repositories',
                                           fixture.repository.binding.session_id,
                                           'agent-git'
                                       ),
@@ -145,7 +152,7 @@ describe('shared execution preparation', () => {
                         if (runtime === 'docker') {
                             const plan = new DockerMountPlan(request);
                             expect(plan.arguments()).toContain(
-                                `${fixture.home}/sessions/${fixture.repository.binding.session_id}/agent-git:/workspace/.git`
+                                `${fixture.home}/files/repositories/${fixture.repository.binding.session_id}/agent-git:/workspace/.git`
                             );
                             expect(plan.containerEnvironment()).toMatchObject({
                                 WORKBENCH_REPOSITORY: 'example/project',
@@ -162,7 +169,8 @@ describe('shared execution preparation', () => {
                                         asset.hostPath ===
                                         join(
                                             fixture.home,
-                                            'sessions',
+                                            'files',
+                                            'repositories',
                                             repository.binding.session_id,
                                             'agent-git'
                                         )
@@ -455,6 +463,10 @@ async function createFixture(options: FixtureOptions = {}) {
     const root = repository?.root ?? (await mkdtemp(join(tmpdir(), 'preparation-')));
     directories.push(root);
     const home = join(root, 'home');
+    const connection = Connection.open(home);
+    connections.push(connection);
+    const runs = new RunStore(connection, home, new ProcessProbe());
+    const checkouts = new RepositoryCheckoutStore(connection);
     const instructionsPath = join(root, 'instructions.md');
     await writeFile(instructionsPath, 'Follow the user task.');
     const workbench: ResolvedWorkbench = {
@@ -494,7 +506,7 @@ async function createFixture(options: FixtureOptions = {}) {
     });
     if (repository) {
         repository.binding.delivery = options.delivery ?? 'none';
-        await new RunStore(home).create({
+        await runs.create({
             id: events.runId,
             metadata: {
                 workbench: 'fixture',
@@ -548,11 +560,14 @@ async function createFixture(options: FixtureOptions = {}) {
                       SSH_AUTH_SOCK: '/socket',
                       GIT_CONFIG_VALUE_0: 'poisoned',
                   },
+            runs,
+            checkouts,
             ...(repository
                 ? {
                       repositories: (home, binding, environment) =>
                           new RepositoryWorkspace(
                               home,
+                              checkouts,
                               binding,
                               environment,
                               repository.git,

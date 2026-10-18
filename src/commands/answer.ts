@@ -1,6 +1,7 @@
 import { defineCommand } from 'citty';
-import { SessionControl } from '../sessions/control.js';
+import { Connection } from '../database/connection.js';
 import { workbenchHome } from '../storage.js';
+import { Services } from '../workbench/services.js';
 import { CliInput } from './input.js';
 import { CliReceipt } from './receipt.js';
 
@@ -60,11 +61,17 @@ export const answerCommand = defineCommand({
                       file: args['response-file'],
                       stdin: args.stdin,
                   });
-            return new SessionControl(workbenchHome()).answer(
-                args.session,
-                args.request,
-                response
-            );
+            const home = workbenchHome();
+            const connection = Connection.open(home);
+            try {
+                return await new Services(home, connection).control.answer(
+                    args.session,
+                    args.request,
+                    response
+                );
+            } finally {
+                connection.close();
+            }
         });
     },
 });

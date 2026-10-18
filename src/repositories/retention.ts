@@ -1,19 +1,19 @@
 import { isDeepStrictEqual } from 'node:util';
 import { OutcomeApplier } from '../outcomes/apply.js';
 import { OutcomeStore } from '../outcomes/store.js';
-import { RunStore } from '../runs/store.js';
+import type { RunStore } from '../runs/store.js';
 import type { RepositoryBinding } from './contracts.js';
 
 /** Recovers saved remote edits before a continuation captures its baseline. */
 export class RepositoryRetention {
     constructor(
         private readonly home: string,
+        private readonly runs: Pick<RunStore, 'read'>,
         private readonly binding: RepositoryBinding
     ) {}
 
     async restore(runId: string, directory: string): Promise<void> {
-        const runs = new RunStore(this.home);
-        const current = await runs.read(runId);
+        const current = await this.runs.read(runId);
         if (!isDeepStrictEqual(current.repository, this.binding))
             throw new Error('Run repository provenance does not match retained edits');
         const history: string[] = [];
@@ -22,7 +22,7 @@ export class RepositoryRetention {
         while (previous) {
             if (seen.has(previous)) throw new Error('Invalid repository run history');
             seen.add(previous);
-            const run = await runs.read(previous);
+            const run = await this.runs.read(previous);
             if (!isDeepStrictEqual(run.repository, this.binding) || !run.outcome_id)
                 throw new Error(
                     'Repository run history has missing results; refusing to lose retained edits'

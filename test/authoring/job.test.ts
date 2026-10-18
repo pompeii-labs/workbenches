@@ -2,15 +2,17 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AuthoringJob, type AuthoringJobRecord } from '../../src/authoring/job.js';
+import type { AuthoringJobRecord } from '../../src/authoring/job.js';
 import { AuthoringOperation } from '../../src/authoring/operation.js';
+import { Connection } from '../../src/database/connection.js';
 import { RunEvents } from '../../src/runs/events.js';
 import { RunStore } from '../../src/runs/store.js';
-import { SessionStore } from '../../src/sessions/store.js';
-import { SessionSupervision } from '../../src/sessions/supervision.js';
+import { Services } from '../../src/workbench/services.js';
 
 const directories: string[] = [];
+const connections: Connection[] = [];
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))
     );
@@ -22,7 +24,10 @@ async function fixture() {
     const operationId = 'author_fixture';
     const directory = join(home, 'authoring', operationId);
     await mkdir(directory, { recursive: true });
-    const run = await new RunStore(home).create({
+    const connection = Connection.open(home);
+    connections.push(connection);
+    const services = new Services(home, connection);
+    const run = await services.runs.create({
         metadata: {
             workbench: 'creator',
             workbench_version: '0.1.4',
@@ -48,7 +53,17 @@ async function fixture() {
         join(home, 'authoring', 'runs', `${run.id}.json`),
         JSON.stringify({ operation_id: operationId })
     );
-    return { home, directory, path, run, record, jobs: new AuthoringJob(home) };
+    return {
+        home,
+        directory,
+        path,
+        run,
+        record,
+        jobs: services.jobs,
+        runs: services.runs,
+        sessions: services.sessions,
+        supervision: services.sessionSupervision,
+    };
 }
 
 describe('authoring verification supervision', () => {
@@ -105,7 +120,7 @@ describe('authoring verification supervision', () => {
             },
         });
         await operation.checkpoint();
-        await new RunStore(f.home).update(f.run.id, { status: 'failed', exit_code: 1 });
+        await f.runs.update(f.run.id, { status: 'failed', exit_code: 1 });
         await writeFile(f.path, JSON.stringify({ ...f.record, pid: process.pid }));
         const request = join(f.directory, 'verification.json');
         await writeFile(
@@ -132,9 +147,9 @@ describe('authoring verification supervision', () => {
 
     test('completed native execution is not completed authoring while verification is running', async () => {
         const f = await fixture();
-        await new RunStore(f.home).update(f.run.id, { status: 'completed' });
+        await f.runs.update(f.run.id, { status: 'completed' });
         await writeFile(f.path, JSON.stringify({ ...f.record, pid: process.pid }));
-        const result = await new SessionSupervision(f.home).wait(f.run, {
+        const result = await f.supervision.wait(f.run, {
             timeoutMilliseconds: 20,
         });
         expect(result).toMatchObject({
@@ -147,9 +162,9 @@ describe('authoring verification supervision', () => {
 
     test('pinning an older creator run still joins its package verification', async () => {
         const f = await fixture();
-        const store = new RunStore(f.home);
+        const store = f.runs;
         await store.update(f.run.id, { status: 'completed' });
-        await new SessionStore(f.home).create({
+        await f.sessions.create({
             id: f.run.id,
             workbench: f.run.workbench,
             workbench_version: f.run.workbench_version,
@@ -161,7 +176,7 @@ describe('authoring verification supervision', () => {
             workspaces: [],
             latest_run_id: RunStore.createId(),
         });
-        const supervision = new SessionSupervision(f.home);
+        const supervision = f.supervision;
         const run = await supervision.resolve(f.run.id, { exactRun: true });
         expect(await supervision.wait(run)).toMatchObject({
             run_id: f.run.id,
@@ -173,7 +188,7 @@ describe('authoring verification supervision', () => {
 
     test('a creator turn boundary cannot bypass terminal cleanup and verification', async () => {
         const f = await fixture();
-        const store = new RunStore(f.home);
+        const store = f.runs;
         await store.update(f.run.id, { status: 'running', pid: process.pid });
         await writeFile(f.path, JSON.stringify({ ...f.record, pid: process.pid }));
         const events = new RunEvents({
@@ -185,7 +200,7 @@ describe('authoring verification supervision', () => {
         await events.emit('output.text', { text: 'Package authored' });
         await events.emit('turn.completed', {});
         expect(
-            await new SessionSupervision(f.home).wait(f.run, {
+            await f.supervision.wait(f.run, {
                 timeoutMilliseconds: 10,
             })
         ).toMatchObject({

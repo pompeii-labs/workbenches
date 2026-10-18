@@ -219,7 +219,7 @@ Current limits:
 
 ## Repository execution and GitHub authentication
 
-`run --repo owner/repository` selects a GitHub input independently of the package source and caller workspace. `--ref` defaults to the repository's default branch. Before runtime preparation, the engine resolves an immutable commit and tree, stores their non-secret provenance on the session, run, and worker request, and checks out that commit under `sessions/<session_id>/repository`. The recorded caller workspace remains the discovery scope, not a transfer source or apply destination. Repository mode rejects named host bindings and host Docker access.
+`run --repo owner/repository` selects a GitHub input independently of the package source and caller workspace. `--ref` defaults to the repository's default branch. Before runtime preparation, the engine resolves an immutable commit and tree, stores their non-secret provenance on the session, run, and worker request, and checks out that commit under `files/repositories/<session_id>/repository`. The recorded caller workspace remains the discovery scope, not a transfer source or apply destination. Repository mode rejects named host bindings and host Docker access.
 
 Resolution and checkout use inherited `GH_TOKEN`, `GITHUB_TOKEN`, or the GitHub CLI's existing login. Authenticated host Git runs only against fresh engine-generated metadata, with credential helpers, hooks, filesystem monitors, global configuration, and redirect following disabled. The engine does not put the token in Git arguments, persisted configuration, normalized events, or package metadata. A new repository run receives `GH_TOKEN` in the runner's process environment. Git uses `gh auth git-credential` as its HTTPS credential helper. The same credential resolves the commit author's GitHub no-reply identity; the engine does not invent a shared account or use the caller's unrelated Git configuration. The checkout has a normal `origin` remote. Docker and E2B stage writable Git metadata separately from the engine's checkout. E2B captures that metadata as resumable native state. Local execution can access host credentials independently and is not a security sandbox. Older sessions retain their recorded authentication choice when resumed.
 
@@ -366,7 +366,27 @@ Stdout is reserved for the selected output contract. Human and final-mode errors
 
 `wb run <ref> --task <task> --detach` creates a durable session and run, launches a background worker, and prints the stable `wb_...` session ID, or a JSON launch receipt with `--json`. `wb attach <id>` resolves the session's latest run, replays its persisted event stream, and follows new events. Without an ID, `wb attach` selects the most recent session in `WORKBENCH_HOME`.
 
-Run metadata and `events.ndjson` live under `$WORKBENCH_HOME/runs/<id>/` (normally the Workbench data directory). The initial task is stored only until the worker consumes it, then removed. Direct foreground runs use the same stored handle and event stream, so their history can also be attached after completion.
+Sessions, runs, and events are rows in `$WORKBENCH_HOME/wb.db`; see [Local storage](#local-storage). The initial task is stored only until the worker consumes it, then deleted. Direct foreground runs use the same stored handle and event stream, so their history can also be attached after completion.
+
+## Local storage
+
+Every record is a row in one SQLite database, `$WORKBENCH_HOME/wb.db` (normally `~/.workbench/wb.db`). It holds sessions, runs, run requests, events, control requests and receipts, leases, run status, and repository receipts. The database runs in WAL mode with a busy timeout, foreign keys on, and `synchronous=NORMAL`. Its schema is a numbered, append-only list of SQL files (`NNNN_title.sql`) embedded in the binary. Each applied migration is recorded in the `__migrations` table with its name, the sha256 of its file, and the time. Each runs in its own transaction with its record. Workbench refuses to open a database written by a newer Workbench, one whose recorded migration differs from the file this binary ships, or one with a gap in its history. WAL does not work on network filesystems such as NFS, so `WORKBENCH_HOME` must be on a local disk.
+
+Every set of bytes lives under `$WORKBENCH_HOME/files/`, referenced from a row:
+
+| Path | Contents |
+| --- | --- |
+| `files/native/<session-id>/` | The runner's own state for the session. Its path is held on the session row. |
+| `files/repositories/<session-id>/` | The managed `--repo` checkout (`repository/`) and its agent Git state (`agent-git/`). |
+| `files/work/<run-id>/` | Live-run scratch, such as the `outbox/` the runner writes deliverables to. It is removed when the run ends. |
+
+Frozen package snapshots are content addressed and stored once at `$WORKBENCH_HOME/packages/<digest>/`, shared by saved aliases and every session that captured the same bytes. A snapshot is removed when no saved Workbench and no session refers to it. Retained results stay in `outcomes/` and `blobs/`. Credentials and the other stores (`catalog.json`, `connections.json`, `profiles.json`, `preferences.json`) are separate files and are not part of the database.
+
+Events keep a per-run `sequence` with a unique index on `(run_id, sequence)`, and a global insertion order. The `--json` stream, `wait --after`, and `attach` report the same sequence numbers as before. One event larger than 4 MiB serialized is stored with its `data` replaced by `{ "truncated": true, "original_bytes": <n>, "limit_bytes": 4194304 }`, keeping its envelope and sequence.
+
+Processes coordinate through the database. A control request is claimed by one atomic update, so no two receivers hold it. Leases are rows with an owner process and a token; a lease is taken over only when its owner process is gone, and a live holder keeps it however long it holds it. Readers keep their poll interval but compare SQLite's change counter between polls and read nothing when no process has written.
+
+Earlier versions kept sessions and runs as files under `sessions/` and `runs/`. This version never reads, moves, or deletes them. The first time `wb ps`, `wb run`, or `wb attach` runs against a home that still has either directory, it prints one line to standard error saying those sessions are not shown, and records that in the database. While a worker started by an earlier version is still alive, new runs are refused until it finishes. A recorded pid counts while the process is alive and its command line is an earlier worker for the same run, or cannot be read; the refusal names the `run.json` to remove if the worker is gone.
 
 Attach is read-only and never starts model work. `wb ps` lists active sessions and completed sessions with resumable native context; `wb ps --all` also includes terminal one-shot history. `wb kill <id>` cooperatively cancels the active run in the named session. The worker observes a private cancellation request, terminates the runner child, emits `run.cancelled`, and then marks the durable run cancelled. Session metadata and native resumable context remain available.
 
@@ -382,7 +402,7 @@ The default policy may select:
 - A managed Docker container whose scoped run is terminal or no longer exists.
 - A managed E2B sandbox whose scoped run is terminal or no longer exists.
 
-Active runs are never eligible. A session with native resumable state protects its session directory and latest run even after the cutoff. Repository sessions retain all linked attempt history for cumulative change composition until their session is removed. Removing resumable state requires both `--include-sessions` and `--apply`. Images, build caches, E2B templates, saved Workbench packages, runner credential volumes, and unrelated Docker containers or E2B sandboxes are outside this cleanup contract.
+Active runs are never eligible. A session with native resumable state protects its session record, files, and latest run even after the cutoff. Repository sessions retain all linked attempt history for cumulative change composition until their session is removed. Removing resumable state requires both `--include-sessions` and `--apply`. Images, build caches, E2B templates, saved Workbench packages, runner credential volumes, and unrelated Docker containers or E2B sandboxes are outside this cleanup contract.
 
 Before cleanup, nonterminal records are reconciled against their worker process. A missing worker produces one `run.failed` event and one terminal metadata transition. Reconciliation is serialized per run so concurrent `ps`, `attach`, or cleanup processes cannot create duplicate terminal events. Cleanup then rechecks every candidate under the session lease before deletion. A resource that became active or became the latest session run is left in place.
 

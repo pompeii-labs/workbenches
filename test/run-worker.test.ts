@@ -1,20 +1,23 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { Connection } from '../src/database/connection.js';
 import type { WorkbenchRunOptions } from '../src/runs/index.js';
 import {
-    RunDispatcher,
     RunStore,
     RunWorker,
     type StoredRun,
     type WorkbenchEvent,
 } from '../src/runs/index.js';
+import { Services } from '../src/workbench/services.js';
 
 const temporaryDirectories: string[] = [];
+const connections: Connection[] = [];
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -24,16 +27,16 @@ afterEach(async () => {
 
 describe('stored one-shot worker', () => {
     test('exposes events and terminal state through the durable handle', async () => {
-        const home = await temporaryHome();
-        const run = await fixtureRun(home);
-        const worker = new RunWorker(home, {
+        const services = await environment();
+        const run = await fixtureRun(services.runs);
+        const worker = workerFor(services, {
             executeRun: async (options) => {
                 await emit(options, run.id, 1, 'run.started');
                 await emit(options, run.id, 2, 'run.completed');
                 return 0;
             },
         });
-        const handle = new RunDispatcher(home).handle(run.id);
+        const handle = services.dispatcher.handle(run.id);
 
         await expect(worker.execute({ id: run.id })).resolves.toBe(0);
         await expect(handle.result).resolves.toEqual({
@@ -47,8 +50,8 @@ describe('stored one-shot worker', () => {
     });
 
     test('hands the stored gpu acknowledgement to the run', async () => {
-        const home = await temporaryHome();
-        const run = await new RunStore(home).create({
+        const services = await environment();
+        const run = await services.runs.create({
             metadata: {
                 workbench: 'fixture-core',
                 workbench_version: '0.1.0',
@@ -65,7 +68,7 @@ describe('stored one-shot worker', () => {
             },
         });
         let received: WorkbenchRunOptions | undefined;
-        const worker = new RunWorker(home, {
+        const worker = workerFor(services, {
             executeRun: async (options) => {
                 received = options;
                 await emit(options, run.id, 1, 'run.completed');
@@ -78,10 +81,10 @@ describe('stored one-shot worker', () => {
     });
 
     test('accepts run cancellation but rejects interactive input', async () => {
-        const home = await temporaryHome();
-        const run = await fixtureRun(home);
+        const services = await environment();
+        const run = await fixtureRun(services.runs);
         const started = deferred<void>();
-        const worker = new RunWorker(home, {
+        const worker = workerFor(services, {
             executeRun: async (options) => {
                 await emit(options, run.id, 1, 'run.started');
                 started.resolve();
@@ -90,7 +93,7 @@ describe('stored one-shot worker', () => {
                 return 130;
             },
         });
-        const handle = new RunDispatcher(home).handle(run.id);
+        const handle = services.dispatcher.handle(run.id);
         const execution = worker.execute({ id: run.id });
         await started.promise;
 
@@ -108,16 +111,16 @@ describe('stored one-shot worker', () => {
     });
 
     test('records one normalized failure when execution throws', async () => {
-        const home = await temporaryHome();
-        const run = await fixtureRun(home);
-        const worker = new RunWorker(home, {
+        const services = await environment();
+        const run = await fixtureRun(services.runs);
+        const worker = workerFor(services, {
             executeRun: async () => {
                 throw new Error('fixture execution failed');
             },
         });
 
         await expect(worker.execute({ id: run.id })).resolves.toBe(1);
-        expect(await new RunStore(home).readEvents(run.id)).toEqual([
+        expect(await services.runs.readEvents(run.id)).toEqual([
             expect.objectContaining({
                 sequence: 1,
                 type: 'run.failed',
@@ -125,16 +128,76 @@ describe('stored one-shot worker', () => {
             }),
         ]);
     });
+
+    test('records the failure after another writer takes its sequence', async () => {
+        const services = await environment();
+        const run = await fixtureRun(services.runs);
+        const original = RunStore.prototype.appendEvent;
+        let raced = false;
+        const append = spyOn(RunStore.prototype, 'appendEvent').mockImplementation(
+            async function (this: RunStore, id, event) {
+                if (!raced) {
+                    raced = true;
+                    await original.call(this, id, {
+                        ...event,
+                        type: 'output.text',
+                        data: {},
+                    });
+                }
+                return original.call(this, id, event);
+            }
+        );
+        try {
+            const worker = workerFor(services, {
+                executeRun: async () => {
+                    throw new Error('fixture execution failed');
+                },
+            });
+
+            await expect(worker.execute({ id: run.id })).resolves.toBe(1);
+        } finally {
+            append.mockRestore();
+        }
+
+        expect(
+            (await services.runs.readEvents(run.id)).map((event) => [
+                event.sequence,
+                event.type,
+            ])
+        ).toEqual([
+            [1, 'output.text'],
+            [2, 'run.failed'],
+        ]);
+        expect((await services.runs.read(run.id)).status).toBe('failed');
+    });
 });
 
-async function temporaryHome(): Promise<string> {
-    const directory = await mkdtemp(join(tmpdir(), 'workbench-worker-'));
-    temporaryDirectories.push(directory);
-    return directory;
+type Environment = Services & { home: string; connection: Connection };
+
+async function environment(): Promise<Environment> {
+    const home = await mkdtemp(join(tmpdir(), 'workbench-worker-'));
+    temporaryDirectories.push(home);
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return Object.assign(new Services(home, connection), { home, connection });
 }
 
-function fixtureRun(home: string): Promise<StoredRun> {
-    return new RunStore(home).create({
+function workerFor(
+    services: Environment,
+    dependencies: ConstructorParameters<typeof RunWorker>[5]
+): RunWorker {
+    return new RunWorker(
+        services.home,
+        services.connection,
+        services.runs,
+        services.sessions,
+        services.checkouts,
+        dependencies
+    );
+}
+
+function fixtureRun(runs: RunStore): Promise<StoredRun> {
+    return runs.create({
         metadata: {
             workbench: 'fixture-core',
             workbench_version: '0.1.0',

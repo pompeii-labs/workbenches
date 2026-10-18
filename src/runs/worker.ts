@@ -1,9 +1,13 @@
 import type { CatalogRegistryReference } from '../catalog/index.js';
+import type { RepositoryCheckoutStore } from '../database/checkouts.js';
+import type { Connection } from '../database/connection.js';
 import { RegistryTelemetry } from '../registry/index.js';
+import type { SessionStore } from '../sessions/store.js';
 import { RunControl, type RunControlRequest } from './control.js';
+import { DuplicateEventSequenceError } from './error.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
 import { InteractiveRunWorker } from './interactive-worker.js';
-import { RunStore, type StoredRun } from './store.js';
+import type { RunStore, StoredRun } from './store.js';
 import {
     WorkbenchRun,
     type WorkbenchRunDependencies,
@@ -16,6 +20,9 @@ export interface ExecuteStoredRunOptions {
     signal?: AbortSignal;
 }
 
+/** Tries to record a run's failure this many times before giving up. */
+const FAILURE_APPEND_ATTEMPTS = 5;
+
 interface RunWorkerDependencies {
     executeRun?: (
         options: WorkbenchRunOptions,
@@ -24,15 +31,20 @@ interface RunWorkerDependencies {
 }
 
 export class RunWorker {
-    private readonly store: RunStore;
     private readonly telemetry: RegistryTelemetry;
     private readonly executeRun: NonNullable<RunWorkerDependencies['executeRun']>;
 
     constructor(
         private readonly home: string,
+        private readonly connection: Connection,
+        private readonly store: RunStore,
+        private readonly sessions: SessionStore,
+        private readonly checkouts: Pick<
+            RepositoryCheckoutStore,
+            'find' | 'record' | 'forget'
+        >,
         dependencies: RunWorkerDependencies = {}
     ) {
-        this.store = new RunStore(home);
         this.telemetry = new RegistryTelemetry({ home });
         this.executeRun = dependencies.executeRun ?? WorkbenchRun.execute;
     }
@@ -108,7 +120,11 @@ export class RunWorker {
                           }
                         : {}),
                 },
-                options.environment ? { env: options.environment } : {}
+                {
+                    ...(options.environment ? { env: options.environment } : {}),
+                    runs: this.store,
+                    checkouts: this.checkouts,
+                }
             );
             state.terminal = true;
             await this.store.update(options.id, {
@@ -134,7 +150,7 @@ export class RunWorker {
             state.terminal = true;
             controlAbort.abort();
             await controls.catch(() => {});
-            await new RunControl(this.home, options.id)
+            await new RunControl(this.connection, options.id)
                 .rejectPending(
                     'run_terminal',
                     'Workbench run is no longer accepting input'
@@ -149,10 +165,18 @@ export class RunWorker {
     }
 
     private interactiveWorker(id: string): InteractiveRunWorker {
-        return new InteractiveRunWorker(this.home, id, {
-            reportLaunch: (registry, idempotencyKey) =>
-                this.reportLaunch(registry, idempotencyKey),
-        });
+        return new InteractiveRunWorker(
+            this.home,
+            this.connection,
+            this.store,
+            this.sessions,
+            this.checkouts,
+            id,
+            {
+                reportLaunch: (registry, idempotencyKey) =>
+                    this.reportLaunch(registry, idempotencyKey),
+            }
+        );
     }
 
     private async reportLaunch(
@@ -170,21 +194,31 @@ export class RunWorker {
         run: StoredRun,
         message: string
     ): Promise<WorkbenchEvent | undefined> {
-        const events = await this.store.readEvents(run.id);
-        const last = events.at(-1);
-        if (
-            last?.type === 'run.completed' ||
-            last?.type === 'run.failed' ||
-            last?.type === 'run.cancelled'
-        ) {
-            return undefined;
+        // Another writer can take the next sequence between the read and the append.
+        for (let attempt = 1; ; attempt += 1) {
+            const last = (await this.store.readEvents(run.id)).at(-1);
+            if (
+                last?.type === 'run.completed' ||
+                last?.type === 'run.failed' ||
+                last?.type === 'run.cancelled'
+            ) {
+                return undefined;
+            }
+            try {
+                return await new RunEvents({
+                    runId: run.id,
+                    runner: run.runner,
+                    initialSequence: last?.sequence ?? 0,
+                    onEvent: (event) => this.store.appendEvent(run.id, event),
+                }).emit('run.failed', { message });
+            } catch (error) {
+                if (
+                    !(error instanceof DuplicateEventSequenceError) ||
+                    attempt >= FAILURE_APPEND_ATTEMPTS
+                )
+                    throw error;
+            }
         }
-        return new RunEvents({
-            runId: run.id,
-            runner: run.runner,
-            initialSequence: last?.sequence ?? 0,
-            onEvent: (event) => this.store.appendEvent(run.id, event),
-        }).emit('run.failed', { message });
     }
 
     private async processControls(
@@ -193,7 +227,7 @@ export class RunWorker {
         signal: AbortSignal,
         state: { terminal: boolean }
     ): Promise<void> {
-        const control = new RunControl(this.home, id);
+        const control = new RunControl(this.connection, id);
         while (!signal.aborted) {
             const request = await control.receive(signal);
             if (!request) continue;

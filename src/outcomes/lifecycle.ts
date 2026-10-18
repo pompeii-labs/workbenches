@@ -1,3 +1,4 @@
+import type { RunStore } from '../runs/store.js';
 import type { PreparedRuntime } from '../runtimes/contracts.js';
 import type {
     OutcomeApplicationState,
@@ -12,6 +13,8 @@ import { OutcomeStore } from './store.js';
 export interface OutcomeLifecycleOptions {
     home: string;
     runId: string;
+    /** The run records a resumed session's retained files are found through. */
+    runs?: Pick<RunStore, 'list'>;
     resumeSessionId?: string;
     now?: () => Date;
     onAvailable?: (
@@ -48,10 +51,14 @@ export class OutcomeLifecycle {
         const output = await OutcomeOutput.create(options.home, options.runId);
         const lifecycle = new OutcomeLifecycle(options, output);
         try {
+            if (options.resumeSessionId && !options.runs)
+                throw new Error('Resuming a session requires its run records');
             if (
                 options.resumeSessionId &&
+                options.runs &&
                 (await restoreSessionArtifacts(
                     options.home,
+                    options.runs,
                     options.resumeSessionId,
                     options.runId,
                     output

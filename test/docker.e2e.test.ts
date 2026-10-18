@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { NativeCredentialFile } from '../src/connections/nativecredentials.js';
+import { Connection } from '../src/database/connection.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import { InteractiveRun, RunStore, type WorkbenchEvent } from '../src/runs/index.js';
 import { DockerClient } from '../src/runtimes/docker/client.js';
@@ -15,16 +16,25 @@ import {
 import { SessionRetention } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { NodeHost } from '../src/workbench/host.js';
+import { Services } from '../src/workbench/services.js';
 import { activateModelCatalogFixture } from './model-catalog-fixture.js';
 
 const temporaryDirectories: string[] = [];
+const connections: Connection[] = [];
 const dockerTest = process.env.WORKBENCH_DOCKER_E2E === '1' ? test : test.skip;
 const dockerSessionTest =
     process.env.WORKBENCH_DOCKER_SESSION_E2E === '1' ? test : test.skip;
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(temporaryDirectories.splice(0).map(removeTemporaryDirectory));
 });
+
+function openServices(home: string): Services {
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return new Services(home, connection);
+}
 
 async function removeTemporaryDirectory(directory: string): Promise<void> {
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -129,7 +139,14 @@ describe('Docker runtime end-to-end', () => {
             try {
                 const containers = await DockerManagedContainers.connect(run.scope);
                 if (!containers) throw new Error('Docker is unavailable');
-                const retention = new SessionRetention(home, { containers });
+                const services = openServices(home);
+                const retention = new SessionRetention(
+                    home,
+                    services.runs,
+                    services.sessions,
+                    services.writer,
+                    { containers }
+                );
 
                 const review = await retention.review({ before: new Date() });
                 expect(review.containers.map((container) => container.name)).toEqual([

@@ -10,7 +10,9 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Connection } from '../../src/database/connection.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
+import { ProcessProbe } from '../../src/processes/probe.js';
 import type { RunControlReceipt } from '../../src/runs/control.js';
 import { StoredRunHandle } from '../../src/runs/handle.js';
 import { RunStore } from '../../src/runs/store.js';
@@ -206,7 +208,8 @@ describe.skipIf(!enabled)('Real headless CLI supervision', () => {
                         }
                         throw new Error('Too many fixture permission requests');
                     };
-                    const store = new RunStore(home);
+                    const connection = Connection.open(home);
+                    const store = new RunStore(connection, home, new ProcessProbe());
                     try {
                         const launch = await invoke<SessionInputResult>([
                             'run',
@@ -405,7 +408,11 @@ describe.skipIf(!enabled)('Real headless CLI supervision', () => {
                     } finally {
                         for (const run of await store.list())
                             if (!RunStore.isTerminal(run.status)) {
-                                const handle = new StoredRunHandle(home, run.id);
+                                const handle = new StoredRunHandle(
+                                    store,
+                                    connection,
+                                    run.id
+                                );
                                 await handle
                                     .cancel('Headless fixture cleanup')
                                     .catch(() => {});
@@ -423,6 +430,7 @@ describe.skipIf(!enabled)('Real headless CLI supervision', () => {
                             ))
                                 await client.killSandbox(sandbox.id);
                         }
+                        connection.close();
                         if (process.env.WORKBENCH_HEADLESS_KEEP === '1')
                             console.error(`Headless fixture retained at ${root}`);
                         else await rm(root, { recursive: true, force: true });

@@ -3,18 +3,22 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { RunDispatcher, RunStore } from '../src/runs/index.js';
-import {
-    SessionLifecycle,
-    SessionResolver,
-    SessionStore,
-} from '../src/sessions/index.js';
-import { SessionSupervision } from '../src/sessions/supervision.js';
+import { Connection } from '../src/database/connection.js';
+import { RunStore } from '../src/runs/index.js';
 import type { ResolvedWorkbenchReference } from '../src/workbench/index.js';
+import { Services } from '../src/workbench/services.js';
 
 const homes: string[] = [];
+const connections: Connection[] = [];
+
+function open(home: string) {
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return new Services(home, connection);
+}
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         homes.splice(0).map((home) => rm(home, { recursive: true, force: true }))
     );
@@ -23,8 +27,7 @@ afterEach(async () => {
 describe('Workbench session lifecycle', () => {
     test('gives foreground and detached executions stable session records', async () => {
         const home = await temporaryHome();
-        const dispatcher = new RunDispatcher(home);
-        const sessions = new SessionStore(home);
+        const { dispatcher, sessions } = open(home);
 
         for (const mode of ['foreground', 'detached'] as const) {
             const run = await dispatcher.prepare({
@@ -43,16 +46,14 @@ describe('Workbench session lifecycle', () => {
 
     test('resolves a stable session and any linked run to the latest execution', async () => {
         const home = await temporaryHome();
-        const dispatcher = new RunDispatcher(home);
-        const sessions = new SessionStore(home);
-        const lifecycle = new SessionLifecycle(home);
+        const { dispatcher, sessions, lifecycle, resolver } = open(home);
         const resolved = await fixtureReference(home);
         const first = await dispatcher.prepare({ resolved, mode: 'interactive' });
         const resumable = await sessions.update(first.id, {
             native_session_id: 'native-session',
         });
         const resumed = await dispatcher.prepare({
-            resolved: (await new SessionResolver(home).resolve(first.id)).resolved,
+            resolved: (await resolver.resolve(first.id)).resolved,
             mode: 'interactive',
             session: resumable,
         });
@@ -71,13 +72,17 @@ describe('Workbench session lifecycle', () => {
 
     test('observation keeps linked runs exact without changing control aliases', async () => {
         const home = await temporaryHome();
-        const dispatcher = new RunDispatcher(home);
-        const sessions = new SessionStore(home);
-        const supervision = new SessionSupervision(home);
+        const {
+            dispatcher,
+            sessions,
+            lifecycle,
+            resolver,
+            sessionSupervision: supervision,
+        } = open(home);
         const resolved = await fixtureReference(home);
         const first = await dispatcher.prepare({ resolved, mode: 'interactive' });
         await sessions.update(first.id, { native_session_id: 'native-session' });
-        const pinned = (await new SessionResolver(home).resolve(first.id)).resolved;
+        const pinned = (await resolver.resolve(first.id)).resolved;
         const second = await dispatcher.prepare({
             resolved: pinned,
             mode: 'interactive',
@@ -96,9 +101,7 @@ describe('Workbench session lifecycle', () => {
         expect((await supervision.resolve(second.id, { exactRun: true })).id).toBe(
             second.id
         );
-        expect((await new SessionLifecycle(home).resolve(second.id)).run.id).toBe(
-            third.id
-        );
+        expect((await lifecycle.resolve(second.id)).run.id).toBe(third.id);
         const missing = RunStore.createId();
         await expect(supervision.resolve(missing, { exactRun: true })).rejects.toThrow(
             'run does not exist'
@@ -112,12 +115,12 @@ describe('Workbench session lifecycle', () => {
 
     test('locks a resumed session to its original runtime', async () => {
         const home = await temporaryHome();
-        const dispatcher = new RunDispatcher(home);
+        const { dispatcher, sessions } = open(home);
         const first = await dispatcher.prepare({
             resolved: await fixtureReference(home),
             mode: 'interactive',
         });
-        const session = await new SessionStore(home).read(first.id);
+        const session = await sessions.read(first.id);
         const changed = await fixtureReference(home);
         changed.workbench.manifest.runtime = 'docker';
 
@@ -132,10 +135,8 @@ describe('Workbench session lifecycle', () => {
 
     test('lists active and resumable sessions while retaining legacy history', async () => {
         const home = await temporaryHome();
-        const dispatcher = new RunDispatcher(home);
-        const runs = new RunStore(home);
-        const sessions = new SessionStore(home);
-        const lifecycle = new SessionLifecycle(home);
+        const { dispatcher, runs, sessions, lifecycle, sessionSupervision } =
+            open(home);
         const resolved = await fixtureReference(home);
 
         const completed = await dispatcher.prepare({
@@ -188,9 +189,7 @@ describe('Workbench session lifecycle', () => {
             resumable: false,
             run: { id: legacy.id },
         });
-        expect((await new SessionSupervision(home).resolve(legacy.id)).id).toBe(
-            legacy.id
-        );
+        expect((await sessionSupervision.resolve(legacy.id)).id).toBe(legacy.id);
     });
 });
 

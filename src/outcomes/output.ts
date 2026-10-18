@@ -1,5 +1,7 @@
-import { lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, mkdir, readdir, readFile, realpath, rm, rmdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+
+import { WorkbenchFiles } from '../files/layout.js';
 
 import type { CollectedOutput, OutcomeSink } from './collection.js';
 import type { DeclaredOutcome } from './contracts.js';
@@ -21,8 +23,9 @@ export class OutcomeOutput {
 
     static async create(home: string, runId: string): Promise<OutcomeOutput> {
         assertOutcomeRunId(runId);
-        await outcomeStorageDirectory(home, ['runs', runId], true);
-        const directory = join(home, 'runs', runId, 'outbox');
+        const files = new WorkbenchFiles(home);
+        await outcomeStorageDirectory(home, ['files', 'work', runId], true);
+        const directory = files.outboxDirectory(runId);
         // Never adopt or replace an earlier attempt's existing deliverables.
         await mkdir(directory, { mode: 0o700 });
         try {
@@ -45,10 +48,11 @@ export class OutcomeOutput {
         }).assemble({ declaration, paths: await walkFiles(this.directory) });
     }
 
-    cleanup(): Promise<void> {
-        return this.owned
-            ? rm(this.directory, { recursive: true, force: true })
-            : Promise.resolve();
+    async cleanup(): Promise<void> {
+        if (!this.owned) return;
+        await rm(this.directory, { recursive: true, force: true });
+        // The run's scratch directory goes with its outbox once nothing else is in it.
+        await rmdir(dirname(this.directory)).catch(() => undefined);
     }
 
     private async declaration(): Promise<DeclaredOutcome | undefined> {

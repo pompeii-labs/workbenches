@@ -1,16 +1,10 @@
-export {
-    type AuthoringLaunch,
-    WorkbenchAuthoring,
-    type WorkbenchAuthoringOptions,
-} from './authoring/index.js';
+export type { AuthoringLaunch } from './authoring/index.js';
 export {
     type CatalogEntry,
     type CatalogRegistryReference,
     type CatalogUpgrade,
     type CatalogUpgradeResult,
     SavedWorkbenchCatalog,
-    SavedWorkbenchUpgrade,
-    type SavedWorkbenchUpgradeOptions,
     type SnapshotFile,
     WorkbenchPackage,
 } from './catalog/index.js';
@@ -82,8 +76,6 @@ export {
     type RegistryPackage,
     type RegistryReference,
     type RegistrySearchResult,
-    RegistryWorkbenchSaver,
-    type RegistryWorkbenchSaverOptions,
 } from './registry/index.js';
 export {
     type CliRelease,
@@ -161,18 +153,11 @@ export {
     type VerifiedRunnerSurface,
 } from './runners/index.js';
 export {
-    type CreateStoredRunOptions,
-    type DispatchRunOptions,
-    type ExecuteStoredRunOptions,
-    type PrepareRunOptions,
-    RunDispatcher,
     RunEvents,
     type RunEventsOptions,
     type RunHandle,
     type RunResult,
     type RunStatus,
-    RunStore,
-    RunWorker,
     type StoredRun,
     type StoredRunRequest,
     type StoredRunStatus,
@@ -240,10 +225,7 @@ export {
     TransferRules,
 } from './runtimes/index.js';
 export {
-    type CreateStoredSessionOptions,
     type ResolvedSession,
-    SessionResolver,
-    SessionStore,
     type StoredSession,
 } from './sessions/index.js';
 export {

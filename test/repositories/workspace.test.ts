@@ -18,6 +18,7 @@ describe('engine-owned repository checkout', () => {
         const fixture = await checkoutFixture();
         const workspace = new RepositoryWorkspace(
             fixture.home,
+            fixture.checkouts,
             fixture.binding,
             { GH_TOKEN: 'fixture-credential' },
             fixture.git,
@@ -61,6 +62,7 @@ describe('engine-owned repository checkout', () => {
         const fixture = await checkoutFixture();
         const workspace = new RepositoryWorkspace(
             fixture.home,
+            fixture.checkouts,
             fixture.binding,
             { GH_TOKEN: 'fixture-credential' },
             fixture.git,
@@ -102,6 +104,7 @@ describe('engine-owned repository checkout', () => {
         const fixture = await checkoutFixture();
         const workspace = new RepositoryWorkspace(
             fixture.home,
+            fixture.checkouts,
             fixture.binding,
             { GH_TOKEN: 'fixture-credential' },
             fixture.git,
@@ -130,24 +133,22 @@ describe('engine-owned repository checkout', () => {
         const fixture = await checkoutFixture();
         const workspace = new RepositoryWorkspace(
             fixture.home,
+            fixture.checkouts,
             fixture.binding,
             { GH_TOKEN: 'fixture-credential' },
             fixture.git,
             fixtureIdentity
         );
         await workspace.prepare();
-        const marker = join(
-            fixture.home,
-            'sessions',
-            fixture.binding.session_id,
-            'repository.json'
-        );
-        await writeFile(
-            marker,
-            JSON.stringify({ ...fixture.binding, revision: '0'.repeat(40) })
-        );
+        const record = (binding: unknown) =>
+            fixture.connection.run(
+                'UPDATE repository_checkouts SET binding = ? WHERE session_id = ?',
+                JSON.stringify(binding),
+                fixture.binding.session_id
+            );
+        record({ ...fixture.binding, revision: '0'.repeat(40) });
         await expect(workspace.prepare()).rejects.toThrow('provenance');
-        await writeFile(marker, JSON.stringify(fixture.binding));
+        record(fixture.binding);
         await rm(workspace.directory, { recursive: true });
         await expect(workspace.prepare()).rejects.toThrow('missing');
         await symlink(fixture.source, workspace.directory);
@@ -161,6 +162,7 @@ describe('engine-owned repository checkout', () => {
         const fixture = await checkoutFixture();
         const workspace = new RepositoryWorkspace(
             fixture.home,
+            fixture.checkouts,
             { ...fixture.binding, tree: '0'.repeat(40) },
             { GH_TOKEN: 'fixture-credential' },
             fixture.git,
@@ -168,7 +170,12 @@ describe('engine-owned repository checkout', () => {
         );
         await expect(workspace.prepare()).rejects.toThrow('selected GitHub commit');
         expect(
-            await readdir(join(fixture.home, 'sessions', fixture.binding.session_id))
+            await readdir(
+                join(fixture.home, 'files', 'repositories', fixture.binding.session_id)
+            )
+        ).toEqual([]);
+        expect(
+            fixture.connection.all('SELECT session_id FROM repository_checkouts')
         ).toEqual([]);
         await mkdir(workspace.directory);
         await expect(workspace.prepare()).rejects.toThrow('provenance is missing');

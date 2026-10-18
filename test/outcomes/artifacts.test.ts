@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-
+import { Connection } from '../../src/database/connection.js';
 import {
     OutcomeExporter,
     OutcomeLifecycle,
@@ -20,11 +20,26 @@ import {
     parseRunOutcome,
     type RunOutcome,
 } from '../../src/outcomes/index.js';
+import { ProcessProbe } from '../../src/processes/probe.js';
 import { RunStore } from '../../src/runs/store.js';
 
 const homes: string[] = [];
+const connections: Connection[] = [];
+const stores = new Map<string, RunStore>();
 const sessionId = 'wb_artifactsession1234567890';
+function runsFor(directory: string) {
+    let store = stores.get(directory);
+    if (!store) {
+        const connection = Connection.open(directory);
+        connections.push(connection);
+        store = new RunStore(connection, directory, new ProcessProbe());
+        stores.set(directory, store);
+    }
+    return store;
+}
 afterEach(async () => {
+    stores.clear();
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         homes.splice(0).map((home) => rm(home, { recursive: true, force: true }))
     );
@@ -75,7 +90,7 @@ async function run(
     session = sessionId,
     status: 'completed' | 'failed' = 'completed'
 ) {
-    const store = new RunStore(directory);
+    const store = runsFor(directory);
     const metadata = await store.create({
         metadata: {
             workbench: 'artifact-probe',
@@ -232,6 +247,7 @@ describe('artifact trees and resume working copies', () => {
         const lifecycle = await OutcomeLifecycle.create({
             home: directory,
             runId: RunStore.createId(),
+            runs: runsFor(directory),
             resumeSessionId: sessionId,
             onAvailable: (outcome) => void available.push(outcome.id),
         });
@@ -283,6 +299,7 @@ describe('artifact trees and resume working copies', () => {
         const lifecycle = await OutcomeLifecycle.create({
             home: directory,
             runId: RunStore.createId(),
+            runs: runsFor(directory),
             resumeSessionId: sessionId,
         });
         try {
@@ -334,6 +351,7 @@ describe('artifact trees and resume working copies', () => {
             OutcomeLifecycle.create({
                 home: directory,
                 runId,
+                runs: runsFor(directory),
                 resumeSessionId: sessionId,
             })
         ).rejects.toThrow('content');

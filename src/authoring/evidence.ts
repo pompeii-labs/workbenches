@@ -1,8 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { StoredRun, WorkbenchEvent } from '../runs/index.js';
-import { RunStore } from '../runs/index.js';
+import type { RunStore, StoredRun, WorkbenchEvent } from '../runs/index.js';
 import type { StoredSession } from '../sessions/index.js';
 
 interface StoredTranscriptItem {
@@ -30,13 +29,14 @@ export interface ImprovementEvidenceResult {
 }
 
 export class ImprovementEvidence {
-    readonly #runs: RunStore;
+    readonly #runs: Pick<RunStore, 'list' | 'readEvents'>;
 
     constructor(
         readonly home: string,
+        runs: Pick<RunStore, 'list' | 'readEvents'>,
         private readonly maximumCharacters = 48_000
     ) {
-        this.#runs = new RunStore(home);
+        this.#runs = runs;
     }
 
     async write(options: {

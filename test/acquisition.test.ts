@@ -6,16 +6,26 @@ import { AuthoringOperation } from '../src/authoring/index.js';
 import { SavedWorkbenchCatalog, WorkbenchPackage } from '../src/catalog/index.js';
 import { CliPresenter } from '../src/commands/presenter.js';
 import { presentPushed } from '../src/commands/push.js';
+import { Connection } from '../src/database/connection.js';
 import { RegistryAccountStore, RegistryClient } from '../src/registry/index.js';
 import { RunnerRegistry } from '../src/runners/index.js';
-import { RunDispatcher, RunStore } from '../src/runs/index.js';
-import { SessionResolver, SessionStore } from '../src/sessions/index.js';
+import { RunStore } from '../src/runs/index.js';
 import { Workbench, WorkbenchResolver } from '../src/workbench/index.js';
+import { Services } from '../src/workbench/services.js';
 import { seedModelCatalogFixture } from './model-catalog-fixture.js';
 
 const runners = RunnerRegistry.standard();
 const roots: string[] = [];
+const connections: Connection[] = [];
+
+function services(home: string): Services {
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return new Services(home, connection);
+}
+
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))
     );
@@ -24,7 +34,7 @@ afterEach(async () => {
 describe('saved-source contract', () => {
     test('verified authoring preserves a live alias and reports collisions without failing the package', async () => {
         const { root, home, path } = await fixture();
-        const catalog = new SavedWorkbenchCatalog(home);
+        const { catalog, writer } = services(home);
         await catalog.addLocal({
             alias: 'custom-expert',
             workbench: await Workbench.load(path, runners),
@@ -60,7 +70,7 @@ describe('saved-source contract', () => {
             alias: 'expert',
             workbench: await Workbench.load(other.path, runners),
         });
-        await catalog.remove('custom-expert');
+        await writer.remove('custom-expert');
         const collision = await AuthoringOperation.prepare(
             home,
             {
@@ -85,14 +95,14 @@ describe('saved-source contract', () => {
 
     test('legacy frozen sessions retain their exact original catalog package after alias removal', async () => {
         const { root, home, path } = await fixture();
-        const catalog = new SavedWorkbenchCatalog(home);
-        const entry = await catalog.add({
+        const { catalog, writer, sessions, resolver } = services(home);
+        const entry = await writer.add({
             alias: 'expert',
             source: root,
             workbench: await Workbench.load(path, runners),
         });
         const id = RunStore.createId();
-        await new SessionStore(home).create({
+        await sessions.create({
             id,
             workbench: 'expert',
             workbench_version: '0.1.0',
@@ -107,8 +117,8 @@ describe('saved-source contract', () => {
             latest_run_id: id,
             native_session_id: 'legacy-native',
         });
-        await catalog.remove('expert');
-        const resumed = await new SessionResolver(home).resolve(id);
+        await writer.remove('expert');
+        const resumed = await resolver.resolve(id);
         expect(resumed.resolved.workbench.packageDirectory).toBe(entry.packagePath);
         expect(
             await readFile(resumed.resolved.workbench.instructionsPath, 'utf8')
@@ -118,7 +128,7 @@ describe('saved-source contract', () => {
             alias: 'expert',
             workbench: await Workbench.load(path, runners),
         });
-        await expect(new SessionResolver(home).resolve(id)).rejects.toThrow();
+        await expect(resolver.resolve(id)).rejects.toThrow();
     });
 
     test('local add is live, idempotent, absolute, and never deletes the source', async () => {
@@ -206,24 +216,29 @@ describe('saved-source contract', () => {
 
     test('each session owns package bytes through edits, removal, and deleted local sources', async () => {
         const { root, home, path } = await fixture();
-        const catalog = new SavedWorkbenchCatalog(home);
+        const { catalog, writer, dispatcher, sessions, runs, resolver } =
+            services(home);
         await catalog.addLocal({ workbench: await Workbench.load(path, runners) });
         await writeFile(join(root, 'workspace-only.txt'), 'Never package me');
-        const resolver = new WorkbenchResolver();
-        const dispatcher = new RunDispatcher(home);
+        const workbenches = new WorkbenchResolver();
         const first = await dispatcher.prepare({
-            resolved: await resolver.resolve('expert', {
+            resolved: await workbenches.resolve('expert', {
                 home,
                 savedOnly: true,
                 cwd: root,
             }),
             mode: 'interactive',
         });
-        const sessions = new SessionStore(home);
         const saved = await sessions.update(first.id, {
             native_session_id: 'native-fixture',
         });
-        expect(saved.workbench_path).toStartWith(join(home, 'sessions', first.id));
+        expect(saved.workbench_path).toStartWith(
+            join(
+                home,
+                'packages',
+                (saved.workbench_digest ?? '').slice('sha256:'.length)
+            )
+        );
         expect(saved.source_workbench_path).toBe(path);
         expect(saved.workspace).toBe(root);
         expect(
@@ -234,7 +249,7 @@ describe('saved-source contract', () => {
         ).toBeFalse();
         await writeFile(join(path, 'instructions.md'), 'Edited instructions');
         const next = await dispatcher.prepare({
-            resolved: await resolver.resolve('expert', {
+            resolved: await workbenches.resolve('expert', {
                 home,
                 savedOnly: true,
                 cwd: root,
@@ -246,9 +261,9 @@ describe('saved-source contract', () => {
         expect(
             await readFile(join(nextSession.workbench_path, 'instructions.md'), 'utf8')
         ).toBe('Edited instructions');
-        await catalog.remove('expert');
+        await writer.remove('expert');
         await rm(path, { recursive: true });
-        const original = await new SessionResolver(home).resolve(first.id);
+        const original = await resolver.resolve(first.id);
         expect(
             await readFile(original.resolved.workbench.instructionsPath, 'utf8')
         ).toBe('Original instructions');
@@ -257,7 +272,7 @@ describe('saved-source contract', () => {
             session: original.session,
             mode: 'interactive',
         });
-        expect((await new RunStore(home).takeRequest(resumed.id)).workbench_path).toBe(
+        expect((await runs.takeRequest(resumed.id)).workbench_path).toBe(
             saved.workbench_path
         );
         expect(await readFile(join(root, 'workspace-only.txt'), 'utf8')).toBe(
@@ -275,12 +290,11 @@ describe('saved-source contract', () => {
             manifest: workbench.manifest,
             files: await new WorkbenchPackage(workbench).files(),
         };
-        const catalog = new SavedWorkbenchCatalog(home);
-        const entry = await catalog.addRemote({ alias: 'expert', workbench: remote });
-        expect(await catalog.addRemote({ alias: 'expert', workbench: remote })).toEqual(
+        const { writer, dispatcher, sessions, resolver } = services(home);
+        const entry = await writer.addRemote({ alias: 'expert', workbench: remote });
+        expect(await writer.addRemote({ alias: 'expert', workbench: remote })).toEqual(
             entry
         );
-        const dispatcher = new RunDispatcher(home);
         const run = await dispatcher.prepare({
             resolved: await new WorkbenchResolver().resolve('expert', {
                 home,
@@ -289,7 +303,7 @@ describe('saved-source contract', () => {
             }),
             mode: 'interactive',
         });
-        await new SessionStore(home).update(run.id, {
+        await sessions.update(run.id, {
             native_session_id: 'native-fixture',
         });
         await writeFile(join(path, 'instructions.md'), 'Remote upgrade');
@@ -299,17 +313,17 @@ describe('saved-source contract', () => {
             files: await new WorkbenchPackage(workbench).files(),
         };
         await expect(
-            catalog.addRemote({ alias: 'expert', workbench: changed })
+            writer.addRemote({ alias: 'expert', workbench: changed })
         ).rejects.toThrow('wb upgrade expert');
         await expect(
-            catalog.addRemote({
+            writer.addRemote({
                 alias: 'expert',
                 workbench: { ...remote, source: 'https://github.com/other/project' },
             })
         ).rejects.toThrow('--as');
-        await catalog.upgrade('expert', changed);
-        await catalog.remove('expert');
-        const resumed = await new SessionResolver(home).resolve(run.id);
+        await writer.upgrade('expert', changed);
+        await writer.remove('expert');
+        const resumed = await resolver.resolve(run.id);
         expect(
             await readFile(resumed.resolved.workbench.instructionsPath, 'utf8')
         ).toBe('Original instructions');

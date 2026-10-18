@@ -1,15 +1,14 @@
 import type { OutcomeApplicationState, RunOutcome } from '../outcomes/contracts.js';
 import type { RunEvents } from './events.js';
-import { RunStore } from './store.js';
+import type { RunStore } from './store.js';
 
 export async function publishRunOutcome(
-    home: string | undefined,
+    runs: Pick<RunStore, 'read' | 'update'> | undefined,
     events: RunEvents,
     outcome: RunOutcome,
     applicationState: OutcomeApplicationState
 ): Promise<void> {
-    if (home) {
-        const runs = new RunStore(home);
+    if (runs) {
         // Embedded engine clients can collect without a dispatcher-owned run record.
         const run = await runs.read(events.runId).catch((error) => {
             if (

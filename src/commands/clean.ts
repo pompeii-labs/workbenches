@@ -1,5 +1,6 @@
 import { defineCommand } from 'citty';
 
+import { Connection } from '../database/connection.js';
 import { RunStore } from '../runs/index.js';
 import { DockerManagedContainers, E2BManagedSandboxes } from '../runtimes/index.js';
 import {
@@ -8,6 +9,7 @@ import {
     type SessionRetentionReview,
 } from '../sessions/index.js';
 import { workbenchHome } from '../storage.js';
+import { Services } from '../workbench/services.js';
 import { CliPresenter } from './presenter.js';
 
 export const cleanCommand = defineCommand({
@@ -51,18 +53,30 @@ export const cleanCommand = defineCommand({
             RunStore.scope(home),
             process.env
         );
-        const retention = new SessionRetention(home, {
-            ...(containers ? { containers } : {}),
-            ...(sandboxes ? { sandboxes } : {}),
-        });
-        const report = args.apply
-            ? await retention.apply(policy)
-            : await retention.review(policy);
-        if (args.json) {
-            process.stdout.write(`${JSON.stringify(machineReport(report))}\n`);
-            return;
+        const connection = Connection.open(home);
+        try {
+            const services = new Services(home, connection);
+            const retention = new SessionRetention(
+                home,
+                services.runs,
+                services.sessions,
+                services.writer,
+                {
+                    ...(containers ? { containers } : {}),
+                    ...(sandboxes ? { sandboxes } : {}),
+                }
+            );
+            const report = args.apply
+                ? await retention.apply(policy)
+                : await retention.review(policy);
+            if (args.json) {
+                process.stdout.write(`${JSON.stringify(machineReport(report))}\n`);
+                return;
+            }
+            renderReport(report, args.apply);
+        } finally {
+            connection.close();
         }
-        renderReport(report, args.apply);
     },
 });
 

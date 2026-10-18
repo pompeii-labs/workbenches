@@ -1,10 +1,11 @@
 import { defineCommand } from 'citty';
 
 import { AuthenticationRequiredError } from '../connections/error.js';
+import { Connection } from '../database/connection.js';
 import { connectAdvice } from '../models/index.js';
 import { createEventRenderer } from '../rendering/index.js';
-import { parseRepository, RepositoryDeliveryStore } from '../repositories/index.js';
-import { RunDispatcher, WorkbenchRun } from '../runs/index.js';
+import { parseRepository } from '../repositories/index.js';
+import { WorkbenchRun } from '../runs/index.js';
 import { RuntimeRegistry, RuntimeSmoke } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import {
@@ -14,6 +15,7 @@ import {
     WorkbenchWorkspaces,
     withRuntime,
 } from '../workbench/index.js';
+import { Services } from '../workbench/services.js';
 import { CliInput } from './input.js';
 import { CliPresenter } from './presenter.js';
 import { CliRunClient } from './run-client.js';
@@ -150,199 +152,206 @@ export const runCommand = defineCommand({
             rawArgs,
         });
         const home = workbenchHome();
-        const runtimes = RuntimeRegistry.standard();
-        const dispatcher = new RunDispatcher(home);
-        const taskSources = [
-            args.prompt !== undefined,
-            args.task !== undefined,
-            args['task-file'] !== undefined,
-            args.stdin,
-        ].filter(Boolean).length;
-        const task =
-            taskSources === 0
-                ? ''
-                : await new CliInput().read({
-                      text: args.task ?? args.prompt,
-                      file: args['task-file'],
-                      stdin: args.stdin,
-                  });
-        if (!task) {
-            throw new Error(
-                'wb run requires a task. Pass --task, --task-file, or --stdin.'
-            );
-        }
-        if (args.detach && (args.final || args['dry-run'])) {
-            throw new Error('--detach cannot be combined with --final or --dry-run');
-        }
-
-        const resolved = await new WorkbenchResolver().resolve(args.workbench, {
-            savedOnly: true,
-            ...(args.dir ? { workspaceDirectory: args.dir } : {}),
-        });
-        if (repository) resolved.repository = repository;
+        const connection = Connection.open(home);
         try {
-            selectRuntime(resolved, args, runtimes);
-            const workspaces = await workbenchWorkspaces.bind({
-                workbench: resolved.workbench,
-                rawArgs,
+            const services = new Services(home, connection);
+            services.legacy.show();
+            const runtimes = RuntimeRegistry.standard();
+            const dispatcher = services.dispatcher;
+            const taskSources = [
+                args.prompt !== undefined,
+                args.task !== undefined,
+                args['task-file'] !== undefined,
+                args.stdin,
+            ].filter(Boolean).length;
+            const task =
+                taskSources === 0
+                    ? ''
+                    : await new CliInput().read({
+                          text: args.task ?? args.prompt,
+                          file: args['task-file'],
+                          stdin: args.stdin,
+                      });
+            if (!task) {
+                throw new Error(
+                    'wb run requires a task. Pass --task, --task-file, or --stdin.'
+                );
+            }
+            if (args.detach && (args.final || args['dry-run'])) {
+                throw new Error(
+                    '--detach cannot be combined with --final or --dry-run'
+                );
+            }
+
+            const resolved = await new WorkbenchResolver().resolve(args.workbench, {
+                savedOnly: true,
+                ...(args.dir ? { workspaceDirectory: args.dir } : {}),
             });
-            validateHostDockerAuthorization(
-                selectedRuntime(resolved.workbench).docker?.engine !== undefined,
-                args['allow-host-docker']
-            );
-            const environment = {
-                ...process.env,
-                ...workbenchEnvironment.bind(resolved.workbench, overrides),
-            };
-            if (args['dry-run']) {
-                const output = new CliPresenter();
-                let translation = '';
-                let failure: string | undefined;
-                let authentication: AuthenticationRequiredError | undefined;
-                const code = await WorkbenchRun.execute(
-                    {
-                        workbenchPath: resolved.workbench.packageDirectory,
-                        workspaceDirectory: resolved.workspaceDirectory,
+            if (repository) resolved.repository = repository;
+            try {
+                selectRuntime(resolved, args, runtimes);
+                const workspaces = await workbenchWorkspaces.bind({
+                    workbench: resolved.workbench,
+                    rawArgs,
+                });
+                validateHostDockerAuthorization(
+                    selectedRuntime(resolved.workbench).docker?.engine !== undefined,
+                    args['allow-host-docker']
+                );
+                const environment = {
+                    ...process.env,
+                    ...workbenchEnvironment.bind(resolved.workbench, overrides),
+                };
+                if (args['dry-run']) {
+                    const output = new CliPresenter();
+                    let translation = '';
+                    let failure: string | undefined;
+                    let authentication: AuthenticationRequiredError | undefined;
+                    const code = await WorkbenchRun.execute(
+                        {
+                            workbenchPath: resolved.workbench.packageDirectory,
+                            workspaceDirectory: resolved.workspaceDirectory,
+                            task,
+                            dryRun: true,
+                            runtime: selectedRuntime(resolved.workbench).name,
+                            workspaces,
+                            allowHostDocker: args['allow-host-docker'],
+                            ...(args['allow-unchecked-gpu']
+                                ? { allowUncheckedGpu: true }
+                                : {}),
+                            reference: args.workbench,
+                            home,
+                            ...(args.connection ? { connection: args.connection } : {}),
+                            onEvent: (event) => {
+                                if (event.type !== 'run.failed') return;
+                                failure = string(object(event.data)?.message);
+                                authentication =
+                                    AuthenticationRequiredError.fromFailure(event.data);
+                            },
+                        },
+                        {
+                            env: environment,
+                            write: (value) => {
+                                translation += value;
+                            },
+                        }
+                    );
+                    if (code !== 0) {
+                        if (authentication) throw authentication;
+                        throw new Error(failure ?? 'Workbench dry run failed');
+                    }
+                    if (!translation.trim()) {
+                        throw new Error('Workbench dry run returned no translation');
+                    }
+                    if (args.json || !output.interactive) {
+                        process.stdout.write(translation);
+                    } else {
+                        renderDryRun(output, translation, resolved);
+                    }
+                    return;
+                }
+
+                if (args.detach) {
+                    // Sandbox preparation creates a billable sandbox. The dispatched
+                    // worker performs the same preflight before startup completes.
+                    if (
+                        !repository &&
+                        runtimes.resolve(selectedRuntime(resolved.workbench).name)
+                            .placement !== 'sandbox'
+                    ) {
+                        const smoke = await new RuntimeSmoke({
+                            workbench: resolved.workbench,
+                            allowUncheckedGpu: args['allow-unchecked-gpu'],
+                            registry: runtimes,
+                            workspaceDirectory: resolved.workspaceDirectory,
+                            environment,
+                            workspaces,
+                            allowHostDocker: args['allow-host-docker'],
+                            reference: args.workbench,
+                            home,
+                            ...(args.connection ? { connection: args.connection } : {}),
+                        }).check();
+                        if (!smoke.authentication.ready) {
+                            throw new AuthenticationRequiredError(
+                                `No authenticated route is available for ${smoke.authentication.model}. ${connectAdvice(smoke.authentication.connectCommand)}.`
+                            );
+                        }
+                    }
+                    const stored = await dispatcher.prepare({
+                        resolved,
                         task,
-                        dryRun: true,
-                        runtime: selectedRuntime(resolved.workbench).name,
+                        mode: 'detached',
+                        reference: args.workbench,
                         workspaces,
                         allowHostDocker: args['allow-host-docker'],
                         ...(args['allow-unchecked-gpu']
                             ? { allowUncheckedGpu: true }
                             : {}),
-                        reference: args.workbench,
-                        home,
                         ...(args.connection ? { connection: args.connection } : {}),
-                        onEvent: (event) => {
-                            if (event.type !== 'run.failed') return;
-                            failure = string(object(event.data)?.message);
-                            authentication = AuthenticationRequiredError.fromFailure(
-                                event.data
-                            );
-                        },
-                    },
-                    {
-                        env: environment,
-                        write: (value) => {
-                            translation += value;
-                        },
-                    }
-                );
-                if (code !== 0) {
-                    if (authentication) throw authentication;
-                    throw new Error(failure ?? 'Workbench dry run failed');
-                }
-                if (!translation.trim()) {
-                    throw new Error('Workbench dry run returned no translation');
-                }
-                if (args.json || !output.interactive) {
-                    process.stdout.write(translation);
-                } else {
-                    renderDryRun(output, translation, resolved);
-                }
-                return;
-            }
-
-            if (args.detach) {
-                // Sandbox preparation creates a billable sandbox. The dispatched
-                // worker performs the same preflight before startup completes.
-                if (
-                    !repository &&
-                    runtimes.resolve(selectedRuntime(resolved.workbench).name)
-                        .placement !== 'sandbox'
-                ) {
-                    const smoke = await new RuntimeSmoke({
-                        workbench: resolved.workbench,
-                        allowUncheckedGpu: args['allow-unchecked-gpu'],
-                        registry: runtimes,
-                        workspaceDirectory: resolved.workspaceDirectory,
+                    });
+                    await dispatcher.dispatch({
+                        id: stored.id,
+                        cwd: resolved.workspaceDirectory,
                         environment,
-                        workspaces,
-                        allowHostDocker: args['allow-host-docker'],
-                        reference: args.workbench,
-                        home,
-                        ...(args.connection ? { connection: args.connection } : {}),
-                    }).check();
-                    if (!smoke.authentication.ready) {
-                        throw new AuthenticationRequiredError(
-                            `No authenticated route is available for ${smoke.authentication.model}. ${connectAdvice(smoke.authentication.connectCommand)}.`
-                        );
-                    }
+                        waitForInitialTurn: true,
+                    });
+                    console.log(
+                        args.json
+                            ? JSON.stringify({
+                                  session_id: stored.session_id ?? stored.id,
+                                  run_id: stored.id,
+                                  input_id: `input_${stored.id}`,
+                                  after_sequence: 0,
+                              })
+                            : (stored.session_id ?? stored.id)
+                    );
+                    return;
                 }
+
                 const stored = await dispatcher.prepare({
                     resolved,
                     task,
-                    mode: 'detached',
+                    mode: 'foreground',
                     reference: args.workbench,
                     workspaces,
                     allowHostDocker: args['allow-host-docker'],
                     ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
                     ...(args.connection ? { connection: args.connection } : {}),
                 });
-                await dispatcher.dispatch({
-                    id: stored.id,
-                    cwd: resolved.workspaceDirectory,
-                    environment,
-                    waitForInitialTurn: true,
+                const renderer = createEventRenderer({
+                    mode: args.json ? 'json' : args.final ? 'final' : 'human',
+                    ...(args.color === undefined ? {} : { color: args.color }),
                 });
-                console.log(
-                    args.json
-                        ? JSON.stringify({
-                              session_id: stored.session_id ?? stored.id,
-                              run_id: stored.id,
-                              input_id: `input_${stored.id}`,
-                              after_sequence: 0,
-                          })
-                        : (stored.session_id ?? stored.id)
-                );
-                return;
-            }
-
-            const stored = await dispatcher.prepare({
-                resolved,
-                task,
-                mode: 'foreground',
-                reference: args.workbench,
-                workspaces,
-                allowHostDocker: args['allow-host-docker'],
-                ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
-                ...(args.connection ? { connection: args.connection } : {}),
-            });
-            const renderer = createEventRenderer({
-                mode: args.json ? 'json' : args.final ? 'final' : 'human',
-                ...(args.color === undefined ? {} : { color: args.color }),
-            });
-            const handle = dispatcher.handle(stored.id);
-            try {
-                await dispatcher.dispatch({
-                    id: stored.id,
-                    cwd: resolved.workspaceDirectory,
-                    environment,
-                    waitForInitialTurn: true,
-                });
-                const client = new CliRunClient();
-                const followed = await client.follow(handle, (event) =>
-                    renderer.render(event)
-                );
-                if (followed.interrupted) {
-                    process.exitCode = 130;
-                    return;
+                const handle = dispatcher.handle(stored.id);
+                try {
+                    await dispatcher.dispatch({
+                        id: stored.id,
+                        cwd: resolved.workspaceDirectory,
+                        environment,
+                        waitForInitialTurn: true,
+                    });
+                    const client = new CliRunClient();
+                    const followed = await client.follow(handle, (event) =>
+                        renderer.render(event)
+                    );
+                    if (followed.interrupted) {
+                        process.exitCode = 130;
+                        return;
+                    }
+                    if (followed.terminalStatus === 'failed') {
+                        process.exitCode = followed.failureExitCode ?? 1;
+                    }
+                    if (followed.terminalStatus === 'cancelled') process.exitCode = 130;
+                    if ((await services.receipts.read(stored.id))?.state === 'failed')
+                        process.exitCode = 1;
+                } finally {
+                    renderer.finish();
                 }
-                if (followed.terminalStatus === 'failed') {
-                    process.exitCode = followed.failureExitCode ?? 1;
-                }
-                if (followed.terminalStatus === 'cancelled') process.exitCode = 130;
-                if (
-                    (await new RepositoryDeliveryStore(home).read(stored.id))?.state ===
-                    'failed'
-                )
-                    process.exitCode = 1;
             } finally {
-                renderer.finish();
+                await resolved.cleanup();
             }
         } finally {
-            await resolved.cleanup();
+            connection.close();
         }
     },
 });

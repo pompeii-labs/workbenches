@@ -1,15 +1,19 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { Connection } from '../src/database/connection.js';
+import { ProcessProbe } from '../src/processes/probe.js';
 import { RunControl } from '../src/runs/control.js';
 import { StoredRunHandle } from '../src/runs/handle.js';
 import { RunStore, type StoredRun } from '../src/runs/store.js';
 
 const temporaryDirectories: string[] = [];
+const connections: Connection[] = [];
 
 afterEach(async () => {
+    for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -19,9 +23,9 @@ afterEach(async () => {
 
 describe('durable run control', () => {
     test('delivers private input once and persists only a payload-free receipt', async () => {
-        const home = await temporaryHome();
-        const run = await fixtureRun(home);
-        const control = new RunControl(home, run.id, {
+        const { home, connection, runs } = await environment();
+        const run = await fixtureRun(runs);
+        const control = new RunControl(connection, run.id, {
             pollMilliseconds: 1,
             timeoutMilliseconds: 1_000,
         });
@@ -35,9 +39,7 @@ describe('durable run control', () => {
             kind: 'send',
             input: { text: 'private prompt value', images: [] },
         });
-        expect((await stat(join(home, 'runs', run.id, 'control'))).mode & 0o777).toBe(
-            0o700
-        );
+        expect(await readdir(home)).not.toContain('runs');
         await control.resolve(required(request), {
             outcome: 'accepted',
             disposition: 'delivered',
@@ -49,21 +51,21 @@ describe('durable run control', () => {
             disposition: 'delivered',
         });
         expect(await control.receive(AbortSignal.abort())).toBeUndefined();
-        const storedControl = await controlText(home, run.id);
+        const storedControl = await controlText(connection, run.id);
         expect(storedControl).not.toContain('private prompt value');
     });
 
     test('claims follow-ups in submission order', async () => {
-        const home = await temporaryHome();
-        const run = await fixtureRun(home);
-        const control = new RunControl(home, run.id, {
+        const { connection, runs } = await environment();
+        const run = await fixtureRun(runs);
+        const control = new RunControl(connection, run.id, {
             pollMilliseconds: 1,
             timeoutMilliseconds: 1_000,
         });
         const first = control.submit({ kind: 'follow_up', input: 'first' });
-        await waitForPending(home, run.id, 1);
+        await waitForPending(connection, run.id, 1);
         const second = control.submit({ kind: 'follow_up', input: 'second' });
-        await waitForPending(home, run.id, 2);
+        await waitForPending(connection, run.id, 2);
 
         const firstRequest = await control.receive();
         expect(firstRequest?.input?.text).toBe('first');
@@ -82,9 +84,9 @@ describe('durable run control', () => {
     });
 
     test('returns rejected receipts without copying input into the receipt', async () => {
-        const home = await temporaryHome();
-        const run = await fixtureRun(home);
-        const control = new RunControl(home, run.id, {
+        const { connection, runs } = await environment();
+        const run = await fixtureRun(runs);
+        const control = new RunControl(connection, run.id, {
             pollMilliseconds: 1,
             timeoutMilliseconds: 1_000,
         });
@@ -105,9 +107,9 @@ describe('durable run control', () => {
     });
 
     test('reports control timeouts without exposing internal request IDs', async () => {
-        const home = await temporaryHome();
-        const run = await fixtureRun(home);
-        const control = new RunControl(home, run.id, {
+        const { connection, runs } = await environment();
+        const run = await fixtureRun(runs);
+        const control = new RunControl(connection, run.id, {
             pollMilliseconds: 1,
             timeoutMilliseconds: 2,
         });
@@ -129,10 +131,10 @@ describe('durable run control', () => {
 
 describe('stored run handle', () => {
     test('submits typed control and resolves terminal state from the run store', async () => {
-        const home = await temporaryHome();
-        const run = await fixtureRun(home);
-        const handle = new StoredRunHandle(home, run.id);
-        const control = new RunControl(home, run.id, {
+        const { connection, runs } = await environment();
+        const run = await fixtureRun(runs);
+        const handle = new StoredRunHandle(runs, connection, run.id);
+        const control = new RunControl(connection, run.id, {
             pollMilliseconds: 1,
         });
         const submitted = handle.send('inspect');
@@ -146,7 +148,7 @@ describe('stored run handle', () => {
             disposition: 'delivered',
         });
 
-        await new RunStore(home).update(run.id, {
+        await runs.update(run.id, {
             status: 'completed',
             finished_at: new Date().toISOString(),
             exit_code: 0,
@@ -158,10 +160,10 @@ describe('stored run handle', () => {
     });
 
     test('rejects new input after a run becomes terminal', async () => {
-        const home = await temporaryHome();
-        const run = await fixtureRun(home);
-        await new RunStore(home).update(run.id, { status: 'cancelled' });
-        const handle = new StoredRunHandle(home, run.id);
+        const { connection, runs } = await environment();
+        const run = await fixtureRun(runs);
+        await runs.update(run.id, { status: 'cancelled' });
+        const handle = new StoredRunHandle(runs, connection, run.id);
 
         await expect(handle.steer('too late')).rejects.toThrow(
             `Workbench run is already cancelled: ${run.id}`
@@ -173,14 +175,14 @@ describe('stored run handle', () => {
     });
 
     test('rejects the result when its worker exits without a terminal state', async () => {
-        const home = await temporaryHome();
-        const run = await fixtureRun(home);
-        await new RunStore(home).update(run.id, {
+        const { connection, runs } = await environment();
+        const run = await fixtureRun(runs);
+        await runs.update(run.id, {
             status: 'running',
             pid: 2_147_483_647,
         });
 
-        const handle = new StoredRunHandle(home, run.id);
+        const handle = new StoredRunHandle(runs, connection, run.id);
 
         await expect(handle.result).rejects.toThrow(
             `Workbench run worker exited unexpectedly: ${run.id}`
@@ -188,10 +190,10 @@ describe('stored run handle', () => {
     });
 
     test('preserves control invocation order from the same handle', async () => {
-        const home = await temporaryHome();
-        const run = await fixtureRun(home);
-        const handle = new StoredRunHandle(home, run.id);
-        const control = new RunControl(home, run.id, {
+        const { connection, runs } = await environment();
+        const run = await fixtureRun(runs);
+        const handle = new StoredRunHandle(runs, connection, run.id);
+        const control = new RunControl(connection, run.id, {
             pollMilliseconds: 1,
             timeoutMilliseconds: 1_000,
         });
@@ -200,7 +202,7 @@ describe('stored run handle', () => {
         const cancelled = handle.cancelTurn();
         const sendRequest = required(await control.receive());
         expect(sendRequest.kind).toBe('send');
-        expect(await pendingCount(home, run.id)).toBe(0);
+        expect(await pendingCount(connection, run.id)).toBe(0);
 
         await control.resolve(sendRequest, {
             outcome: 'accepted',
@@ -214,7 +216,7 @@ describe('stored run handle', () => {
             disposition: 'cancelled',
         });
         await cancelled;
-        await new RunStore(home).update(run.id, {
+        await runs.update(run.id, {
             status: 'completed',
             finished_at: new Date().toISOString(),
             exit_code: 0,
@@ -226,14 +228,24 @@ describe('stored run handle', () => {
     });
 });
 
-async function temporaryHome(): Promise<string> {
-    const directory = await mkdtemp(join(tmpdir(), 'workbench-control-'));
-    temporaryDirectories.push(directory);
-    return directory;
+async function environment(): Promise<{
+    home: string;
+    connection: Connection;
+    runs: RunStore;
+}> {
+    const home = await mkdtemp(join(tmpdir(), 'workbench-control-'));
+    temporaryDirectories.push(home);
+    const connection = Connection.open(home);
+    connections.push(connection);
+    return {
+        home,
+        connection,
+        runs: new RunStore(connection, home, new ProcessProbe()),
+    };
 }
 
-function fixtureRun(home: string): Promise<StoredRun> {
-    return new RunStore(home).create({
+function fixtureRun(runs: RunStore): Promise<StoredRun> {
+    return runs.create({
         metadata: {
             workbench: 'fixture-core',
             workbench_version: '0.1.0',
@@ -250,30 +262,35 @@ function fixtureRun(home: string): Promise<StoredRun> {
     });
 }
 
-async function waitForPending(home: string, runId: string, count: number) {
-    const directory = join(home, 'runs', runId, 'control', 'pending');
+async function waitForPending(connection: Connection, runId: string, count: number) {
     for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((await readdir(directory)).length >= count) return;
+        if ((await pendingCount(connection, runId)) >= count) return;
         await Bun.sleep(1);
     }
     throw new Error(`Timed out waiting for ${count} control requests`);
 }
 
-async function pendingCount(home: string, runId: string): Promise<number> {
-    return (
-        await readdir(join(home, 'runs', runId, 'control', 'pending')).catch(() => [])
-    ).length;
+async function pendingCount(connection: Connection, runId: string): Promise<number> {
+    const row = connection.one(
+        "SELECT count(*) AS n FROM control_requests WHERE run_id = ? AND state = 'pending'",
+        runId
+    );
+    return Number(row?.n ?? 0);
 }
 
-async function controlText(home: string, runId: string): Promise<string> {
-    const root = join(home, 'runs', runId, 'control');
-    const contents: string[] = [];
-    for (const directory of ['pending', 'active', 'receipts']) {
-        for (const file of await readdir(join(root, directory))) {
-            contents.push(await readFile(join(root, directory, file), 'utf8'));
-        }
-    }
-    return contents.join('\n');
+async function controlText(connection: Connection, runId: string): Promise<string> {
+    return [
+        ...connection.all(
+            'SELECT payload FROM control_requests WHERE run_id = ?',
+            runId
+        ),
+        ...connection.all(
+            'SELECT payload FROM control_receipts WHERE run_id = ?',
+            runId
+        ),
+    ]
+        .map((row) => String(row.payload))
+        .join('\n');
 }
 
 function required<T>(value: T | undefined): T {

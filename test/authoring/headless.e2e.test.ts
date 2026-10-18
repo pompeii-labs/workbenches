@@ -3,7 +3,9 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConnectionStore } from '../../src/connections/store.js';
+import { Connection } from '../../src/database/connection.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
+import { ProcessProbe } from '../../src/processes/probe.js';
 import { RunnerRegistry } from '../../src/runners/registry.js';
 import { StoredRunHandle } from '../../src/runs/handle.js';
 import { RunStore } from '../../src/runs/store.js';
@@ -139,7 +141,8 @@ test.skipIf(process.env.WORKBENCH_AUTHORING_E2E !== '1')(
             }
             throw new Error('Authoring exceeded its supervision budget');
         };
-        const store = new RunStore(home);
+        const connection = Connection.open(home);
+        const store = new RunStore(connection, home, new ProcessProbe());
         try {
             const created = await invoke<SessionInputResult>([
                 'create',
@@ -255,13 +258,14 @@ test.skipIf(process.env.WORKBENCH_AUTHORING_E2E !== '1')(
         } finally {
             for (const run of await store.list())
                 if (!RunStore.isTerminal(run.status)) {
-                    const handle = new StoredRunHandle(home, run.id);
+                    const handle = new StoredRunHandle(store, connection, run.id);
                     await handle.cancel('Authoring fixture cleanup').catch(() => {});
                     await Promise.race([
                         handle.result.catch(() => {}),
                         Bun.sleep(10_000),
                     ]);
                 }
+            connection.close();
             if (process.env.WORKBENCH_HEADLESS_KEEP === '1')
                 console.error(`Authoring fixture retained at ${root}`);
             else await rm(root, { recursive: true, force: true });

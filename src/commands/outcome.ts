@@ -4,6 +4,8 @@ import { pathToFileURL } from 'node:url';
 import { defineCommand } from 'citty';
 
 import { AuthenticationRequiredError } from '../connections/error.js';
+import type { RepositoryCheckoutStore } from '../database/checkouts.js';
+import { Connection } from '../database/connection.js';
 import {
     OutcomeApplier,
     OutcomeExporter,
@@ -17,6 +19,7 @@ import { E2BOutcomeRecovery } from '../runtimes/e2b/recovery.js';
 import { E2BSdkClient } from '../runtimes/e2b/sdk.js';
 import { RuntimeSecretStore } from '../runtimes/secrets.js';
 import { workbenchHome } from '../storage.js';
+import { Services } from '../workbench/services.js';
 import { CliPresenter } from './presenter.js';
 
 export const outcomeCommand = defineCommand({
@@ -97,47 +100,54 @@ export const outcomeCommand = defineCommand({
                 );
             return;
         }
-        const outcomes = new OutcomeStore(home);
-        const runs = new RunStore(home);
-        const resolved: { outcome: RunOutcome; run?: StoredRun } = args.recover
-            ? await recoverOutcome(args.target, home)
-            : await resolveOutcome(args.target, outcomes, runs);
-        let action:
-            | { type: 'apply'; applied: number; unchanged: number }
-            | { type: 'export'; path: string }
-            | undefined;
+        const connection = Connection.open(home);
+        try {
+            const services = new Services(home, connection);
+            const outcomes = new OutcomeStore(home);
+            const runs = services.runs;
+            const resolved: { outcome: RunOutcome; run?: StoredRun } = args.recover
+                ? await recoverOutcome(args.target, home, runs)
+                : await resolveOutcome(args.target, outcomes, runs);
+            let action:
+                | { type: 'apply'; applied: number; unchanged: number }
+                | { type: 'export'; path: string }
+                | undefined;
 
-        if (args.apply) {
-            const run = resolved.run ?? (await runs.read(resolved.outcome.run_id));
-            const result = await new OutcomeApplier(outcomes).apply(
-                resolved.outcome,
-                workspaceTargets(run, args.workspace)
-            );
-            action = { type: 'apply', ...result };
-        } else if (args.export) {
-            action = {
-                type: 'export',
-                path: await new OutcomeExporter(outcomes).export(
+            if (args.apply) {
+                const run = resolved.run ?? (await runs.read(resolved.outcome.run_id));
+                const result = await new OutcomeApplier(outcomes).apply(
                     resolved.outcome,
-                    args.export
-                ),
-            };
-        }
+                    workspaceTargets(run, services.checkouts, args.workspace)
+                );
+                action = { type: 'apply', ...result };
+            } else if (args.export) {
+                action = {
+                    type: 'export',
+                    path: await new OutcomeExporter(outcomes).export(
+                        resolved.outcome,
+                        args.export
+                    ),
+                };
+            }
 
-        const receipt = await outcomes.receipt(resolved.outcome.id);
-        if (args.json) {
-            process.stdout.write(
-                `${JSON.stringify({ outcome: resolved.outcome, application: receipt, ...(action ? { action } : {}) })}\n`
-            );
-            return;
+            const receipt = await outcomes.receipt(resolved.outcome.id);
+            if (args.json) {
+                process.stdout.write(
+                    `${JSON.stringify({ outcome: resolved.outcome, application: receipt, ...(action ? { action } : {}) })}\n`
+                );
+                return;
+            }
+            await renderOutcome(outcomes, resolved.outcome, receipt.state, action);
+        } finally {
+            connection.close();
         }
-        await renderOutcome(outcomes, resolved.outcome, receipt.state, action);
     },
 });
 
 async function recoverOutcome(
     target: string,
-    home: string
+    home: string,
+    runs: Pick<RunStore, 'read' | 'update'>
 ): Promise<{ outcome: RunOutcome }> {
     RunStore.validateId(target);
     const recovery = new E2BOutcomeRecovery(home, {
@@ -146,7 +156,7 @@ async function recoverOutcome(
     });
     if (!(await recovery.exists()))
         throw new Error('This run has no pending E2B outcome recovery');
-    return { outcome: await recovery.recover(e2bRecoveryClient()) };
+    return { outcome: await recovery.recover(e2bRecoveryClient(), runs) };
 }
 
 function e2bRecoveryClient(): E2BSdkClient {
@@ -175,7 +185,11 @@ async function resolveOutcome(
     return { outcome, run };
 }
 
-function workspaceTargets(run: StoredRun, primary?: string) {
+function workspaceTargets(
+    run: StoredRun,
+    checkouts: Pick<RepositoryCheckoutStore, 'find' | 'record' | 'forget'>,
+    primary?: string
+) {
     const named = Object.fromEntries(
         (run.workspaces ?? []).map((workspace) => [
             workspace.name,
@@ -188,6 +202,7 @@ function workspaceTargets(run: StoredRun, primary?: string) {
                 (run.repository
                     ? new RepositoryWorkspace(
                           workbenchHome(),
+                          checkouts,
                           run.repository,
                           process.env
                       ).directory

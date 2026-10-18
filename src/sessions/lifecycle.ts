@@ -1,5 +1,5 @@
 import { RunStore, type StoredRun } from '../runs/store.js';
-import { SessionStore, type StoredSession } from './store.js';
+import type { SessionStore, StoredSession } from './store.js';
 
 export interface SessionActivity {
     id: string;
@@ -9,12 +9,15 @@ export interface SessionActivity {
 }
 
 export class SessionLifecycle {
-    readonly #runs: RunStore;
-    readonly #sessions: SessionStore;
+    readonly #runs: Pick<RunStore, 'read' | 'list' | 'reconcile'>;
+    readonly #sessions: Pick<SessionStore, 'read' | 'list'>;
 
-    constructor(home: string) {
-        this.#runs = new RunStore(home);
-        this.#sessions = new SessionStore(home);
+    constructor(
+        runs: Pick<RunStore, 'read' | 'list' | 'reconcile'>,
+        sessions: Pick<SessionStore, 'read' | 'list'>
+    ) {
+        this.#runs = runs;
+        this.#sessions = sessions;
     }
 
     async resolve(id: string): Promise<SessionActivity> {

@@ -1,3 +1,4 @@
+import type { CatalogWriter } from '../catalog/writer.js';
 import { OutcomeStore } from '../outcomes/store.js';
 import { RunStore, type StoredRun } from '../runs/store.js';
 import {
@@ -5,7 +6,7 @@ import {
     type E2BRecoveryReview,
 } from '../runtimes/e2b/recovery.js';
 import type { ManagedDockerContainer, ManagedE2BSandbox } from '../runtimes/index.js';
-import { SessionStore, type StoredSession } from './store.js';
+import type { SessionStore, StoredSession } from './store.js';
 
 export interface SessionRetentionPolicy {
     before: Date;
@@ -64,10 +65,13 @@ export class SessionRetention {
 
     constructor(
         private readonly home: string,
+        runs: RunStore,
+        sessions: SessionStore,
+        private readonly catalog: Pick<CatalogWriter, 'releaseSnapshot'>,
         dependencies: SessionRetentionDependencies = {}
     ) {
-        this.#runs = new RunStore(home);
-        this.#sessions = new SessionStore(home);
+        this.#runs = runs;
+        this.#sessions = sessions;
         this.#outcomes = new OutcomeStore(home);
         this.#containers = dependencies.containers;
         this.#sandboxes = dependencies.sandboxes;
@@ -215,6 +219,7 @@ export class SessionRetention {
                         return;
                     }
                     await this.#sessions.remove(session.id);
+                    await this.catalog.releaseSnapshot(session.workbench_digest);
                     removedSessions.push(session.id);
                     removedBytes += sessionBytes.get(session.id) ?? 0;
                     for (const run of runs) {

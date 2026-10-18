@@ -1,9 +1,11 @@
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ConnectionStore } from '../src/connections/store.js';
+import { Connection } from '../src/database/connection.js';
+import { RepositoryDeliveryStore } from '../src/repositories/receipts.js';
 import { RunnerRegistry } from '../src/runners/registry.js';
 import { type PreparedRunner, Runner } from '../src/runners/runner.js';
 import {
@@ -23,18 +25,21 @@ import {
 } from '../src/runs/index.js';
 import { RunSupervision } from '../src/runs/supervision.js';
 import { LocalRuntimeProvider, RuntimeRegistry } from '../src/runtimes/index.js';
-import { SessionStore } from '../src/sessions/index.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { NodeHost } from '../src/workbench/host.js';
+import { Services } from '../src/workbench/services.js';
 import { supportedRunnerDeclaration } from './runner-adapter-contract.js';
 
 const temporaryDirectories: string[] = [];
+const openHomes = new Map<string, { connection: Connection; services: Services }>();
 const instructionDirectory = await mkdtemp(join(tmpdir(), 'worker-instructions-'));
 const instructionsPath = join(instructionDirectory, 'instructions.md');
 await writeFile(instructionsPath, 'Follow the user task.\n');
 afterAll(() => rm(instructionDirectory, { recursive: true, force: true }));
 
 afterEach(async () => {
+    for (const { connection } of openHomes.values()) connection.close();
+    openHomes.clear();
     await Promise.all(
         temporaryDirectories
             .splice(0)
@@ -96,7 +101,7 @@ describe('interactive run worker', () => {
             workerFor(home, stored.id, adapter).execute({ environment: {} })
         ).resolves.toBe(3);
         expect(adapter.starts).toBe(0);
-        expect(await new RunStore(home).readEvents(stored.id)).toContainEqual(
+        expect(await servicesFor(home).runs.readEvents(stored.id)).toContainEqual(
             expect.objectContaining({
                 type: 'run.failed',
                 data: {
@@ -107,7 +112,7 @@ describe('interactive run worker', () => {
                 },
             })
         );
-        expect((await new RunStore(home).read(stored.id)).exit_code).toBe(3);
+        expect((await servicesFor(home).runs.read(stored.id)).exit_code).toBe(3);
     });
 
     test('executes an initial detached task as a resumable native session', async () => {
@@ -124,12 +129,12 @@ describe('interactive run worker', () => {
             })
         ).resolves.toBe(0);
 
-        const run = await new RunStore(home).read(stored.id);
+        const run = await servicesFor(home).runs.read(stored.id);
         expect(run).toMatchObject({ status: 'completed', exit_code: 0 });
         expect(adapter.prompts).toEqual(['initial task']);
         expect(adapter.starts).toBe(1);
         expect(run.runner_session_id).toBe('native-session-1');
-        const events = await new RunStore(home).readEvents(stored.id);
+        const events = await servicesFor(home).runs.readEvents(stored.id);
         const started = events.find((event) => event.type === 'turn.started');
         const completed = events.find((event) => event.type === 'turn.completed');
         const delivered = events.find(
@@ -170,11 +175,11 @@ describe('interactive run worker', () => {
         ).resolves.toBe(1);
 
         expect(adapter.prompts).toHaveLength(2);
-        expect(await new RunStore(home).read(stored.id)).toMatchObject({
+        expect(await servicesFor(home).runs.read(stored.id)).toMatchObject({
             status: 'failed',
             exit_code: 1,
         });
-        const events = await new RunStore(home).readEvents(stored.id);
+        const events = await servicesFor(home).runs.readEvents(stored.id);
         expect(events.at(-1)).toMatchObject({
             type: 'run.failed',
             data: { code: 'output_truncated' },
@@ -196,11 +201,11 @@ describe('interactive run worker', () => {
         ).resolves.toBe(1);
 
         // The dispatched worker exits right after this, so the record is final now.
-        expect(await new RunStore(home).read(stored.id)).toMatchObject({
+        expect(await servicesFor(home).runs.read(stored.id)).toMatchObject({
             status: 'failed',
             exit_code: 1,
         });
-        const events = await new RunStore(home).readEvents(stored.id);
+        const events = await servicesFor(home).runs.readEvents(stored.id);
         expect(events.filter((event) => event.type === 'run.failed')).toEqual([
             expect.objectContaining({ data: { message: 'native startup failed' } }),
         ]);
@@ -224,11 +229,13 @@ describe('interactive run worker', () => {
         ).resolves.toBe(130);
 
         expect(adapter.prompts).toEqual([]);
-        expect(await new RunStore(home).read(stored.id)).toMatchObject({
+        expect(await servicesFor(home).runs.read(stored.id)).toMatchObject({
             status: 'cancelled',
             exit_code: 130,
         });
-        expect((await new RunStore(home).readEvents(stored.id)).at(-1)).toMatchObject({
+        expect(
+            (await servicesFor(home).runs.readEvents(stored.id)).at(-1)
+        ).toMatchObject({
             type: 'run.cancelled',
             data: { reason: 'interrupted' },
         });
@@ -265,7 +272,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         await expect(handle.attach()).resolves.toMatchObject({
@@ -273,9 +280,9 @@ describe('interactive run worker', () => {
         });
         const receipt = await handle.send('attached turn');
         await waitForEventType(home, stored.id, 'turn.completed');
-        expect((await new RunStore(home).read(stored.id)).status).toBe('running');
+        expect((await servicesFor(home).runs.read(stored.id)).status).toBe('running');
         expect(
-            (await new RunStore(home).readEvents(stored.id)).find(
+            (await servicesFor(home).runs.readEvents(stored.id)).find(
                 (event) => event.type === 'turn.completed'
             )?.data
         ).toMatchObject({ input_id: receipt.id });
@@ -295,13 +302,13 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForRunning(home, stored.id);
 
         await expect(handle.attach()).resolves.toMatchObject({
             disposition: 'attached',
         });
-        expect((await new RunStore(home).read(stored.id)).runner_session_id).toBe(
+        expect((await servicesFor(home).runs.read(stored.id)).runner_session_id).toBe(
             undefined
         );
 
@@ -321,7 +328,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForRunning(home, stored.id);
 
         await expect(handle.cancel('cancel during startup')).resolves.toMatchObject({
@@ -331,7 +338,9 @@ describe('interactive run worker', () => {
 
         await expect(execution).resolves.toBe(130);
         await expect(handle.result).resolves.toMatchObject({ status: 'cancelled' });
-        expect((await new RunStore(home).readEvents(stored.id)).at(-1)).toMatchObject({
+        expect(
+            (await servicesFor(home).runs.readEvents(stored.id)).at(-1)
+        ).toMatchObject({
             type: 'run.cancelled',
             data: { reason: 'cancel during startup' },
         });
@@ -344,14 +353,14 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
         await handle.attach();
         await handle.send('finish in background');
         await adapter.waitForPrompts(1);
 
         await handle.detach();
-        expect((await new RunStore(home).read(stored.id)).status).toBe('running');
+        expect((await servicesFor(home).runs.read(stored.id)).status).toBe('running');
         adapter.completeFirst();
         await expect(execution).resolves.toBe(0);
         expect(adapter.cancellations).toBe(0);
@@ -361,7 +370,7 @@ describe('interactive run worker', () => {
     test('reopens native state from the stable Workbench session', async () => {
         const home = await temporaryHome();
         const sessionId = 'wb_workersession12345678901';
-        const sessions = new SessionStore(home);
+        const sessions = servicesFor(home).sessions;
         await sessions.create({
             id: sessionId,
             workbench: 'fixture-core',
@@ -376,7 +385,7 @@ describe('interactive run worker', () => {
             native_session_id: 'native-session-before',
             latest_run_id: sessionId,
         });
-        const stored = await new RunStore(home).create({
+        const stored = await servicesFor(home).runs.create({
             metadata: {
                 workbench: 'fixture-core',
                 workbench_version: '0.1.0',
@@ -399,7 +408,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
 
         await waitForReady(home, stored.id);
         expect(adapter.session).toEqual({
@@ -419,7 +428,7 @@ describe('interactive run worker', () => {
     test('names an unnamed resumed session from its first CLI input', async () => {
         const home = await temporaryHome();
         const sessionId = 'wb_workername123456789012';
-        const sessions = new SessionStore(home);
+        const sessions = servicesFor(home).sessions;
         await sessions.create({
             id: sessionId,
             workbench: 'fixture-core',
@@ -434,7 +443,7 @@ describe('interactive run worker', () => {
             native_session_id: 'native-session-before',
             latest_run_id: sessionId,
         });
-        const stored = await new RunStore(home).create({
+        const stored = await servicesFor(home).runs.create({
             metadata: {
                 workbench: 'fixture-core',
                 workbench_version: '0.1.0',
@@ -457,7 +466,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
 
         await waitForReady(home, stored.id);
         await handle.send('Audit Docker cleanup behavior');
@@ -480,7 +489,7 @@ describe('interactive run worker', () => {
         const execution = worker.execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const firstHandle = new StoredRunHandle(home, stored.id);
+        const firstHandle = handleFor(home, stored.id);
 
         await waitForReady(home, stored.id);
         const first = firstHandle.send('first turn');
@@ -493,7 +502,7 @@ describe('interactive run worker', () => {
             disposition: 'queued',
         });
 
-        const recovered = new StoredRunHandle(home, stored.id);
+        const recovered = handleFor(home, stored.id);
         await expect(recovered.steer('change direction')).resolves.toMatchObject({
             disposition: 'queued',
         });
@@ -554,7 +563,7 @@ describe('interactive run worker', () => {
         expect(eventIndex(events, 'input.delivered', 'cancel_turn')).toBeLessThan(
             eventIndex(events, 'input.delivered', 'follow_up')
         );
-        expect((await new RunStore(home).read(stored.id)).runner_session_id).toBe(
+        expect((await servicesFor(home).runs.read(stored.id)).runner_session_id).toBe(
             'native-session-1'
         );
         expect(await storedControlText(home, stored.id)).not.toContain('first turn');
@@ -571,7 +580,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         await expect(handle.steer('too early')).rejects.toThrow(
@@ -599,7 +608,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         await handle.send('first turn');
@@ -608,13 +617,13 @@ describe('interactive run worker', () => {
             disposition: 'queued',
         });
 
-        let events = await new RunStore(home).readEvents(stored.id);
+        let events = await servicesFor(home).runs.readEvents(stored.id);
         expect(eventIndex(events, 'input.queued', 'steer')).toBeGreaterThan(-1);
         expect(eventIndex(events, 'input.delivered', 'steer')).toBe(-1);
 
         adapter.deliverSteering();
         await waitForEvent(home, stored.id, 'input.delivered', 'steer');
-        events = await new RunStore(home).readEvents(stored.id);
+        events = await servicesFor(home).runs.readEvents(stored.id);
         expect(eventIndex(events, 'input.queued', 'steer')).toBeLessThan(
             eventIndex(events, 'input.delivered', 'steer')
         );
@@ -633,14 +642,14 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
         await handle.send('first turn');
         await adapter.waitForPrompts(1);
         await handle.steer('discard on ordinary interruption');
         await handle.cancelTurn();
         expect(adapter.prompts).toEqual(['first turn']);
-        const events = await new RunStore(home).readEvents(stored.id);
+        const events = await servicesFor(home).runs.readEvents(stored.id);
         expect(eventIndex(events, 'input.rejected', 'steer')).toBeGreaterThan(-1);
         await handle.close();
         await execution;
@@ -653,7 +662,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         await handle.send('first turn');
@@ -664,7 +673,7 @@ describe('interactive run worker', () => {
         ).resolves.toMatchObject({ disposition: 'cancelled' });
         await adapter.waitForPrompts(2);
         expect(adapter.prompts).toEqual(['first turn', 'queued correction']);
-        const events = await new RunStore(home).readEvents(stored.id);
+        const events = await servicesFor(home).runs.readEvents(stored.id);
         expect(eventIndex(events, 'input.rejected', 'steer')).toBe(-1);
         expect(eventIndex(events, 'input.delivered', 'steer')).toBeGreaterThan(
             eventIndex(events, 'input.queued', 'steer')
@@ -682,7 +691,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         await expect(handle.cancelTurn()).resolves.toMatchObject({
@@ -710,7 +719,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         const turn = handle.send('inspect outside');
@@ -747,11 +756,14 @@ describe('interactive run worker', () => {
             const execution = workerFor(home, stored.id, adapter).execute({
                 environment: { OPENAI_API_KEY: 'fixture-openai-key' },
             });
-            const handle = new StoredRunHandle(home, stored.id);
+            const handle = handleFor(home, stored.id);
             await waitForReady(home, stored.id);
-            const supervision = new RunSupervision(home);
+            const supervision = new RunSupervision(
+                servicesFor(home).runs,
+                new RepositoryDeliveryStore(connectionFor(home))
+            );
             const snapshot = async () =>
-                supervision.snapshot(await new RunStore(home).read(stored.id));
+                supervision.snapshot(await servicesFor(home).runs.read(stored.id));
 
             const turn = handle.send('inspect outside');
             await (kind === 'permission'
@@ -816,7 +828,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         const turn = handle.send('configure deployment');
@@ -858,7 +870,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         const turn = handle.send('configure deployment');
@@ -884,18 +896,27 @@ describe('interactive run worker', () => {
     test('records a normalized terminal event when startup fails', async () => {
         const home = await temporaryHome();
         const stored = await fixtureRun(home);
-        const worker = new InteractiveRunWorker(home, stored.id, {
-            loadWorkbench: async () => {
-                throw new Error('fixture load failed');
-            },
-        });
+        const services = servicesFor(home);
+        const worker = new InteractiveRunWorker(
+            home,
+            connectionFor(home),
+            services.runs,
+            services.sessions,
+            services.checkouts,
+            stored.id,
+            {
+                loadWorkbench: async () => {
+                    throw new Error('fixture load failed');
+                },
+            }
+        );
 
         await expect(worker.execute({})).resolves.toBe(1);
-        await expect(new StoredRunHandle(home, stored.id).result).resolves.toEqual({
+        await expect(handleFor(home, stored.id).result).resolves.toEqual({
             runId: stored.id,
             status: 'failed',
         });
-        expect(await new RunStore(home).readEvents(stored.id)).toEqual([
+        expect(await servicesFor(home).runs.readEvents(stored.id)).toEqual([
             expect.objectContaining({
                 run_id: stored.id,
                 sequence: 1,
@@ -912,7 +933,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         await handle.send('first turn');
@@ -926,7 +947,7 @@ describe('interactive run worker', () => {
         await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
 
         expect(adapter.prompts).toEqual(['first turn']);
-        expect(await new RunStore(home).readEvents(stored.id)).toContainEqual(
+        expect(await servicesFor(home).runs.readEvents(stored.id)).toContainEqual(
             expect.objectContaining({
                 type: 'input.rejected',
                 data: expect.objectContaining({ kind: 'send', code: 'turn_active' }),
@@ -941,7 +962,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         await handle.send('first turn');
@@ -951,7 +972,7 @@ describe('interactive run worker', () => {
         await execution;
         await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
 
-        const events = await new RunStore(home).readEvents(stored.id);
+        const events = await servicesFor(home).runs.readEvents(stored.id);
         expect(adapter.prompts).toEqual(['first turn']);
         expect(events).toContainEqual(
             expect.objectContaining({
@@ -972,7 +993,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         await expect(handle.cancel('client left')).resolves.toMatchObject({
@@ -983,7 +1004,9 @@ describe('interactive run worker', () => {
             runId: stored.id,
             status: 'cancelled',
         });
-        expect((await new RunStore(home).readEvents(stored.id)).at(-1)).toMatchObject({
+        expect(
+            (await servicesFor(home).runs.readEvents(stored.id)).at(-1)
+        ).toMatchObject({
             type: 'run.cancelled',
             data: { reason: 'client left' },
         });
@@ -996,7 +1019,7 @@ describe('interactive run worker', () => {
         const execution = workerFor(home, stored.id, adapter).execute({
             environment: { OPENAI_API_KEY: 'fixture-openai-key' },
         });
-        const handle = new StoredRunHandle(home, stored.id);
+        const handle = handleFor(home, stored.id);
         await waitForReady(home, stored.id);
 
         const sent = handle.send('cancel immediately');
@@ -1219,34 +1242,68 @@ function workerFor(
     runId: string,
     adapter: RunnerSessionAdapter,
     reportLaunch?: NonNullable<
-        ConstructorParameters<typeof InteractiveRunWorker>[2]
+        ConstructorParameters<typeof InteractiveRunWorker>[6]
     >['reportLaunch']
 ) {
-    return new InteractiveRunWorker(home, runId, {
-        loadWorkbench: async () => workbench(),
-        findExecutable: (name) => `/bin/${name}`,
-        registry: new RunnerRegistry([new InteractiveWorkerTestRunner(adapter)]),
-        runtimeRegistry: new RuntimeRegistry([
-            new LocalRuntimeProvider({
-                host: new NodeHost(),
-                findExecutable: (name) => `/bin/${name}`,
-                spawn: () => ({
-                    exited: Promise.resolve(0),
-                    stdout: new Blob(['No credentials found\n']).stream(),
-                    stderr: new Blob([]).stream(),
+    const services = servicesFor(home);
+    return new InteractiveRunWorker(
+        home,
+        connectionFor(home),
+        services.runs,
+        services.sessions,
+        services.checkouts,
+        runId,
+        {
+            loadWorkbench: async () => workbench(),
+            findExecutable: (name) => `/bin/${name}`,
+            registry: new RunnerRegistry([new InteractiveWorkerTestRunner(adapter)]),
+            runtimeRegistry: new RuntimeRegistry([
+                new LocalRuntimeProvider({
+                    host: new NodeHost(),
+                    findExecutable: (name) => `/bin/${name}`,
+                    spawn: () => ({
+                        exited: Promise.resolve(0),
+                        stdout: new Blob(['No credentials found\n']).stream(),
+                        stderr: new Blob([]).stream(),
+                    }),
                 }),
-            }),
-        ]),
-        now: () => new Date('2026-09-01T12:00:00.000Z'),
-        captureOutcomes: false,
-        ...(reportLaunch ? { reportLaunch } : {}),
-    });
+            ]),
+            now: () => new Date('2026-09-01T12:00:00.000Z'),
+            captureOutcomes: false,
+            ...(reportLaunch ? { reportLaunch } : {}),
+        }
+    );
 }
 
 async function temporaryHome(): Promise<string> {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-interactive-worker-'));
     temporaryDirectories.push(directory);
     return directory;
+}
+
+/** One connection per temporary home, so each test owns its database. */
+function servicesFor(home: string): Services {
+    let open = openHomes.get(home);
+    if (!open) {
+        const connection = Connection.open(home);
+        open = { connection, services: new Services(home, connection) };
+        openHomes.set(home, open);
+    }
+    return open.services;
+}
+
+function connectionFor(home: string): Connection {
+    servicesFor(home);
+    return required(openHomes.get(home)).connection;
+}
+
+function handleFor(home: string, runId: string): StoredRunHandle {
+    return new StoredRunHandle(servicesFor(home).runs, connectionFor(home), runId);
+}
+
+function required<T>(value: T | undefined): T {
+    if (value === undefined) throw new Error('Expected a value');
+    return value;
 }
 
 function fixtureRun(
@@ -1257,7 +1314,7 @@ function fixtureRun(
         registry?: boolean;
     } = {}
 ): Promise<StoredRun> {
-    return new RunStore(home).create({
+    return servicesFor(home).runs.create({
         metadata: {
             workbench: 'fixture-core',
             workbench_version: '0.1.0',
@@ -1318,14 +1375,12 @@ async function until(check: () => Promise<boolean>): Promise<void> {
 }
 
 async function waitForReady(home: string, runId: string): Promise<void> {
-    const store = new RunStore(home);
+    const store = servicesFor(home).runs;
     for (let attempt = 0; attempt < 200; attempt += 1) {
         const run = await store.read(runId);
         if (run.runner_session_id) return;
         if (RunStore.isTerminal(run.status)) {
-            const events = await Bun.file(
-                join(home, 'runs', runId, 'events.ndjson')
-            ).text();
+            const events = JSON.stringify(await store.readEvents(runId));
             throw new Error(`Interactive run became ${run.status}: ${events}`);
         }
         await Bun.sleep(2);
@@ -1334,7 +1389,7 @@ async function waitForReady(home: string, runId: string): Promise<void> {
 }
 
 async function waitForRunning(home: string, runId: string): Promise<void> {
-    const store = new RunStore(home);
+    const store = servicesFor(home).runs;
     for (let attempt = 0; attempt < 200; attempt += 1) {
         if ((await store.read(runId)).status === 'running') return;
         await Bun.sleep(2);
@@ -1343,7 +1398,7 @@ async function waitForRunning(home: string, runId: string): Promise<void> {
 }
 
 async function waitForSessionName(home: string, sessionId: string): Promise<void> {
-    const store = new SessionStore(home);
+    const store = servicesFor(home).sessions;
     for (let attempt = 0; attempt < 200; attempt += 1) {
         if ((await store.read(sessionId)).name) return;
         await Bun.sleep(2);
@@ -1357,7 +1412,7 @@ async function waitForEvent(
     type: WorkbenchEvent['type'],
     kind: string
 ): Promise<void> {
-    const store = new RunStore(home);
+    const store = servicesFor(home).runs;
     for (let attempt = 0; attempt < 200; attempt += 1) {
         const events = await store.readEvents(runId);
         if (eventIndex(events, type, kind) >= 0) return;
@@ -1371,7 +1426,7 @@ async function waitForEventType(
     runId: string,
     type: WorkbenchEvent['type']
 ): Promise<void> {
-    const store = new RunStore(home);
+    const store = servicesFor(home).runs;
     for (let attempt = 0; attempt < 200; attempt += 1) {
         if ((await store.readEvents(runId)).some((event) => event.type === type))
             return;
@@ -1387,14 +1442,13 @@ async function collect(events: AsyncIterable<WorkbenchEvent>) {
 }
 
 async function storedControlText(home: string, runId: string): Promise<string> {
-    const root = join(home, 'runs', runId, 'control');
-    const contents: string[] = [];
-    for (const directory of ['pending', 'active', 'receipts']) {
-        for (const file of await readdir(join(root, directory))) {
-            contents.push(await readFile(join(root, directory, file), 'utf8'));
-        }
-    }
-    return contents.join('\n');
+    const database = connectionFor(home);
+    return [
+        ...database.all('SELECT payload FROM control_requests WHERE run_id = ?', runId),
+        ...database.all('SELECT payload FROM control_receipts WHERE run_id = ?', runId),
+    ]
+        .map((row) => String(row.payload))
+        .join('\n');
 }
 
 function field(value: unknown, key: string): string | undefined {

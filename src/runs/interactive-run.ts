@@ -1,4 +1,5 @@
 import { AuthenticationRequiredError } from '../connections/error.js';
+import type { RepositoryCheckoutStore } from '../database/checkouts.js';
 import type { OutcomeCompleteness, RunOutcome } from '../outcomes/contracts.js';
 import type { RepositoryBinding } from '../repositories/contracts.js';
 import { RunnerRegistry } from '../runners/registry.js';
@@ -52,6 +53,9 @@ export interface InteractiveRunDependencies {
     runtimeRegistry?: RuntimeRegistry;
     now?: () => Date;
     captureOutcomes?: boolean;
+    /** The records of the Workbench home `options.home` names. */
+    runs?: Pick<RunStore, 'read' | 'update' | 'list'>;
+    checkouts?: Pick<RepositoryCheckoutStore, 'find' | 'record' | 'forget'>;
 }
 
 export interface InteractiveRunOptions {
@@ -126,6 +130,10 @@ export class InteractiveRun {
                         findExecutable: this.dependencies.findExecutable ?? Bun.which,
                     }),
                 ...(this.dependencies.now ? { now: this.dependencies.now } : {}),
+                ...(this.dependencies.runs ? { runs: this.dependencies.runs } : {}),
+                ...(this.dependencies.checkouts
+                    ? { checkouts: this.dependencies.checkouts }
+                    : {}),
             }
         );
         try {

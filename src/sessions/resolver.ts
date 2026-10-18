@@ -2,7 +2,7 @@ import { RunnerRegistry } from '../runners/registry.js';
 import type { ResolvedWorkbenchReference } from '../workbench/resolver.js';
 import { withRuntime } from '../workbench/runtimes.js';
 import { Workbench } from '../workbench/workbench.js';
-import { SessionLifecycle } from './lifecycle.js';
+import type { SessionLifecycle } from './lifecycle.js';
 import type { StoredSession } from './store.js';
 
 export interface ResolvedSession {
@@ -12,10 +12,10 @@ export interface ResolvedSession {
 }
 
 export class SessionResolver {
-    readonly #lifecycle: SessionLifecycle;
+    readonly #lifecycle: Pick<SessionLifecycle, 'session' | 'resolve'>;
 
-    constructor(home: string) {
-        this.#lifecycle = new SessionLifecycle(home);
+    constructor(lifecycle: Pick<SessionLifecycle, 'session' | 'resolve'>) {
+        this.#lifecycle = lifecycle;
     }
 
     async resolve(id: string): Promise<ResolvedSession> {
