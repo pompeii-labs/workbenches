@@ -6,6 +6,7 @@ import { RepositoryCheckoutStore } from '../database/checkouts.js';
 import type { Connection } from '../database/connection.js';
 import { LeaseStore } from '../database/leases.js';
 import { type Row, RowReader } from '../database/rows.js';
+import { SessionRecordStore } from '../database/sessions.js';
 import { WorkbenchFiles } from '../files/layout.js';
 import type { ProcessProbe } from '../processes/probe.js';
 import {
@@ -54,7 +55,7 @@ export class SessionStore {
     readonly #identity = new SessionIdentity();
     readonly #files: WorkbenchFiles;
     readonly #leases: LeaseStore;
-    readonly #checkouts: RepositoryCheckoutStore;
+    readonly #records: SessionRecordStore;
 
     constructor(
         private readonly database: Pick<
@@ -66,7 +67,10 @@ export class SessionStore {
     ) {
         this.#files = new WorkbenchFiles(home);
         this.#leases = new LeaseStore(database, probe);
-        this.#checkouts = new RepositoryCheckoutStore(database);
+        this.#records = new SessionRecordStore(
+            database,
+            new RepositoryCheckoutStore(database)
+        );
     }
 
     async exclusive<T>(id: string, operation: () => Promise<T>): Promise<T> {
@@ -95,13 +99,7 @@ export class SessionStore {
             updated_at: timestamp,
         };
         const native = this.nativeDirectory(session.id);
-        const inserted = this.database.run(
-            `INSERT OR IGNORE INTO sessions (
-                id, name, workbench, workbench_version, runner, model, runtime, reference,
-                workbench_path, source_workbench_path, workbench_digest, workspace,
-                repository, workspaces, registry, allow_unchecked_gpu, native_path,
-                native_session_id, latest_run_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        const inserted = this.#records.insert([
             session.id,
             session.name ?? null,
             session.workbench,
@@ -124,14 +122,13 @@ export class SessionStore {
             session.native_session_id ?? null,
             session.latest_run_id,
             session.created_at,
-            session.updated_at
-        );
-        if (inserted.changes === 0)
-            throw new Error(`Session already exists: ${session.id}`);
+            session.updated_at,
+        ]);
+        if (!inserted) throw new Error(`Session already exists: ${session.id}`);
         try {
             await mkdir(native, { recursive: true, mode: 0o700 });
         } catch (error) {
-            this.database.run('DELETE FROM sessions WHERE id = ?', session.id);
+            this.#records.discard(session.id);
             throw error;
         }
         return session;
@@ -179,8 +176,8 @@ export class SessionStore {
         options: { resumableOnly?: boolean; workspace?: string } = {}
     ): Promise<StoredSession[]> {
         const workspace = options.workspace ? resolve(options.workspace) : undefined;
-        return this.database
-            .all('SELECT * FROM sessions ORDER BY updated_at DESC, id DESC')
+        return this.#records
+            .rows()
             .flatMap((row) => {
                 try {
                     return [this.parse(row)];
@@ -199,14 +196,7 @@ export class SessionStore {
 
     async remove(id: string): Promise<void> {
         RunStore.validateId(id);
-        this.database.transaction(() => {
-            this.database.run('DELETE FROM sessions WHERE id = ?', id);
-            this.database.run(
-                "DELETE FROM repository_receipts WHERE scope = 'session' AND id = ?",
-                id
-            );
-            this.#checkouts.forget(id);
-        });
+        this.#records.remove(id);
         await this.#files.removeSession(id);
     }
 
@@ -222,7 +212,7 @@ export class SessionStore {
 
     private load(id: string): StoredSession {
         RunStore.validateId(id);
-        const row = this.database.one('SELECT * FROM sessions WHERE id = ?', id);
+        const row = this.#records.row(id);
         if (!row) throw new Error(`Workbench session does not exist: ${id}`);
         return this.parse(row);
     }
@@ -274,15 +264,12 @@ export class SessionStore {
         RunStore.validateId(id);
         return this.database.transaction(() => {
             const next = operation(this.load(id));
-            this.database.run(
-                `UPDATE sessions SET name = ?, native_session_id = ?, latest_run_id = ?,
-                    updated_at = ? WHERE id = ?`,
-                next.name ?? null,
-                next.native_session_id ?? null,
-                next.latest_run_id,
-                next.updated_at,
-                id
-            );
+            this.#records.change(id, {
+                name: next.name ?? null,
+                native_session_id: next.native_session_id ?? null,
+                latest_run_id: next.latest_run_id,
+                updated_at: next.updated_at,
+            });
             return next;
         });
     }

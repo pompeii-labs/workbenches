@@ -1,4 +1,5 @@
 import type { Connection } from '../database/connection.js';
+import { RepositoryReceiptRecords } from '../database/receipts.js';
 import { RowReader } from '../database/rows.js';
 import {
     parseRepository,
@@ -10,9 +11,13 @@ const MAXIMUM_RECEIPT_BYTES = 32_768;
 
 /** Delivery receipts, one per run and one per session (the latest attempt). */
 export class RepositoryDeliveryStore {
+    readonly #records: RepositoryReceiptRecords;
+
     constructor(
         private readonly database: Pick<Connection, 'run' | 'one' | 'transaction'>
-    ) {}
+    ) {
+        this.#records = new RepositoryReceiptRecords(database);
+    }
 
     async read(runId: string): Promise<RepositoryDeliveryReceipt | undefined> {
         this.assertIdentifier(runId);
@@ -34,19 +39,10 @@ export class RepositoryDeliveryStore {
         if (receipt.session_id) this.assertIdentifier(receipt.session_id);
         const payload = JSON.stringify(receipt);
         this.database.transaction(() => {
-            if (receipt.session_id) this.save('session', receipt.session_id, payload);
-            this.save('run', receipt.run_id, payload);
+            if (receipt.session_id)
+                this.#records.save('session', receipt.session_id, payload);
+            this.#records.save('run', receipt.run_id, payload);
         });
-    }
-
-    private save(scope: 'run' | 'session', id: string, payload: string): void {
-        this.database.run(
-            `INSERT INTO repository_receipts (scope, id, payload) VALUES (?, ?, ?)
-             ON CONFLICT (scope, id) DO UPDATE SET payload = excluded.payload`,
-            scope,
-            id,
-            payload
-        );
     }
 
     private load(
@@ -54,11 +50,7 @@ export class RepositoryDeliveryStore {
         id: string,
         runId?: string
     ): RepositoryDeliveryReceipt | undefined {
-        const row = this.database.one(
-            'SELECT payload FROM repository_receipts WHERE scope = ? AND id = ?',
-            scope,
-            id
-        );
+        const row = this.#records.row(scope, id);
         if (!row) return undefined;
         if (
             typeof row.payload !== 'string' ||
