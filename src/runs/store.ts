@@ -5,6 +5,7 @@ import type { Connection } from '../database/connection.js';
 import { LeaseStore } from '../database/leases.js';
 import { type Row, RowReader } from '../database/rows.js';
 import { RunEventStore } from '../database/runs/events.js';
+import { type RunColumns, RunRecordStore } from '../database/runs/records.js';
 import { RunRequestStore, type StoredRunRequest } from '../database/runs/requests.js';
 import { WorkbenchFiles } from '../files/layout.js';
 import { OutcomeStore } from '../outcomes/store.js';
@@ -68,6 +69,7 @@ export interface CreateStoredRunOptions {
 
 export class RunStore {
     readonly #events: RunEventStore;
+    readonly #records: RunRecordStore;
     readonly #requests: RunRequestStore;
     readonly #leases: LeaseStore;
     readonly #files: WorkbenchFiles;
@@ -81,6 +83,7 @@ export class RunStore {
         private readonly probe: Pick<ProcessProbe, 'alive'>
     ) {
         this.#events = new RunEventStore(database);
+        this.#records = new RunRecordStore(database);
         this.#requests = new RunRequestStore(database);
         this.#leases = new LeaseStore(database, probe);
         this.#files = new WorkbenchFiles(home);
@@ -155,16 +158,8 @@ export class RunStore {
             ...options.metadata,
         };
         this.database.transaction(() => {
-            const inserted = this.database.run(
-                `INSERT OR IGNORE INTO runs (
-                    id, status, workbench, workbench_version, runner, model, runtime,
-                    workspace, repository, mode, execution, workspaces, allow_host_docker,
-                    registry, registry_event_id, dispatched_at, started_at, finished_at,
-                    pid, runner_session_id, session_id, resumed_from, exit_code, outcome_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                ...this.columns(run)
-            );
-            if (inserted.changes === 0) throw new Error(`Run already exists: ${id}`);
+            if (!this.#records.insert(this.columns(run)))
+                throw new Error(`Run already exists: ${id}`);
             this.#requests.put(id, { version: 1, ...options.request });
         });
         return run;
@@ -172,7 +167,7 @@ export class RunStore {
 
     async read(id: string): Promise<StoredRun> {
         RunStore.validateId(id);
-        const row = this.database.one('SELECT * FROM runs WHERE id = ?', id);
+        const row = this.#records.row(id);
         if (!row) throw new Error(`Workbench run does not exist: ${id}`);
         return this.parse(row, id);
     }
@@ -183,23 +178,9 @@ export class RunStore {
     ): Promise<StoredRun> {
         RunStore.validateId(id);
         return this.database.transaction(() => {
-            const current = this.parse(
-                this.database.one('SELECT * FROM runs WHERE id = ?', id) ??
-                    this.missing(id),
-                id
-            );
+            const current = this.parse(this.#records.row(id) ?? this.missing(id), id);
             const next: StoredRun = { ...current, ...patch };
-            const [, ...values] = this.columns(next);
-            this.database.run(
-                `UPDATE runs SET status = ?, workbench = ?, workbench_version = ?, runner = ?,
-                    model = ?, runtime = ?, workspace = ?, repository = ?, mode = ?,
-                    execution = ?, workspaces = ?, allow_host_docker = ?, registry = ?,
-                    registry_event_id = ?, dispatched_at = ?, started_at = ?,
-                    finished_at = ?, pid = ?, runner_session_id = ?, session_id = ?,
-                    resumed_from = ?, exit_code = ?, outcome_id = ? WHERE id = ?`,
-                ...values,
-                id
-            );
+            this.#records.replace(this.columns(next));
             return next;
         });
     }
@@ -271,15 +252,13 @@ export class RunStore {
     }
 
     async list(): Promise<StoredRun[]> {
-        return this.database
-            .all('SELECT * FROM runs ORDER BY dispatched_at DESC, id DESC')
-            .flatMap((row) => {
-                try {
-                    return [this.parse(row, String(row.id))];
-                } catch {
-                    return [];
-                }
-            });
+        return this.#records.rows().flatMap((row) => {
+            try {
+                return [this.parse(row, String(row.id))];
+            } catch {
+                return [];
+            }
+        });
     }
 
     async size(id: string): Promise<number> {
@@ -307,13 +286,7 @@ export class RunStore {
         for (const outcome of await outcomes.list()) {
             if (outcome.run_id === id) await outcomes.remove(outcome.id);
         }
-        this.database.transaction(() => {
-            this.database.run(
-                "DELETE FROM repository_receipts WHERE scope = 'run' AND id = ?",
-                id
-            );
-            this.database.run('DELETE FROM runs WHERE id = ?', id);
-        });
+        this.#records.remove(id);
         await this.#files.removeWork(id);
     }
 
@@ -321,7 +294,7 @@ export class RunStore {
         throw new Error(`Workbench run does not exist: ${id}`);
     }
 
-    private columns(run: StoredRun) {
+    private columns(run: StoredRun): RunColumns {
         return [
             run.id,
             run.status,
