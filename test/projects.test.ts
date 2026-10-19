@@ -309,6 +309,7 @@ describe('projects', () => {
                 {
                     name: 'Pixel Pirate',
                     slug: 'pixel-pirate',
+                    counts: { needs_you: 0, running: 0, done: 0, failed: 0 },
                     created_at: expect.any(String),
                 },
             ],

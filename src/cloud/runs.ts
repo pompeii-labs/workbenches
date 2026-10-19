@@ -9,6 +9,7 @@ import type {
 } from '../registry/account-store.js';
 import type { RegistryClient } from '../registry/client.js';
 import type { WorkbenchEvent } from '../runs/events.js';
+import type { RunChangeListener } from '../runs/store.js';
 import {
     type CloudCommandReceipt,
     type CloudRun,
@@ -39,7 +40,8 @@ export class CloudRuns {
         private readonly accounts: Pick<RegistryAccountStore, 'current' | 'require'>,
         private readonly client: Pick<RegistryClient, 'apiUrl'>,
         private readonly sessions: CloudSessionStore,
-        private readonly projects: Pick<ProjectStore, 'resolve'>
+        private readonly projects: Pick<ProjectStore, 'resolve'>,
+        private readonly changes: RunChangeListener
     ) {}
 
     async login(): Promise<{ organization: string } | null> {
@@ -84,6 +86,7 @@ export class CloudRuns {
             title: titleFrom(run.task),
             createdAt: run.created_at,
         });
+        this.changes.notify(run.id);
         return { session_id: run.session_id, run_id: run.id };
     }
 

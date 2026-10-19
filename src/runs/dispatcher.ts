@@ -191,6 +191,7 @@ export class RunDispatcher {
                     workspaces,
                     allow_host_docker: options.allowHostDocker ?? false,
                     session_id: session.id,
+                    task: options.task ?? '',
                     ...(options.session ? { resumed_from: session.latest_run_id } : {}),
                     ...(options.resolved.registry
                         ? {

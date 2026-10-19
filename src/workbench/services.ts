@@ -11,8 +11,11 @@ import type { Connection } from '../database/connection.js';
 import { LeaseStore } from '../database/leases.js';
 import { NoticeStore } from '../database/notices.js';
 import { ProjectRecordStore } from '../database/projects.js';
+import { StudioCommandStore } from '../database/studio/commands.js';
+import { StudioStateStore } from '../database/studio/state.js';
 import { LegacyLayout } from '../legacy/layout.js';
 import { LegacyNotice } from '../legacy/notice.js';
+import { HostCommands } from '../processes/commands.js';
 import { ProcessProbe } from '../processes/probe.js';
 import { CloudProjectClient } from '../projects/cloud.js';
 import { ProjectMirror } from '../projects/mirror.js';
@@ -31,6 +34,8 @@ import { SessionLifecycle } from '../sessions/lifecycle.js';
 import { SessionResolver } from '../sessions/resolver.js';
 import { SessionStore } from '../sessions/store.js';
 import { SessionSupervision } from '../sessions/supervision.js';
+import { StudioServices } from '../studio/services.js';
+import { StudioWake } from '../studio/wake.js';
 
 /**
  * Every store and service of one Workbench home, wired once over the
@@ -39,6 +44,9 @@ import { SessionSupervision } from '../sessions/supervision.js';
  */
 export class Services {
     readonly probe = new ProcessProbe();
+    readonly wake: StudioWake;
+    readonly studioState: StudioStateStore;
+    readonly studioCommands: StudioCommandStore;
     readonly registry: RegistryClient;
     readonly accounts: RegistryAccountStore;
     readonly projects: ProjectStore;
@@ -62,8 +70,10 @@ export class Services {
     readonly evidence: ImprovementEvidence;
     readonly control: SessionControl;
     readonly worker: RunWorker;
+    readonly studio: StudioServices;
 
     constructor(home: string, connection: Connection) {
+        this.wake = new StudioWake(home);
         this.registry = new RegistryClient({ home });
         this.accounts = new RegistryAccountStore({ home, client: this.registry });
         this.projects = new ProjectStore(
@@ -76,9 +86,12 @@ export class Services {
             this.accounts,
             this.registry,
             this.cloudSessions,
-            this.projects
+            this.projects,
+            this.wake
         );
-        this.runs = new RunStore(connection, home, this.probe);
+        this.runs = new RunStore(connection, home, this.probe, this.wake);
+        this.studioState = new StudioStateStore(connection);
+        this.studioCommands = new StudioCommandStore(connection);
         this.sessions = new SessionStore(connection, home, this.probe);
         this.checkouts = new RepositoryCheckoutStore(connection);
         this.receipts = new RepositoryDeliveryStore(connection);
@@ -136,6 +149,13 @@ export class Services {
             this.runs,
             this.sessions,
             this.checkouts
+        );
+        this.studio = new StudioServices(
+            home,
+            this,
+            process.platform,
+            new HostCommands(),
+            Date.now
         );
     }
 }

@@ -38,6 +38,7 @@ import { runCommand } from './commands/run.js';
 import { sendCommand } from './commands/send.js';
 import { smokeCommand } from './commands/smoke.js';
 import { statusCommand } from './commands/status.js';
+import { studioCommand } from './commands/studio.js';
 import { unpublishCommand } from './commands/unpublish.js';
 import { updateCommand } from './commands/update.js';
 import { upgradeCommand } from './commands/upgrade.js';
@@ -50,6 +51,7 @@ import { Connection } from './database/connection.js';
 import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
 import { workbenchHome } from './storage.js';
+import { StudioProcess } from './studio/index.js';
 import { Services } from './workbench/services.js';
 
 let bareInvocation = import.meta.main && process.argv.length === 2;
@@ -82,6 +84,7 @@ export const workbenchCommand = defineCommand({
         ps: psCommand,
         project: projectCommand,
         status: statusCommand,
+        studio: studioCommand,
         build: buildCommand,
         clean: cleanCommand,
         connect: connectCommand,
@@ -124,6 +127,20 @@ if (import.meta.main) {
         let code: number;
         try {
             code = await new Services(home, connection).worker.executeDispatched(id);
+        } finally {
+            connection.close();
+        }
+        process.exit(code);
+    }
+    if (process.argv[2] === '__studio') {
+        const home = process.argv[3];
+        if (!home) process.exit(2);
+        RegistryClient.configureApiUrl(extractApiUrl(process.argv.slice(4)).apiUrl);
+        const connection = Connection.open(home);
+        let code: number;
+        try {
+            const services = new Services(home, connection);
+            code = await new StudioProcess(services.studioState, services.studio).run();
         } finally {
             connection.close();
         }

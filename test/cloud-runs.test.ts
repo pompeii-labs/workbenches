@@ -44,8 +44,10 @@ describe('cloud runs', () => {
         });
 
         expect(
-            connection.one('SELECT max(version) AS version FROM __migrations')
-        ).toEqual({ version: 3 });
+            connection.one(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cloud_sessions'"
+            )
+        ).toEqual({ name: 'cloud_sessions' });
         expect(store.bySession('wbs_cloudsession')).toMatchObject({
             project: 'Cloud Demo',
             latestRunId: 'wb_cloudrun1234567890123456',

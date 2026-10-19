@@ -219,9 +219,10 @@ describe('cloud MCP', () => {
         ).toHaveLength(2);
     });
 
-    test('lists tracked cloud runs and sessions', async () => {
+    test('lists tracked cloud runs, sessions, and tasks', async () => {
         const { home } = await setupAndRun();
-        const supervision = open(home).mcp.supervision;
+        const { mcp, services } = open(home);
+        const supervision = mcp.supervision;
         expect(await supervision.runs({ project: 'Demo', limit: 20 })).toMatchObject([
             { id: CLOUD_RUN_ID, session_id: CLOUD_SESSION_ID, runtime: 'cloud' },
         ]);
@@ -233,6 +234,9 @@ describe('cloud MCP', () => {
                 project: 'Demo',
                 latest_run: { id: CLOUD_RUN_ID },
             },
+        ]);
+        expect(await services.studio.board.tasks('Demo')).toMatchObject([
+            { id: CLOUD_SESSION_ID, source: 'cloud' },
         ]);
     });
 });

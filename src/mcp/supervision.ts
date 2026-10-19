@@ -151,6 +151,7 @@ export class McpSupervision {
                 runtime: run.runtime ?? 'local',
                 dispatched_at: run.dispatched_at,
                 ...(run.finished_at ? { finished_at: run.finished_at } : {}),
+                ...(run.task ? { task: run.task } : {}),
             }))
             .filter((run) => !project || run.project === project);
         const cloud = await this.cloudRuns(project, options.status);

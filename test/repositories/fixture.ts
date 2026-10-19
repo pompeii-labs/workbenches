@@ -13,6 +13,7 @@ import type { RepositoryBinding } from '../../src/repositories/contracts.js';
 import { RepositoryGit } from '../../src/repositories/git.js';
 import { RepositoryGitHub } from '../../src/repositories/github.js';
 import { RunStore } from '../../src/runs/store.js';
+import { StudioWake } from '../../src/studio/wake.js';
 
 const directories: string[] = [];
 const connections = new Map<string, Connection>();
@@ -160,7 +161,7 @@ export async function checkoutFixture() {
         home,
         connection,
         checkouts: new RepositoryCheckoutStore(connection),
-        runs: new RunStore(connection, home, new ProcessProbe()),
+        runs: new RunStore(connection, home, new ProcessProbe(), new StudioWake(home)),
         binding: selected,
         git: new FixtureGit(source),
     };
@@ -173,7 +174,12 @@ export async function saveRun(
     outcome?: RunOutcome,
     previous?: string
 ) {
-    const runs = new RunStore(connect(home), home, new ProcessProbe());
+    const runs = new RunStore(
+        connect(home),
+        home,
+        new ProcessProbe(),
+        new StudioWake(home)
+    );
     await runs.create({
         id,
         metadata: {

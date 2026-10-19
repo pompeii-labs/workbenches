@@ -60,9 +60,14 @@ const listCommand = defineCommand({
         const home = workbenchHome();
         const connection = Connection.open(home);
         try {
-            const projects = (await new Services(home, connection).projects.list()).map(
-                ({ name, slug, created_at }) => ({ name, slug, created_at })
-            );
+            const projects = (
+                await new Services(home, connection).studio.board.projects()
+            ).map(({ name, slug, counts, created_at }) => ({
+                name,
+                slug,
+                counts,
+                created_at,
+            }));
             if (args.json) {
                 process.stdout.write(`${JSON.stringify({ projects })}\n`);
                 return;
@@ -78,10 +83,16 @@ const listCommand = defineCommand({
                         'project',
                         project.name,
                         project.slug,
+                        String(project.counts.needs_you),
+                        String(project.counts.running),
+                        String(project.counts.done),
+                        String(project.counts.failed),
                         project.created_at,
                     ],
                     title: project.name,
-                    details: [project.slug],
+                    details: [
+                        `${project.counts.needs_you} needs you, ${project.counts.running} running, ${project.counts.done} done, ${project.counts.failed} failed`,
+                    ],
                 });
             }
         } finally {

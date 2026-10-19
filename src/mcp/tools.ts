@@ -172,12 +172,26 @@ export const mcpTools: Tool[] = [
         },
     },
     {
+        name: 'projects',
+        description: 'List tracked projects.',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
         name: 'create_project',
         description: 'Create a tracked project.',
         inputSchema: {
             type: 'object',
             properties: { name: { type: 'string' } },
             required: ['name'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'tasks',
+        description: 'List tracked tasks.',
+        inputSchema: {
+            type: 'object',
+            properties: { project: { type: 'string' } },
             additionalProperties: false,
         },
     },
