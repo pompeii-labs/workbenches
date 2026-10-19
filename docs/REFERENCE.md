@@ -212,7 +212,12 @@ Run a saved alias only. Local registrations read current package bytes for each 
 ```sh
 wb run project-core "Explain the storage architecture"
 wb run project-core --task "Review this migration"
+wb project create "Demo"
+wb project list --json
+wb run project-core --project demo --task "Review this migration"
 ```
+
+Project names are trimmed, preserve display case, contain 1 to 64 characters, and cannot contain control characters. Each project has a lowercase hyphenated slug. Names and slugs are unique case-insensitively. `--project <name-or-slug>` must resolve an existing project and never creates one implicitly; an unknown name fails before anything is dispatched and suggests a close match. Resumes and continuations retain the session's project. Sessions started without this option remain untracked by Studio. `ps --json` reports the project's display name as `project`, a string or `null`, for every session. Projects are rows in the local `wb.db`, can span any number of directories, and work the same with or without `wb login`. `wb project list --json` returns each project's `name`, `slug`, `counts` of tasks that need you, are running, are done, and failed, and `created_at`.
 
 The default output is a colorized, terminal-safe Markdown stream normalized across runners. For integrations, `--json` emits the runner-neutral Workbench event protocol as NDJSON. `--final` emits only the final assistant response.
 
@@ -586,6 +591,25 @@ wb status --json       # run summaries for other tools
 ```
 
 Status folds each run's event log incrementally into a cache row in the local database, so frequent polling reads only new events.
+
+### Local Studio
+
+`wb studio` starts the local Studio API in a detached process and runs the dashboard container. The default image is `ghcr.io/pompeii-labs/workbenches/studio:0.2.0@sha256:9f470434880319cab6944fa0e51e6db6456aa8c92363f948b4cb821af3531b33`; `--image` selects another. Studio pulls the image when it is not present locally, runs it by its resolved image ID, and refuses an image built for another version of wb with "Studio image <image> does not match this version of wb. Drop --image to use the default image, or update wb." It fails with a plain message when Docker is not running or Docker Desktop is set to Windows containers. The dashboard is published at `127.0.0.1:9292` by default and the API binds to `127.0.0.1:9293`. Use `--port` and `--api-port` to override them. Startup fails before launching either process when a selected port is busy.
+
+```sh
+wb studio
+wb studio --no-open
+wb studio --port 9392 --api-port 9393
+wb studio status
+wb studio status --json
+wb studio stop
+```
+
+Starting Studio again opens the running dashboard with a fresh open link and never restarts it. `studio stop` is idempotent. JSON status contains `running`, `url`, `image`, and `image_id`, plus `open_url` when the browser was not opened; the API token is kept only in the owner-only state file `$WORKBENCH_HOME/studio/state.json` while the dashboard runs and is never printed. Studio shows local tracked sessions only, the same with or without `wb login`. See [Local Studio API](STUDIO.md) for the loopback API contract and the open link.
+
+### Agents over MCP
+
+`wb mcp` serves `search`, `view`, `run`, `wait`, `send`, `answer`, `cancel`, `runs`, `sessions`, `push`, `projects`, `create_project`, and `tasks` to coding agents over stdio. The tools use the same catalog, inspection, supervision, control, history, and registry operations as their CLI counterparts. `run` accepts a saved alias and starts a detached local run with the Workbench's default runtime; its optional `runtime` argument selects a declared `local`, `docker`, `e2b`, or `daytona` runtime. `wb mcp` runs, supervises, and lists local work and local projects only; cloud work goes through `mcp.workbenches.dev`. `wait` returns a cursor and stops at a turn boundary, pending input, timeout, or terminal state, with each call capped at 60 seconds. Registry search runs only when the CLI already has a registry login, and `push` never starts a login flow. Local runs refuse to start while a worker of an earlier Workbench version is still active, as `wb run` does. Connect Claude Code with `claude mcp add wb -- wb mcp`; the [Studio API guide](STUDIO.md#connect-an-agent) lists the tools and supervision loop.
 
 Headless callers can supervise the same engine without keeping a client attached:
 

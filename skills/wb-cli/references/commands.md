@@ -27,7 +27,9 @@ Sources: `.#name` and `/path#name` select one package in a repo, `org/name` is t
 
 | Command | What it does |
 | --- | --- |
-| `wb run <ALIAS> [PROMPT]` | Requires a task through the positional prompt, `--task`, `--task-file`, or `--stdin`. `--final`, `--json`, or `--detach` choose the output. `--dir` sets the workspace; `--repo owner/name [--ref]` works on an isolated GitHub checkout; `--workspace NAME=PATH` binds named workspaces; `--env-file`, `--env NAME=value`, `--connection`, `--runtime`, `--allow-host-docker`. Unknown options are rejected. |
+| `wb run <ALIAS> [PROMPT]` | Requires a task through the positional prompt, `--task`, `--task-file`, or `--stdin`. `--final`, `--json`, or `--detach` choose the output. `--dir` sets the workspace; `--repo owner/name [--ref]` works on an isolated GitHub checkout; `--workspace NAME=PATH` binds named workspaces; `--env-file`, `--env NAME=value`, `--connection`, `--runtime`, `--project`, `--allow-host-docker`. Unknown options are rejected. |
+| `wb project create <NAME> [--json]` | Create a local project. Works the same with or without `wb login`. |
+| `wb project list [--json]` | Projects with task counts. `--project <name-or-slug>` on `run` must name one of them. |
 | `wb ps [--all] [--json]` | Active and resumable sessions, with `needs_input` and pending requests. |
 | `wb wait <SESSION\|RUN> [--run] [--after SEQ] [--timeout SECONDS] [--json]` | Read-only. Returns at the next turn boundary, terminal state, or input request. |
 | `wb send <SESSION> [TEXT\|--task-file F\|--stdin] [--steer\|--queue] [--json]` | Send to an idle session, steer the active turn, or queue a follow-up. Uses the inherited environment for credentials. |
@@ -37,6 +39,8 @@ Sources: `.#name` and `/path#name` select one package in a repo, `org/name` is t
 | `wb kill <SESSION>` | Cancel the active run. |
 | `wb outcome <RUN\|OUTCOME> [--json] [--apply] [--export DIR] [--workspace DIR]` | Inspect a run's durable result, apply pending changes, or export a bundle. |
 | `wb clean [--older-than 30d] [--include-sessions] [--apply]` | Preview, then remove old run data. |
+| `wb mcp` | Serve the Workbench tools (`search`, `view`, `run`, `wait`, `send`, `answer`, `cancel`, `runs`, `sessions`, `push`, `projects`, `create_project`, `tasks`) to an MCP client over stdio. |
+| `wb studio [--image REF] [--port 9292] [--api-port 9293] [--no-open] [--json]` | Start the local dashboard in Docker, or open the running one. Pulls the pinned image when missing. `wb studio status` and `wb studio stop` take `--json`. |
 
 ## Author
 
@@ -78,7 +82,8 @@ The CLI reports anonymous save and run counts only for registry Workbenches publ
 | Path | Contents |
 | --- | --- |
 | `catalog.json`, `packages/` | Saved aliases and package snapshots. |
-| `wb.db`, `files/` | Sessions, runs, and events (one SQLite database), and the runner state, checkouts, and live-run scratch they refer to. |
+| `wb.db`, `files/` | Sessions, runs, events, and projects (one SQLite database), and the runner state, checkouts, and live-run scratch they refer to. |
+| `studio/` | The running Studio's owner-only state file and its one-time open-link pages. |
 | `outcomes/`, `blobs/` | Durable results. |
 | `connections.json` | `wb connect` defaults. No secrets. |
 | `metadata/models/` | The cached model catalog, refreshed every 6 hours. |

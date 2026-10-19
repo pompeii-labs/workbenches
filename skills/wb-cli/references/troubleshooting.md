@@ -23,6 +23,11 @@ A headless run is almost always waiting on a permission prompt. Check `wb ps --j
 | `wb run requires a task` | Pass `--task`, `--task-file`, or `--stdin`. |
 | `Session wb_... needs new input` | Use `wb send wb_... <task>` or pass `--task`, `--task-file`, or `--stdin` to `resume`. |
 | `wb create requires an authoring brief` | Pass `--task`, `--task-file`, or `--stdin`, or use `--from`. |
+| `No project "X". Did you mean "Y"?` | `--project` never creates a project. Use the suggested name, or have the person run `wb project create "X"`. |
+| `A run started by an earlier version of Workbench is still active` | An old detached worker still owns its files. Wait for it or stop it; the message names the run file to remove if the process is gone. `wb mcp` runs refuse the same way. |
+| `Docker isn't running. Start Docker and run wb studio again.` | Ask the person to start Docker, then rerun `wb studio`. |
+| `Docker is using Windows containers` from `wb studio` | Docker Desktop must be switched to Linux containers. |
+| `Studio image X does not match this version of wb` | The image was built for another version of `wb`. Drop `--image` to use the default image, or update `wb`. |
 
 Credential errors are in `connections.md`.
 
