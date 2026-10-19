@@ -122,6 +122,16 @@ wb run project-core --task "Review this migration" --json
 
 Remote additions are frozen until `wb upgrade`. Local additions are live: each new run reads the registered absolute package directory. Every session captures its own package bytes, so resumed sessions keep their original package even after edits, upgrades, or removal. `run` accepts saved aliases only; `--dir` and `--repo` select the work target, never the package source. `wb login` connects one organization per approval, so run `wb login --org <slug>` for each you push from, then manage them with `wb org list`, `wb org use <slug>`, `wb whoami`, and `wb logout [--org <slug>]`.
 
+Create a project before starting tracked work. Names resolve case-insensitively by display name or slug. Projects are local to this machine and work the same with or without `wb login`:
+
+```sh
+wb project create "Demo"
+wb run project-core --project demo --task "Review this migration" --detach
+wb project list
+```
+
+Coding agents can use the same projects and detached runs through `wb mcp`, and `wb studio` shows them on a local dashboard; see [Local Studio API](docs/STUDIO.md) and [Connect an agent](docs/STUDIO.md#connect-an-agent).
+
 ### Share with your team, then publish
 
 Every organization workbench is internal until you publish it. `wb push` stores a new version under `organization/<manifest-name>`; only your organization's members and keys can see it. Teammates save it with `wb add`, using the held key for `org` automatically (`wb login --org <org>` first; without the key an internal workbench reports as missing):
@@ -307,8 +317,12 @@ wb view project-core       # inspect configuration and readiness
 wb validate project-core   # validate a package
 wb smoke project-core      # preflight, no model request
 wb run project-core --task "Review this project"
+wb run project-core --project Demo --task "Review this project"
 wb ps                      # list active and resumable sessions
 wb status                  # live progress of active and recent runs
+wb studio --no-open        # dashboard on 9292, local API on 9293
+wb studio --port 9392 --api-port 9393
+wb mcp                     # serve Workbench tools to a coding agent over stdio
 wb send wb_... "Check the rollback too"
 wb resume wb_... --task "Run the checks"
 wb outcome wbo_...         # inspect returned results
@@ -323,6 +337,7 @@ Run `wb <command> --help` for command-specific options.
 - [CLI and execution reference](docs/REFERENCE.md)
 - [Workbench package specification](SPEC.md)
 - [Execution protocol](docs/EXECUTION.md)
+- [Local Studio API](docs/STUDIO.md)
 - [Outcome contract](docs/OUTCOMES.md)
 - [Source and workspace behavior](docs/SOURCES.md)
 - [Benchmarks](https://github.com/pompeii-labs/workbenchmarks): the same requests with and without a Workbench, graded by running the result, and how to reproduce them

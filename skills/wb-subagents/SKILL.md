@@ -55,7 +55,10 @@ Record `session_id`, `run_id`, and `after_sequence` from the receipt. A session 
 - `--workspace NAME=PATH` binds each named workspace `wb view` lists. Never guess sibling repository paths.
 - `--runtime`, `--env-file`, and `--connection` choose the runtime, supply keys, and pick a provider.
 - For a quick synchronous answer use `--final` instead of `--detach --json`.
+- `--project <name>` groups the session under an existing project so the person can follow it in `wb studio`. It never creates one; ask before running `wb project create`.
 - Before retrying anything, check `wb ps --json` so you do not start a duplicate run.
+
+When your host speaks MCP, `wb mcp` exposes the same loop as tools: `run`, then `wait`, then `send` or `answer`, then `wait` again with the returned `next`. The person connects it once, for example with `claude mcp add wb -- wb mcp`.
 
 Docker runs mount the workspace. A git worktree breaks there: its `.git` points at the parent repository, which is not mounted. Give a containerized run a full clone (`git clone --local`) and fetch its branch back. Give parallel runs separate clones.
 
