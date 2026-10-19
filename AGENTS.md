@@ -154,6 +154,22 @@ Only answer reported requests. `allow` grants permission once and `deny` rejects
 
 `wb run <name>` requires a task through `--task`, `--task-file`, `--stdin`, or the positional task. `wb resume <id>` also requires new input; use `wb send` to continue an idle resumable session. Bare `wb` displays command help.
 
+## Projects, MCP, and Studio
+
+Group related sessions under a project so a person can follow them in `wb studio`:
+
+```sh
+wb project create "Demo"
+wb run project-core --project demo --task "Review the migration" --detach --json
+wb project list --json
+```
+
+`--project` accepts a name or slug case-insensitively and never creates a project; an unknown name fails before dispatch with a suggestion. Without `wb login` projects are local. With it they belong to the default organization, and a copy in `wb.db` serves lookups while the cloud is unreachable. Ask before creating a project on someone's behalf.
+
+An MCP host can drive the same engine with `wb mcp`, a stdio server with the tools `search`, `view`, `run`, `wait`, `send`, `answer`, `cancel`, `runs`, `sessions`, `push`, `projects`, `create_project`, and `tasks`. The loop matches the CLI: `run`, then `wait`, then `send` or `answer`, then `wait` again with the returned `next`. `run` with `where: "cloud"` needs an existing project and `wb login`; the MCP never starts a login flow.
+
+`wb studio` runs a local dashboard in Docker over a loopback API, and `wb studio stop` removes it. It pulls the pinned Studio image when it is missing. Starting Studio is the person's decision; it is not part of delegating work. See `docs/STUDIO.md` for the API and the open link.
+
 ## Authorization and safety
 
 Workbench manifests declare environment variable names, never their values. Provide required values through inherited environment, `--env-file`, or repeatable `--env NAME=value` flags. An unset required value fails preflight. An optional MCP whose environment is unavailable is disabled for that run. Prefer `--env-file` or inherited environment for secrets because command-line values may be retained in shell history.
