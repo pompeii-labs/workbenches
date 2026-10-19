@@ -13,9 +13,11 @@ import { LegacyLayout } from '../legacy/layout.js';
 import { LegacyNotice } from '../legacy/notice.js';
 import { ProcessProbe } from '../processes/probe.js';
 import { ProjectStore } from '../projects/store.js';
+import { RegistryAccountStore } from '../registry/account-store.js';
 import { RegistryClient } from '../registry/client.js';
 import { RepositoryDeliveryStore } from '../repositories/receipts.js';
 import { RunContinuation } from '../runs/continuation.js';
+import { DetachedRunLauncher } from '../runs/detached.js';
 import { RunDispatcher } from '../runs/dispatcher.js';
 import { RunStore } from '../runs/store.js';
 import { RunSupervision } from '../runs/supervision.js';
@@ -34,6 +36,7 @@ import { SessionSupervision } from '../sessions/supervision.js';
 export class Services {
     readonly probe = new ProcessProbe();
     readonly registry: RegistryClient;
+    readonly accounts: RegistryAccountStore;
     readonly projects: ProjectStore;
     readonly runs: RunStore;
     readonly sessions: SessionStore;
@@ -45,6 +48,7 @@ export class Services {
     readonly lifecycle: SessionLifecycle;
     readonly resolver: SessionResolver;
     readonly dispatcher: RunDispatcher;
+    readonly launcher: DetachedRunLauncher;
     readonly continuation: RunContinuation;
     readonly supervision: RunSupervision;
     readonly sessionSupervision: SessionSupervision;
@@ -55,6 +59,7 @@ export class Services {
 
     constructor(home: string, connection: Connection) {
         this.registry = new RegistryClient({ home });
+        this.accounts = new RegistryAccountStore({ home, client: this.registry });
         this.projects = new ProjectStore(new ProjectRecordStore(connection));
         this.runs = new RunStore(connection, home, this.probe);
         this.sessions = new SessionStore(connection, home, this.probe);
@@ -85,6 +90,7 @@ export class Services {
             this.projects,
             this.registry
         );
+        this.launcher = new DetachedRunLauncher(home, this.dispatcher);
         this.continuation = new RunContinuation(
             this.dispatcher,
             this.runs,
