@@ -53,10 +53,13 @@ describe('upgrading a database from each schema version', () => {
                 workbench: 'fixture-core',
                 project_id: null,
             });
-            expect(upgraded.one('SELECT id, status, session_id FROM runs')).toEqual({
+            expect(
+                upgraded.one('SELECT id, status, session_id, task FROM runs')
+            ).toEqual({
                 id: RUN,
                 status: 'running',
                 session_id: SESSION,
+                task: null,
             });
             expect(
                 upgraded.all(

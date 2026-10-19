@@ -22,6 +22,7 @@ import {
 } from '../../src/outcomes/index.js';
 import { ProcessProbe } from '../../src/processes/probe.js';
 import { RunStore } from '../../src/runs/store.js';
+import { StudioWake } from '../../src/studio/wake.js';
 
 const homes: string[] = [];
 const connections: Connection[] = [];
@@ -32,7 +33,12 @@ function runsFor(directory: string) {
     if (!store) {
         const connection = Connection.open(directory);
         connections.push(connection);
-        store = new RunStore(connection, directory, new ProcessProbe());
+        store = new RunStore(
+            connection,
+            directory,
+            new ProcessProbe(),
+            new StudioWake(directory)
+        );
         stores.set(directory, store);
     }
     return store;

@@ -26,8 +26,9 @@ export class RunRecordStore {
                     id, status, workbench, workbench_version, runner, model, runtime,
                     workspace, repository, mode, execution, workspaces, allow_host_docker,
                     registry, registry_event_id, dispatched_at, started_at, finished_at,
-                    pid, runner_session_id, session_id, resumed_from, exit_code, outcome_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    pid, runner_session_id, session_id, resumed_from, exit_code, outcome_id,
+                    task
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 ...columns
             ).changes > 0
         );
@@ -53,7 +54,7 @@ export class RunRecordStore {
                 execution = ?, workspaces = ?, allow_host_docker = ?, registry = ?,
                 registry_event_id = ?, dispatched_at = ?, started_at = ?,
                 finished_at = ?, pid = ?, runner_session_id = ?, session_id = ?,
-                resumed_from = ?, exit_code = ?, outcome_id = ? WHERE id = ?`,
+                resumed_from = ?, exit_code = ?, outcome_id = ?, task = ? WHERE id = ?`,
             ...values,
             id
         );

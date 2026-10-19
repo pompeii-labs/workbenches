@@ -46,6 +46,11 @@ export class WorkbenchFiles {
         return join(this.workDirectory(runId), 'outbox');
     }
 
+    /** Runtime state of the running local Studio, which is never a database record. */
+    get studioState(): string {
+        return join(this.home, 'studio', 'state.json');
+    }
+
     /** Root of a shared, content-addressed package snapshot. */
     packageRoot(digest: string): string {
         return join(this.home, 'packages', digest.slice('sha256:'.length));

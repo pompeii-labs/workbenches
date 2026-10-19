@@ -35,7 +35,8 @@ export class McpServices {
             this.workbenches,
             this.launcher,
             this.supervision,
-            services.projects
+            services.projects,
+            services.studio.board
         );
     }
 }
