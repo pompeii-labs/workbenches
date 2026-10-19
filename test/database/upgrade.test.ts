@@ -46,9 +46,12 @@ describe('upgrading a database from each schema version', () => {
             expect(
                 upgraded.all('SELECT version FROM __migrations ORDER BY version')
             ).toEqual(migrations.map((migration) => ({ version: migration.version })));
-            expect(upgraded.one('SELECT id, workbench FROM sessions')).toEqual({
+            expect(
+                upgraded.one('SELECT id, workbench, project_id FROM sessions')
+            ).toEqual({
                 id: SESSION,
                 workbench: 'fixture-core',
+                project_id: null,
             });
             expect(upgraded.one('SELECT id, status, session_id FROM runs')).toEqual({
                 id: RUN,

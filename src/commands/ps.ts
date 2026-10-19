@@ -81,6 +81,7 @@ export const psCommand = defineCommand({
                             ...run,
                             session_id: activity.id,
                             session_name: activity.session?.name,
+                            project: activity.session?.project ?? null,
                             resumable: activity.resumable,
                             state: snapshot.state,
                             needs_input: snapshot.state === 'needs_input',

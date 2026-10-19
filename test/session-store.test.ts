@@ -23,6 +23,34 @@ afterEach(async () => {
 });
 
 describe('session storage', () => {
+    test('stores an existing project by its slug', async () => {
+        const home = await temporaryHome();
+        const { sessions: store, projects } = open(home);
+        await projects.create('Demo Project');
+        const session = await store.create({
+            id: 'wb_projectsession123456789012',
+            project: await projects.resolve('demo-project'),
+            workbench: 'creator',
+            workbench_version: '0.1.0',
+            runner: 'opencode',
+            model: 'openai/gpt-5.6-terra',
+            reference: 'creator',
+            workbench_path: '/repo/.workbenches/creator',
+            workspace: '/repo',
+            workspaces: [],
+            latest_run_id: 'wb_projectsession123456789012',
+        });
+
+        expect(session.project).toBe('Demo Project');
+        expect((await store.read(session.id)).project).toBe('Demo Project');
+        expect((await store.list()).map((entry) => entry.project)).toEqual([
+            'Demo Project',
+        ]);
+        await expect(projects.resolve('Missing')).rejects.toThrow(
+            'No project "Missing"'
+        );
+    });
+
     for (const inaccessible of [false, true]) {
         test(`serializes session operations when owner is ${inaccessible ? 'inaccessible' : 'accessible'}`, async () => {
             const home = await temporaryHome();
@@ -108,9 +136,8 @@ describe('session storage', () => {
         });
         expect(updated.native_session_id).toBe('ses_native_1');
         expect((await store.list()).map((entry) => entry.id)).toEqual([session.id]);
-        await expect(store.create({ ...session })).rejects.toThrow(
-            'Session already exists'
-        );
+        const { project: _project, ...copy } = session;
+        await expect(store.create(copy)).rejects.toThrow('Session already exists');
         await store.remove(session.id);
         await expect(store.read(session.id)).rejects.toThrow(
             'Workbench session does not exist'
