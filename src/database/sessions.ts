@@ -30,24 +30,26 @@ export class SessionRecordStore {
         return (
             this.database.run(
                 `INSERT OR IGNORE INTO sessions (
-                    id, name, workbench, workbench_version, runner, model, runtime, reference,
-                    workbench_path, source_workbench_path, workbench_digest, workspace,
-                    repository, workspaces, registry, allow_unchecked_gpu, native_path,
-                    native_session_id, latest_run_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    id, name, project_id, workbench, workbench_version, runner, model,
+                    runtime, reference, workbench_path, source_workbench_path,
+                    workbench_digest, workspace, repository, workspaces, registry,
+                    allow_unchecked_gpu, native_path, native_session_id, latest_run_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 ...columns
             ).changes > 0
         );
     }
 
+    /** One session with its project's display name as `project`. */
     row(id: string): Row | undefined {
-        return this.database.one('SELECT * FROM sessions WHERE id = ?', id);
+        return this.database.one(`${sessionSelect} WHERE sessions.id = ?`, id);
     }
 
     /** Every session, most recently updated first. */
     rows(): Row[] {
         return this.database.all(
-            'SELECT * FROM sessions ORDER BY updated_at DESC, id DESC'
+            `${sessionSelect} ORDER BY sessions.updated_at DESC, sessions.id DESC`
         );
     }
 
@@ -80,3 +82,6 @@ export class SessionRecordStore {
         });
     }
 }
+
+const sessionSelect = `SELECT sessions.*, projects.name AS project
+FROM sessions LEFT JOIN projects ON projects.id = sessions.project_id`;

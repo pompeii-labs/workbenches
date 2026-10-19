@@ -5,6 +5,7 @@ import type { CatalogRegistryReference } from '../catalog/types.js';
 import { RepositoryCheckoutStore } from '../database/checkouts.js';
 import type { Connection } from '../database/connection.js';
 import { LeaseStore } from '../database/leases.js';
+import type { ProjectRecord } from '../database/projects.js';
 import { type Row, RowReader } from '../database/rows.js';
 import { SessionRecordStore } from '../database/sessions.js';
 import { WorkbenchFiles } from '../files/layout.js';
@@ -22,6 +23,8 @@ export interface StoredSession {
     version: 1;
     id: string;
     name?: string;
+    /** The display name of the project the session was started in. */
+    project?: string;
     workbench: string;
     workbench_version: string;
     runner: string;
@@ -45,9 +48,11 @@ export interface StoredSession {
 
 export type CreateStoredSessionOptions = Omit<
     StoredSession,
-    'version' | 'name' | 'runtime' | 'created_at' | 'updated_at'
+    'version' | 'name' | 'project' | 'runtime' | 'created_at' | 'updated_at'
 > & {
     name?: string;
+    /** A project already resolved by the caller. */
+    project?: Pick<ProjectRecord, 'id' | 'name'>;
     runtime?: string;
 };
 
@@ -89,11 +94,12 @@ export class SessionStore {
     async create(options: CreateStoredSessionOptions): Promise<StoredSession> {
         RunStore.validateId(options.id);
         const timestamp = new Date().toISOString();
-        const { name, ...metadata } = options;
+        const { name, project, ...metadata } = options;
         const session: StoredSession = {
             version: 1,
             ...metadata,
             ...(name !== undefined ? { name: this.#identity.normalize(name) } : {}),
+            ...(project !== undefined ? { project: project.name } : {}),
             runtime: options.runtime ?? 'local',
             created_at: timestamp,
             updated_at: timestamp,
@@ -102,6 +108,7 @@ export class SessionStore {
         const inserted = this.#records.insert([
             session.id,
             session.name ?? null,
+            project?.id ?? null,
             session.workbench,
             session.workbench_version,
             session.runner,
@@ -220,6 +227,7 @@ export class SessionStore {
     private parse(row: Row): StoredSession {
         const reader = new RowReader(row, 'Workbench session record');
         const name = reader.optionalText('name');
+        const project = reader.optionalText('project');
         const digest = reader.optionalText('workbench_digest');
         if (name !== undefined && !this.#identity.isNormalized(name))
             throw new Error('Invalid Workbench session record: column name');
@@ -236,6 +244,7 @@ export class SessionStore {
             version: 1,
             id: reader.text('id'),
             ...(name !== undefined ? { name } : {}),
+            ...(project !== undefined ? { project } : {}),
             workbench: reader.text('workbench'),
             workbench_version: reader.text('workbench_version'),
             runner: reader.text('runner'),

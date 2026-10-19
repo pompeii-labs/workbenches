@@ -8,6 +8,8 @@ import type { RepositoryCheckoutStore } from '../database/checkouts.js';
 import type { Connection } from '../database/connection.js';
 import type { LegacyLayout } from '../legacy/layout.js';
 import { modelLabel } from '../models/index.js';
+import type { ProjectStore } from '../projects/store.js';
+import type { RegistryClient } from '../registry/client.js';
 import { RepositoryGitHub, RepositoryWorkspace } from '../repositories/index.js';
 import { RunnerRegistry } from '../runners/index.js';
 import {
@@ -37,6 +39,8 @@ export interface PrepareRunOptions {
     reference?: string;
     session?: StoredSession;
     connection?: string;
+    /** An existing project name or slug for a new session. */
+    project?: string;
 }
 
 export interface DispatchRunOptions {
@@ -64,7 +68,9 @@ export class RunDispatcher {
         private readonly checkouts: Pick<
             RepositoryCheckoutStore,
             'find' | 'record' | 'forget'
-        >
+        >,
+        private readonly projects: Pick<ProjectStore, 'resolve'>,
+        private readonly registry: Pick<RegistryClient, 'apiUrl'>
     ) {}
 
     async prepare(options: PrepareRunOptions): Promise<StoredRun> {
@@ -90,6 +96,9 @@ export class RunDispatcher {
         const digest = WorkbenchPackage.digest(files);
         const suggestedName = options.task
             ? this.identity.fromPrompt(options.task)
+            : undefined;
+        const project = options.project
+            ? this.projects.resolve(options.project)
             : undefined;
         if (options.session) this.assertCompatible(options, options.session, digest);
         const repository =
@@ -120,6 +129,7 @@ export class RunDispatcher {
             this.sessions.create({
                 id,
                 ...(suggestedName ? { name: suggestedName } : {}),
+                ...(project ? { project } : {}),
                 workbench: workbench.manifest.name,
                 workbench_version: workbench.manifest.version,
                 runner: workbench.manifest.runner,
@@ -347,11 +357,13 @@ export class RunDispatcher {
         throw new Error(`Workbench session did not start in time: ${id}`);
     }
 
-    private workerCommand(id: string): string[] {
+    /** The detached worker command, which carries the API URL this process uses. */
+    workerCommand(id: string): string[] {
         const executable = process.execPath;
         const runningThroughBun = basename(executable).startsWith('bun');
+        const api = ['--api-url', this.registry.apiUrl];
         return runningThroughBun
-            ? [executable, Bun.main, '__worker', this.home, id]
-            : [executable, '__worker', this.home, id];
+            ? [executable, Bun.main, '__worker', this.home, id, ...api]
+            : [executable, '__worker', this.home, id, ...api];
     }
 }

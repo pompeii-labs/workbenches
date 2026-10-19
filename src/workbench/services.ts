@@ -8,9 +8,12 @@ import { RepositoryCheckoutStore } from '../database/checkouts.js';
 import type { Connection } from '../database/connection.js';
 import { LeaseStore } from '../database/leases.js';
 import { NoticeStore } from '../database/notices.js';
+import { ProjectRecordStore } from '../database/projects.js';
 import { LegacyLayout } from '../legacy/layout.js';
 import { LegacyNotice } from '../legacy/notice.js';
 import { ProcessProbe } from '../processes/probe.js';
+import { ProjectStore } from '../projects/store.js';
+import { RegistryClient } from '../registry/client.js';
 import { RepositoryDeliveryStore } from '../repositories/receipts.js';
 import { RunContinuation } from '../runs/continuation.js';
 import { RunDispatcher } from '../runs/dispatcher.js';
@@ -30,6 +33,8 @@ import { SessionSupervision } from '../sessions/supervision.js';
  */
 export class Services {
     readonly probe = new ProcessProbe();
+    readonly registry: RegistryClient;
+    readonly projects: ProjectStore;
     readonly runs: RunStore;
     readonly sessions: SessionStore;
     readonly checkouts: RepositoryCheckoutStore;
@@ -49,6 +54,8 @@ export class Services {
     readonly worker: RunWorker;
 
     constructor(home: string, connection: Connection) {
+        this.registry = new RegistryClient({ home });
+        this.projects = new ProjectStore(new ProjectRecordStore(connection));
         this.runs = new RunStore(connection, home, this.probe);
         this.sessions = new SessionStore(connection, home, this.probe);
         this.checkouts = new RepositoryCheckoutStore(connection);
@@ -74,7 +81,9 @@ export class Services {
             snapshots,
             guard,
             this.writer,
-            this.checkouts
+            this.checkouts,
+            this.projects,
+            this.registry
         );
         this.continuation = new RunContinuation(
             this.dispatcher,

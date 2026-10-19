@@ -18,7 +18,10 @@ import { OfficialWorkbenchResolver } from '../src/authoring/official.js';
 import { WorkbenchPackage } from '../src/catalog/package.js';
 import { AuthenticationRequiredError } from '../src/connections/error.js';
 import { Connection } from '../src/database/connection.js';
+import { RowReader } from '../src/database/rows.js';
 import { OutcomeStore } from '../src/outcomes/store.js';
+import { RegistryAccountStore } from '../src/registry/account-store.js';
+import { RegistryClient } from '../src/registry/client.js';
 import { RunControl } from '../src/runs/control.js';
 import { RunEvents } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/index.js';
@@ -29,6 +32,7 @@ import { seedModelCatalogFixture } from './model-catalog-fixture.js';
 const projectDirectory = resolve(import.meta.dir, '..');
 const cliPath = join(projectDirectory, 'src', 'cli.ts');
 const temporaryDirectories: string[] = [];
+const servers: Bun.Server<undefined>[] = [];
 const connections: Connection[] = [];
 const wired = new Map<string, ReturnType<typeof wire>>();
 
@@ -49,6 +53,7 @@ function open(home: string) {
 }
 
 afterEach(async () => {
+    for (const server of servers.splice(0)) server.stop(true);
     wired.clear();
     for (const connection of connections.splice(0)) connection.close();
     await Promise.all(
@@ -92,9 +97,20 @@ describe('CLI integration', () => {
         expect(taskless.stderr).toContain('wb run requires a task');
         expect(taskless.stderr).not.toContain('Workbench is not saved');
         expect(
+            (await executeCli(['project', 'create', 'Demo'], environment)).code
+        ).toBe(0);
+        expect(
             (
                 await executeCli(
-                    ['run', 'pinned-expert', '--task', 'first', '--final'],
+                    [
+                        'run',
+                        'pinned-expert',
+                        '--task',
+                        'first',
+                        '--project',
+                        'Demo',
+                        '--final',
+                    ],
                     environment,
                     fixture.root
                 )
@@ -105,6 +121,7 @@ describe('CLI integration', () => {
         );
         const first = (await open(home).sessions.list())[0];
         if (!first) throw new Error('Missing original session');
+        expect(first.project).toBe('Demo');
         expect(first.source_workbench_path).toBe(fixture.packageDirectory);
         await writeFile(
             join(fixture.packageDirectory, 'instructions.md'),
@@ -143,8 +160,121 @@ describe('CLI integration', () => {
         expect((await open(home).sessions.read(first.id)).workbench_path).toBe(
             first.workbench_path
         );
+        expect((await open(home).sessions.read(first.id)).project).toBe('Demo');
+        const sessions: unknown[] = (
+            await executeCli(['ps', '--all', '--json'], environment)
+        ).stdout
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        const recorded = sessions.find(
+            (session) => isRecord(session) && session.session_id === first.id
+        );
+        expect(isRecord(recorded) ? recorded.project : undefined).toBe('Demo');
     });
 
+    test('resolves project slugs and rejects unknown projects before dispatch', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('workbench-strict-project-');
+        const bin = await fakeBin();
+        const record = join(fixture.root, 'strict-project-runner');
+        const environment = {
+            WORKBENCH_HOME: home,
+            PATH: `${bin}:${process.env.PATH ?? ''}`,
+            OPENAI_API_KEY: 'fixture-openai-key',
+            WB_TEST_RECORD: record,
+        };
+        await seedModelCatalogFixture(home);
+        expect(
+            (
+                await executeCli(
+                    ['add', fixture.packageDirectory, '--as', 'project-fixture'],
+                    environment,
+                    fixture.root
+                )
+            ).code
+        ).toBe(0);
+        expect(
+            (
+                await executeCli(
+                    ['project', 'create', 'Pixel Pirate'],
+                    environment,
+                    fixture.root
+                )
+            ).code
+        ).toBe(0);
+
+        const unknown = await executeCli(
+            [
+                'run',
+                'project-fixture',
+                '--task',
+                'wrong project',
+                '--project',
+                'Pixel Pirates',
+                '--final',
+            ],
+            environment,
+            fixture.root
+        );
+        expect(unknown.code).toBe(1);
+        expect(unknown.stderr).toContain(
+            'No project "Pixel Pirates". Did you mean "Pixel Pirate"?'
+        );
+        expect(unknown.stderr).toContain(
+            'Create it with: wb project create "Pixel Pirates"'
+        );
+        expect(await stat(`${record}.args`).catch(() => undefined)).toBeUndefined();
+
+        const requests: string[] = [];
+        const api = Bun.serve({
+            hostname: '127.0.0.1',
+            port: 0,
+            fetch: (request) => {
+                requests.push(new URL(request.url).pathname);
+                return Response.json(
+                    { error: { message: 'Not found' } },
+                    { status: 404 }
+                );
+            },
+        });
+        servers.push(api);
+        const apiUrl = `http://127.0.0.1:${api.port}`;
+        const client = new RegistryClient({ home, apiUrl });
+        await new RegistryAccountStore({ home, client }).save(
+            {
+                organizationId: '00000000-0000-4000-8000-000000000001',
+                slug: 'acme',
+                name: 'Acme',
+                personal: false,
+                token: 'placeholder-project-key',
+                keyId: '00000000-0000-4000-8000-000000000002',
+                scopes: ['projects:read'],
+                expiresAt: '2099-01-01T00:00:00.000Z',
+            },
+            { makeDefault: true }
+        );
+
+        const valid = await executeCli(
+            [
+                'run',
+                'project-fixture',
+                '--task',
+                'right project',
+                '--project',
+                'pixel-pirate',
+                '--final',
+                '--api-url',
+                apiUrl,
+            ],
+            environment,
+            fixture.root
+        );
+        expect(valid.code).toBe(0);
+        expect(requests).toEqual([]);
+        const session = (await open(home).sessions.list())[0];
+        expect(session?.project).toBe('Pixel Pirate');
+    });
     test('creates, edits, runs, and improves a Workbench entirely headlessly', async () => {
         const root = await temporaryDirectory('headless-authoring-');
         const home = await temporaryDirectory('headless-authoring-home-');
@@ -645,6 +775,7 @@ describe('CLI integration', () => {
         });
         const ps = await executeCli(['ps', '--json'], environment);
         expect(JSON.parse(ps.stdout)).toMatchObject({
+            project: null,
             needs_input: true,
             state: 'needs_input',
         });
@@ -3349,6 +3480,10 @@ async function waitForRunEventCount(
         await Bun.sleep(25);
     }
     throw new Error(`Timed out waiting for ${count} ${type} events`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return RowReader.isRecord(value);
 }
 
 async function temporaryDirectory(prefix: string) {
