@@ -2,11 +2,10 @@ import { defineCommand } from 'citty';
 
 import { AuthenticationRequiredError } from '../connections/error.js';
 import { Connection } from '../database/connection.js';
-import { connectAdvice } from '../models/index.js';
 import { createEventRenderer } from '../rendering/index.js';
 import { parseRepository } from '../repositories/index.js';
 import { WorkbenchRun } from '../runs/index.js';
-import { RuntimeRegistry, RuntimeSmoke } from '../runtimes/index.js';
+import { RuntimeRegistry } from '../runtimes/index.js';
 import { workbenchHome } from '../storage.js';
 import {
     selectedRuntime,
@@ -186,6 +185,32 @@ export const runCommand = defineCommand({
                     '--detach cannot be combined with --final or --dry-run'
                 );
             }
+            if (args.detach) {
+                const stored = await services.launcher.start({
+                    workbench: args.workbench,
+                    task,
+                    ...(args.dir ? { directory: args.dir } : {}),
+                    ...(repository ? { repository } : {}),
+                    ...(args.runtime ? { runtime: args.runtime } : {}),
+                    rawArgs,
+                    environmentOverrides: overrides,
+                    allowHostDocker: args['allow-host-docker'],
+                    allowUncheckedGpu: args['allow-unchecked-gpu'],
+                    ...(args.connection ? { connection: args.connection } : {}),
+                    ...(args.project ? { project: args.project } : {}),
+                });
+                console.log(
+                    args.json
+                        ? JSON.stringify({
+                              session_id: stored.session_id ?? stored.id,
+                              run_id: stored.id,
+                              input_id: `input_${stored.id}`,
+                              after_sequence: 0,
+                          })
+                        : (stored.session_id ?? stored.id)
+                );
+                return;
+            }
 
             const resolved = await new WorkbenchResolver().resolve(args.workbench, {
                 savedOnly: true,
@@ -252,64 +277,6 @@ export const runCommand = defineCommand({
                     } else {
                         renderDryRun(output, translation, resolved);
                     }
-                    return;
-                }
-
-                if (args.detach) {
-                    // Sandbox preparation creates a billable sandbox. The dispatched
-                    // worker performs the same preflight before startup completes.
-                    if (
-                        !repository &&
-                        runtimes.resolve(selectedRuntime(resolved.workbench).name)
-                            .placement !== 'sandbox'
-                    ) {
-                        const smoke = await new RuntimeSmoke({
-                            workbench: resolved.workbench,
-                            allowUncheckedGpu: args['allow-unchecked-gpu'],
-                            registry: runtimes,
-                            workspaceDirectory: resolved.workspaceDirectory,
-                            environment,
-                            workspaces,
-                            allowHostDocker: args['allow-host-docker'],
-                            reference: args.workbench,
-                            home,
-                            ...(args.connection ? { connection: args.connection } : {}),
-                        }).check();
-                        if (!smoke.authentication.ready) {
-                            throw new AuthenticationRequiredError(
-                                `No authenticated route is available for ${smoke.authentication.model}. ${connectAdvice(smoke.authentication.connectCommand)}.`
-                            );
-                        }
-                    }
-                    const stored = await dispatcher.prepare({
-                        resolved,
-                        task,
-                        mode: 'detached',
-                        reference: args.workbench,
-                        workspaces,
-                        allowHostDocker: args['allow-host-docker'],
-                        ...(args['allow-unchecked-gpu']
-                            ? { allowUncheckedGpu: true }
-                            : {}),
-                        ...(args.connection ? { connection: args.connection } : {}),
-                        ...(args.project ? { project: args.project } : {}),
-                    });
-                    await dispatcher.dispatch({
-                        id: stored.id,
-                        cwd: resolved.workspaceDirectory,
-                        environment,
-                        waitForInitialTurn: true,
-                    });
-                    console.log(
-                        args.json
-                            ? JSON.stringify({
-                                  session_id: stored.session_id ?? stored.id,
-                                  run_id: stored.id,
-                                  input_id: `input_${stored.id}`,
-                                  after_sequence: 0,
-                              })
-                            : (stored.session_id ?? stored.id)
-                    );
                     return;
                 }
 

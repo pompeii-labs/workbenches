@@ -132,6 +132,29 @@ export class SessionControl {
             receipt,
         };
     }
+
+    /** Stops the session's active run and waits until its worker acknowledges. */
+    async cancel(id: string): Promise<{ session_id: string; run_id: string }> {
+        const activity = await this.lifecycle.resolve(id);
+        if (RunStore.isTerminal(activity.run.status)) {
+            throw new Error(
+                `Workbench session is already ${activity.run.status}: ${activity.id}`
+            );
+        }
+        await new StoredRunHandle(this.runs, this.connection, activity.run.id).cancel(
+            'requested'
+        );
+        for await (const _event of this.runs.follow(activity.run.id)) {
+            // The worker owns the event stream; cancellation waits for acknowledgement.
+        }
+        const finished = await this.runs.read(activity.run.id);
+        if (finished.status !== 'cancelled') {
+            throw new Error(
+                `Workbench session finished as ${finished.status} before it stopped: ${activity.id}`
+            );
+        }
+        return { session_id: activity.id, run_id: activity.run.id };
+    }
 }
 
 function questionResponse(value: unknown, response: string): RunnerQuestionResponse {

@@ -24,6 +24,7 @@ import { killCommand } from './commands/kill.js';
 import { listCommand } from './commands/list.js';
 import { loginCommand } from './commands/login.js';
 import { logoutCommand } from './commands/logout.js';
+import { mcpCommand } from './commands/mcp.js';
 import { orgCommand } from './commands/org.js';
 import { outcomeCommand } from './commands/outcome.js';
 import { exitOnBrokenPipe } from './commands/pipe.js';
@@ -71,6 +72,7 @@ export const workbenchCommand = defineCommand({
         upgrade: upgradeCommand,
         login: loginCommand,
         logout: logoutCommand,
+        mcp: mcpCommand,
         org: orgCommand,
         outcome: outcomeCommand,
         whoami: whoamiCommand,
