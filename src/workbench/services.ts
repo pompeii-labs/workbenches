@@ -4,7 +4,9 @@ import { SnapshotGuard } from '../catalog/guard.js';
 import { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import { CatalogSnapshots } from '../catalog/snapshots.js';
 import { CatalogWriter } from '../catalog/writer.js';
+import { CloudRuns } from '../cloud/runs.js';
 import { RepositoryCheckoutStore } from '../database/checkouts.js';
+import { CloudSessionStore } from '../database/cloud/sessions.js';
 import type { Connection } from '../database/connection.js';
 import { LeaseStore } from '../database/leases.js';
 import { NoticeStore } from '../database/notices.js';
@@ -19,6 +21,7 @@ import { RegistryAccountStore } from '../registry/account-store.js';
 import { RegistryClient } from '../registry/client.js';
 import { RepositoryDeliveryStore } from '../repositories/receipts.js';
 import { RunContinuation } from '../runs/continuation.js';
+import { DetachedRunLauncher } from '../runs/detached.js';
 import { RunDispatcher } from '../runs/dispatcher.js';
 import { RunStore } from '../runs/store.js';
 import { RunSupervision } from '../runs/supervision.js';
@@ -39,6 +42,8 @@ export class Services {
     readonly registry: RegistryClient;
     readonly accounts: RegistryAccountStore;
     readonly projects: ProjectStore;
+    readonly cloudSessions: CloudSessionStore;
+    readonly cloud: CloudRuns;
     readonly runs: RunStore;
     readonly sessions: SessionStore;
     readonly checkouts: RepositoryCheckoutStore;
@@ -49,6 +54,7 @@ export class Services {
     readonly lifecycle: SessionLifecycle;
     readonly resolver: SessionResolver;
     readonly dispatcher: RunDispatcher;
+    readonly launcher: DetachedRunLauncher;
     readonly continuation: RunContinuation;
     readonly supervision: RunSupervision;
     readonly sessionSupervision: SessionSupervision;
@@ -64,6 +70,13 @@ export class Services {
             new ProjectMirror(new ProjectRecordStore(connection)),
             this.accounts,
             new CloudProjectClient(this.registry)
+        );
+        this.cloudSessions = new CloudSessionStore(connection);
+        this.cloud = new CloudRuns(
+            this.accounts,
+            this.registry,
+            this.cloudSessions,
+            this.projects
         );
         this.runs = new RunStore(connection, home, this.probe);
         this.sessions = new SessionStore(connection, home, this.probe);
@@ -94,6 +107,7 @@ export class Services {
             this.projects,
             this.registry
         );
+        this.launcher = new DetachedRunLauncher(home, this.dispatcher);
         this.continuation = new RunContinuation(
             this.dispatcher,
             this.runs,

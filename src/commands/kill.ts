@@ -1,7 +1,6 @@
 import { defineCommand } from 'citty';
 
 import { Connection } from '../database/connection.js';
-import { RunStore } from '../runs/index.js';
 import { workbenchHome } from '../storage.js';
 import { Services } from '../workbench/services.js';
 import { CliPresenter } from './presenter.js';
@@ -24,28 +23,13 @@ export const killCommand = defineCommand({
         const connection = Connection.open(home);
         try {
             const services = new Services(home, connection);
-            const store = services.runs;
             const activity = await services.lifecycle.resolve(args.session);
-            if (RunStore.isTerminal(activity.run.status)) {
-                throw new Error(
-                    `Workbench session is already ${activity.run.status}: ${activity.id}`
-                );
-            }
             output.progress(`Stopping ${activity.id}`);
-            await services.dispatcher.handle(activity.run.id).cancel('requested');
-            for await (const _event of store.follow(activity.run.id)) {
-                // The worker owns the event stream; kill only waits for its acknowledgement.
-            }
-            const finished = await store.read(activity.run.id);
-            if (finished.status !== 'cancelled') {
-                throw new Error(
-                    `Workbench session finished as ${finished.status} before it stopped: ${activity.id}`
-                );
-            }
+            const result = await services.control.cancel(activity.id);
             output.record({
-                machine: ['cancelled', activity.id],
+                machine: ['cancelled', result.session_id],
                 title: 'Stopped session',
-                details: [activity.id],
+                details: [result.session_id],
                 tone: 'warning',
             });
         } finally {
