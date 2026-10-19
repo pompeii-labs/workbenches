@@ -8,6 +8,7 @@ import { LeaseStore } from '../../src/database/leases.js';
 import { ProcessProbe } from '../../src/processes/probe.js';
 import { RunControl } from '../../src/runs/control.js';
 import { RunStore } from '../../src/runs/store.js';
+import { StudioWake } from '../../src/studio/wake.js';
 
 const [role, home, runId, extra] = process.argv.slice(2);
 if (!role || !home) throw new Error('role and home are required');
@@ -22,7 +23,7 @@ try {
     if (role === 'append') {
         // Appends events whose sequences do not overlap with other writers.
         const writer = Number(extra);
-        const store = new RunStore(connection, home, probe);
+        const store = new RunStore(connection, home, probe, new StudioWake(home));
         for (let index = 1; index <= 40; index += 1) {
             await store.appendEvent(runId ?? '', {
                 protocol: 0,

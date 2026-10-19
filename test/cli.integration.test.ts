@@ -12,6 +12,7 @@ import {
     symlink,
     writeFile,
 } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -173,6 +174,68 @@ describe('CLI integration', () => {
             (session) => isRecord(session) && session.session_id === first.id
         );
         expect(isRecord(recorded) ? recorded.project : undefined).toBe('Demo');
+        expect(isRecord(recorded) ? 'task' in recorded : true).toBeFalse();
+        const beforeStudioSend = (await open(home).sessions.read(first.id))
+            .latest_run_id;
+        const studioPort = await freeTestPort();
+        open(home).studio.state.write({
+            server_pid: 0,
+            api_port: studioPort,
+            ui_port: 9_292,
+            container_id: 'test-container',
+            token: 'test-token',
+            image: 'test-studio',
+            created_at: new Date().toISOString(),
+        });
+        const previousPath = process.env.PATH;
+        const previousRecord = process.env.WB_TEST_RECORD;
+        process.env.PATH = environment.PATH;
+        process.env.WB_TEST_RECORD = record;
+        const studio = Bun.spawn([process.execPath, cliPath, '__studio', home], {
+            cwd: fixture.root,
+            env: {
+                ...process.env,
+                WORKBENCH_HOME: home,
+                PATH: environment.PATH,
+                WB_TEST_RECORD: record,
+                OPENROUTER_API_KEY: 'fixture-openrouter-key',
+            },
+            stdin: 'ignore',
+            stdout: 'ignore',
+            stderr: 'pipe',
+        });
+        try {
+            await waitForStudio(studioPort);
+            const response = await fetch(
+                `http://127.0.0.1:${studioPort}/v1/runs/${beforeStudioSend}/commands`,
+                {
+                    method: 'POST',
+                    headers: {
+                        Host: `127.0.0.1:${studioPort}`,
+                        Authorization: 'Bearer test-token',
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        kind: 'send',
+                        payload: { text: 'continue through studio' },
+                        idempotency_key: 'studio-continuation',
+                    }),
+                }
+            );
+            expect(response.status).toBe(202);
+            expect(await response.json()).toMatchObject({
+                command: { status: 'accepted' },
+            });
+            expect((await open(home).sessions.read(first.id)).latest_run_id).not.toBe(
+                beforeStudioSend
+            );
+        } finally {
+            studio.kill('SIGTERM');
+            await studio.exited;
+            process.env.PATH = previousPath;
+            if (previousRecord === undefined) delete process.env.WB_TEST_RECORD;
+            else process.env.WB_TEST_RECORD = previousRecord;
+        }
     });
 
     test('serves every MCP tool over stdio and reports unknown projects', async () => {
@@ -212,7 +275,9 @@ describe('CLI integration', () => {
                 'runs',
                 'sessions',
                 'push',
+                'projects',
                 'create_project',
+                'tasks',
             ]);
             expect(client.getInstructions()).toContain(
                 'Work the loop: `run`, then `wait`, then `send` or `answer`'
@@ -254,6 +319,12 @@ describe('CLI integration', () => {
             expect(created.structuredContent).toMatchObject({
                 project: { name: 'Pixel Pirate', slug: 'pixel-pirate' },
             });
+            const projects = await client.callTool({ name: 'projects', arguments: {} });
+            expect(projects.structuredContent).toMatchObject({
+                projects: [{ name: 'Pixel Pirate' }],
+            });
+            const emptyTasks = await client.callTool({ name: 'tasks', arguments: {} });
+            expect(emptyTasks.structuredContent).toEqual({ tasks: [] });
 
             const unknown = await client.callTool({
                 name: 'run',
@@ -290,6 +361,13 @@ describe('CLI integration', () => {
             });
             const session = await open(home).sessions.read(launchedSession);
             expect(session.project).toBe('Pixel Pirate');
+            const tasks = await client.callTool({
+                name: 'tasks',
+                arguments: { project: 'Pixel Pirate' },
+            });
+            expect(tasks.structuredContent).toMatchObject({
+                tasks: [{ project: 'Pixel Pirate', title: 'inspect the harbor' }],
+            });
         } finally {
             await client.close();
         }
@@ -3930,6 +4008,33 @@ async function waitForRunEventCount(
         await Bun.sleep(25);
     }
     throw new Error(`Timed out waiting for ${count} ${type} events`);
+}
+
+async function waitForStudio(port: number): Promise<void> {
+    const started = Date.now();
+    while (Date.now() - started < 5_000) {
+        const response = await fetch(`http://127.0.0.1:${port}/v1/status`, {
+            headers: {
+                Host: `127.0.0.1:${port}`,
+                Authorization: 'Bearer test-token',
+            },
+        }).catch(() => undefined);
+        if (response?.ok) return;
+        await Bun.sleep(25);
+    }
+    throw new Error('Timed out waiting for Studio');
+}
+
+async function freeTestPort(): Promise<number> {
+    return new Promise((resolvePort, reject) => {
+        const server = createServer();
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', () => {
+            const address = server.address();
+            const port = typeof address === 'object' && address ? address.port : 0;
+            server.close((error) => (error ? reject(error) : resolvePort(port)));
+        });
+    });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

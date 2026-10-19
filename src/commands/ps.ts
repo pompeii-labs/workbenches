@@ -75,10 +75,11 @@ export const psCommand = defineCommand({
             for (const activity of activities) {
                 const run = activity.run;
                 if (args.json) {
+                    const { task: _task, ...record } = run;
                     const snapshot = await services.supervision.snapshot(run);
                     process.stdout.write(
                         `${JSON.stringify({
-                            ...run,
+                            ...record,
                             session_id: activity.id,
                             session_name: activity.session?.name,
                             project: activity.session?.project ?? null,

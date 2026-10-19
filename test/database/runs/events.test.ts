@@ -7,6 +7,7 @@ import { Connection } from '../../../src/database/connection.js';
 import { ProcessProbe } from '../../../src/processes/probe.js';
 import { DuplicateEventSequenceError } from '../../../src/runs/error.js';
 import { RunStore } from '../../../src/runs/store.js';
+import { StudioWake } from '../../../src/studio/wake.js';
 
 /** The event log stores no event larger than this. */
 const MAXIMUM_EVENT_BYTES = 4 * 1024 * 1024;
@@ -28,7 +29,12 @@ describe('event size cap', () => {
         const home = await temporaryHome();
         const connection = Connection.open(home);
         connections.push(connection);
-        const store = new RunStore(connection, home, new ProcessProbe());
+        const store = new RunStore(
+            connection,
+            home,
+            new ProcessProbe(),
+            new StudioWake(home)
+        );
         const run = await store.create({
             metadata: {
                 workbench: 'fixture-core',

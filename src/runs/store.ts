@@ -52,6 +52,13 @@ export interface StoredRun {
     resumed_from?: string;
     exit_code?: number;
     outcome_id?: string;
+    /** The task the run was started with, kept for local history. */
+    task?: string;
+}
+
+/** Told the id of every run whose record or events this store changes. */
+export interface RunChangeListener {
+    notify(runId: string): void;
 }
 
 const terminalStatuses = new Set<StoredRunStatus>(['completed', 'failed', 'cancelled']);
@@ -80,7 +87,8 @@ export class RunStore {
             'run' | 'one' | 'all' | 'transaction' | 'changeToken' | 'delay'
         >,
         private readonly home: string,
-        private readonly probe: Pick<ProcessProbe, 'alive'>
+        private readonly probe: Pick<ProcessProbe, 'alive'>,
+        private readonly changes: RunChangeListener
     ) {
         this.#events = new RunEventStore(database);
         this.#records = new RunRecordStore(database);
@@ -177,12 +185,14 @@ export class RunStore {
         patch: Partial<Omit<StoredRun, 'version' | 'id'>>
     ): Promise<StoredRun> {
         RunStore.validateId(id);
-        return this.database.transaction(() => {
+        const next = this.database.transaction(() => {
             const current = this.parse(this.#records.row(id) ?? this.missing(id), id);
             const next: StoredRun = { ...current, ...patch };
             this.#records.replace(this.columns(next));
             return next;
         });
+        this.changes.notify(id);
+        return next;
     }
 
     async takeRequest(id: string): Promise<StoredRunRequest> {
@@ -193,6 +203,7 @@ export class RunStore {
     async appendEvent(id: string, event: WorkbenchEvent): Promise<void> {
         RunStore.validateId(id);
         this.#events.append(id, event);
+        this.changes.notify(id);
     }
 
     async readEvents(id: string): Promise<WorkbenchEvent[]> {
@@ -320,6 +331,7 @@ export class RunStore {
             run.resumed_from ?? null,
             run.exit_code ?? null,
             run.outcome_id ?? null,
+            run.task ?? null,
         ] as const;
     }
 
@@ -360,6 +372,7 @@ export class RunStore {
             resumed_from: reader.optionalText('resumed_from'),
             exit_code: reader.optionalInteger('exit_code'),
             outcome_id: reader.optionalText('outcome_id'),
+            task: reader.optionalText('task'),
             allow_host_docker: reader.optionalFlag('allow_host_docker'),
         };
         return {
@@ -406,6 +419,7 @@ export class RunStore {
             ...(optional.outcome_id !== undefined
                 ? { outcome_id: optional.outcome_id }
                 : {}),
+            ...(optional.task !== undefined ? { task: optional.task } : {}),
         };
     }
 

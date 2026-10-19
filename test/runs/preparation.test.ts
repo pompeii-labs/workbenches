@@ -23,6 +23,7 @@ import { DockerMountPlan } from '../../src/runtimes/docker/mounts.js';
 import { RuntimeRegistry } from '../../src/runtimes/registry.js';
 import { PathPlan } from '../../src/runtimes/remote/paths.js';
 import { TransferRules } from '../../src/runtimes/staging/rules.js';
+import { StudioWake } from '../../src/studio/wake.js';
 import type { ResolvedWorkbench } from '../../src/types.js';
 import { checkoutFixture, fixtureIdentity } from '../repositories/fixture.js';
 
@@ -465,7 +466,12 @@ async function createFixture(options: FixtureOptions = {}) {
     const home = join(root, 'home');
     const connection = Connection.open(home);
     connections.push(connection);
-    const runs = new RunStore(connection, home, new ProcessProbe());
+    const runs = new RunStore(
+        connection,
+        home,
+        new ProcessProbe(),
+        new StudioWake(home)
+    );
     const checkouts = new RepositoryCheckoutStore(connection);
     const instructionsPath = join(root, 'instructions.md');
     await writeFile(instructionsPath, 'Follow the user task.');

@@ -8,6 +8,7 @@ import {
 
 import packageMetadata from '../../package.json' with { type: 'json' };
 import type { ProjectStore } from '../projects/store.js';
+import type { StudioBoard } from '../studio/board.js';
 import type { McpRunLauncher } from './run.js';
 import type { McpSupervision } from './supervision.js';
 import { MCP_INSTRUCTIONS, mcpTools } from './tools.js';
@@ -24,7 +25,8 @@ export class WorkbenchMcpServer {
         private readonly workbenches: McpWorkbenchOperations,
         private readonly launcher: Pick<McpRunLauncher, 'start'>,
         private readonly supervision: McpSupervision,
-        private readonly projects: Pick<ProjectStore, 'create'>
+        private readonly projects: Pick<ProjectStore, 'create'>,
+        private readonly board: Pick<StudioBoard, 'projects' | 'tasks'>
     ) {
         this.#server.setRequestHandler(ListToolsRequestSchema, () => ({
             tools: mcpTools,
@@ -154,6 +156,17 @@ export class WorkbenchMcpServer {
                 )
             );
         }
+        if (name === 'projects') {
+            const projects = (await this.board.projects()).map(
+                ({ name: projectName, slug, counts, created_at }) => ({
+                    name: projectName,
+                    slug,
+                    counts,
+                    created_at,
+                })
+            );
+            return toolResult({ projects });
+        }
         if (name === 'create_project') {
             const project = this.projects.create(requiredText(args, 'name'));
             return toolResult({
@@ -162,6 +175,11 @@ export class WorkbenchMcpServer {
                     slug: project.slug,
                     created_at: project.created_at,
                 },
+            });
+        }
+        if (name === 'tasks') {
+            return toolResult({
+                tasks: await this.board.tasks(optionalText(args, 'project')),
             });
         }
         throw new Error(`Unknown tool: ${name}`);

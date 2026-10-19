@@ -20,6 +20,7 @@ import type { RunSnapshot } from '../../src/runs/supervision.js';
 import { DockerManagedContainers } from '../../src/runtimes/docker/containers.js';
 import { E2BSdkClient } from '../../src/runtimes/e2b/sdk.js';
 import type { SessionInputResult } from '../../src/sessions/control.js';
+import { StudioWake } from '../../src/studio/wake.js';
 import { seedModelCatalogFixture } from '../model-catalog-fixture.js';
 
 const enabled = process.env.WORKBENCH_HEADLESS_E2E === '1';
@@ -209,7 +210,12 @@ describe.skipIf(!enabled)('Real headless CLI supervision', () => {
                         throw new Error('Too many fixture permission requests');
                     };
                     const connection = Connection.open(home);
-                    const store = new RunStore(connection, home, new ProcessProbe());
+                    const store = new RunStore(
+                        connection,
+                        home,
+                        new ProcessProbe(),
+                        new StudioWake(home)
+                    );
                     try {
                         const launch = await invoke<SessionInputResult>([
                             'run',
