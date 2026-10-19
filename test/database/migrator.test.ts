@@ -153,9 +153,9 @@ describe('migration history', () => {
 
         const database = Connection.open(home);
         connections.push(database);
-        expect(database.all('SELECT version FROM __migrations')).toEqual([
-            { version: 1 },
-        ]);
+        expect(database.all('SELECT version FROM __migrations')).toEqual(
+            migrations.map((migration) => ({ version: migration.version }))
+        );
     });
 });
 

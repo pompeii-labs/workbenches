@@ -8,6 +8,7 @@ import { CatalogWriter } from '../src/catalog/writer.js';
 import { Connection } from '../src/database/connection.js';
 import { LeaseStore } from '../src/database/leases.js';
 import { ProcessProbe } from '../src/processes/probe.js';
+import { RegistryClient } from '../src/registry/client.js';
 import type { WorkbenchEvent } from '../src/runs/index.js';
 import { RunStore } from '../src/runs/index.js';
 import { RunReconciliationLease } from '../src/runs/reconciliation.js';
@@ -458,6 +459,20 @@ describe('durable Workbench runs', () => {
             session: ready,
         });
         expect((await runs.takeRequest(second.id)).allow_unchecked_gpu).toBeUndefined();
+    });
+
+    test('passes the configured API URL to the worker process', async () => {
+        const home = await temporaryHome();
+        RegistryClient.configureApiUrl('http://127.0.0.1:58021');
+        try {
+            const command = open(home).dispatcher.workerCommand(
+                'wb_worker123456789012345678'
+            );
+            expect(command).toContain('__worker');
+            expect(command.slice(-2)).toEqual(['--api-url', 'http://127.0.0.1:58021']);
+        } finally {
+            RegistryClient.configureApiUrl(undefined);
+        }
     });
 
     test('refuses to start a run while a worker of the earlier file layout is alive', async () => {

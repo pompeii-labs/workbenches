@@ -27,6 +27,7 @@ import { logoutCommand } from './commands/logout.js';
 import { orgCommand } from './commands/org.js';
 import { outcomeCommand } from './commands/outcome.js';
 import { exitOnBrokenPipe } from './commands/pipe.js';
+import { projectCommand } from './commands/project.js';
 import { psCommand } from './commands/ps.js';
 import { publishCommand } from './commands/publish.js';
 import { pushCommand } from './commands/push.js';
@@ -77,6 +78,7 @@ export const workbenchCommand = defineCommand({
         publish: publishCommand,
         unpublish: unpublishCommand,
         ps: psCommand,
+        project: projectCommand,
         status: statusCommand,
         build: buildCommand,
         clean: cleanCommand,
@@ -114,6 +116,7 @@ if (import.meta.main) {
         const home = process.argv[3];
         const id = process.argv[4];
         if (!home || !id) process.exit(2);
+        RegistryClient.configureApiUrl(extractApiUrl(process.argv.slice(5)).apiUrl);
         await new ModelCatalog({ home }).loadCached();
         const connection = Connection.open(home);
         let code: number;

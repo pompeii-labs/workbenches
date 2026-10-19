@@ -1,5 +1,6 @@
 /// <reference path="./sql.d.ts" />
 import initial from './0001_initial.sql' with { type: 'text' };
+import projects from './0002_projects.sql' with { type: 'text' };
 
 /**
  * One schema change. `sql` is the text of `migrations/NNNN_name.sql`; its
@@ -18,4 +19,5 @@ export interface Migration {
  */
 export const migrations: readonly Migration[] = [
     { version: 1, name: 'initial', sql: initial },
+    { version: 2, name: 'projects', sql: projects },
 ];

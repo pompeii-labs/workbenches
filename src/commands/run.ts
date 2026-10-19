@@ -121,6 +121,10 @@ export const runCommand = defineCommand({
             description:
                 'Declared runtime to run on (defaults to the first declared runtime)',
         },
+        project: {
+            type: 'string',
+            description: 'Group this session under a local studio project',
+        },
         'allow-unchecked-gpu': {
             type: 'boolean',
             description:
@@ -288,6 +292,7 @@ export const runCommand = defineCommand({
                             ? { allowUncheckedGpu: true }
                             : {}),
                         ...(args.connection ? { connection: args.connection } : {}),
+                        ...(args.project ? { project: args.project } : {}),
                     });
                     await dispatcher.dispatch({
                         id: stored.id,
@@ -317,6 +322,7 @@ export const runCommand = defineCommand({
                     allowHostDocker: args['allow-host-docker'],
                     ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
                     ...(args.connection ? { connection: args.connection } : {}),
+                    ...(args.project ? { project: args.project } : {}),
                 });
                 const renderer = createEventRenderer({
                     mode: args.json ? 'json' : args.final ? 'final' : 'human',
@@ -377,6 +383,7 @@ const runOptions = new Set([
     '--allow-host-docker',
     '--connection',
     '--runtime',
+    '--project',
     '--allow-unchecked-gpu',
 ]);
 
