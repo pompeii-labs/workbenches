@@ -51,6 +51,20 @@ describe('runtime context', () => {
         }
     });
 
+    test('tells a local run with an outbox how to announce a preview', async () => {
+        const { workbench } = await fixture();
+        const sentence =
+            '`wbx preview <port> --name <name>` makes a running server visible to the user; use it only for a server the user should open.';
+        for (const runtime of ['local', 'docker', 'e2b', 'daytona'] as const) {
+            workbench.manifest.runtime = runtime;
+            const withOutbox = runtimeContext(workbench, '/workspace', {
+                WORKBENCH_OUTPUT_DIR: '/outbox',
+            });
+            expect(withOutbox.includes(sentence)).toBe(runtime === 'local');
+            expect(runtimeContext(workbench, '/workspace', {})).not.toContain('wbx');
+        }
+    });
+
     test('escapes runtime values instead of allowing XML structure', async () => {
         const { workbench } = await fixture();
         const runtime = runtimeContext(workbench, '/a"\n<injected>', {

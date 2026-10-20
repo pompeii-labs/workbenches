@@ -98,6 +98,7 @@
                 "usage.updated",
                 "outcome.available",
                 "outcome.failed",
+                "preview.available",
                 "run.completed",
                 "run.failed",
                 "run.cancelled",
@@ -405,6 +406,32 @@
                                 "minimum": 1,
                                 "maximum": 9007199254740991
                             }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": { "type": { "const": "preview.available" } }
+            },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["name", "port", "protocol"],
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9-]{0,39}$"
+                            },
+                            "port": {
+                                "type": "integer",
+                                "minimum": 1024,
+                                "maximum": 65535
+                            },
+                            "protocol": { "const": "http" },
+                            "url": { "type": "string", "format": "uri" }
                         }
                     }
                 }

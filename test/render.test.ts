@@ -188,6 +188,47 @@ describe('Workbench event renderers', () => {
         expect(stderr).toContain('■ Cancelled');
     });
 
+    test('prints a live preview line in human mode only', () => {
+        const preview = event(1, 'preview.available', {
+            name: 'game',
+            port: 5173,
+            protocol: 'http',
+            url: 'http://127.0.0.1:5173/',
+        });
+        const remote = event(2, 'preview.available', {
+            name: 'docs',
+            port: 8080,
+            protocol: 'http',
+        });
+        let human = '';
+        const renderer = createEventRenderer({
+            mode: 'human',
+            color: false,
+            stdout: (value) => {
+                human += value;
+            },
+        });
+        renderer.render(preview);
+        renderer.render(remote);
+        renderer.finish();
+        expect(human).toContain('◆ Live preview: game at http://127.0.0.1:5173/\n');
+        expect(human).toContain('◆ Live preview: docs on port 8080\n');
+
+        let final = '';
+        const finalOnly = createEventRenderer({
+            mode: 'final',
+            stdout: (value) => {
+                final += value;
+            },
+            stderr: (value) => {
+                final += value;
+            },
+        });
+        finalOnly.render(preview);
+        finalOnly.finish();
+        expect(final).toBe('');
+    });
+
     test('colorizes only the human renderer when explicitly enabled', () => {
         let human = '';
         const colored = createEventRenderer({

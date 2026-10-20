@@ -181,6 +181,11 @@ export interface PreparedRuntime {
         buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
     ): RuntimeService;
     cancel(process: SpawnedRunner): void;
+    /**
+     * Ports the engine listens on itself for this runtime, such as a runner
+     * server, which a run's preview may never claim.
+     */
+    reservedPorts?(): number[];
     infrastructure?(): Promise<RuntimeInfrastructureMetadata | undefined>;
     collectOutcome?(store: OutcomeSink): Promise<RuntimeOutcomeCollection | undefined>;
     /** Capture repository changes during execution without finalizing or caching them. */

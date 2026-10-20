@@ -300,7 +300,7 @@ Every execution has one stable Workbench session ID. Runners with native session
 
 Events are ordered by a monotonically increasing `sequence` within one run and carry execution protocol version `0`.
 
-The catalog has 31 event types, matching the JSON Schema:
+The catalog has 33 event types, matching the JSON Schema:
 
 ```text
 run.started       run.ready
@@ -317,6 +317,7 @@ input.queued      input.delivered      input.rejected
 question.requested    question.answered    question.rejected
 usage.updated
 outcome.available     outcome.failed
+preview.available
 run.completed     run.failed     run.cancelled
 runner.event
 ```
@@ -334,6 +335,8 @@ Descendant sessions that a runner reports natively contribute their own usage de
 Exactly one of `run.completed`, `run.failed`, or `run.cancelled` terminates the event stream. The `result` promise resolves to the matching status.
 
 `outcome.available` refers to a locally committed immutable result. It includes `outcome_id`, `completeness`, `application_state`, counts of `changesets`, `artifacts`, `links`, and `warnings`, and an optional `summary`. It carries no artifact bytes or raw tool result. A terminal execution may have a partial outcome without being successful. See [OUTCOMES.md](OUTCOMES.md).
+
+`preview.available` reports a server the agent started and announced with `wbx preview <port> --name <name>`, a helper the engine writes for each run and puts first on the runner's `PATH`. The helper checks its arguments and that the port listens on `127.0.0.1`, then records one line in an engine-owned control file outside the outbox; it never reaches the network or an API. The engine checks each announcement again: `name` matches `^[a-z0-9][a-z0-9-]{0,39}$`, `port` is an integer from 1024 to 65535 that the engine does not use itself (such as the runner's own server), a run has at most 8 previews, and the port must still be listening. An announcement that fails a check produces no event. Announcing a name again with a different port replaces its earlier preview and emits a new event; repeating the same name and port emits nothing. The data is `name`, `port`, `protocol` (`http`), and an optional `url`. On the local runtime `url` is the loopback address `http://127.0.0.1:<port>/`; a `url` is never signed or token-bearing. The local runtime is the only one that offers the helper today, and a preview is announced only while the run is active; nothing keeps the server running after the run ends.
 
 Remote runtimes may attach an `infrastructure` object to that terminal event. It contains provider duration, maximum lease, resource shape, and an estimated or unavailable USD cost. Model tokens and provider-reported model cost remain exclusive to `usage.updated`; clients must not combine the two fields silently.
 
