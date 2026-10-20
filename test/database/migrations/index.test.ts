@@ -33,4 +33,14 @@ describe('migration files', () => {
             expect(migration.sql).toBe(readFileSync(join(folder, file), 'utf8'));
         }
     });
+
+    test('keep the shipped history', () => {
+        expect(
+            migrations.slice(0, 3).map(({ version, name }) => ({ version, name }))
+        ).toEqual([
+            { version: 1, name: 'initial' },
+            { version: 2, name: 'projects' },
+            { version: 3, name: 'run_task' },
+        ]);
+    });
 });
