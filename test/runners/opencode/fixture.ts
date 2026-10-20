@@ -9,6 +9,7 @@ import { OpenCodeSkillStaging } from '../../../src/runners/opencode/skills.js';
 import type { ResolvedWorkbench } from '../../../src/types.js';
 import { modelCatalogFixture } from '../../model-catalog-fixture.js';
 import {
+    RUNNER_CONFORMANCE_SHELL_COMMAND,
     RUNNER_CONFORMANCE_UNSAFE_VALUES,
     type RunnerConformanceScenario,
 } from '../../runner-adapter-contract.js';
@@ -120,6 +121,9 @@ export class FakeOpenCodeServer {
                 });
                 this.emit('message.part.updated', {
                     part: contractToolPart('completed'),
+                });
+                this.emit('message.part.updated', {
+                    part: contractShellPart(),
                 });
                 this.emit('message.part.updated', {
                     part: {
@@ -494,6 +498,22 @@ export function contractToolPart(status: 'running' | 'completed') {
             },
             output: RUNNER_CONFORMANCE_UNSAFE_VALUES[3],
             time: { start: 100, end: 125 },
+        },
+    };
+}
+
+export function contractShellPart() {
+    return {
+        type: 'tool',
+        messageID: 'message_1',
+        tool: 'bash',
+        callID: 'call_shell',
+        state: {
+            status: 'completed',
+            input: { command: RUNNER_CONFORMANCE_SHELL_COMMAND },
+            metadata: { output: RUNNER_CONFORMANCE_UNSAFE_VALUES[3], exit: 0 },
+            output: RUNNER_CONFORMANCE_UNSAFE_VALUES[3],
+            time: { start: 125, end: 150 },
         },
     };
 }

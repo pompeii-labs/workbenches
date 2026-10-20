@@ -10,6 +10,7 @@ import { PiSessionAdapter } from '../src/runners/pi/session.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { modelCatalogFixture } from './model-catalog-fixture.js';
 import {
+    RUNNER_CONFORMANCE_SHELL_COMMAND,
     type RunnerConformanceScenario,
     runnerAdapterContract,
 } from './runner-adapter-contract.js';
@@ -397,6 +398,19 @@ class FakePiRpc {
                 type: 'tool_execution_end',
                 toolCallId: 'call_contract',
                 toolName: 'write',
+                result: { content: 'MUST_NOT_RENDER_TOOL_OUTPUT' },
+                isError: false,
+            });
+            this.emit({
+                type: 'tool_execution_start',
+                toolCallId: 'call_shell',
+                toolName: 'bash',
+                args: { command: RUNNER_CONFORMANCE_SHELL_COMMAND },
+            });
+            this.emit({
+                type: 'tool_execution_end',
+                toolCallId: 'call_shell',
+                toolName: 'bash',
                 result: { content: 'MUST_NOT_RENDER_TOOL_OUTPUT' },
                 isError: false,
             });

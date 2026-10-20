@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { redactCredentials } from '../runners/index.js';
 import type { RunStore, StoredRun, WorkbenchEvent } from '../runs/index.js';
 import type { StoredSession } from '../sessions/index.js';
 
@@ -254,24 +255,7 @@ export class ImprovementEvidence {
     }
 
     private redact(value: string): string {
-        return value
-            .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [REDACTED]')
-            .replace(/\b(?:sk|pk|rk)_[A-Za-z0-9_-]{12,}\b/gu, '[REDACTED]')
-            .replace(
-                /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu,
-                '[REDACTED]'
-            )
-            .replace(
-                /\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD))\s*=\s*([^\s]+)/gu,
-                '$1=[REDACTED]'
-            )
-            .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/gu, '[REDACTED]')
-            .replace(/\bxox[baprs]-[A-Za-z0-9-]{16,}\b/gu, '[REDACTED]')
-            .replace(/\bAKIA[0-9A-Z]{16}\b/gu, '[REDACTED]')
-            .replace(
-                /-----BEGIN [^-\r\n]+ PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]+ PRIVATE KEY-----/gu,
-                '[REDACTED PRIVATE KEY]'
-            );
+        return redactCredentials(value);
     }
 
     private bounded(value: string, maximum: number): string {

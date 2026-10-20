@@ -22,10 +22,16 @@ activateModelCatalogFixture();
 export const RUNNER_CONFORMANCE_UNSAFE_VALUES = [
     'MUST_NOT_RENDER_REASONING',
     'MUST_NOT_RENDER_CREDENTIAL',
-    'MUST_NOT_RENDER_COMMAND',
+    'MUST_NOT_RENDER_COMMAND_SECRET',
     'MUST_NOT_RENDER_TOOL_OUTPUT',
     'MUST_NOT_RENDER_IMAGE_DATA',
 ] as const;
+
+/**
+ * The shell call every runner fixture makes in the tool events scenario. Its
+ * credential must never cross the event boundary; its structure must.
+ */
+export const RUNNER_CONFORMANCE_SHELL_COMMAND = `API_TOKEN=${RUNNER_CONFORMANCE_UNSAFE_VALUES[2]} npx tgcheck --json`;
 
 export type RunnerConformanceScenario =
     | 'streaming_text'
@@ -122,6 +128,15 @@ export function runnerAdapterContract(options: {
                             name: 'write',
                             title: 'Write',
                             target: '/workspace/output.txt',
+                            status: 'completed',
+                        }),
+                    });
+                    expect(observed.events).toContainEqual({
+                        type: 'tool.completed',
+                        data: expect.objectContaining({
+                            id: 'call_shell',
+                            target: 'API_TOKEN=[REDACTED] npx tgcheck --json',
+                            programs: ['tgcheck'],
                             status: 'completed',
                         }),
                     });
