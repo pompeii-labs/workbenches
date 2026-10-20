@@ -1,7 +1,4 @@
-/// <reference path="./sql.d.ts" />
-import initial from './0001_initial.sql' with { type: 'text' };
-import projects from './0002_projects.sql' with { type: 'text' };
-import runTask from './0003_run_task.sql' with { type: 'text' };
+import { readMigrationFolder } from './folder.js' with { type: 'macro' };
 
 /**
  * One schema change. `sql` is the text of `migrations/NNNN_name.sql`; its
@@ -14,12 +11,8 @@ export interface Migration {
 }
 
 /**
- * Append-only schema history, embedded so the compiled binary carries it. Add
- * the next number to this list and never edit a shipped file; see
- * `migrations/README.md`.
+ * Append-only schema history, read from this folder at transpile time so the
+ * compiled binary carries it. Add the next numbered file and never edit a
+ * shipped one; see `migrations/README.md`.
  */
-export const migrations: readonly Migration[] = [
-    { version: 1, name: 'initial', sql: initial },
-    { version: 2, name: 'projects', sql: projects },
-    { version: 3, name: 'run_task', sql: runTask },
-];
+export const migrations: readonly Migration[] = readMigrationFolder();
