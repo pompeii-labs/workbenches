@@ -132,6 +132,52 @@ describe('DaytonaToolbox', () => {
         expect(call?.url.searchParams.get('expiresInSeconds')).toBe('3600');
     });
 
+    test('mints a signed preview URL with its token and expires it without naming the token', async () => {
+        let expireStatus = 200;
+        const { sandbox, requests } = await startedSandbox((request) => {
+            if (request.url.pathname.endsWith('/signed-preview-url'))
+                return json({
+                    sandboxId: 'sandbox-1',
+                    port: 5173,
+                    token: 'fixture-preview-token',
+                    url: 'https://5173-fixture-preview-token.proxy.daytona.test',
+                });
+            if (request.url.pathname.endsWith('/expire'))
+                return new Response('token fixture-preview-token is unknown', {
+                    status: expireStatus,
+                });
+            return json({});
+        });
+        await expect(sandbox.signedPreviewUrl?.(5173, 30)).resolves.toEqual({
+            url: 'https://5173-fixture-preview-token.proxy.daytona.test',
+            token: 'fixture-preview-token',
+        });
+        expect(requests.at(-1)?.url.searchParams.get('expiresInSeconds')).toBe('30');
+        await sandbox.expireSignedPreviewUrl?.(5173, 'fixture-preview-token');
+        expect(requests.at(-1)?.method).toBe('POST');
+        expect(requests.at(-1)?.url.pathname).toBe(
+            '/api/sandbox/sandbox-1/ports/5173/signed-preview-url/fixture-preview-token/expire'
+        );
+        expireStatus = 404;
+        const failure = await sandbox
+            .expireSignedPreviewUrl?.(5173, 'fixture-preview-token')
+            .catch((error: unknown) => error);
+        expect(String(failure)).toBe(
+            'DaytonaApiError: Daytona did not expire the signed preview URL for port 5173 (status 404)'
+        );
+    });
+
+    test('refuses a signed preview reply without a URL and token', async () => {
+        const { sandbox } = await startedSandbox((request) =>
+            request.url.pathname.endsWith('/signed-preview-url')
+                ? json({ url: 'https://5173-x.proxy.daytona.test' })
+                : json({})
+        );
+        await expect(sandbox.signedPreviewUrl?.(5173, 30)).rejects.toThrow(
+            'Daytona returned an unexpected signed preview URL response'
+        );
+    });
+
     test('reports sandbox size from its description', async () => {
         const { sandbox } = await startedSandbox();
         expect(await sandbox.info()).toEqual({

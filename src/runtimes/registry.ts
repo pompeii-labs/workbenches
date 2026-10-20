@@ -21,6 +21,7 @@ import type {
     RuntimePlacement,
     RuntimePreparation,
     RuntimePrepareRequest,
+    RuntimePreviewFeed,
     RuntimeProvider,
     RuntimeService,
     RuntimeServiceBinding,
@@ -296,6 +297,52 @@ class GuardedRuntime implements PreparedRuntime {
         return async (keepMinutes) => {
             try {
                 await suspend(keepMinutes);
+            } catch (error) {
+                throw RuntimeError.from(this.name, 'cleanup', error);
+            }
+        };
+    }
+
+    reservedPorts(): number[] {
+        return this.runtime.reservedPorts?.() ?? [];
+    }
+
+    get previews(): RuntimePreviewFeed | undefined {
+        return this.runtime.previews;
+    }
+
+    /** Present only when the guarded runtime can sign preview URLs. */
+    get previewUrl(): PreparedRuntime['previewUrl'] {
+        const previewUrl = this.runtime.previewUrl?.bind(this.runtime);
+        if (!previewUrl) return undefined;
+        return async (port, ttlSeconds) => {
+            try {
+                return await previewUrl(port, ttlSeconds);
+            } catch (error) {
+                throw RuntimeError.from(this.name, 'launch', error);
+            }
+        };
+    }
+
+    get expireSignedPreviewUrl(): PreparedRuntime['expireSignedPreviewUrl'] {
+        const expire = this.runtime.expireSignedPreviewUrl?.bind(this.runtime);
+        if (!expire) return undefined;
+        return async (port, token) => {
+            try {
+                await expire(port, token);
+            } catch (error) {
+                throw RuntimeError.from(this.name, 'launch', error);
+            }
+        };
+    }
+
+    /** Present only when the guarded runtime can keep its sandbox running. */
+    get linger(): PreparedRuntime['linger'] {
+        const linger = this.runtime.linger?.bind(this.runtime);
+        if (!linger) return undefined;
+        return async (minutes) => {
+            try {
+                await linger(minutes);
             } catch (error) {
                 throw RuntimeError.from(this.name, 'cleanup', error);
             }

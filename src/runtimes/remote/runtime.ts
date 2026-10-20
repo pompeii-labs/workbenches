@@ -155,7 +155,7 @@ export abstract class RemoteRuntime<S extends RemoteSandbox, A extends StagedAss
             new RemoteProcess(
                 {
                     start: (output) =>
-                        sandbox.start(shellCommand(invocation.command), {
+                        sandbox.start(this.commandLine(invocation), {
                             cwd: invocation.cwd,
                             env: definedEnvironment(invocation.env),
                             stdin: options.stdin === 'pipe',
@@ -165,6 +165,11 @@ export abstract class RemoteRuntime<S extends RemoteSandbox, A extends StagedAss
                 options.stdin === 'pipe'
             )
         );
+    }
+
+    /** The shell command line that launches the runner. */
+    protected commandLine(invocation: RunnerInvocation): string {
+        return shellCommand(invocation.command);
     }
 
     cancel(process: SpawnedRunner): void {

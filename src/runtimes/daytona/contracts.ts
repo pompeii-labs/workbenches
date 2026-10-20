@@ -2,6 +2,7 @@ import type { RemoteSandbox } from '../remote/runtime.js';
 import type { AssetSource } from '../staging/source.js';
 import type { RemoteTransfer } from '../staging/transfer.js';
 import type { DaytonaConnector } from './connector.js';
+import type { FollowedCommand, LogOutput } from './follow.js';
 
 /** Sandbox resources. Daytona allocates whole CPUs and whole GiB. */
 export interface DaytonaResources {
@@ -41,7 +42,34 @@ export interface DaytonaSandbox extends RemoteSandbox {
     upload(path: string, data: Uint8Array): Promise<void>;
     /** A URL that reaches a sandbox port without further credentials. */
     previewUrl(port: number, ttlSeconds: number): Promise<string>;
+    /**
+     * Mints a new signed URL for `port` that expires after `ttlSeconds`, with
+     * the token that expires it early. Both are credentials. A sandbox without
+     * it cannot hand out preview URLs to a host.
+     */
+    signedPreviewUrl?(
+        port: number,
+        ttlSeconds: number
+    ): Promise<DaytonaSignedPreviewUrl>;
+    /** Expires a signed URL for `port` before its time. */
+    expireSignedPreviewUrl?(port: number, token: string): Promise<void>;
+    /**
+     * Starts `command` in its own session and follows its standard output as
+     * it is written, until stopped. A sandbox without it is read only when
+     * asked, so announcements arrive at the end of each turn.
+     */
+    follow?(
+        command: string,
+        onStdout: LogOutput,
+        onFailure: (error: unknown) => void
+    ): Promise<FollowedCommand>;
     info(): Promise<DaytonaSandboxInfo>;
+}
+
+/** A signed preview URL and the token that expires it. Both are credentials. */
+export interface DaytonaSignedPreviewUrl {
+    url: string;
+    token: string;
 }
 
 export interface DaytonaSandboxSummary {

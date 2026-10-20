@@ -18,6 +18,8 @@ import { RunStore } from '../../src/runs/store.js';
 import type {
     PreparedRuntime,
     RuntimePrepareRequest,
+    RuntimePreviewFeed,
+    RuntimePreviewListener,
     RuntimeProvider,
 } from '../../src/runtimes/contracts.js';
 import { DockerMountPlan } from '../../src/runtimes/docker/mounts.js';
@@ -111,6 +113,34 @@ describe('shared execution preparation', () => {
             } finally {
                 await fixture.preparation.cleanup();
             }
+        }
+    });
+    test('publishes the previews a sandbox runtime carries without a URL until collection', async () => {
+        const feed = new RecordingFeed();
+        const fixture = await createFixture({
+            runtime: 'daytona',
+            placement: 'sandbox',
+            previews: feed,
+        });
+        try {
+            await fixture.preparation.prepare();
+            // The host helper is for host runs; the sandbox runtime stages its own.
+            expect(fixture.provider.request?.environment.PATH).toBeUndefined();
+            expect(feed.calls).toEqual(['watch']);
+            await feed.listener?.available({ name: 'demo', port: 5173 });
+            await fixture.preparation.checkpoint(1);
+            expect(feed.calls).toEqual(['watch', 'refresh']);
+            expect(
+                fixture.eventsSeen.filter((event) => event.type === 'preview.available')
+            ).toEqual([
+                expect.objectContaining({
+                    data: { name: 'demo', port: 5173, protocol: 'http' },
+                }),
+            ]);
+            await fixture.preparation.collect('complete');
+            expect(feed.calls).toEqual(['watch', 'refresh', 'close']);
+        } finally {
+            await fixture.preparation.cleanup();
         }
     });
     for (const runtime of ['local', 'docker', 'e2b']) {
@@ -533,6 +563,26 @@ interface FixtureOptions {
     cleanupFailure?: Error;
     gate?: Promise<void>;
     placement?: RuntimeProvider['placement'];
+    previews?: RuntimePreviewFeed;
+}
+
+/** A sandbox runtime's preview feed that records what preparation asks of it. */
+class RecordingFeed implements RuntimePreviewFeed {
+    readonly calls: string[] = [];
+    listener: RuntimePreviewListener | undefined;
+
+    watch(listener: RuntimePreviewListener): void {
+        this.calls.push('watch');
+        this.listener = listener;
+    }
+
+    async refresh(): Promise<void> {
+        this.calls.push('refresh');
+    }
+
+    async close(): Promise<void> {
+        this.calls.push('close');
+    }
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -772,6 +822,7 @@ class TrackingRuntime implements RuntimeProvider {
                     stderr: 'pipe',
                 }),
             launchService: unused,
+            ...(this.options.previews ? { previews: this.options.previews } : {}),
             cancel: (process) => process.kill?.(),
             cleanup: () => {
                 this.calls.push('runtime.cleanup');

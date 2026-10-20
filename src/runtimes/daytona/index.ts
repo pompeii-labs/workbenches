@@ -11,9 +11,11 @@ export type {
     DaytonaSandbox,
     DaytonaSandboxInfo,
     DaytonaSandboxSummary,
+    DaytonaSignedPreviewUrl,
 } from './contracts.js';
+export type { FollowedCommand, LogOutput } from './follow.js';
 export { DaytonaRuntimeProvider } from './provider.js';
-export { daytonaResources } from './runtime.js';
+export { daytonaResources } from './resources.js';
 export {
     DaytonaApiError,
     type DaytonaApiOptions,

@@ -1,8 +1,11 @@
 import { createConnection } from 'node:net';
 
+import type { PreviewPorts } from './log.js';
+import { PreviewPolicy } from './policy.js';
+
 /** Checks whether a server accepts connections on a loopback port of this host. */
-export class LoopbackPorts {
-    static readonly host = '127.0.0.1';
+export class LoopbackPorts implements PreviewPorts {
+    static readonly host = PreviewPolicy.loopbackHost;
     static readonly timeoutMs = 1_000;
 
     listening(port: number): Promise<boolean> {

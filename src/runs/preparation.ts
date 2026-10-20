@@ -78,6 +78,11 @@ interface PreparedExecution {
     authentication?: RunnerConnectionSelection;
 }
 
+/** Reports a preview announcement the engine ignored. */
+const warn = (message: string) => {
+    process.stderr.write(`wb: ${message}\n`);
+};
+
 /** Owns preparation resources, including partially prepared resources on failure. */
 export class ExecutionPreparation {
     private runner: PreparedRunner | undefined;
@@ -114,6 +119,7 @@ export class ExecutionPreparation {
     ): Promise<RunOutcome | undefined> {
         // Collection ends the run's last turn, so later announcements are not published.
         await this.previews?.close();
+        await this.runtime?.previews?.close();
         const outcome = await this.outcomes?.collect(this.runtime, completeness);
         const { home, repository, events } = this.options;
         if (!outcome || !home || !repository || !this.repository) return outcome;
@@ -138,6 +144,7 @@ export class ExecutionPreparation {
 
     async checkpoint(turn: number): Promise<RunOutcome | undefined> {
         await this.previews?.refresh();
+        await this.runtime?.previews?.refresh();
         return this.outcomes?.checkpoint(this.runtime, turn);
     }
 
@@ -235,14 +242,15 @@ export class ExecutionPreparation {
             });
         }
         const provider = this.dependencies.runtimes.resolve(runtimeName);
-        // Previews reach the user from the host for now; other placements need their own transport.
+        // A host run announces through a control file the engine reads here; a
+        // sandbox runtime carries its own announcements as `runtime.previews`.
         if (home && this.outcomes && provider.placement === 'host') {
             this.previews = new PreviewChannel({
                 home,
                 runId: this.options.events.runId,
                 events: this.options.events,
                 reserved: () => this.runtime?.reservedPorts?.() ?? [],
-                warn: (message) => process.stderr.write(`wb: ${message}\n`),
+                warn,
             });
             await this.previews.install();
             environment = this.previews.environment(environment);
@@ -327,6 +335,18 @@ export class ExecutionPreparation {
         });
         const preflight = await this.runtime.preflight();
         this.previews?.watch();
+        // A sandbox runtime carries its own announcements. A signed URL is a
+        // credential, so its previews are published without one.
+        this.runtime.previews?.watch({
+            available: async (preview) => {
+                await this.options.events.emit('preview.available', {
+                    name: preview.name,
+                    port: preview.port,
+                    protocol: 'http',
+                });
+            },
+            warn,
+        });
         const selection = await this.selectConnection(
             runners,
             this.runner,

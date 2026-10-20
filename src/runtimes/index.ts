@@ -11,11 +11,15 @@ export type {
     RuntimePlacement,
     RuntimePreparation,
     RuntimePrepareRequest,
+    RuntimePreview,
+    RuntimePreviewFeed,
+    RuntimePreviewListener,
     RuntimeProvider,
     RuntimeRunnerContract,
     RuntimeService,
     RuntimeServiceBinding,
     RuntimeSessionOptions,
+    RuntimeSignedPreviewUrl,
 } from './contracts.js';
 export {
     DaytonaApi,
@@ -33,6 +37,7 @@ export {
     type DaytonaSandbox,
     type DaytonaSandboxInfo,
     type DaytonaSandboxSummary,
+    type DaytonaSignedPreviewUrl,
     daytonaResources,
     defaultDaytonaApiUrl,
 } from './daytona/index.js';

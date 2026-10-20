@@ -16,6 +16,8 @@ export type PreviewDecision =
  * announced text.
  */
 export class PreviewPolicy {
+    /** The address a preview's server listens on, where the runner runs. */
+    static readonly loopbackHost = '127.0.0.1';
     static readonly maximumPreviews = 8;
     static readonly maximumLineBytes = 512;
     static readonly minimumPort = 1024;
