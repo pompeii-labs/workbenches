@@ -28,6 +28,8 @@ const PATTERNS: readonly (readonly [RegExp, string])[] = [
     [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/gu, REDACTED],
     [/\bAIza[0-9A-Za-z_-]{35}/gu, REDACTED],
     [/\b(?:hf|npm|e2b|dtn)_[A-Za-z0-9]{20,}/gu, REDACTED],
+    // workbenches.dev API keys and run credentials.
+    [/\b(?:wb_[a-f0-9]{64}|wbrc_[A-Za-z0-9_-]{20,})/gu, REDACTED],
 ];
 
 /** The text with every recognizable credential replaced. */

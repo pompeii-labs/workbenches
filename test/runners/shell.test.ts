@@ -49,6 +49,8 @@ describe('shell command descriptions', () => {
         ['a GitHub token', 'ghp_0123456789abcdefABCDEF0123456789abcd'],
         ['a fine-grained GitHub token', 'github_pat_11ABCDEFG0123456789_abcdefghij'],
         ['an AWS access key', 'AKIAIOSFODNN7EXAMPLE'],
+        ['a workbenches.dev API key', `wb_${'0123456789abcdef'.repeat(4)}`],
+        ['a workbenches.dev run credential', 'wbrc_Q2xhdWRlIHJ1biBjcmVkZW50aWFsIGtleQ'],
         ['a JSON Web Token', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl'],
         ['an opaque token', 'Zx9Qr7Lm2Np4Kd8Vt6Wy3Hb5Jc1Fg0Sa'],
     ])('removes %s passed as a bare argument', (_label, key) => {
