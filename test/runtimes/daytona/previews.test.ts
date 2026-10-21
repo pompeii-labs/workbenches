@@ -177,6 +177,26 @@ describe('Daytona previews', () => {
         }
     });
 
+    test('a runtime that reattaches to the sandbox mid-run keeps what was announced', async () => {
+        const client = new FakeClient();
+        // An earlier runtime of this run announced a preview before the host restarted.
+        client.sandbox.files.set(control, encode(line('demo', 5173)));
+        client.sandbox.listeningPorts.add(5173);
+        const { runtime, published } = await running(client);
+        try {
+            const install = client.sandbox.runs.find((run) =>
+                run.command.includes('announcements.jsonl')
+            )?.command;
+            expect(install).not.toContain(`rm -f '${control}'`);
+            expect(install).toContain(`[ -f '${control}' ] || : > '${control}'`);
+            await runtime.previews?.refresh();
+            expect(published).toEqual([{ name: 'demo', port: 5173 }]);
+            await expect(runtime.previewUrl?.(5173, 60)).resolves.toBeDefined();
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test("reserves the runner's server and Daytona's toolbox ports", async () => {
         const { runtime, client, published, warnings, announce } = await running();
         try {

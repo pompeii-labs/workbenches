@@ -63,7 +63,12 @@ export class SandboxPreviews implements RuntimePreviewFeed {
         );
     }
 
-    /** Stages the helper and an empty control file, replacing any an earlier run left. */
+    /**
+     * Stages the helper and the control file. A control file already in the
+     * sandbox is kept, so a host that reattaches to it mid-run still knows
+     * what was announced; each announcement is checked again as it is read,
+     * so one whose server has stopped is not shown.
+     */
     async install(): Promise<void> {
         await new StagingDirectories(this.sandbox, this.rules).prepare([
             helperDirectory,
@@ -77,8 +82,7 @@ export class SandboxPreviews implements RuntimePreviewFeed {
         const result = await this.sandbox.run(
             [
                 `chmod 700 ${quote(helper)}`,
-                `rm -f ${quote(controlFile)}`,
-                `: > ${quote(controlFile)}`,
+                `{ [ -f ${quote(controlFile)} ] || : > ${quote(controlFile)}; }`,
                 `chmod 600 ${quote(controlFile)}`,
             ].join(' && ')
         );
