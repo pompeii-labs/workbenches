@@ -198,9 +198,12 @@ describe('local runtime provider contract', () => {
             cwd: '/workspace',
             env: {},
         }));
+        expect(runtime.reservedPorts?.()).toEqual([]);
         await expect(service.resolveUrl('http://127.0.0.1:3123')).resolves.toBe(
             'http://127.0.0.1:3123'
         );
+        // A preview may never claim the runner server's own port.
+        expect(runtime.reservedPorts?.()).toEqual([3123]);
         await runtime.cleanup();
     });
 

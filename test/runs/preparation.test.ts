@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { ConnectionStore } from '../../src/connections/store.js';
 import { RepositoryCheckoutStore } from '../../src/database/checkouts.js';
 import { Connection } from '../../src/database/connection.js';
+import { WorkbenchFiles } from '../../src/files/layout.js';
 import { OutcomeStore } from '../../src/outcomes/store.js';
 import { ProcessProbe } from '../../src/processes/probe.js';
 import { RepositoryWorkspace } from '../../src/repositories/workspace.js';
@@ -17,6 +18,8 @@ import { RunStore } from '../../src/runs/store.js';
 import type {
     PreparedRuntime,
     RuntimePrepareRequest,
+    RuntimePreviewFeed,
+    RuntimePreviewListener,
     RuntimeProvider,
 } from '../../src/runtimes/contracts.js';
 import { DockerMountPlan } from '../../src/runtimes/docker/mounts.js';
@@ -38,6 +41,108 @@ afterEach(async () => {
 });
 
 describe('shared execution preparation', () => {
+    for (const mode of ['one-shot', 'session'] as const) {
+        test(`gives a ${mode} host run the wbx helper and publishes its previews until collection`, async () => {
+            const fixture = await createFixture({ mode });
+            const files = new WorkbenchFiles(fixture.home);
+            const helper = files.helperDirectory(fixture.events.runId);
+            const server = Bun.serve({
+                hostname: '127.0.0.1',
+                port: 0,
+                fetch: () => new Response('preview'),
+            });
+            try {
+                const prepared = await fixture.preparation.prepare();
+                const environment = fixture.provider.request?.environment ?? {};
+                expect(environment.PATH?.split(':')[0]).toBe(helper);
+                expect(prepared.runtime.environment.PATH).toBe(environment.PATH);
+                const announce = (name: string) =>
+                    Bun.spawn(['wbx', 'preview', String(server.port), '--name', name], {
+                        // The fixture environment has no system PATH for the port check.
+                        env: {
+                            ...environment,
+                            PATH: `${environment.PATH}:${process.env.PATH}`,
+                        },
+                        stdout: 'ignore',
+                        stderr: 'ignore',
+                    }).exited;
+                expect(await announce('demo')).toBe(0);
+                await fixture.preparation.checkpoint(1);
+                expect(
+                    fixture.eventsSeen.filter(
+                        (event) => event.type === 'preview.available'
+                    )
+                ).toEqual([
+                    expect.objectContaining({
+                        data: {
+                            name: 'demo',
+                            port: server.port,
+                            protocol: 'http',
+                            url: `http://127.0.0.1:${server.port}/`,
+                        },
+                    }),
+                ]);
+                await fixture.preparation.collect('complete');
+                expect(await announce('late')).toBe(0);
+                await Bun.sleep(50);
+                expect(
+                    fixture.eventsSeen.filter(
+                        (event) => event.type === 'preview.available'
+                    )
+                ).toHaveLength(1);
+            } finally {
+                server.stop(true);
+                await fixture.preparation.cleanup();
+            }
+            expect(await stat(helper).catch(() => undefined)).toBeUndefined();
+        });
+    }
+    test('gives the wbx helper only to host runs that capture outcomes', async () => {
+        for (const options of [
+            { captureOutcomes: false },
+            { placement: 'container' as const },
+        ]) {
+            const fixture = await createFixture(options);
+            try {
+                await fixture.preparation.prepare();
+                const helper = new WorkbenchFiles(fixture.home).helperDirectory(
+                    fixture.events.runId
+                );
+                expect(fixture.provider.request?.environment.PATH).toBeUndefined();
+                expect(await stat(helper).catch(() => undefined)).toBeUndefined();
+            } finally {
+                await fixture.preparation.cleanup();
+            }
+        }
+    });
+    test('publishes the previews a sandbox runtime carries without a URL until collection', async () => {
+        const feed = new RecordingFeed();
+        const fixture = await createFixture({
+            runtime: 'daytona',
+            placement: 'sandbox',
+            previews: feed,
+        });
+        try {
+            await fixture.preparation.prepare();
+            // The host helper is for host runs; the sandbox runtime stages its own.
+            expect(fixture.provider.request?.environment.PATH).toBeUndefined();
+            expect(feed.calls).toEqual(['watch']);
+            await feed.listener?.available({ name: 'demo', port: 5173 });
+            await fixture.preparation.checkpoint(1);
+            expect(feed.calls).toEqual(['watch', 'refresh']);
+            expect(
+                fixture.eventsSeen.filter((event) => event.type === 'preview.available')
+            ).toEqual([
+                expect.objectContaining({
+                    data: { name: 'demo', port: 5173, protocol: 'http' },
+                }),
+            ]);
+            await fixture.preparation.collect('complete');
+            expect(feed.calls).toEqual(['watch', 'refresh', 'close']);
+        } finally {
+            await fixture.preparation.cleanup();
+        }
+    });
     for (const runtime of ['local', 'docker', 'e2b']) {
         test(`${runtime} gives authenticated repository runs normal gh and git credentials`, async () => {
             const fixture = await createFixture({
@@ -457,6 +562,27 @@ interface FixtureOptions {
     runtimeFailure?: Error;
     cleanupFailure?: Error;
     gate?: Promise<void>;
+    placement?: RuntimeProvider['placement'];
+    previews?: RuntimePreviewFeed;
+}
+
+/** A sandbox runtime's preview feed that records what preparation asks of it. */
+class RecordingFeed implements RuntimePreviewFeed {
+    readonly calls: string[] = [];
+    listener: RuntimePreviewListener | undefined;
+
+    watch(listener: RuntimePreviewListener): void {
+        this.calls.push('watch');
+        this.listener = listener;
+    }
+
+    async refresh(): Promise<void> {
+        this.calls.push('refresh');
+    }
+
+    async close(): Promise<void> {
+        this.calls.push('close');
+    }
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -645,13 +771,15 @@ class TrackingRunner extends Runner {
 }
 
 class TrackingRuntime implements RuntimeProvider {
-    readonly placement = 'host' as const;
+    readonly placement: RuntimeProvider['placement'];
     request: RuntimePrepareRequest | undefined;
     constructor(
         readonly name: string,
         private readonly calls: string[],
         private readonly options: FixtureOptions
-    ) {}
+    ) {
+        this.placement = options.placement ?? 'host';
+    }
     async prepare(request: RuntimePrepareRequest): Promise<PreparedRuntime> {
         this.request = request;
         this.calls.push('runtime.prepare');
@@ -694,6 +822,7 @@ class TrackingRuntime implements RuntimeProvider {
                     stderr: 'pipe',
                 }),
             launchService: unused,
+            ...(this.options.previews ? { previews: this.options.previews } : {}),
             cancel: (process) => process.kill?.(),
             cleanup: () => {
                 this.calls.push('runtime.cleanup');

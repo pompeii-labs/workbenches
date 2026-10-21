@@ -4,8 +4,10 @@ import { requirementsOf } from '../../workbench/runtimes.js';
 import type {
     RuntimeInfrastructureMetadata,
     RuntimePreparation,
+    RuntimePreviewFeed,
     RuntimeService,
     RuntimeServiceBinding,
+    RuntimeSignedPreviewUrl,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
 import { runLabels } from '../remote/labels.js';
@@ -14,34 +16,20 @@ import { RemoteRuntime, type RemoteRuntimeOptions } from '../remote/runtime.js';
 import { type ArchiveUpload, AssetStage } from '../remote/stage.js';
 import { needsRepositoryTools } from '../repository-tools.js';
 import { runnerExecutable } from '../runner.js';
+import { shellCommand } from '../staging/shell.js';
 import type { StagedAsset } from '../staging/transfer.js';
-import type {
-    DaytonaClient,
-    DaytonaClock,
-    DaytonaResources,
-    DaytonaSandbox,
-} from './contracts.js';
+import type { DaytonaClient, DaytonaClock, DaytonaSandbox } from './contracts.js';
+import { SandboxLifetime } from './lifetime.js';
 import { PreviewUrl } from './preview.js';
+import { SandboxPreviews } from './previews.js';
+import { daytonaResources } from './resources.js';
 import { ServiceLauncher } from './service.js';
 import { SandboxSetup } from './setup.js';
 
 /** The port a runner's server binds to inside the sandbox. */
 const servicePort = 4096;
-/** A sandbox that cannot be deleted is retried this many times, then reported. */
-const maximumDeleteAttempts = 4;
-const firstDeleteRetryDelayMs = 1_000;
-
-/** A client that can stop a sandbox and set the lifetimes that keep it. */
-type KeepingClient = DaytonaClient &
-    Required<
-        Pick<DaytonaClient, 'stopSandbox' | 'setAutoDeleteInterval' | 'setSandboxTtl'>
-    >;
-
-function canKeep(client: DaytonaClient): client is KeepingClient {
-    return Boolean(
-        client.stopSandbox && client.setAutoDeleteInterval && client.setSandboxTtl
-    );
-}
+/** Ports Daytona's own toolbox, web terminal, and recordings listen on in every sandbox. */
+const toolboxPorts = [2280, 22222, 33333];
 
 export interface DaytonaRuntimeOptions extends RemoteRuntimeOptions {
     client: DaytonaClient;
@@ -53,29 +41,6 @@ export interface DaytonaRuntimeOptions extends RemoteRuntimeOptions {
      * was staged, so they must be unchanged since then.
      */
     existing?: { sandboxId: string };
-}
-
-/**
- * What a sandbox gets for a requirement the Workbench does not declare. Daytona's
- * own default of 1 vCPU and 1 GiB is too small for a runner server plus tools. A
- * declared value always wins, including a smaller one.
- */
-const daytonaDefaultResources = { cpu: 2, memoryGb: 4 } as const;
-
-/** Sandbox resources for a Workbench's requirements. Daytona allocates whole units. */
-export function daytonaResources(
-    requirements: ReturnType<typeof requirementsOf>
-): DaytonaResources {
-    return {
-        cpu: requirements.cpu ?? daytonaDefaultResources.cpu,
-        memoryGb:
-            requirements.memory_gb === undefined
-                ? daytonaDefaultResources.memoryGb
-                : Math.ceil(requirements.memory_gb),
-        ...(requirements.disk_gb === undefined
-            ? {}
-            : { diskGb: Math.ceil(requirements.disk_gb) }),
-    };
 }
 
 /** Puts a snapshot's archive into the sandbox. The toolbox takes whole byte arrays. */
@@ -98,13 +63,20 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
     readonly preparation: RuntimePreparation;
     protected declare readonly options: DaytonaRuntimeOptions;
     private preview: PreviewUrl | undefined;
+    private previewFeed: SandboxPreviews | undefined;
+    private readonly lifetime: SandboxLifetime;
     /** Set while a sandbox this runtime created could not be deleted. */
     private undeleted: string | undefined;
-    /** Set by `suspend`: the client that keeps the sandbox and for how long. */
-    private keeping: { client: KeepingClient; minutes: number } | undefined;
+    /** Set by `suspend`: how many minutes to keep the stopped sandbox. */
+    private keeping: number | undefined;
+    /** Set by `linger`: how many minutes to keep the sandbox running. */
+    private lingerMinutes: number | undefined;
+    /** The id of the sandbox while it lingers after the runtime ended. */
+    private lingering: string | undefined;
 
     constructor(options: DaytonaRuntimeOptions) {
         super(options);
+        this.lifetime = new SandboxLifetime(options.client, options.clock);
         this.preparation = {
             kind: 'image',
             reference: options.image,
@@ -118,6 +90,15 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
      */
     get sandboxId(): string | undefined {
         return this.sandbox?.id;
+    }
+
+    /** The run's preview announcements, once preflight staged the helper. */
+    get previews(): RuntimePreviewFeed | undefined {
+        return this.previewFeed;
+    }
+
+    reservedPorts(): number[] {
+        return [servicePort, ...toolboxPorts];
     }
 
     async preflight(): Promise<PreflightResult> {
@@ -135,6 +116,13 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
             pullRequests: this.options.request.repository?.delivery === 'pr',
         });
         await this.preflightAssets(sandbox);
+        if (this.carriesPreviews() && !this.previewFeed) {
+            const previews = new SandboxPreviews(sandbox, this.options.rules, () =>
+                this.reservedPorts()
+            );
+            await previews.install();
+            this.previewFeed = previews;
+        }
         this.ready = true;
         return {
             runner: { name: this.workbench.manifest.runner, path: runnerPath },
@@ -203,16 +191,71 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
                 'A suspended Daytona sandbox must be kept for a whole number of minutes'
             );
         }
-        if (this.cleaned) fail('Runtime has already been cleaned up');
-        if (!this.sandbox) fail('There is no Daytona sandbox to suspend');
-        const client = this.options.client;
-        if (!canKeep(client)) {
-            return fail(
+        if (!this.lifetime.keeps) {
+            fail(
                 'This Daytona client cannot stop sandboxes or change their lifetime, so the sandbox cannot be kept'
             );
         }
-        this.keeping = { client, minutes: keepMinutes };
+        if (this.lingering) {
+            await this.lifetime.keep(this.lingering, keepMinutes);
+            this.lingering = undefined;
+            return;
+        }
+        if (this.cleaned) fail('Runtime has already been cleaned up');
+        if (!this.sandbox) fail('There is no Daytona sandbox to suspend');
+        this.keeping = keepMinutes;
         await this.cleanup();
+    }
+
+    /**
+     * Ends the runtime like `cleanup` after a run that announced a preview, but
+     * leaves the sandbox running with its credential files removed, and sets
+     * Daytona's TTL to `minutes` from now so it is destroyed then even if the
+     * host is gone. Calling it again while the sandbox lingers sets the TTL
+     * again. `cleanup` deletes a lingering sandbox and `suspend` keeps it.
+     */
+    async linger(minutes: number): Promise<void> {
+        const fail = (message: string): never => {
+            throw new RuntimeError(this.name, 'cleanup', message);
+        };
+        if (!Number.isSafeInteger(minutes) || minutes < 1) {
+            fail(
+                'A lingering Daytona sandbox must be kept for a whole number of minutes'
+            );
+        }
+        if (!this.lifetime.lingers) {
+            fail(
+                'This Daytona client cannot change a sandbox lifetime, so the sandbox cannot be kept running'
+            );
+        }
+        if (this.lingering) return this.lifetime.extend(this.lingering, minutes);
+        if (this.cleaned) fail('Runtime has already been cleaned up');
+        if (!this.sandbox) fail('There is no Daytona sandbox to keep running');
+        if (!this.previewFeed?.announced) {
+            fail(
+                'The run announced no preview, so there is nothing to keep the sandbox running for'
+            );
+        }
+        this.lingerMinutes = minutes;
+        await this.cleanup();
+    }
+
+    /**
+     * Mints a new signed URL for an announced preview's port on every call,
+     * valid for `ttlSeconds` (1 to 86,400). It works while the run is live and
+     * while the sandbox lingers. The URL and token are credentials: they are
+     * returned to the caller only, never cached, logged, or emitted.
+     */
+    async previewUrl(
+        port: number,
+        ttlSeconds: number
+    ): Promise<RuntimeSignedPreviewUrl> {
+        return this.runningPreviews().signedUrl(port, ttlSeconds);
+    }
+
+    /** Expires a signed URL that `previewUrl` minted for an announced preview's port. */
+    async expireSignedPreviewUrl(port: number, token: string): Promise<void> {
+        await this.runningPreviews().expire(port, token);
     }
 
     /**
@@ -220,8 +263,13 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
      * deleted, the runtime is not clean, so a later call deletes it again.
      */
     override async cleanup(): Promise<void> {
+        if (this.cleaned && this.lingering) {
+            await this.lifetime.delete(this.lingering);
+            this.lingering = undefined;
+            return;
+        }
         if (this.cleaned && this.undeleted) {
-            await this.deleteSandbox(this.undeleted);
+            await this.lifetime.delete(this.undeleted);
             this.undeleted = undefined;
             return;
         }
@@ -229,46 +277,58 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
     }
 
     /**
-     * Deletes the sandbox, trying again a few times, or keeps it when the
-     * runtime is suspending, and records a failure that names it so the user
-     * can delete it themselves.
+     * Ends the control session that follows preview announcements, then
+     * deletes the sandbox, trying again a few times, keeps it stopped when the
+     * runtime is suspending, or leaves it running when it lingers. A failure
+     * is recorded with the sandbox named so the user can delete it themselves.
      */
     protected async destroy(failures: unknown[]): Promise<void> {
         if (!this.sandbox) return;
-        const id = this.sandbox.id;
+        const sandbox = this.sandbox;
+        await this.previewFeed?.stop().catch(() => {});
         try {
-            if (this.keeping) await this.keep(id, this.keeping);
-            else await this.deleteSandbox(id);
+            if (this.keeping) {
+                await this.lifetime.keep(sandbox.id, this.keeping);
+            } else if (this.lingerMinutes) {
+                await this.lifetime.linger(
+                    sandbox,
+                    this.options.paths.bindings.find(
+                        (binding) => binding.kind === 'credentials'
+                    )?.runtimePath,
+                    this.lingerMinutes
+                );
+                this.lingering = sandbox.id;
+            } else {
+                await this.lifetime.delete(sandbox.id);
+            }
         } catch (error) {
-            this.undeleted = id;
+            this.undeleted = sandbox.id;
             failures.push(error);
         }
     }
 
-    /**
-     * Stops sandbox `id` and lets Daytona delete it after `minutes` stopped.
-     * Daytona archives a stopped sandbox after seven days by default, so the
-     * archive deadline is set one minute past the delete deadline: the sandbox
-     * is deleted before it can be archived.
-     */
-    private async keep(
-        id: string,
-        { client, minutes }: { client: KeepingClient; minutes: number }
-    ): Promise<void> {
-        try {
-            await client.stopSandbox(id);
-            await client.setAutoArchiveInterval?.(id, minutes + 1);
-            await client.setAutoDeleteInterval(id, minutes);
-            // Daytona's TTL destroys a sandbox in any state, so it is cleared last.
-            await client.setSandboxTtl(id, 0);
-        } catch (error) {
+    /** The runner's command line, with the preview helper first on PATH when the run has one. */
+    protected override commandLine(invocation: RunnerInvocation): string {
+        const command = shellCommand(invocation.command);
+        return this.previewFeed ? this.previewFeed.command(command) : command;
+    }
+
+    /** A run with an outbox gets the preview helper, as on the local runtime. */
+    private carriesPreviews(): boolean {
+        const { purpose, outcome } = this.options.request;
+        return outcome !== undefined && (purpose === undefined || purpose === 'run');
+    }
+
+    /** The run's previews, while its sandbox runs. */
+    private runningPreviews(): SandboxPreviews {
+        if (!this.previewFeed || !this.ready || (this.cleaned && !this.lingering)) {
             throw new RuntimeError(
                 this.name,
-                'cleanup',
-                `Daytona sandbox ${id} was not suspended: ${error instanceof Error ? error.message : String(error)}. Call cleanup to delete it.`,
-                { cause: error }
+                'launch',
+                'The Daytona sandbox is not running with previews'
             );
         }
+        return this.previewFeed;
     }
 
     /**
@@ -280,35 +340,15 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
     private attachOrLaunch(invocation: RunnerInvocation) {
         return this.track(
             new RemoteProcess(
-                new ServiceLauncher(this.requireReady(), invocation, servicePort),
+                new ServiceLauncher(
+                    this.requireReady(),
+                    invocation,
+                    servicePort,
+                    this.commandLine(invocation)
+                ),
                 false
             )
         );
-    }
-
-    /**
-     * Deletes sandbox `id`, waiting longer between each of a few attempts. The
-     * error after the last attempt names the sandbox.
-     */
-    private async deleteSandbox(id: string): Promise<void> {
-        for (let attempt = 1; ; attempt++) {
-            try {
-                await this.options.client.deleteSandbox(id);
-                return;
-            } catch (error) {
-                if (attempt >= maximumDeleteAttempts) {
-                    throw new RuntimeError(
-                        this.name,
-                        'cleanup',
-                        `Daytona sandbox ${id} was not deleted after ${attempt} attempts: ${error instanceof Error ? error.message : String(error)}. Delete it with the Daytona dashboard or API.`,
-                        { cause: error }
-                    );
-                }
-                await this.options.clock.sleep(
-                    firstDeleteRetryDelayMs * 2 ** (attempt - 1)
-                );
-            }
-        }
     }
 
     private async ensureSandbox(): Promise<DaytonaSandbox> {
@@ -360,7 +400,7 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
             this.snapshots = [];
             this.snapshotBaselines.clear();
             if (created) {
-                await this.deleteSandbox(created).catch((failure) => {
+                await this.lifetime.delete(created).catch((failure) => {
                     throw new RuntimeError(
                         this.name,
                         'prepare',
@@ -430,22 +470,9 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
             }
             return sandbox;
         } catch (error) {
-            if (starting) await this.restore(sandboxId);
+            if (starting) await this.lifetime.restore(sandboxId);
             throw error;
         }
-    }
-
-    /**
-     * Puts a sandbox this runtime started back as it was kept: stopped, with no
-     * lease. The lease is cleared only once the sandbox is stopped, and when
-     * either step fails the lease still bounds the sandbox.
-     */
-    private async restore(sandboxId: string): Promise<void> {
-        const client = this.options.client;
-        await client
-            .stopSandbox?.(sandboxId)
-            .then(() => client.setSandboxTtl?.(sandboxId, 0))
-            .catch(() => {});
     }
 
     protected async measureInfrastructure(): Promise<RuntimeInfrastructureMetadata> {

@@ -74,6 +74,11 @@ export function runtimeContext(
                   'This is the current execution attempt and its writable outbox. On resume, prior session deliverables are restored here as independent working copies with their relative paths preserved. Before revising a delivered file, locate its current working copy using a shell command such as find "$WORKBENCH_OUTPUT_DIR" -type f, then use the exact returned paths for file tools. Do not reuse absolute paths from earlier tool calls or search the engine home or parent runs directory to find prior results. Read and revise the existing working files rather than recreating them from conversation memory; keep their supporting assets. New sessions start with an empty outbox. A missing earlier filename is not evidence that the outbox is unavailable or read-only; explain missing source material instead of claiming an exact revision from memory. Earlier outbox paths in the conversation are obsolete; do not edit or recreate an earlier outbox. Retained earlier artifacts remain immutable.',
               ]
             : []),
+        ...(outbox && (runtime === 'local' || runtime === 'daytona')
+            ? [
+                  '`wbx preview <port> --name <name>` makes a running server visible to the user; use it only for a server the user should open.',
+              ]
+            : []),
         repository
             ? 'Repository edits are collected as durable results. E2B copies are restored only into this managed checkout, not into a caller directory. Requested reports, audit findings, downloads, and standalone deliverables belong in the outbox as usual, not in the repository checkout, unless the user specifically requests a project file. Local execution is still on the host and is not a security sandbox.'
             : behavior,

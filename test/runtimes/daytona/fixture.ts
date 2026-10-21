@@ -10,7 +10,9 @@ import type {
     DaytonaRuntimeDependencies,
     DaytonaSandbox,
     DaytonaSandboxInfo,
+    DaytonaSignedPreviewUrl,
 } from '../../../src/runtimes/daytona/contracts.js';
+import type { LogOutput } from '../../../src/runtimes/daytona/follow.js';
 import { DaytonaRuntimeProvider } from '../../../src/runtimes/daytona/provider.js';
 import { identityCommand } from '../../../src/runtimes/remote/directories.js';
 import { DiskTransfer } from '../../../src/runtimes/remote/disk/transfer.js';
@@ -200,6 +202,16 @@ export class FakeSandbox implements DaytonaSandbox {
     probes = 0;
     baselineFailure = false;
     input = '';
+    /** Files a download reads, by sandbox path, before the collection defaults. */
+    readonly files = new Map<string, Uint8Array>();
+    /** Ports something listens on, beyond the runner's server. */
+    readonly listeningPorts = new Set<number>();
+    /** Commands followed over the log stream, with the output they report to. */
+    readonly follows: Array<{ command: string; output: LogOutput; stopped: boolean }> =
+        [];
+    /** Every signed preview URL minted and expired, in order. */
+    readonly signed: Array<{ port: number; ttlSeconds: number }> = [];
+    readonly expired: Array<{ port: number; token: string }> = [];
 
     async run(command: string, options: RemoteRunOptions = {}) {
         this.runs.push({ command, options });
@@ -251,6 +263,8 @@ export class FakeSandbox implements DaytonaSandbox {
             return result(0, `/usr/bin/${name}\n`);
         }
         if (command.includes('/dev/tcp') || command.includes('curl -s')) {
+            const port = Number(command.match(/\/dev\/tcp\/127\.0\.0\.1\/(\d+)/)?.[1]);
+            if (this.listeningPorts.has(port)) return result(0);
             this.probes += 1;
             return this.listening ? result(0) : result(1);
         }
@@ -301,6 +315,8 @@ export class FakeSandbox implements DaytonaSandbox {
 
     /** What the sandbox would hold at a collection path: unchanged input, no deletions. */
     private remoteBytes(path: string): Uint8Array {
+        const file = this.files.get(path);
+        if (file) return file;
         if (path.includes('workbench-native-state')) {
             return this.nativeStateDownload ?? new Uint8Array();
         }
@@ -322,6 +338,29 @@ export class FakeSandbox implements DaytonaSandbox {
         const answer = this.previewAnswers.shift();
         if (answer instanceof Error) throw answer;
         return answer ?? `https://${port}-token.proxy.daytona.test`;
+    }
+
+    async signedPreviewUrl(
+        port: number,
+        ttlSeconds: number
+    ): Promise<DaytonaSignedPreviewUrl> {
+        this.signed.push({ port, ttlSeconds });
+        const token = `signed-token-${this.signed.length}`;
+        return { url: `https://${port}-${token}.proxy.daytona.test`, token };
+    }
+
+    async expireSignedPreviewUrl(port: number, token: string): Promise<void> {
+        this.expired.push({ port, token });
+    }
+
+    async follow(command: string, output: LogOutput) {
+        const entry = { command, output, stopped: false };
+        this.follows.push(entry);
+        return {
+            stop: async () => {
+                entry.stopped = true;
+            },
+        };
     }
 
     async info(): Promise<DaytonaSandboxInfo> {

@@ -31,6 +31,20 @@ export class DaytonaApiError extends Error {
     }
 }
 
+/**
+ * The WebSocket constructor Bun and Node provide, which takes request headers
+ * as its second argument. The DOM declaration describes only subprotocols
+ * there, so the platform constructor is narrowed to this form once.
+ */
+type HeaderSocket = new (
+    url: URL,
+    options: { headers: Record<string, string> }
+) => WebSocket;
+
+function headerSocket(value: unknown): value is HeaderSocket {
+    return typeof value === 'function';
+}
+
 export interface SandboxDto {
     id: string;
     state?: string;
@@ -123,6 +137,26 @@ export class DaytonaTransport {
     ): Promise<T> {
         const response = await this.request(method, path, options);
         return (await response.json()) as T;
+    }
+
+    /**
+     * Opens an authenticated WebSocket to an absolute toolbox URL, given with
+     * its HTTP scheme. The platform WebSocket carries the credential in a
+     * request header, never in the URL.
+     */
+    socket(url: string): WebSocket {
+        const target = new URL(url);
+        target.protocol = target.protocol === 'http:' ? 'ws:' : 'wss:';
+        const Socket: unknown = globalThis.WebSocket;
+        if (!headerSocket(Socket)) {
+            throw new DaytonaApiError('This platform has no WebSocket');
+        }
+        return new Socket(target, {
+            headers: {
+                Authorization: `Bearer ${this.apiKey}`,
+                'User-Agent': WORKBENCH_USER_AGENT,
+            },
+        });
     }
 
     waitUntilStarted(id: string): Promise<SandboxDto> {

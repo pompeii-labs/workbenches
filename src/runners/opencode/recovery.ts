@@ -18,7 +18,10 @@ export class TurnRecovery {
     private inflight: Promise<RunnerTurnResult> | undefined;
 
     constructor(
-        private readonly server: Pick<OpenCodeServer, 'requestJson'>,
+        private readonly server: Pick<
+            OpenCodeServer,
+            'requestJson' | 'pendingRequests'
+        >,
         private readonly state: OpenCodeSessionState,
         private readonly router: OpenCodeEventRouter,
         private readonly emitted: TurnProgress
@@ -57,6 +60,12 @@ export class TurnRecovery {
             const replay = messages.turnOf(inputId, inputIds);
             turn = waiting ?? this.begin(inputId, inputIds);
             await this.replay(turn, replay, sessionId);
+            // A request asked before the stream was lost is still waiting, and
+            // the new stream will not repeat it. Unlisted, nothing changes.
+            for (const request of await this.server.pendingRequests().catch(() => [])) {
+                await this.router.handle(request);
+                state.assertOpen();
+            }
             let batch = messages.withoutCoveredDeltas(this.router.take());
             while (batch.length > 0) {
                 for (const value of batch) {

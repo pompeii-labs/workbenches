@@ -36,6 +36,9 @@ export class FakeOpenCodeServer {
     spawnEnvironment: Record<string, string | undefined> = {};
     /** What `GET /session/:id/message` returns: messages with their parts. */
     transcript: Array<{ info: Record<string, unknown>; parts: unknown[] }> = [];
+    /** What `GET /permission` and `GET /question` list as still waiting. */
+    pendingPermissions: Record<string, unknown>[] = [];
+    pendingQuestions: Record<string, unknown>[] = [];
     eventSubscriptions = 0;
     /** Event streams opened and not yet closed or aborted. */
     openEventStreams = 0;
@@ -404,6 +407,12 @@ export class FakeOpenCodeServer {
             this.onTranscriptRead?.();
             await this.transcriptGate;
             return Response.json(this.transcript);
+        }
+        if (url.pathname === '/permission' && init.method === 'GET') {
+            return Response.json(this.pendingPermissions);
+        }
+        if (url.pathname === '/question' && init.method === 'GET') {
+            return Response.json(this.pendingQuestions);
         }
         if (url.pathname.startsWith('/session/') && init.method === 'GET') {
             const info = this.sessions.get(

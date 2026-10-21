@@ -27,6 +27,7 @@ export const WORKBENCH_EVENT_TYPES = [
     'usage.updated',
     'outcome.available',
     'outcome.failed',
+    'preview.available',
     'run.completed',
     'run.failed',
     'run.cancelled',

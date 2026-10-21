@@ -3,7 +3,12 @@ import { RuntimeError } from '../error.js';
 import type { RemoteCommand, RemoteCommandOptions } from '../remote/process.js';
 import type { RemoteRunOptions } from '../remote/runtime.js';
 import { quote } from '../staging/shell.js';
-import type { DaytonaSandbox, DaytonaSandboxInfo } from './contracts.js';
+import type {
+    DaytonaSandbox,
+    DaytonaSandboxInfo,
+    DaytonaSignedPreviewUrl,
+} from './contracts.js';
+import { type FollowedCommand, LogFollower, type LogOutput } from './follow.js';
 import { SessionProcess } from './process.js';
 import {
     DaytonaApiError,
@@ -78,6 +83,42 @@ export class DaytonaToolbox implements DaytonaSandbox {
         }
     }
 
+    async follow(
+        command: string,
+        onStdout: LogOutput,
+        onFailure: (error: unknown) => void
+    ): Promise<FollowedCommand> {
+        const session = `wb-${crypto.randomUUID()}`;
+        await this.transport.request('POST', `${this.toolbox}/process/session`, {
+            absolute: true,
+            json: { sessionId: session },
+        });
+        try {
+            const started = await this.transport.json<{ cmdId: string }>(
+                'POST',
+                `${this.toolbox}/process/session/${session}/exec`,
+                {
+                    absolute: true,
+                    json: {
+                        command: this.subshell(command, {}),
+                        runAsync: true,
+                        suppressInputEcho: true,
+                    },
+                }
+            );
+            return new LogFollower(
+                this.transport,
+                `${this.toolbox}/process/session/${session}`,
+                started.cmdId,
+                onStdout,
+                onFailure
+            );
+        } catch (error) {
+            await this.endSession(session);
+            throw error;
+        }
+    }
+
     async upload(path: string, data: Uint8Array): Promise<void> {
         const form = new FormData();
         form.append('files[0].path', path);
@@ -129,6 +170,45 @@ export class DaytonaToolbox implements DaytonaSandbox {
             { query: { expiresInSeconds: String(Math.max(60, Math.ceil(ttlSeconds))) } }
         );
         return preview.url;
+    }
+
+    async signedPreviewUrl(
+        port: number,
+        ttlSeconds: number
+    ): Promise<DaytonaSignedPreviewUrl> {
+        const preview = await this.transport.json<unknown>(
+            'GET',
+            `/sandbox/${encodeURIComponent(this.id)}/ports/${port}/signed-preview-url`,
+            { query: { expiresInSeconds: String(ttlSeconds) } }
+        );
+        if (
+            typeof preview !== 'object' ||
+            preview === null ||
+            !('url' in preview) ||
+            !('token' in preview) ||
+            typeof preview.url !== 'string' ||
+            typeof preview.token !== 'string'
+        ) {
+            throw new DaytonaApiError(
+                'Daytona returned an unexpected signed preview URL response'
+            );
+        }
+        return { url: preview.url, token: preview.token };
+    }
+
+    async expireSignedPreviewUrl(port: number, token: string): Promise<void> {
+        try {
+            await this.transport.request(
+                'POST',
+                `/sandbox/${encodeURIComponent(this.id)}/ports/${port}/signed-preview-url/${encodeURIComponent(token)}/expire`
+            );
+        } catch (error) {
+            // The request path carries the token, so the transport's message never leaves here.
+            throw new DaytonaApiError(
+                `Daytona did not expire the signed preview URL for port ${port}${error instanceof DaytonaApiError && error.status ? ` (status ${error.status})` : ''}`,
+                error instanceof DaytonaApiError ? error.status : undefined
+            );
+        }
     }
 
     async info(): Promise<DaytonaSandboxInfo> {

@@ -46,6 +46,16 @@ export class WorkbenchFiles {
         return join(this.workDirectory(runId), 'outbox');
     }
 
+    /** The private directory a run's runner finds the `wbx` helper in. */
+    helperDirectory(runId: string): string {
+        return join(this.workDirectory(runId), 'bin');
+    }
+
+    /** Where the `wbx` helper records preview announcements, outside the outbox. */
+    previewDirectory(runId: string): string {
+        return join(this.workDirectory(runId), 'previews');
+    }
+
     /** Runtime state of the running local Studio, which is never a database record. */
     get studioState(): string {
         return join(this.home, 'studio', 'state.json');

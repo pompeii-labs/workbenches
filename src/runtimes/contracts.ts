@@ -149,6 +149,42 @@ export interface RuntimePreparation {
     excludedPaths?: string[];
 }
 
+/** A server the agent announced with `wbx preview` and the runtime accepted. */
+export interface RuntimePreview {
+    name: string;
+    port: number;
+}
+
+/** Where a runtime's accepted previews and announcement warnings go. */
+export interface RuntimePreviewListener {
+    available(preview: RuntimePreview): Promise<void>;
+    warn(message: string): void;
+}
+
+/**
+ * The `wbx` announcements of a runtime that carries them from its sandbox
+ * itself. Every announcement is validated before the listener sees it.
+ */
+export interface RuntimePreviewFeed {
+    /** Starts following announcements and passes each accepted preview to `listener`, in order. */
+    watch(listener: RuntimePreviewListener): void;
+    /** Reads the control file again and passes on anything the follower missed. */
+    refresh(): Promise<void>;
+    /** Passes on what is left, then stops, so no preview follows the run's end. */
+    close(): Promise<void>;
+}
+
+/**
+ * A signed URL that reaches one sandbox port without further credentials.
+ * Both values are credentials: never log, print, store in an event, or show
+ * them to anyone but the person the preview is for.
+ */
+export interface RuntimeSignedPreviewUrl {
+    url: string;
+    /** Expires the URL early through `expireSignedPreviewUrl`. */
+    token: string;
+}
+
 export interface PreparedRuntime {
     readonly name: string;
     readonly workbench: ResolvedWorkbench;
@@ -181,6 +217,29 @@ export interface PreparedRuntime {
         buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
     ): RuntimeService;
     cancel(process: SpawnedRunner): void;
+    /**
+     * Ports the engine listens on itself for this runtime, such as a runner
+     * server, which a run's preview may never claim.
+     */
+    reservedPorts?(): number[];
+    /**
+     * The run's `wbx` announcements, for a runtime that carries them from its
+     * sandbox itself. Present after `preflight` when the runtime staged the
+     * helper. A host runtime leaves it out: the engine reads its control file.
+     */
+    readonly previews?: RuntimePreviewFeed | undefined;
+    /**
+     * Mints a new signed URL for `port`, valid for `ttlSeconds`, on every call.
+     * Only a port of a preview this run announced is accepted. The URL and its
+     * token are credentials that the engine never logs or emits.
+     */
+    readonly previewUrl?:
+        | ((port: number, ttlSeconds: number) => Promise<RuntimeSignedPreviewUrl>)
+        | undefined;
+    /** Expires a signed URL that `previewUrl` minted for `port` before its time. */
+    readonly expireSignedPreviewUrl?:
+        | ((port: number, token: string) => Promise<void>)
+        | undefined;
     infrastructure?(): Promise<RuntimeInfrastructureMetadata | undefined>;
     collectOutcome?(store: OutcomeSink): Promise<RuntimeOutcomeCollection | undefined>;
     /** Capture repository changes during execution without finalizing or caching them. */
@@ -196,6 +255,15 @@ export interface PreparedRuntime {
      * platform can stop a sandbox and keep its disk implements it.
      */
     readonly suspend?: ((keepMinutes: number) => Promise<void>) | undefined;
+    /**
+     * Ends the runtime like `cleanup` once a run that announced a preview is
+     * over, but keeps its remote sandbox running for `minutes` from now so the
+     * previews stay reachable. Credential files are removed from the sandbox
+     * first. Calling it again while the sandbox lingers sets the deadline
+     * again, counted from then. `cleanup` deletes a lingering sandbox and
+     * `suspend` stops and keeps it.
+     */
+    readonly linger?: ((minutes: number) => Promise<void>) | undefined;
     cleanup(): Promise<void>;
 }
 

@@ -790,7 +790,7 @@ bun run build
 
 `test:e2b` requires `E2B_API_KEY`, builds a real E2B template, exercises remote streaming, PTY input, pending workspace outcomes, original-sandbox result recovery, cross-sandbox credential persistence, and sandbox destruction. `test:e2b:sessions` additionally starts OpenCode in two fresh sandboxes and verifies native session resume. It requires a supported model-provider key and makes model-provider requests.
 
-`test:daytona` runs only when `DAYTONA_API_KEY` is set. It creates a sandbox from `debian:bookworm-slim`, runs a command, transfers a file in both directions, follows a background command, requests a preview URL, deletes the sandbox, and confirms by listing the run's label that nothing is left. It uses Daytona usage and is skipped unless both `DAYTONA_E2E=1` and the key are set.
+`test:daytona` runs only when `DAYTONA_API_KEY` is set. It creates a sandbox from `debian:bookworm-slim`, runs a command, transfers a file in both directions, follows a background command, requests a preview URL, announces a preview with `wbx` and follows it over the log stream, signs and expires a URL for it, deletes the sandbox, and confirms by listing the run's label that nothing is left. It uses Daytona usage and is skipped unless both `DAYTONA_E2E=1` and the key are set.
 
 `test:outcomes:harnesses` exercises OpenCode and Pi through the public CLI on Local, Docker, and E2B. It requires `OPENROUTER_API_KEY`, a running Docker daemon, and `E2B_API_KEY`. It makes real model-provider requests and verifies tool-created changes in primary and named workspaces, exact binary artifact bytes, link metadata, outcome publication before completion, keyless inspection and export, explicit E2B application, and native context resume. Set `WORKBENCH_OUTCOME_RUNTIMES=local`, `docker`, or `e2b` to run a subset. Docker fixtures build native-runner images by default; existing images containing the corresponding runner may be reused through `WORKBENCH_OUTCOME_DOCKER_OPENCODE_IMAGE` and `WORKBENCH_OUTCOME_DOCKER_PI_IMAGE`. `WORKBENCH_OUTCOME_CLI` may point at an isolated compiled binary to run the same checks against release packaging. These overrides are test-only.
 
@@ -858,7 +858,41 @@ await runtime.suspend?.(7 * 24 * 60); // keep the stopped sandbox for 7 days
 
 `suspend` stops running commands, copies native state out as `cleanup` does, stops the sandbox, sets Daytona's auto-archive interval to one minute past `keepMinutes` and its auto-delete interval to `keepMinutes` (a whole number, at least 1), and then clears the lease TTL, deleting nothing. Daytona deletes the sandbox once it has been stopped for `keepMinutes`, before it can be archived. The runtime is finished afterwards, as after `cleanup`, and a later `cleanup` deletes nothing. When a step fails, the error names the sandbox and a later `cleanup` deletes it. Keep the sandbox id, the native session id, and the runner server's password, and pass them to `adopt` and the session for the next run. `suspend` is present only on a runtime that can keep its sandbox, so call `runtime.suspend?.(minutes)` and fall back to `cleanup` when it is undefined. A `DaytonaClient` the host supplies must implement `stopSandbox`, `setAutoDeleteInterval`, and `setSandboxTtl` for `suspend`, and `startSandbox` and `setSandboxTtl` for `adopt` to start a stopped sandbox; `setAutoArchiveInterval` is also used when present. These members are optional, so a client without them keeps working and is refused only for those operations. `DaytonaApi` implements all of them.
 
-Only Daytona has `adopt` and `suspend`. E2B keeps its own outcome-recovery state and template lifecycle, so reconnecting there is not offered yet. The CLI calls neither: `wb attach` observes stored events and does not reconnect to a live sandbox.
+#### Keeping previews reachable after a run
+
+A Daytona run with an outbox gets the `wbx` helper, so the agent can announce a server it started with `wbx preview <port> --name <name>`. Daytona refuses runners that read standard input, so previews there are OpenCode only. After `preflight`, `runtime.previews` follows the announcements; call `watch` with a listener, `refresh` at each turn end, and `close` when the run's last turn is over:
+
+```ts
+runtime.previews?.watch({
+    available: async ({ name, port }) => show(name, port),
+    warn: (message) => log(message),
+});
+```
+
+The listener receives `{ name, port }` only, and the CLI publishes the same as `preview.available` without a `url`. A host that wants to show a preview asks for a signed URL when it needs one:
+
+```ts
+const signed = await runtime.previewUrl?.(port, 3_600); // { url, token }
+if (signed) await runtime.expireSignedPreviewUrl?.(port, signed.token);
+```
+
+`previewUrl` mints a new URL with `GET /sandbox/{id}/ports/{port}/signed-preview-url?expiresInSeconds=` on every call and caches nothing. `ttlSeconds` is a whole number from 1 to 86,400. `expireSignedPreviewUrl` revokes one before its time with `POST /sandbox/{id}/ports/{port}/signed-preview-url/{token}/expire`. Both refuse a port that is not a preview this run announced, including the runner server's and Daytona's own ports, and both work while the run is live and while the sandbox lingers. The URL and token are credentials: the engine never logs, prints, or emits them, an error never contains the token, and the host keeps them away from anyone but the person the preview is for. A `DaytonaSandbox` the host supplies needs `signedPreviewUrl` and `expireSignedPreviewUrl` for these, and `follow` for announcements to arrive as they are written; without `follow` they arrive with each `refresh`. `DaytonaApi` implements all three.
+
+When a run that announced at least one preview ends, the host may call `linger` instead of `cleanup`:
+
+```ts
+await runtime.linger?.(30); // keep the previews reachable for 30 minutes
+```
+
+`linger` stops running commands, including the runner, copies native state out as `cleanup` does, ends the control session, removes the credential files mounted in the sandbox at `/workbench-credentials` (when the request mounted a credential store), and sets Daytona's TTL to `minutes` from now (a whole number, at least 1). The sandbox is not deleted or stopped, so servers the agent started keep running until the TTL destroys it, even if the host is gone. When the credential files cannot be removed, the sandbox is deleted instead and `linger` fails. It refuses a run that announced no preview. While the sandbox lingers:
+
+- `linger(minutes)` again extends it: the TTL is set again, counted from that call.
+- `cleanup()` ends it by deleting the sandbox.
+- `suspend(keepMinutes)` ends it by stopping the sandbox and keeping it for a later `adopt`.
+
+The engine sets no cap on `minutes` and does not track cost; the host decides how long a sandbox may linger, how often it is extended, and who pays for it. When setting the TTL fails, the error names the sandbox and a later `cleanup` deletes it. A `DaytonaClient` the host supplies must implement `setSandboxTtl` for `linger`. Model credentials that came from environment variables are not files: they leave with the runner's process, but a server the agent started inherited the runner's environment and keeps it while it runs.
+
+Only Daytona has `adopt`, `suspend`, `linger`, and signed preview URLs. E2B keeps its own outcome-recovery state and template lifecycle, so reconnecting there is not offered yet. The CLI calls neither: `wb attach` observes stored events and does not reconnect to a live sandbox.
 
 A session that lost its event stream, or restarted, calls `resumeTurn`:
 

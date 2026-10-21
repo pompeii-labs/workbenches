@@ -276,6 +276,15 @@ class HumanEventRenderer implements EventRenderer {
             this.stdout(`    wb outcome ${id}\n`);
             return;
         }
+        if (event.type === 'preview.available') {
+            this.endAnswer();
+            const url = text(event.data, 'url');
+            const where = url ? `at ${url}` : `on port ${number(event.data, 'port')}`;
+            this.stdout(
+                `  ${colors.cyan('◆')} ${colors.bold('Serving')} ${text(event.data, 'name')} ${where}\n`
+            );
+            return;
+        }
         if (event.type === 'repository.preparing') {
             this.endAnswer();
             this.stdout(
