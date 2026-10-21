@@ -1,17 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 
-import { describeShellCommand } from '../../src/runners/shell.js';
+import { scrubShellCommand } from '../../src/runners/shell.js';
 
 const SECRET = 'MUST_NOT_RENDER_SECRET';
 
 function command(value: string): string {
-    const described = describeShellCommand(value);
-    if (!described) throw new Error('expected a description');
-    return described.command;
-}
-
-function programs(value: string): string[] {
-    return describeShellCommand(value)?.programs ?? [];
+    const scrubbed = scrubShellCommand(value);
+    if (!scrubbed) throw new Error('expected a command');
+    return scrubbed;
 }
 
 describe('shell command descriptions', () => {
@@ -38,6 +34,12 @@ describe('shell command descriptions', () => {
             `docker login -u ci -p ${SECRET} registry.fly.io`,
         ],
         ['an attached database password', `mysql -u root -p${SECRET} app`],
+        ['an SSH password', `sshpass -p ${SECRET} ssh host`],
+        ['a Redis password', `redis-cli -a ${SECRET} ping`],
+        ['a secret-named header', `curl -H "PRIVATE-TOKEN: ${SECRET}" https://x`],
+        ['a form field', `curl -d 'password=${SECRET}' https://x/login`],
+        ['an encoded form field', `curl --data-urlencode "token=${SECRET}" https://x`],
+        ['a JSON field', `curl -d '{"api_key":"${SECRET}"}' https://x`],
     ])('removes the value of %s', (_label, value) => {
         expect(command(value)).not.toContain(SECRET);
         expect(command(value)).toContain('[REDACTED]');
@@ -63,6 +65,19 @@ describe('shell command descriptions', () => {
         expect(command(value)).toBe(value);
     });
 
+    test('keeps the operator after a removed value', () => {
+        expect(command('FOO_TOKEN=abc&&npm test')).toBe(
+            'FOO_TOKEN=[REDACTED]&&npm test'
+        );
+        expect(command('export GH_TOKEN=x; gh pr list')).toBe(
+            'export GH_TOKEN=[REDACTED]; gh pr list'
+        );
+    });
+
+    test('keeps prose that names an authorization scheme', () => {
+        expect(command('echo "basic setup done"')).toBe('echo "basic setup done"');
+    });
+
     test('reduces heredoc bodies to a line count', () => {
         const value = [
             "cat > .env <<'EOF'",
@@ -72,7 +87,6 @@ describe('shell command descriptions', () => {
             'npm run build',
         ].join('\n');
         expect(command(value)).toBe("cat > .env <<'EOF' [2 lines] EOF npm run build");
-        expect(programs(value)).toEqual(['cat', 'npm run build']);
     });
 
     test('hides the rest of an unterminated heredoc', () => {
@@ -87,62 +101,6 @@ describe('shell command descriptions', () => {
     });
 
     test('describes nothing for an empty command', () => {
-        expect(describeShellCommand('  \n ')).toBeUndefined();
-    });
-});
-
-describe('shell command programs', () => {
-    test.each([
-        ['a single program', 'ls -la', ['ls']],
-        [
-            'a chain',
-            'cd dist && npm run build || echo failed; ls',
-            ['cd', 'npm run build', 'echo', 'ls'],
-        ],
-        ['a pipeline', 'cat log.txt | grep error | wc -l', ['cat', 'grep', 'wc']],
-        [
-            'assignments before the program',
-            'NODE_ENV=production API_KEY=x node server.js',
-            ['node'],
-        ],
-        ['package runners', 'npx -y tgcheck --json', ['tgcheck']],
-        [
-            'package manager subcommands',
-            'bun test && pnpm install',
-            ['bun test', 'pnpm install'],
-        ],
-        [
-            'package executors',
-            'pnpm dlx playwright test && bun x tsc',
-            ['playwright', 'tsc'],
-        ],
-        ['wrappers', 'sudo env FOO=1 timeout 30 nohup ./scripts/gate.sh', ['gate.sh']],
-        [
-            'a nested shell',
-            `bash -lc "npm test && npx tgcheck"`,
-            ['npm test', 'tgcheck'],
-        ],
-        ['a shell script', 'sh scripts/playtest.sh --fast', ['playtest.sh']],
-        ['command substitution', 'echo $(date) > out.txt', ['echo', 'date']],
-        ['redirections', 'npm test 2>&1 > test.log', ['npm test']],
-        ['background jobs', 'npx serve dist & sleep 2', ['serve', 'sleep']],
-        ['repeated programs once', 'npx tgcheck; npx tgcheck --json', ['tgcheck']],
-    ])('reads %s', (_label, value, expected) => {
-        expect(programs(value)).toEqual(expected);
-    });
-
-    test('never names a credential or an unreadable token as a program', () => {
-        expect(programs('sk-or-v1-0123456789abcdef0123456789abcdef --help')).toEqual(
-            []
-        );
-        expect(programs('"$(cat key)" run')).toEqual([]);
-        expect(programs('./bin/{a,b}.sh')).toEqual([]);
-    });
-
-    test('bounds the number of programs', () => {
-        const value = Array.from({ length: 30 }, (_, index) => `step${index}`).join(
-            ' && '
-        );
-        expect(programs(value)).toHaveLength(16);
+        expect(scrubShellCommand('  \n ')).toBeUndefined();
     });
 });

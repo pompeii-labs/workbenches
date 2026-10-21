@@ -53,7 +53,6 @@ describe('runner tool descriptions', () => {
         expect(description).toEqual({
             title: 'Call the API',
             target: 'curl -H "Authorization: [REDACTED]" https://example.invalid',
-            programs: ['curl'],
             exit_code: 0,
         });
         expect(JSON.stringify(description)).not.toContain('SECRET');
@@ -63,9 +62,10 @@ describe('runner tool descriptions', () => {
         expect(describeTool('bash', {}, { exit: 1.5 })).toEqual({
             title: 'Shell command',
         });
-        expect(
-            describeTool('shell_command', { command: '   ' }, { exitCode: 2 })
-        ).toEqual({ title: 'Shell command', exit_code: 2 });
+        expect(describeTool('shell_command', { command: '   ' }, { exit: 2 })).toEqual({
+            title: 'Shell command',
+            exit_code: 2,
+        });
     });
 
     test('strips terminal control characters and bounds display text', () => {

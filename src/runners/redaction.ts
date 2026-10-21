@@ -15,11 +15,12 @@ const PATTERNS: readonly (readonly [RegExp, string])[] = [
         /-----BEGIN [^-\r\n]+ PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]+ PRIVATE KEY-----/gu,
         '[REDACTED PRIVATE KEY]',
     ],
-    [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/giu, `$1 ${REDACTED}`],
+    // Case-sensitive Basic, so prose such as "basic setup" survives.
+    [/\b([Bb]earer|BEARER|Basic)\s+[A-Za-z0-9._~+/=-]+/gu, `$1 ${REDACTED}`],
     [/\b(?:sk|pk|rk)[-_][A-Za-z0-9_-]{12,}/gu, REDACTED],
     [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gu, REDACTED],
     [
-        /\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?))\s*=\s*([^\s]+)/gu,
+        /\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?))\s*=\s*("[^"]*"|'[^']*'|[^\s;&|)'"]+)/gu,
         `$1=${REDACTED}`,
     ],
     [/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/gu, REDACTED],

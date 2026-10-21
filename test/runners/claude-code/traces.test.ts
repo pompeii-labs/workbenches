@@ -250,7 +250,6 @@ describe('Claude Code recorded trace replay', () => {
             data: expect.objectContaining({
                 name: 'Bash',
                 target: 'echo hello > out.txt',
-                programs: ['echo'],
             }),
         });
         await run.finish();

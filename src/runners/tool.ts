@@ -1,12 +1,10 @@
-import { describeShellCommand } from './shell.js';
+import { scrubShellCommand } from './shell.js';
 import { displayText } from './text.js';
 
 export interface ToolDescription {
     title: string;
     target?: string;
     description?: string;
-    /** Programs a shell command ran, without their arguments. */
-    programs?: string[];
     /** A finished shell command's exit status, when the runner reports one. */
     exit_code?: number;
 }
@@ -24,15 +22,11 @@ export function describeTool(
 
     if (SHELL_TOOLS.has(normalized)) {
         const raw = input?.command;
-        const shell = typeof raw === 'string' ? describeShellCommand(raw) : undefined;
-        const exit =
-            number(metadata, 'exit') ??
-            number(metadata, 'exitCode') ??
-            number(metadata, 'exit_code');
+        const command = typeof raw === 'string' ? scrubShellCommand(raw) : undefined;
+        const exit = number(metadata, 'exit');
         return {
             title: description ?? 'Shell command',
-            ...(shell ? { target: shell.command } : {}),
-            ...(shell?.programs.length ? { programs: shell.programs } : {}),
+            ...(command ? { target: command } : {}),
             ...(exit !== undefined && Number.isInteger(exit)
                 ? { exit_code: exit }
                 : {}),

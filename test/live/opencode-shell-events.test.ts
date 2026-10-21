@@ -110,7 +110,6 @@ test.skipIf(process.env.WORKBENCH_SHELL_EVENTS_E2E !== '1')(
                 expect.objectContaining({
                     title: 'Check the service',
                     target: `API_TOKEN=[REDACTED] sh -c 'echo shell-e2e' && curl -s -H "Authorization: [REDACTED]" http://127.0.0.1:${provider.port}/health; exit 3`,
-                    programs: ['echo', 'curl', 'exit'],
                     exit_code: 3,
                     status: 'completed',
                 })

@@ -136,7 +136,6 @@ export function runnerAdapterContract(options: {
                         data: expect.objectContaining({
                             id: 'call_shell',
                             target: 'API_TOKEN=[REDACTED] npx tgcheck --json',
-                            programs: ['tgcheck'],
                             status: 'completed',
                         }),
                     });

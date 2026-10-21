@@ -174,7 +174,6 @@ describe('Claude Code stream-json event normalization', () => {
                 name: 'Bash',
                 title: 'List',
                 target: 'GITHUB_TOKEN=[REDACTED] ls -la',
-                programs: ['ls'],
             },
         });
         expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER');
