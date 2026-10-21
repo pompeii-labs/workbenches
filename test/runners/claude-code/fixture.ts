@@ -4,7 +4,10 @@ import type {
 } from '../../../src/runners/claude-code/process.js';
 import type { PreparedClaudeCodeSession } from '../../../src/runners/claude-code/session.js';
 import type { ResolvedWorkbench } from '../../../src/types.js';
-import type { RunnerConformanceScenario } from '../../runner-adapter-contract.js';
+import {
+    RUNNER_CONFORMANCE_SHELL_COMMAND,
+    type RunnerConformanceScenario,
+} from '../../runner-adapter-contract.js';
 
 export const PREPARED: PreparedClaudeCodeSession = {
     paths: {
@@ -272,6 +275,15 @@ export class FakeClaudeCode {
                 },
             ]);
             this.toolResult('call_contract', 'MUST_NOT_RENDER_TOOL_OUTPUT');
+            this.assistant([
+                {
+                    type: 'tool_use',
+                    id: 'call_shell',
+                    name: 'Bash',
+                    input: { command: RUNNER_CONFORMANCE_SHELL_COMMAND },
+                },
+            ]);
+            this.toolResult('call_shell', 'MUST_NOT_RENDER_TOOL_OUTPUT');
             this.finishTurn(command, {
                 usage: { input_tokens: 5, output_tokens: 7 },
                 total_cost_usd: 0.001,
@@ -325,7 +337,7 @@ export class FakeClaudeCode {
                     type: 'tool_use',
                     id: 'call_running',
                     name: 'Bash',
-                    input: { command: 'MUST_NOT_RENDER_COMMAND', description: 'Wait' },
+                    input: { command: 'sleep 5', description: 'Wait' },
                 },
             ]);
             return;

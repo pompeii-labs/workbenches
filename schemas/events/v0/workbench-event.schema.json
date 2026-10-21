@@ -452,6 +452,7 @@
                             "title": { "type": "string" },
                             "target": { "type": "string" },
                             "description": { "type": "string" },
+                            "exit_code": { "type": "integer" },
                             "status": { "enum": ["completed", "failed"] },
                             "duration_ms": { "type": "number", "minimum": 0 },
                             "outcome_id": {

@@ -245,7 +245,13 @@ describe('Claude Code recorded trace replay', () => {
             ['Write', 'failed'],
         ]);
         expect(run.events.some((event) => event.type === 'file.changed')).toBe(false);
-        expect(JSON.stringify(run.events)).not.toContain('echo hello');
+        expect(run.events).toContainEqual({
+            type: 'tool.completed',
+            data: expect.objectContaining({
+                name: 'Bash',
+                target: 'echo hello > out.txt',
+            }),
+        });
         await run.finish();
     });
 

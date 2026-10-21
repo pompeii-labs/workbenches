@@ -1,10 +1,15 @@
-import { stripVTControlCharacters } from 'node:util';
+import { scrubShellCommand } from './shell.js';
+import { displayText } from './text.js';
 
 export interface ToolDescription {
     title: string;
     target?: string;
     description?: string;
+    /** A finished shell command's exit status, when the runner reports one. */
+    exit_code?: number;
 }
+
+const SHELL_TOOLS = new Set(['bash', 'shell', 'shell_command']);
 
 export function describeTool(
     name: string,
@@ -15,8 +20,17 @@ export function describeTool(
     const target = path(input) ?? url(input);
     const description = value(input, 'description');
 
-    if (['bash', 'shell', 'shell_command'].includes(normalized)) {
-        return { title: description ?? 'Shell command' };
+    if (SHELL_TOOLS.has(normalized)) {
+        const raw = input?.command;
+        const command = typeof raw === 'string' ? scrubShellCommand(raw) : undefined;
+        const exit = number(metadata, 'exit');
+        return {
+            title: description ?? 'Shell command',
+            ...(command ? { target: command } : {}),
+            ...(exit !== undefined && Number.isInteger(exit)
+                ? { exit_code: exit }
+                : {}),
+        };
     }
     if (normalized === 'read') return withTarget('Read', target, range(input));
     if (['write', 'edit'].includes(normalized)) {
@@ -174,7 +188,7 @@ function value(
 ): string | undefined {
     const candidate = record?.[key];
     if (typeof candidate !== 'string') return undefined;
-    const clean = sanitize(candidate).trim();
+    const clean = displayText(candidate).trim();
     if (!clean) return undefined;
     return clean.length > 240 ? `${clean.slice(0, 237)}...` : clean;
 }
@@ -187,21 +201,6 @@ function number(
     return typeof candidate === 'number' && Number.isFinite(candidate)
         ? candidate
         : undefined;
-}
-
-function sanitize(value: string): string {
-    return Array.from(stripVTControlCharacters(value))
-        .filter((character) => {
-            const code = character.charCodeAt(0);
-            return (
-                code === 9 ||
-                code === 10 ||
-                code === 13 ||
-                (code >= 32 && !(code >= 127 && code <= 159))
-            );
-        })
-        .join('')
-        .replace(/\s+/gu, ' ');
 }
 
 function humanize(value: string): string {

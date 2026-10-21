@@ -143,7 +143,7 @@ describe('Claude Code stream-json event normalization', () => {
         expect(JSON.stringify(events)).not.toContain('secret');
     });
 
-    test('reports failed tools without a file change and titles shell commands safely', () => {
+    test('reports failed tools without a file change and describes shell commands without their credentials', () => {
         const adapter = new ClaudeCodeEventAdapter();
         const events = [
             ...adapter.consume(
@@ -153,7 +153,7 @@ describe('Claude Code stream-json event normalization', () => {
                         id: 'shell',
                         name: 'Bash',
                         input: {
-                            command: 'MUST_NOT_RENDER_COMMAND',
+                            command: 'GITHUB_TOKEN=MUST_NOT_RENDER_COMMAND ls -la',
                             description: 'List',
                         },
                     },
@@ -169,8 +169,14 @@ describe('Claude Code stream-json event normalization', () => {
         ];
         expect(events).toContainEqual({
             type: 'tool.started',
-            data: { id: 'shell', name: 'Bash', title: 'List' },
+            data: {
+                id: 'shell',
+                name: 'Bash',
+                title: 'List',
+                target: 'GITHUB_TOKEN=[REDACTED] ls -la',
+            },
         });
+        expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER');
         expect(events).toContainEqual({
             type: 'tool.completed',
             data: {

@@ -24,6 +24,7 @@ export {
     PiSessionAdapter,
     type PiSessionDependencies,
 } from './pi/session.js';
+export { redactCredentials } from './redaction.js';
 export { RunnerRegistry } from './registry.js';
 export {
     type PreparedRunner,
