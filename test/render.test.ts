@@ -211,8 +211,8 @@ describe('Workbench event renderers', () => {
         renderer.render(preview);
         renderer.render(remote);
         renderer.finish();
-        expect(human).toContain('◆ Live preview: game at http://127.0.0.1:5173/\n');
-        expect(human).toContain('◆ Live preview: docs on port 8080\n');
+        expect(human).toContain('◆ Serving game at http://127.0.0.1:5173/\n');
+        expect(human).toContain('◆ Serving docs on port 8080\n');
 
         let final = '';
         const finalOnly = createEventRenderer({

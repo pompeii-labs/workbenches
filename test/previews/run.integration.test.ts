@@ -323,7 +323,7 @@ describe('live previews on the local runtime', () => {
             );
             expect(attached.code).toBe(0);
             expect(attached.stdout).toContain(
-                `Live preview: demo at http://127.0.0.1:${port}/`
+                `Serving demo at http://127.0.0.1:${port}/`
             );
         });
     }

@@ -281,7 +281,7 @@ class HumanEventRenderer implements EventRenderer {
             const url = text(event.data, 'url');
             const where = url ? `at ${url}` : `on port ${number(event.data, 'port')}`;
             this.stdout(
-                `  ${colors.cyan('◆')} ${colors.bold('Live preview:')} ${text(event.data, 'name')} ${where}\n`
+                `  ${colors.cyan('◆')} ${colors.bold('Serving')} ${text(event.data, 'name')} ${where}\n`
             );
             return;
         }
