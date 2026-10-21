@@ -150,7 +150,9 @@ export class OpenCodeServer {
         this.subscription = subscription;
         const closeWithServer = () => subscription.abort();
         this.closeSubscription = closeWithServer;
-        this.abort.signal.addEventListener('abort', closeWithServer, { once: true });
+        this.abort.signal.addEventListener('abort', closeWithServer, {
+            once: true,
+        });
         const response = await this.authFetch(this.endpoint('/event'), {
             signal: subscription.signal,
         });
@@ -168,10 +170,16 @@ export class OpenCodeServer {
                 await consume(event);
             }
         })
+            .then(() => {
+                // The server never ends the stream on its own, so an end
+                // nobody asked for is a lost stream, not a quiet one.
+                throw new Error('OpenCode event stream ended');
+            })
             .catch((error) => {
                 if (
                     !this.closed &&
                     !isAbortError(error) &&
+                    !subscription.signal.aborted &&
                     this.subscription === subscription
                 ) {
                     onFailure(
@@ -181,6 +189,27 @@ export class OpenCodeServer {
             })
             .finally(() => this.eventLoops.delete(loop));
         this.eventLoops.add(loop);
+    }
+
+    /**
+     * The permissions and questions the server is still waiting on, as the
+     * events that asked them. A turn resumed on a new stream asks its host
+     * again, since the new stream never repeats an earlier request. A V2
+     * server has no such listing, so it reports none.
+     */
+    async pendingRequests(): Promise<unknown[]> {
+        if (this.v2) return [];
+        const listed = async (path: string, type: string) => {
+            const body = await this.requestJson(path, { method: 'GET' });
+            return Array.isArray(body)
+                ? body.map((properties) => ({ type, properties }))
+                : [];
+        };
+        const [permissions, questions] = await Promise.all([
+            listed('/permission', 'permission.asked'),
+            listed('/question', 'question.asked'),
+        ]);
+        return [...permissions, ...questions];
     }
 
     async request(path: string, init: RequestInit): Promise<Response> {

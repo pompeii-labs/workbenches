@@ -20,7 +20,8 @@ interface AlwaysPermission {
 /**
  * Answers the permission and question requests a running turn raises. Each is
  * put to the host, and the host's answer is sent back to OpenCode. A request
- * stops waiting when the turn settles, which a closing session does too. A
+ * stops waiting when the turn settles, which a closing session does too, and
+ * one the host had not answered is withdrawn from it. A
  * permission the host allowed "always" is remembered for the rest of the session.
  */
 export class OpenCodeInputRequests {
@@ -34,12 +35,21 @@ export class OpenCodeInputRequests {
         >,
         private readonly host: Pick<
             RunnerSessionHost,
-            'requestPermission' | 'requestQuestion'
+            'requestPermission' | 'requestQuestion' | 'withdrawRequest'
         >,
         private readonly children: Pick<OpenCodeChildren, 'owns'>,
         private readonly environment: Record<string, string | undefined>,
         private readonly state: Pick<OpenCodeSessionState, 'active'>
     ) {}
+
+    /**
+     * Requests put to the host whose answer still counts. A resumed turn lists
+     * what OpenCode still waits on, and also sees requests arrive on the new
+     * stream, so the same request can come twice; it is put to the host once.
+     * One its turn gave up on is withdrawn from the host and leaves this set,
+     * so a resumed turn asks it again.
+     */
+    private readonly asked = new Set<string>();
 
     /** Whether the turn has settled or another turn has replaced it. */
     private stale(active: ActiveTurn): boolean {
@@ -47,6 +57,45 @@ export class OpenCodeInputRequests {
     }
 
     async permission(
+        active: ActiveTurn,
+        properties: Record<string, unknown>
+    ): Promise<void> {
+        await this.once(properties, () => this.askPermission(active, properties));
+    }
+
+    async question(
+        active: ActiveTurn,
+        properties: Record<string, unknown>
+    ): Promise<void> {
+        await this.once(properties, () => this.askQuestion(active, properties));
+    }
+
+    private async once(
+        properties: Record<string, unknown>,
+        ask: () => Promise<void>
+    ): Promise<void> {
+        const id = string(properties.id);
+        if (id && this.asked.has(id)) return;
+        if (id) this.asked.add(id);
+        try {
+            await ask();
+        } catch (error) {
+            if (id) this.asked.delete(id);
+            throw error;
+        }
+    }
+
+    /**
+     * The turn moved on before the answer was used, and OpenCode still waits.
+     * A request the host never answered is withdrawn there, so it stops
+     * showing as pending, and either way a resumed turn can ask it again.
+     */
+    private async abandon(id: string, answered: boolean): Promise<void> {
+        this.asked.delete(id);
+        if (!answered) await this.host.withdrawRequest?.(id).catch(() => {});
+    }
+
+    private async askPermission(
         active: ActiveTurn,
         properties: Record<string, unknown>
     ): Promise<void> {
@@ -83,7 +132,10 @@ export class OpenCodeInputRequests {
                 () => undefined
             ),
         ]);
-        if (!decision || this.stale(active)) return;
+        if (!decision || this.stale(active)) {
+            await this.abandon(id, decision !== undefined);
+            return;
+        }
         const replied = await this.reply(id, decision);
         if (replied && decision === 'allow_always') {
             this.always.push({
@@ -94,7 +146,7 @@ export class OpenCodeInputRequests {
         }
     }
 
-    async question(
+    private async askQuestion(
         active: ActiveTurn,
         properties: Record<string, unknown>
     ): Promise<void> {
@@ -123,7 +175,10 @@ export class OpenCodeInputRequests {
                 () => undefined
             ),
         ]);
-        if (!response || this.stale(active)) return;
+        if (!response || this.stale(active)) {
+            await this.abandon(id, response !== undefined);
+            return;
+        }
         if (response.outcome === 'rejected') {
             await this.server.replyQuestion(
                 `/question/${encodeURIComponent(id)}/reject`
