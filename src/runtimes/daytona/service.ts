@@ -8,7 +8,7 @@ import type { DaytonaSandbox } from './contracts.js';
  * needs `bash` for its `/dev/tcp` redirection or `curl`, and reports a closed
  * port otherwise.
  */
-const portListening = (port: number) =>
+export const portListening = (port: number) =>
     [
         'if command -v bash >/dev/null 2>&1; then',
         `  bash -c '(exec 3<>/dev/tcp/127.0.0.1/${port}) 2>/dev/null'`,
@@ -30,13 +30,15 @@ export class ServiceLauncher implements RemoteLauncher {
     constructor(
         private readonly sandbox: Pick<DaytonaSandbox, 'run' | 'start'>,
         private readonly invocation: RunnerInvocation,
-        private readonly port: number
+        private readonly port: number,
+        /** The shell command line that starts the server. */
+        private readonly commandLine = shellCommand(invocation.command)
     ) {}
 
     async start(output: RemoteOutput): Promise<RemoteCommand> {
         const probe = await this.sandbox.run(portListening(this.port));
         if (probe.code !== 0) {
-            return this.sandbox.start(shellCommand(this.invocation.command), {
+            return this.sandbox.start(this.commandLine, {
                 cwd: this.invocation.cwd,
                 env: definedEnvironment(this.invocation.env),
                 stdin: false,

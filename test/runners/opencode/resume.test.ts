@@ -37,6 +37,11 @@ class RecordingHost implements RunnerSessionHost {
     /** Permission ids that are never answered. */
     readonly unanswered = new Set<string>();
     readonly permissions: string[] = [];
+    readonly withdrawn: string[] = [];
+
+    async withdrawRequest(id: string): Promise<void> {
+        this.withdrawn.push(id);
+    }
 
     async emit(event: WorkbenchEventDraft): Promise<void> {
         if (this.failOnce.delete(event.type)) throw new Error('host storage failed');
@@ -170,7 +175,7 @@ describe('OpenCode turn resume', () => {
         await session.close();
     });
 
-    test('recovers from a stream that ended without an error', async () => {
+    test('a stream that ends on its own is a lost stream, and resume recovers the turn', async () => {
         const server = new FakeOpenCodeServer();
         const host = new RecordingHost();
         const session = await start(server, host);
@@ -181,19 +186,105 @@ describe('OpenCode turn resume', () => {
                 server.currentInputMessageId(),
                 'Hello'
             );
+            // Nothing more will ever arrive on this stream.
             server.endEventStream();
         };
-        const turn = session.prompt('work');
-        await server.prompted;
-        await Bun.sleep(5);
-        // Nothing failed, and nothing will ever arrive on this stream.
-        expect(await settled(turn)).toBe(false);
+        await expect(session.prompt('work')).rejects.toThrow(
+            'OpenCode event stream failed'
+        );
         server.transcript = finishedTranscript(server.currentInputMessageId());
-        // The catch-up settles the prompt that was waiting.
         await expect(session.resumeTurn()).resolves.toEqual({ reason: 'stop' });
-        await expect(turn).resolves.toEqual({ reason: 'stop' });
         expect(host.texts).toEqual(['Hello', ', world']);
         expect(server.eventSubscriptions).toBe(2);
+        await session.close();
+    });
+
+    test('asks the host again for a request OpenCode still waits on, and its answer finishes the turn', async () => {
+        const server = new FakeOpenCodeServer();
+        server.transcript = [
+            { info: { id: 'msg_input_1', role: 'user' }, parts: [] },
+            {
+                info: {
+                    id: 'message_1',
+                    role: 'assistant',
+                    parentID: 'msg_input_1',
+                    time: { created: 1 },
+                },
+                parts: [],
+            },
+        ];
+        // Asked before this session existed, on a stream it never saw.
+        server.pendingPermissions = [
+            {
+                id: 'perm_waiting',
+                sessionID: 'ses_native_1',
+                permission: 'external_directory',
+                patterns: ['/outside/*'],
+                always: [],
+            },
+        ];
+        // The new stream repeats the same request while the transcript is read.
+        server.onTranscriptRead = () =>
+            server.emit('permission.asked', server.pendingPermissions[0] ?? {});
+        server.onPermissionReply = () => {
+            server.pendingPermissions = [];
+            server.completeTurn('approved');
+        };
+        const host = new RecordingHost();
+        const session = await start(server, host);
+
+        await expect(session.resumeTurn()).resolves.toEqual({ reason: 'completed' });
+        // Listed and repeated, it is still put to the host once and answered once.
+        expect(host.permissions).toEqual(['perm_waiting']);
+        expect(server.permissionReplies).toEqual([{ reply: 'once' }]);
+        await session.close();
+    });
+
+    test('a request its turn gave up on is withdrawn from the host, then asked again on resume', async () => {
+        const server = new FakeOpenCodeServer();
+        const host = new RecordingHost();
+        host.unanswered.add('perm_open');
+        const session = await start(server, host);
+        const permission = {
+            id: 'perm_open',
+            sessionID: 'ses_native_1',
+            permission: 'external_directory',
+            patterns: ['/outside/*'],
+            always: [],
+        };
+        server.onPrompt = () => {
+            server.emit('session.status', { status: { type: 'busy' } });
+            server.emitAssistantText(
+                'message_1',
+                server.currentInputMessageId(),
+                'Hello'
+            );
+            server.emit('permission.asked', permission);
+        };
+        const turn = session.prompt('work').catch((error: Error) => error);
+        for (let tries = 0; tries < 200 && host.permissions.length === 0; tries++) {
+            await Bun.sleep(1);
+        }
+        expect(host.permissions).toEqual(['perm_open']);
+        server.pendingPermissions = [permission];
+        server.transcript = [
+            { info: { id: server.currentInputMessageId(), role: 'user' }, parts: [] },
+        ];
+        // The stream drops while the host still has the request open.
+        server.failEventStream();
+        expect(String(await turn)).toContain('OpenCode event stream failed');
+        for (let tries = 0; tries < 200 && host.withdrawn.length === 0; tries++) {
+            await Bun.sleep(1);
+        }
+        expect(host.withdrawn).toEqual(['perm_open']);
+
+        // OpenCode still waits on it, so the resumed turn asks again.
+        const resumed = session.resumeTurn();
+        for (let tries = 0; tries < 200 && host.permissions.length < 2; tries++) {
+            await Bun.sleep(1);
+        }
+        expect(host.permissions).toEqual(['perm_open', 'perm_open']);
+        expect(await settled(resumed)).toBe(false);
         await session.close();
     });
 
@@ -443,7 +534,9 @@ describe('OpenCode turn resume', () => {
             },
         ];
         const session = await start(server, new RecordingHost());
-        await expect(session.resumeTurn()).resolves.toEqual({ reason: 'cancelled' });
+        await expect(session.resumeTurn()).resolves.toEqual({
+            reason: 'cancelled',
+        });
         await session.close();
     });
 

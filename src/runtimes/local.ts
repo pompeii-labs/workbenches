@@ -105,6 +105,7 @@ export class LocalRuntime implements PreparedRuntime {
     readonly preparation = { kind: 'host' as const };
     private ready = false;
     private cleaned = false;
+    private readonly servicePorts = new Set<number>();
     private readonly requiresGitHubCli;
     private readonly allowUncheckedGpu: boolean;
     /** The runner CLI the host must provide. */
@@ -238,8 +239,18 @@ export class LocalRuntime implements PreparedRuntime {
         );
         return {
             process,
-            resolveUrl: async (reportedUrl) => reportedUrl,
+            resolveUrl: async (reportedUrl) => {
+                const port = URL.canParse(reportedUrl)
+                    ? Number(new URL(reportedUrl).port)
+                    : 0;
+                if (Number.isInteger(port) && port > 0) this.servicePorts.add(port);
+                return reportedUrl;
+            },
         };
+    }
+
+    reservedPorts(): number[] {
+        return [...this.servicePorts];
     }
 
     cancel(process: SpawnedRunner): void {

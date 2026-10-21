@@ -16,6 +16,7 @@ import { OutcomeApplier } from '../outcomes/apply.js';
 import type { OutcomeCompleteness, RunOutcome } from '../outcomes/contracts.js';
 import { OutcomeLifecycle } from '../outcomes/lifecycle.js';
 import { OutcomeStore } from '../outcomes/store.js';
+import { PreviewChannel } from '../previews/channel.js';
 import {
     type RepositoryBinding,
     RepositoryCredentials,
@@ -77,6 +78,11 @@ interface PreparedExecution {
     authentication?: RunnerConnectionSelection;
 }
 
+/** Reports a preview announcement the engine ignored. */
+const warn = (message: string) => {
+    process.stderr.write(`wb: ${message}\n`);
+};
+
 /** Owns preparation resources, including partially prepared resources on failure. */
 export class ExecutionPreparation {
     private runner: PreparedRunner | undefined;
@@ -86,6 +92,7 @@ export class ExecutionPreparation {
     private release: Promise<void> | undefined;
     private repository: RepositoryWorkspace | undefined;
     private collection: Promise<RunOutcome | undefined> | undefined;
+    private previews: PreviewChannel | undefined;
 
     constructor(
         private readonly options: ExecutionPreparationOptions,
@@ -110,6 +117,9 @@ export class ExecutionPreparation {
     private async collectOnce(
         completeness: OutcomeCompleteness
     ): Promise<RunOutcome | undefined> {
+        // Collection ends the run's last turn, so later announcements are not published.
+        await this.previews?.close();
+        await this.runtime?.previews?.close();
         const outcome = await this.outcomes?.collect(this.runtime, completeness);
         const { home, repository, events } = this.options;
         if (!outcome || !home || !repository || !this.repository) return outcome;
@@ -132,10 +142,10 @@ export class ExecutionPreparation {
         }
     }
 
-    checkpoint(turn: number): Promise<RunOutcome | undefined> {
-        return (
-            this.outcomes?.checkpoint(this.runtime, turn) ?? Promise.resolve(undefined)
-        );
+    async checkpoint(turn: number): Promise<RunOutcome | undefined> {
+        await this.previews?.refresh();
+        await this.runtime?.previews?.refresh();
+        return this.outcomes?.checkpoint(this.runtime, turn);
     }
 
     infrastructure(): Promise<RuntimeInfrastructureMetadata | undefined> {
@@ -231,11 +241,25 @@ export class ExecutionPreparation {
                     ),
             });
         }
+        const provider = this.dependencies.runtimes.resolve(runtimeName);
+        // A host run announces through a control file the engine reads here; a
+        // sandbox runtime carries its own announcements as `runtime.previews`.
+        if (home && this.outcomes && provider.placement === 'host') {
+            this.previews = new PreviewChannel({
+                home,
+                runId: this.options.events.runId,
+                events: this.options.events,
+                reserved: () => this.runtime?.reservedPorts?.() ?? [],
+                warn,
+            });
+            await this.previews.install();
+            environment = this.previews.environment(environment);
+        }
         const runners = this.dependencies.runners ?? RunnerRegistry.standard();
         const harness = runners.resolve(workbench.manifest.runner);
         const contract = harness.runtimeContract();
         this.runner = await harness.prepare(workbench, environment);
-        this.runtime = await this.dependencies.runtimes.resolve(runtimeName).prepare({
+        this.runtime = await provider.prepare({
             workbench,
             workspaceDirectory,
             environment,
@@ -310,6 +334,19 @@ export class ExecutionPreparation {
                 : {}),
         });
         const preflight = await this.runtime.preflight();
+        this.previews?.watch();
+        // A sandbox runtime carries its own announcements. A signed URL is a
+        // credential, so its previews are published without one.
+        this.runtime.previews?.watch({
+            available: async (preview) => {
+                await this.options.events.emit('preview.available', {
+                    name: preview.name,
+                    port: preview.port,
+                    protocol: 'http',
+                });
+            },
+            warn,
+        });
         const selection = await this.selectConnection(
             runners,
             this.runner,
@@ -397,6 +434,7 @@ export class ExecutionPreparation {
             }),
             Promise.resolve().then(() => this.runner?.cleanup()),
             Promise.resolve().then(() => this.outcomes?.cleanup()),
+            Promise.resolve().then(() => this.previews?.remove()),
         ]);
         const failure = results.find(
             (result): result is PromiseRejectedResult => result.status === 'rejected'

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-
+import type { RuntimePreview } from '../../src/runtimes/contracts.js';
 import { DaytonaApi } from '../../src/runtimes/daytona/api.js';
 import type { DaytonaSandbox } from '../../src/runtimes/daytona/contracts.js';
+import { SandboxPreviews } from '../../src/runtimes/daytona/previews.js';
+import { TransferRules } from '../../src/runtimes/staging/rules.js';
 
 /**
  * Opt-in: creates real Daytona sandboxes and spends Daytona usage. Run with
@@ -95,6 +97,56 @@ describe.skipIf(!enabled)('Daytona runtime end to end', () => {
 
             const url = await sandbox.previewUrl(4096, 600);
             expect(new URL(url).protocol).toBe('https:');
+        },
+        { timeout: 15 * 60_000 }
+    );
+
+    test(
+        'follows a wbx announcement over the log stream and signs a URL for it',
+        async () => {
+            const sandbox = await createSandbox();
+            const previews = new SandboxPreviews(
+                sandbox,
+                new TransferRules('Daytona'),
+                () => [4096, 2280, 22222, 33333]
+            );
+            await previews.install();
+            const published: RuntimePreview[] = [];
+            const warnings: string[] = [];
+            previews.watch({
+                available: async (preview) => {
+                    published.push(preview);
+                },
+                warn: (message) => warnings.push(message),
+            });
+            const server = await sandbox.run(
+                "nohup perl -MIO::Socket::INET -e '$s=IO::Socket::INET->new(LocalAddr=>q(127.0.0.1),LocalPort=>8080,Listen=>5,ReuseAddr=>1) or die; while($c=$s->accept){print $c qq(HTTP/1.0 200 OK\\r\\n\\r\\nwbx-preview-ok); close $c}' >/dev/null 2>&1 &"
+            );
+            expect(server.code).toBe(0);
+            await Bun.sleep(1_000);
+            const announced = await sandbox.run(
+                previews.command('wbx preview 8080 --name demo')
+            );
+            expect(announced.stdout).toContain(
+                'wbx: announced preview demo on port 8080'
+            );
+            // The follower delivers the announcement without a turn-end read.
+            for (let attempt = 0; published.length === 0 && attempt < 60; attempt++) {
+                await Bun.sleep(500);
+            }
+            expect(published).toEqual([{ name: 'demo', port: 8080 }]);
+            expect(warnings).toEqual([]);
+
+            const signed = await previews.signedUrl(8080, 120);
+            const page = await fetch(signed.url, {
+                headers: { 'X-Daytona-Skip-Preview-Warning': 'true' },
+            });
+            expect(await page.text()).toContain('wbx-preview-ok');
+            await previews.expire(8080, signed.token);
+            await expect(previews.signedUrl(4096, 120)).rejects.toThrow(
+                'Port 4096 is not a preview this run announced'
+            );
+            await previews.close();
         },
         { timeout: 15 * 60_000 }
     );
