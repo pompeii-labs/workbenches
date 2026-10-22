@@ -11,7 +11,7 @@ import type { StudioWakeSocket } from './wake.js';
 
 /** The published Studio dashboard image, pinned by digest. */
 export const DEFAULT_STUDIO_IMAGE =
-    'ghcr.io/pompeii-labs/workbenches/studio:0.2.0@sha256:9f470434880319cab6944fa0e51e6db6456aa8c92363f948b4cb821af3531b33';
+    'ghcr.io/pompeii-labs/workbenches/studio:0.3.0@sha256:e25dc97df8d2a84f0da0ef729de922707ba2567647eee275389e01e5250e4c3e';
 export const DEFAULT_STUDIO_PORT = 9_292;
 export const DEFAULT_STUDIO_API_PORT = 9_293;
 
