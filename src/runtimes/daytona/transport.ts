@@ -1,4 +1,5 @@
 import { WORKBENCH_USER_AGENT } from '../../user-agent.js';
+import { resendable } from '../edge.js';
 import type { DaytonaFetch } from './contracts.js';
 
 export const defaultDaytonaApiUrl = 'https://app.daytona.io/api';
@@ -72,10 +73,6 @@ interface RequestOptions {
     repeatable?: boolean;
 }
 
-/** Cloudflare could not reach Daytona, so the request never arrived. */
-const undelivered = new Set([521, 522, 523, 525]);
-/** The edge or Daytona failed after the request may have arrived. */
-const uncertain = new Set([502, 503, 504, 520, 524]);
 /** Waits before each resend, in poll intervals: about 43 seconds in all by default. */
 const backoff = [3, 10, 30, 100];
 
@@ -149,11 +146,7 @@ export class DaytonaTransport {
                 continue;
             }
             if (response.ok) return response;
-            if (
-                !last &&
-                (undelivered.has(response.status) ||
-                    (repeatable && uncertain.has(response.status)))
-            ) {
+            if (!last && resendable(response.status, repeatable)) {
                 await response.body?.cancel().catch(() => {});
                 await this.wait(this.pollIntervalMs * (backoff[attempt] ?? 0));
                 continue;

@@ -300,3 +300,61 @@ describe('OpenCodeServer event subscription', () => {
         expect(closed).toBe(true);
     });
 });
+
+describe('OpenCodeServer requests through a sandbox edge', () => {
+    test('resends a request the edge never delivered', async () => {
+        const statuses = [522];
+        let calls = 0;
+        const server = await startedServer(async () => {
+            calls += 1;
+            const status = statuses.shift();
+            return status
+                ? new Response('error code: 522', { status })
+                : new Response('{}');
+        });
+        try {
+            const response = await server.request('/session', {
+                method: 'POST',
+                body: '{}',
+            });
+            expect(response.ok).toBe(true);
+            expect(calls).toBe(2);
+        } finally {
+            await server.close();
+        }
+    });
+
+    test('never resends a request that may have arrived', async () => {
+        let calls = 0;
+        const server = await startedServer(async () => {
+            calls += 1;
+            return new Response('error code: 520', { status: 520 });
+        });
+        try {
+            await expect(
+                server.request('/session', { method: 'POST', body: '{}' })
+            ).rejects.toThrow();
+            expect(calls).toBe(1);
+        } finally {
+            await server.close();
+        }
+    });
+
+    test('stops waiting to resend once the server closes', async () => {
+        let calls = 0;
+        let answered = () => {};
+        const first = new Promise<void>((resolve) => {
+            answered = resolve;
+        });
+        const server = await startedServer(async () => {
+            calls += 1;
+            answered();
+            return new Response('error code: 522', { status: 522 });
+        });
+        const pending = server.request('/session', { method: 'GET' });
+        await first;
+        await server.close();
+        await expect(pending).rejects.toThrow();
+        expect(calls).toBe(1);
+    });
+});

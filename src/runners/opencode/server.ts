@@ -1,7 +1,27 @@
+import { resendable } from '../../runtimes/edge.js';
 import type { RunnerInvocation } from '../../types.js';
 import { RunnerProcessExit } from '../exit.js';
 import { record, string } from './json.js';
 import { OpenCodeV2Events, v2Message } from './v2.js';
+
+/** Waits before each resend of a request the edge dropped: 44 seconds in all. */
+const resendDelaysMs = [1_000, 3_000, 10_000, 30_000];
+
+/** Waits `ms`, or rejects with the signal's reason once it aborts. */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.reject(signal.reason);
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            signal.removeEventListener('abort', stop);
+            resolve();
+        }, ms);
+        const stop = () => {
+            clearTimeout(timer);
+            reject(signal.reason);
+        };
+        signal.addEventListener('abort', stop, { once: true });
+    });
+}
 
 export interface SpawnedOpenCodeServer {
     exited: Promise<number>;
@@ -104,7 +124,7 @@ export class OpenCodeServer {
         });
         try {
             this.url = await launched.resolveUrl(await ready.promise);
-            const info = await this.authFetch(new URL('/api/info', this.url), {
+            const info = await this.send(new URL('/api/info', this.url), {
                 signal: AbortSignal.any([
                     this.abort.signal,
                     AbortSignal.timeout(this.options.startupTimeoutMs),
@@ -242,7 +262,7 @@ export class OpenCodeServer {
             };
         }
         if (this.v2) path = path.replace(/\/abort$/, '/interrupt');
-        const response = await this.authFetch(this.endpoint(path), init);
+        const response = await this.send(this.endpoint(path), init);
         if (!response.ok) {
             throw new Error(`OpenCode request failed with HTTP ${response.status}`);
         }
@@ -365,7 +385,7 @@ export class OpenCodeServer {
             path = `/session/${encodeURIComponent(sessionID)}/permission/${encodeURIComponent(id)}/reply`;
             body = { decision: record(body)?.reply };
         }
-        const response = await this.authFetch(this.endpoint(path), {
+        const response = await this.send(this.endpoint(path), {
             method: 'POST',
             body: JSON.stringify(body),
         });
@@ -417,7 +437,7 @@ export class OpenCodeServer {
                 };
             }
         }
-        const response = await this.authFetch(this.endpoint(path), {
+        const response = await this.send(this.endpoint(path), {
             method,
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         });
@@ -456,6 +476,32 @@ export class OpenCodeServer {
                 url.searchParams.set('order', 'asc');
         } else url.searchParams.set('directory', this.options.workspaceDirectory);
         return url;
+    }
+
+    /**
+     * Sends a request to the server. A sandbox's server is reached through its
+     * provider's edge, so a request the edge never delivered is sent again, and
+     * so is a read whose outcome is unknown. The event stream is not sent this
+     * way: losing it is recovered by subscribing again.
+     */
+    private async send(
+        input: string | URL | Request,
+        init: RequestInit = {}
+    ): Promise<Response> {
+        const signal = init.signal ?? this.abort.signal;
+        const repeatable = (init.method ?? 'GET').toUpperCase() === 'GET';
+        for (const delay of [...resendDelaysMs, undefined]) {
+            const response = await this.authFetch(input, { ...init, signal });
+            if (
+                response.ok ||
+                delay === undefined ||
+                !resendable(response.status, repeatable)
+            )
+                return response;
+            await response.body?.cancel().catch(() => {});
+            await abortableDelay(delay, signal);
+        }
+        throw new Error('OpenCode request was never sent');
     }
 
     private authFetch(input: string | URL | Request, init: RequestInit = {}) {
