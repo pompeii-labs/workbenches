@@ -112,7 +112,7 @@ describe('SessionProcess', () => {
                     // the exit code is seen is the one that fails.
                     return logReads === 1
                         ? json({ stdout: 'done', stderr: '' })
-                        : new Response('bad gateway', { status: 502 });
+                        : new Response('server error', { status: 500 });
                 },
                 status: () => json({ id: 'cmd-1', exitCode: logReads >= 1 ? 3 : null }),
             })

@@ -1,4 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { client, json, startedSandbox, toolbox } from './http.js';
 
@@ -41,7 +45,7 @@ describe('DaytonaToolbox', () => {
         const call = requests.at(-1);
         expect(call?.url.href).toBe(`${toolbox}/process/execute`);
         const body = JSON.parse(String(call?.body));
-        expect(body.command).toBe('{\necho hi\n} 2>&1');
+        expect(body.command).toContain('echo hi');
         expect(body.cwd).toBe('/workspace');
         expect(body.envs).toEqual({ A: 'b' });
         expect(body.timeout).toBeGreaterThan(0);
@@ -68,6 +72,45 @@ describe('DaytonaToolbox', () => {
                 'Daytona toolbox process/execute returned an unexpected response: expected JSON with a numeric exitCode'
             );
             expect(toolboxCalls).toBe(1);
+        }
+    });
+
+    test('resends a command whose reply was lost, unchanged', async () => {
+        let calls = 0;
+        const { sandbox, requests } = await startedSandbox(() =>
+            ++calls === 1
+                ? new Response('error code: 520', { status: 520 })
+                : json({ exitCode: 0, result: 'done' })
+        );
+        await expect(sandbox.run('make build')).resolves.toEqual({
+            code: 0,
+            stdout: 'done',
+            stderr: '',
+        });
+        const sent = requests
+            .filter((request) => request.url.pathname.endsWith('/process/execute'))
+            .map((request) => JSON.parse(String(request.body)).command);
+        expect(sent).toHaveLength(2);
+        expect(sent[1]).toBe(sent[0]);
+    });
+
+    test('a resent command runs once and returns the first result', async () => {
+        const { sandbox, requests } = await startedSandbox(() =>
+            json({ exitCode: 0, result: '' })
+        );
+        await sandbox.run('echo ran >> "$COUNT"; echo out; exit 3');
+        const command: string = JSON.parse(String(requests.at(-1)?.body)).command;
+        const directory = await mkdtemp(join(tmpdir(), 'wb-daytona-once-'));
+        try {
+            const local = command.replaceAll('/tmp/.workbench-commands', directory);
+            const env = { ...process.env, COUNT: join(directory, 'count') };
+            const first = spawnSync('sh', ['-c', local], { env, encoding: 'utf8' });
+            const second = spawnSync('sh', ['-c', local], { env, encoding: 'utf8' });
+            expect([first.status, first.stdout]).toEqual([3, 'out\n']);
+            expect([second.status, second.stdout]).toEqual([3, 'out\n']);
+            expect(await readFile(join(directory, 'count'), 'utf8')).toBe('ran\n');
+        } finally {
+            await rm(directory, { recursive: true, force: true });
         }
     });
 

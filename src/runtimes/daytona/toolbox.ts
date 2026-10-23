@@ -16,6 +16,9 @@ import {
     type SandboxDto,
 } from './transport.js';
 
+/** Where each command records its output and exit code in the sandbox. */
+const commandRecords = '/tmp/.workbench-commands';
+
 /** Commands, files, and preview URLs for one sandbox. */
 export class DaytonaToolbox implements DaytonaSandbox {
     constructor(
@@ -35,10 +38,9 @@ export class DaytonaToolbox implements DaytonaSandbox {
             {
                 absolute: true,
                 timeoutMs: this.transport.commandTimeoutMs,
+                repeatable: true,
                 json: {
-                    // The toolbox returns one merged stream, so fold stderr in
-                    // explicitly and keep failure detail in the result.
-                    command: `{\n${this.asRoot(command, options.user)}\n} 2>&1`,
+                    command: this.once(this.asRoot(command, options.user)),
                     ...(options.cwd ? { cwd: options.cwd } : {}),
                     ...(options.env ? { envs: options.env } : {}),
                     timeout: Math.ceil(this.transport.commandTimeoutMs / 1000),
@@ -127,8 +129,10 @@ export class DaytonaToolbox implements DaytonaSandbox {
             new Blob([data as Uint8Array<ArrayBuffer>]),
             path.split('/').at(-1) ?? 'file'
         );
+        // Uploading the same file to the same path again replaces it.
         await this.transport.request('POST', `${this.toolbox}/files/bulk-upload`, {
             absolute: true,
+            repeatable: true,
             body: form,
             timeoutMs: this.transport.transferTimeoutMs,
         });
@@ -259,6 +263,32 @@ export class DaytonaToolbox implements DaytonaSandbox {
             code,
             ...(typeof reply.result === 'string' ? { result: reply.result } : {}),
         };
+    }
+
+    /**
+     * Wraps a command so it runs at most once however often it is sent. The
+     * first delivery claims a record in the sandbox and saves the output and
+     * exit code there; a resend after a lost reply finds the claim and returns
+     * that record instead of running the command again. Records older than any
+     * resend could be are removed. The toolbox returns one merged stream, so
+     * stderr is folded in to keep failure detail.
+     */
+    private once(command: string): string {
+        const record = `${commandRecords}/${crypto.randomUUID()}`;
+        return [
+            `find ${quote(commandRecords)} -mindepth 1 -maxdepth 1 -mmin +120 -exec rm -rf {} + 2>/dev/null`,
+            `R=${quote(record)}`,
+            `if mkdir -p ${quote(commandRecords)} 2>/dev/null && mkdir -m 700 "$R" 2>/dev/null; then`,
+            `(\n${command}\n) > "$R/out" 2>&1`,
+            'echo $? > "$R/code.next" && mv "$R/code.next" "$R/code"',
+            'fi',
+            'while [ ! -f "$R/code" ]; do',
+            '[ -d "$R" ] || { echo "The command could not record its result"; exit 70; }',
+            'sleep 1',
+            'done',
+            'cat "$R/out"',
+            'exit "$(cat "$R/code")"',
+        ].join('\n');
     }
 
     /** Runs the command as root, through sudo when the sandbox user is not root. */

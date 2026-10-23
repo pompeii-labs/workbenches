@@ -65,7 +65,19 @@ interface RequestOptions {
     timeoutMs?: number;
     /** An absolute URL, for toolbox calls. Otherwise the path is under the API URL. */
     absolute?: boolean;
+    /**
+     * The request may be sent again when its outcome is unknown. Reads,
+     * replacements, and deletes are repeatable unless this says otherwise.
+     */
+    repeatable?: boolean;
 }
+
+/** Cloudflare could not reach Daytona, so the request never arrived. */
+const undelivered = new Set([521, 522, 523, 525]);
+/** The edge or Daytona failed after the request may have arrived. */
+const uncertain = new Set([502, 503, 504, 520, 524]);
+/** Waits before each resend, in poll intervals: about 43 seconds in all by default. */
+const backoff = [3, 10, 30, 100];
 
 /** Authenticated, bounded HTTP. Holds the credential; never logs or echoes it. */
 export class DaytonaTransport {
@@ -95,6 +107,11 @@ export class DaytonaTransport {
         this.pollIntervalMs = options.pollIntervalMs ?? 300;
     }
 
+    /**
+     * Sends one request. A request the edge never delivered is sent again, and
+     * so is a repeatable request whose outcome is unknown, so a short outage
+     * between Cloudflare and Daytona does not end a run.
+     */
     async request(
         method: string,
         path: string,
@@ -110,24 +127,43 @@ export class DaytonaTransport {
             Accept: options.accept ?? 'application/json',
         };
         if (options.json !== undefined) headers['Content-Type'] = 'application/json';
-        const response = await this.fetcher(url, {
-            method,
-            headers,
-            ...(options.json !== undefined
-                ? { body: JSON.stringify(options.json) }
-                : options.body
-                  ? { body: options.body }
-                  : {}),
-            signal: AbortSignal.timeout(options.timeoutMs ?? this.requestTimeoutMs),
-        });
-        if (!response.ok) {
+        const body =
+            options.json !== undefined ? JSON.stringify(options.json) : options.body;
+        const repeatable =
+            options.repeatable ?? ['GET', 'HEAD', 'PUT', 'DELETE'].includes(method);
+        for (let attempt = 0; ; attempt++) {
+            const last = attempt === backoff.length;
+            let response: Response;
+            try {
+                response = await this.fetcher(url, {
+                    method,
+                    headers,
+                    ...(body !== undefined ? { body } : {}),
+                    signal: AbortSignal.timeout(
+                        options.timeoutMs ?? this.requestTimeoutMs
+                    ),
+                });
+            } catch (error) {
+                if (last || !repeatable || timedOut(error)) throw error;
+                await this.wait(this.pollIntervalMs * (backoff[attempt] ?? 0));
+                continue;
+            }
+            if (response.ok) return response;
+            if (
+                !last &&
+                (undelivered.has(response.status) ||
+                    (repeatable && uncertain.has(response.status)))
+            ) {
+                await response.body?.cancel().catch(() => {});
+                await this.wait(this.pollIntervalMs * (backoff[attempt] ?? 0));
+                continue;
+            }
             const detail = (await response.text().catch(() => '')).slice(0, 500);
             throw new DaytonaApiError(
-                `Daytona API ${method} ${url.pathname} failed with ${response.status}${detail ? `: ${detail}` : ''}`,
+                `Daytona API ${method} ${url.pathname} failed with ${response.status}${attempt > 0 ? ` after ${attempt + 1} attempts` : ''}${detail ? `: ${detail}` : ''}`,
                 response.status
             );
         }
-        return response;
     }
 
     async json<T>(
@@ -214,4 +250,9 @@ export class DaytonaTransport {
     wait(milliseconds: number): Promise<void> {
         return new Promise((resolve) => setTimeout(resolve, milliseconds));
     }
+}
+
+/** The request's own time limit ran out, which a resend would only repeat. */
+function timedOut(error: unknown): boolean {
+    return error instanceof DOMException && error.name === 'TimeoutError';
 }
