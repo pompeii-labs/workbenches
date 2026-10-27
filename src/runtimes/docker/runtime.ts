@@ -461,7 +461,10 @@ export class DockerRuntime implements PreparedRuntime {
         ];
     }
 
-    /** Applies declared cpu and memory requirements as container limits. */
+    /**
+     * Applies declared cpu and memory requirements as container limits, and
+     * gives a GPU Workbench every GPU, which the provider checked the daemon has.
+     */
     private limitArguments(): string[] {
         const requirements = requirementsOf(this.options.request.workbench.manifest);
         return [
@@ -471,6 +474,7 @@ export class DockerRuntime implements PreparedRuntime {
             ...(requirements.memory_gb === undefined
                 ? []
                 : ['--memory', `${Math.ceil(requirements.memory_gb * 1024)}m`]),
+            ...(requirements.gpu ? ['--gpus', 'all'] : []),
         ];
     }
 

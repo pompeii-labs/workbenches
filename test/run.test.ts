@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type WorkbenchEvent, WorkbenchRun } from '../src/runs/index.js';
 import { type RuntimeAsset, RuntimeRegistry } from '../src/runtimes/index.js';
+import { NodeHost } from '../src/workbench/host.js';
 
 const temporaryDirectories: string[] = [];
 const TEST_ENVIRONMENT = {
@@ -54,8 +55,14 @@ describe('local run lifecycle', () => {
         expect(spawned).toBeFalse();
     });
 
-    test('refuses an unchecked gpu requirement unless the run acknowledges it', async () => {
+    test('refuses a gpu requirement discovery cannot meet unless the run acknowledges it', async () => {
         const fixture = await createFixture({ gpu: true });
+        const node = new NodeHost();
+        // A host where GPU discovery finds nothing, whatever this machine has.
+        const host = {
+            describe: () => node.describe(),
+            gpus: async () => ({ gpus: [], reason: 'nvidia-smi is not installed' }),
+        };
         const run = async (acknowledged: boolean) => {
             const events: WorkbenchEvent[] = [];
             const code = await WorkbenchRun.execute(
@@ -71,6 +78,10 @@ describe('local run lifecycle', () => {
                 {
                     env: TEST_ENVIRONMENT,
                     findExecutable: () => '/bin/opencode',
+                    runtimeRegistry: RuntimeRegistry.standard({
+                        findExecutable: () => '/bin/opencode',
+                        host,
+                    }),
                     write() {},
                 }
             );
@@ -83,7 +94,7 @@ describe('local run lifecycle', () => {
             type: 'run.failed',
             data: {
                 message: expect.stringContaining(
-                    'GPU requirements are not checked on the local runtime'
+                    'requires a GPU but none was found: nvidia-smi is not installed'
                 ),
             },
         });

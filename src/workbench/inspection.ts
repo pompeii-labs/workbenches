@@ -23,11 +23,16 @@ import {
 } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
 import type { ResolvedWorkbench, WorkbenchRequirements } from '../types.js';
+import type { GpuInventory } from './gpus.js';
+import { NodeHost } from './host.js';
 import {
+    describeGpu,
     describeRuntime,
+    renderGpu,
     renderRequirements,
     renderRuntimeDetails,
     renderRuntimeFields,
+    type WorkbenchGpuView,
     type WorkbenchRuntimeView,
 } from './inspection-runtimes.js';
 import { WorkbenchPreflight } from './preflight.js';
@@ -88,6 +93,8 @@ export interface WorkbenchView {
     /** Every declared runtime in declaration order. */
     runtimes: WorkbenchRuntimeView[];
     requirements: WorkbenchRequirements;
+    /** Present when the Workbench needs a GPU. */
+    gpu?: WorkbenchGpuView;
     instructions: string;
     skills: string[];
     tools: string[];
@@ -112,6 +119,8 @@ interface WorkbenchInspectionOptions {
     environment?: Record<string, string | undefined>;
     reference?: string;
     authentication?: RunnerAuthenticationStatus | 'unavailable';
+    /** The host's GPUs, discovered for a Workbench that needs one. */
+    gpus?: GpuInventory;
 }
 
 export class WorkbenchInspection {
@@ -144,6 +153,7 @@ export class WorkbenchInspection {
                 : {}),
             runtimes,
             requirements: requirementsOf(manifest),
+            ...(options.gpus ? { gpu: describeGpu(options.gpus, runtimes) } : {}),
             instructions: manifest.instructions,
             skills: options.workbench.skills.map((skill) => skill.name),
             tools: manifest.tools,
@@ -209,6 +219,7 @@ export class WorkbenchInspection {
             this.field(lines, label, value);
         }
         this.field(lines, 'Requires', renderRequirements(view.requirements));
+        if (view.gpu) this.field(lines, 'GPU', renderGpu(view.gpu));
         this.field(lines, 'Instructions', view.instructions);
         this.field(lines, 'Skills', view.skills.join(', ') || 'none');
         this.field(lines, 'Tools', view.tools.join(', ') || 'none');
@@ -374,8 +385,9 @@ export class WorkbenchInspector {
             await github.list(reference.source),
             reference.selector
         );
+        const remote = github.resolve(selected);
         return WorkbenchInspection.describe({
-            workbench: github.resolve(selected),
+            workbench: remote,
             reference: value,
             origin: {
                 kind: 'github',
@@ -383,7 +395,14 @@ export class WorkbenchInspector {
                 selector: selected.selector,
                 revision: selected.revision,
             },
+            ...(await this.gpus(remote)),
         });
+    }
+
+    /** The host's GPUs, discovered only for a Workbench that needs one. */
+    private async gpus(workbench: ResolvedWorkbench): Promise<{ gpus?: GpuInventory }> {
+        if (!requirementsOf(workbench.manifest).gpu) return {};
+        return { gpus: await new NodeHost().gpus() };
     }
 
     private async describeResolved(
@@ -391,8 +410,14 @@ export class WorkbenchInspector {
         reference: string,
         origin: WorkbenchOrigin
     ): Promise<WorkbenchInspection> {
+        const gpus = await this.gpus(workbench);
         if (selectedRuntime(workbench).name !== 'local') {
-            return WorkbenchInspection.describe({ workbench, reference, origin });
+            return WorkbenchInspection.describe({
+                workbench,
+                reference,
+                origin,
+                ...gpus,
+            });
         }
         let runner: PreparedRunner | undefined;
         let runtime: PreparedRuntime | undefined;
@@ -430,6 +455,7 @@ export class WorkbenchInspector {
                 reference,
                 origin,
                 authentication,
+                ...gpus,
             });
         } catch {
             return WorkbenchInspection.describe({
@@ -437,6 +463,7 @@ export class WorkbenchInspector {
                 reference,
                 origin,
                 authentication: 'unavailable',
+                ...gpus,
             });
         } finally {
             await Promise.allSettled([runtime?.cleanup(), runner?.cleanup()]);

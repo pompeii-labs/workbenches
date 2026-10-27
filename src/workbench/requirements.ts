@@ -6,6 +6,7 @@ import type {
     WorkbenchOs,
     WorkbenchRequirements,
 } from '../types.js';
+import type { GpuInventory } from './gpus.js';
 import type { HostDescriber } from './host.js';
 import { requirementsOf, selectedRuntime } from './runtimes.js';
 
@@ -26,8 +27,13 @@ export interface RequirementsReport {
 }
 
 export interface RequirementsCheckOptions {
-    /** Accept a GPU requirement on a runtime that cannot verify it. */
+    /** Accept a GPU requirement on the local runtime when discovery found no GPU. */
     allowUncheckedGpu?: boolean;
+    /**
+     * The host's GPUs, as discovered. A local GPU requirement passes only when
+     * they include one; `verify` discovers them itself.
+     */
+    gpus?: GpuInventory;
 }
 
 /** One check in flight: what is required, where, and what has been learned. */
@@ -76,6 +82,26 @@ export class RequirementsPreflight {
         return this.described;
     }
 
+    /**
+     * `check`, after discovering the host's GPUs when the Workbench needs one
+     * on the local runtime. A describer that cannot discover GPUs finds none.
+     */
+    async verify(
+        workbench: ResolvedWorkbench,
+        options: RequirementsCheckOptions = {}
+    ): Promise<RequirementsReport> {
+        const discover =
+            !options.gpus &&
+            selectedRuntime(workbench).name === 'local' &&
+            requirementsOf(workbench.manifest).gpu;
+        if (!discover) return this.check(workbench, options);
+        const gpus = (await this.describer?.gpus?.()) ?? {
+            gpus: [],
+            reason: 'this host cannot discover GPUs',
+        };
+        return this.check(workbench, { ...options, gpus });
+    }
+
     check(
         workbench: ResolvedWorkbench,
         options: RequirementsCheckOptions = {}
@@ -86,11 +112,7 @@ export class RequirementsPreflight {
             runtime,
             options,
             report: { checked: [], applied: [], unchecked: [] },
-            fail: (message) => {
-                throw new Error(
-                    `Workbench ${workbench.manifest.name} cannot run on the ${runtime.name} runtime: ${message}`
-                );
-            },
+            fail: this.refusal(workbench),
         };
         if (runtime.name === 'daytona') this.checkDaytona(check);
         else if (runtime.name === 'local') this.checkLocal(check);
@@ -173,12 +195,18 @@ export class RequirementsPreflight {
             report.checked.push(`memory ${available} GiB`);
         }
         if (requirements.gpu) {
-            if (!options.allowUncheckedGpu) {
-                fail(
-                    'GPU requirements are not checked on the local runtime. Pass --allow-unchecked-gpu to run anyway.'
-                );
+            const found = options.gpus?.gpus ?? [];
+            if (found.length > 0) {
+                report.checked.push(`gpu ${found.map((gpu) => gpu.name).join(', ')}`);
+            } else {
+                const reason = options.gpus?.reason ?? 'no GPU discovery ran';
+                if (!options.allowUncheckedGpu) {
+                    fail(
+                        `requires a GPU but none was found: ${reason}. Pass --allow-unchecked-gpu to run on a GPU discovery cannot see.`
+                    );
+                }
+                report.unchecked.push(`gpu was not found: ${reason}`);
             }
-            report.unchecked.push('gpu is not checked on the local runtime');
         }
         if (requirements.disk_gb !== undefined) {
             report.unchecked.push('disk_gb is not checked on the local runtime');
@@ -194,12 +222,21 @@ export class RequirementsPreflight {
                 `requires os ${this.list(os)} but the ${runtime.name} runtime provides linux`
             );
         }
-        if (requirements.gpu) {
+        if (requirements.gpu && runtime.name !== 'docker') {
             fail(`GPU requirements are not supported on the ${runtime.name} runtime`);
         }
         if (runtime.name !== 'docker') {
             this.pending(check, ['arch', 'cpu', 'memory', 'disk']);
             return;
+        }
+        if (requirements.gpu) {
+            // Docker Desktop runs containers in a Linux virtual machine with no GPU.
+            if (this.host.os === 'macos') {
+                fail(
+                    'Docker on macOS cannot give a container a GPU. Use the local runtime.'
+                );
+            }
+            report.applied.push('gpu: all GPUs through the NVIDIA container runtime');
         }
         if (architectures) {
             if (!architectures.includes(this.host.arch as WorkbenchArch)) {
@@ -255,12 +292,7 @@ export class RequirementsPreflight {
         daemon: { cpus: number; memoryBytes: number }
     ): void {
         const requirements = requirementsOf(workbench.manifest);
-        const runtime = selectedRuntime(workbench).name;
-        const fail = (message: string): never => {
-            throw new Error(
-                `Workbench ${workbench.manifest.name} cannot run on the ${runtime} runtime: ${message}`
-            );
-        };
+        const fail = this.refusal(workbench);
         if (requirements.cpu !== undefined && daemon.cpus < requirements.cpu) {
             fail(
                 `requires ${requirements.cpu} CPUs but the Docker daemon has ${daemon.cpus}`
@@ -274,6 +306,28 @@ export class RequirementsPreflight {
                 );
             }
         }
+    }
+
+    /**
+     * Throws when a GPU Workbench meets a Docker daemon without the NVIDIA
+     * container runtime, which is what gives `--gpus` its GPUs. `runtimes` are
+     * the names `docker info` lists.
+     */
+    checkDaemonRuntimes(workbench: ResolvedWorkbench, runtimes: string[]): void {
+        if (!requirementsOf(workbench.manifest).gpu) return;
+        if (runtimes.some((name) => name.startsWith('nvidia'))) return;
+        this.refusal(workbench)(
+            `requires a GPU but the Docker daemon has no NVIDIA container runtime (it has ${runtimes.join(', ') || 'none'}). Install the NVIDIA Container Toolkit and run nvidia-ctk runtime configure --runtime=docker.`
+        );
+    }
+
+    private refusal(workbench: ResolvedWorkbench): (message: string) => never {
+        const runtime = selectedRuntime(workbench).name;
+        return (message) => {
+            throw new Error(
+                `Workbench ${workbench.manifest.name} cannot run on the ${runtime} runtime: ${message}`
+            );
+        };
     }
 }
 

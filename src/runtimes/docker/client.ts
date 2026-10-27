@@ -128,6 +128,29 @@ export class DockerClient {
         return { cpus, memoryBytes };
     }
 
+    /** The names of the daemon's container runtimes, such as runc and nvidia. */
+    async daemonRuntimes(): Promise<string[]> {
+        const result = await this.require(
+            [this.executable, 'info', '--format', '{{json .Runtimes}}'],
+            'Docker daemon runtimes are unavailable'
+        );
+        let runtimes: unknown;
+        try {
+            runtimes = JSON.parse(result.stdout.trim());
+        } catch {
+            runtimes = undefined;
+        }
+        if (
+            typeof runtimes !== 'object' ||
+            runtimes === null ||
+            Array.isArray(runtimes)
+        )
+            throw new Error(
+                `Docker returned invalid daemon runtimes: ${result.stdout.trim().slice(0, 200)}`
+            );
+        return Object.keys(runtimes);
+    }
+
     immutableReference(reference: string, image: DockerImageInspect): string {
         if (reference.includes('@sha256:')) return reference;
         const digest = image.RepoDigests?.[0];

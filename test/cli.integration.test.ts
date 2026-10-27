@@ -3417,6 +3417,7 @@ describe('CLI integration', () => {
             ['requirements:', '  gpu: true', 'runtimes:', '  local: {}'].join('\n')
         );
         const bin = await fakeBin();
+        await fakeGpuTools(bin, false);
         const home = await temporaryDirectory('workbench-gpu-gate-');
         const environment = {
             PATH: `${bin}:${process.env.PATH}`,
@@ -3436,17 +3437,53 @@ describe('CLI integration', () => {
             environment
         );
         expect(refused.code).toBe(1);
-        expect(refused.stderr).toContain(
-            'GPU requirements are not checked on the local runtime'
-        );
+        expect(refused.stderr).toContain('requires a GPU but none was found');
+        expect(refused.stderr).toContain('Pass --allow-unchecked-gpu');
 
         const accepted = await executeCli(
             ['run', 'gpu', '--task', 'work', '--final', '--allow-unchecked-gpu'],
             environment
         );
-        expect(accepted.stderr).not.toContain(
-            'GPU requirements are not checked on the local runtime'
+        expect(accepted.stderr).not.toContain('requires a GPU');
+
+        const view = await executeCli(['view', 'gpu'], environment);
+        expect(view.stdout).toMatch(/GPU {10}none: .+ · refused on local/);
+    });
+
+    test('runs a gpu Workbench locally on a GPU discovery finds', async () => {
+        const fixture = await createFixture();
+        await writeRuntimesManifest(
+            fixture.packageDirectory,
+            ['requirements:', '  gpu: true', 'runtimes:', '  local: {}'].join('\n')
         );
+        const bin = await fakeBin();
+        await fakeGpuTools(bin, true);
+        const home = await temporaryDirectory('workbench-gpu-found-');
+        const environment = {
+            PATH: `${bin}:${process.env.PATH}`,
+            WORKBENCH_HOME: home,
+        };
+        expect(
+            (
+                await executeCli(
+                    ['add', fixture.packageDirectory, '--as', 'gpu'],
+                    environment
+                )
+            ).code
+        ).toBe(0);
+        const smoke = await executeCli(['smoke', 'gpu', '--json'], environment);
+        const report: unknown = JSON.parse(smoke.stdout);
+        expect(report).toMatchObject({
+            requirements: { checked: [expect.stringMatching(/^gpu /)] },
+        });
+        const run = await executeCli(
+            ['run', 'gpu', '--task', 'work', '--final'],
+            environment
+        );
+        expect(run.stderr).not.toContain('requires a GPU');
+        const view = await executeCli(['view', 'gpu', '--json'], environment);
+        const described: unknown = JSON.parse(view.stdout);
+        expect(described).toMatchObject({ gpu: { local: 'passes' } });
     });
 
     test('refuses to materialize a remote Workbench for a direct run', async () => {
@@ -4431,6 +4468,27 @@ async function fakeClaude() {
     );
     await chmod(claude, 0o755);
     return directory;
+}
+
+/**
+ * Puts nvidia-smi and system_profiler first on PATH, so GPU discovery sees
+ * the same machine on Linux and macOS: one NVIDIA or Apple GPU, or none.
+ */
+async function fakeGpuTools(bin: string, found: boolean): Promise<void> {
+    const nvidia = found
+        ? 'echo "NVIDIA L4, 23034"'
+        : 'echo "No devices were found"; exit 6';
+    const apple = found
+        ? `echo '${JSON.stringify({ SPDisplaysDataType: [{ _name: 'Apple M2 Max', sppci_device_type: 'spdisplays_gpu', sppci_model: 'Apple M2 Max' }] })}'`
+        : `echo '${JSON.stringify({ SPDisplaysDataType: [] })}'`;
+    const tools: Array<[name: string, body: string]> = [
+        ['nvidia-smi', nvidia],
+        ['system_profiler', apple],
+    ];
+    for (const [name, body] of tools) {
+        await writeFile(join(bin, name), `#!/bin/sh\n${body}\n`);
+        await chmod(join(bin, name), 0o755);
+    }
 }
 
 async function fakeBin(

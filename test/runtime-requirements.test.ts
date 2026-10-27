@@ -17,9 +17,11 @@ import {
 } from '../src/runtimes/index.js';
 import { DiskAssetSource } from '../src/runtimes/staging/disk.js';
 import type { ResolvedWorkbench } from '../src/types.js';
+import type { GpuInventory } from '../src/workbench/gpus.js';
 import {
     type HostDescriber,
     NodeHost,
+    type RequirementsCheckOptions,
     type RequirementsHost,
     RequirementsPreflight,
     WorkbenchManifestParser,
@@ -61,10 +63,17 @@ function workbench(
 }
 
 class FixedHost implements HostDescriber {
-    constructor(private readonly facts: RequirementsHost) {}
+    constructor(
+        private readonly facts: RequirementsHost,
+        private readonly inventory?: GpuInventory
+    ) {}
 
     describe(): RequirementsHost {
         return this.facts;
+    }
+
+    async gpus(): Promise<GpuInventory> {
+        return this.inventory ?? { gpus: [], reason: 'nvidia-smi is not installed' };
     }
 }
 
@@ -75,20 +84,40 @@ const macArmFacts: RequirementsHost = {
     memoryBytes: 16 * 1024 ** 3,
 };
 const macArm = new FixedHost(macArmFacts);
-const linuxX64 = new FixedHost({
+const linuxX64Facts: RequirementsHost = {
     os: 'linux',
     arch: 'x64',
     cpus: 2,
     memoryBytes: 4 * 1024 ** 3,
+};
+const linuxX64 = new FixedHost(linuxX64Facts);
+/** A Linux host whose nvidia-smi lists two GPUs. */
+const linuxNvidia = new FixedHost(linuxX64Facts, {
+    gpus: [
+        { name: 'NVIDIA GeForce RTX 4090', memory_gb: 24 },
+        { name: 'NVIDIA RTX A6000', memory_gb: 48 },
+    ],
 });
 
 function check(
     manifest: Record<string, unknown>,
     runtime: string,
     host: HostDescriber = macArm,
-    options: { allowUncheckedGpu?: boolean } = {}
+    options: RequirementsCheckOptions = {}
 ) {
     return new RequirementsPreflight(host).check(workbench(manifest, runtime), options);
+}
+
+function verify(
+    manifest: Record<string, unknown>,
+    runtime: string,
+    host: HostDescriber = macArm,
+    options: RequirementsCheckOptions = {}
+) {
+    return new RequirementsPreflight(host).verify(
+        workbench(manifest, runtime),
+        options
+    );
 }
 
 const localOnly = { runtimes: { local: {} } };
@@ -159,15 +188,64 @@ describe('local requirements', () => {
         ).toThrow('requires 16 GiB of memory but this host has 15 GiB');
     });
 
-    test('refuses a gpu requirement unless it is explicitly accepted', () => {
-        expect(() => check(withRuntimes({ gpu: true }), 'local')).toThrow(
-            'GPU requirements are not checked on the local runtime'
-        );
+    test('passes a gpu requirement when discovery finds a GPU', async () => {
         expect(
-            check(withRuntimes({ gpu: true }), 'local', macArm, {
-                allowUncheckedGpu: true,
-            }).unchecked
-        ).toEqual(['gpu is not checked on the local runtime']);
+            (await verify(withRuntimes({ gpu: true }), 'local', linuxNvidia)).checked
+        ).toEqual(['gpu NVIDIA GeForce RTX 4090, NVIDIA RTX A6000']);
+        const apple = new FixedHost(macArmFacts, { gpus: [{ name: 'Apple M2 Max' }] });
+        expect(
+            (await verify(withRuntimes({ gpu: true }), 'local', apple)).checked
+        ).toEqual(['gpu Apple M2 Max']);
+    });
+
+    test('refuses a gpu requirement discovery cannot meet, naming why', async () => {
+        await expect(
+            verify(withRuntimes({ gpu: true }), 'local', linuxX64)
+        ).rejects.toThrow(
+            'cannot run on the local runtime: requires a GPU but none was found: nvidia-smi is not installed. Pass --allow-unchecked-gpu to run on a GPU discovery cannot see.'
+        );
+        const empty = new FixedHost(linuxX64Facts, {
+            gpus: [],
+            reason: 'nvidia-smi exited with 6: No devices were found',
+        });
+        await expect(
+            verify(withRuntimes({ gpu: true }), 'local', empty)
+        ).rejects.toThrow(
+            'none was found: nvidia-smi exited with 6: No devices were found'
+        );
+        // A describer that cannot discover GPUs finds none.
+        const bare: HostDescriber = { describe: () => linuxX64Facts };
+        await expect(
+            verify(withRuntimes({ gpu: true }), 'local', bare)
+        ).rejects.toThrow('none was found: this host cannot discover GPUs');
+        // The synchronous check never discovers, so it refuses too.
+        expect(() => check(withRuntimes({ gpu: true }), 'local', linuxNvidia)).toThrow(
+            'none was found: no GPU discovery ran'
+        );
+    });
+
+    test('accepts a gpu discovery cannot see when told to', async () => {
+        expect(
+            (
+                await verify(withRuntimes({ gpu: true }), 'local', linuxX64, {
+                    allowUncheckedGpu: true,
+                })
+            ).unchecked
+        ).toEqual(['gpu was not found: nvidia-smi is not installed']);
+    });
+
+    test('discovers GPUs only for a local Workbench that needs one', async () => {
+        let asked = 0;
+        const counting: HostDescriber = {
+            describe: () => linuxX64Facts,
+            gpus: async () => {
+                asked += 1;
+                return { gpus: [] };
+            },
+        };
+        await verify(withRuntimes({ cpu: 1 }), 'local', counting);
+        await verify(withRuntimes({ gpu: true }), 'docker', counting);
+        expect(asked).toBe(0);
     });
 
     test('records disk as unchecked', () => {
@@ -220,14 +298,51 @@ describe('docker and e2b requirements', () => {
         ]);
     });
 
-    test('refuse a gpu requirement even when unchecked gpu is accepted', () => {
-        for (const runtime of ['docker', 'e2b']) {
-            expect(() =>
-                check(withRuntimes({ gpu: true }), runtime, macArm, {
-                    allowUncheckedGpu: true,
-                })
-            ).toThrow(`GPU requirements are not supported on the ${runtime} runtime`);
-        }
+    test('e2b refuses a gpu requirement even when unchecked gpu is accepted', () => {
+        expect(() =>
+            check(withRuntimes({ gpu: true }), 'e2b', linuxNvidia, {
+                allowUncheckedGpu: true,
+            })
+        ).toThrow('GPU requirements are not supported on the e2b runtime');
+    });
+
+    test('docker on macOS refuses a gpu requirement', () => {
+        expect(() =>
+            check(withRuntimes({ gpu: true }), 'docker', macArm, {
+                allowUncheckedGpu: true,
+            })
+        ).toThrow(
+            'cannot run on the docker runtime: Docker on macOS cannot give a container a GPU. Use the local runtime.'
+        );
+    });
+
+    test('docker on Linux gives a gpu Workbench every GPU', () => {
+        expect(check(withRuntimes({ gpu: true }), 'docker', linuxX64).applied).toEqual([
+            'gpu: all GPUs through the NVIDIA container runtime',
+        ]);
+    });
+
+    test('docker needs the NVIDIA container runtime for a gpu Workbench', () => {
+        const preflight = new RequirementsPreflight(linuxX64);
+        const gpu = workbench(withRuntimes({ gpu: true }), 'docker');
+        expect(() =>
+            preflight.checkDaemonRuntimes(gpu, ['io.containerd.runc.v2', 'runc'])
+        ).toThrow(
+            'cannot run on the docker runtime: requires a GPU but the Docker daemon has no NVIDIA container runtime (it has io.containerd.runc.v2, runc). Install the NVIDIA Container Toolkit and run nvidia-ctk runtime configure --runtime=docker.'
+        );
+        expect(() =>
+            preflight.checkDaemonRuntimes(gpu, [
+                'io.containerd.runc.v2',
+                'nvidia',
+                'runc',
+            ])
+        ).not.toThrow();
+        // A Workbench that needs no GPU never needs the runtime.
+        expect(() =>
+            preflight.checkDaemonRuntimes(workbench(withRuntimes({}), 'docker'), [
+                'runc',
+            ])
+        ).not.toThrow();
     });
 });
 
@@ -338,11 +453,21 @@ describe('providers apply requirements before preparing', () => {
         ).resolves.toBeDefined();
     });
 
-    test('the local provider refuses a gpu requirement the request does not acknowledge', async () => {
+    test('the local provider refuses a gpu requirement discovery cannot meet unless acknowledged', async () => {
         const target = workbench(withRuntimes({ gpu: true }), 'local');
         await expect(
             new LocalRuntimeProvider({ host: macArm }).prepare(prepareRequest(target))
-        ).rejects.toThrow('GPU requirements are not checked on the local runtime');
+        ).rejects.toThrow(
+            'requires a GPU but none was found: nvidia-smi is not installed'
+        );
+        const acknowledged = await new LocalRuntimeProvider({ host: macArm }).prepare(
+            prepareRequest(target, true)
+        );
+        await acknowledged.cleanup();
+        const found = await new LocalRuntimeProvider({ host: linuxNvidia }).prepare(
+            prepareRequest(target)
+        );
+        await found.cleanup();
     });
 
     test('the local provider reports checked requirements from preflight', async () => {
@@ -359,7 +484,7 @@ describe('providers apply requirements before preparing', () => {
         expect(preflight.requirements).toEqual({
             checked: ['cpu 8'],
             applied: [],
-            unchecked: ['gpu is not checked on the local runtime'],
+            unchecked: ['gpu was not found: nvidia-smi is not installed'],
         });
         await runtime.cleanup();
     });
@@ -488,9 +613,83 @@ describe('providers apply requirements before preparing', () => {
             });
             expect(spawned[0]).not.toContain('--cpus');
             expect(spawned[0]).not.toContain('--memory');
+            expect(spawned[0]).not.toContain('--gpus');
         } finally {
             await runtime.cleanup();
         }
+    });
+
+    test('the docker provider gives a gpu Workbench every GPU on a daemon with the NVIDIA runtime', async () => {
+        const commands: string[][] = [];
+        const spawned: string[][] = [];
+        const runtime = await new DockerRuntimeProvider({
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerDouble(commands, undefined, DOCKER_RUNTIMES_NVIDIA),
+            spawn(command) {
+                spawned.push(command);
+                return { exited: Promise.resolve(0), kill() {} };
+            },
+            host: linuxX64,
+        }).prepare(prepareRequest(workbench(withRuntimes({ gpu: true }), 'docker')));
+        try {
+            expect(commands).toContainEqual([
+                '/usr/bin/docker',
+                'info',
+                '--format',
+                '{{json .Runtimes}}',
+            ]);
+            const preflight = await runtime.preflight();
+            expect(preflight.requirements?.applied).toEqual([
+                'gpu: all GPUs through the NVIDIA container runtime',
+            ]);
+            runtime.launch({
+                command: ['opencode', 'serve'],
+                cwd: runtime.workspaceDirectory,
+                env: runtime.environment,
+            });
+            for (const command of [
+                spawned[0] ?? [],
+                commands.findLast((entry) => entry[1] === 'run') ?? [],
+            ]) {
+                const gpus = command.indexOf('--gpus');
+                expect(gpus).toBeGreaterThan(0);
+                expect(command[gpus + 1]).toBe('all');
+                // The flag belongs to docker run, before the image.
+                expect(gpus).toBeLessThan(command.indexOf('--entrypoint'));
+            }
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test('the docker provider refuses a gpu Workbench on a daemon without the NVIDIA runtime', async () => {
+        const spawned: string[][] = [];
+        await expect(
+            new DockerRuntimeProvider({
+                findExecutable: () => '/usr/bin/docker',
+                command: dockerDouble([], undefined, DOCKER_RUNTIMES_RUNC),
+                spawn(command) {
+                    spawned.push(command);
+                    return { exited: Promise.resolve(0), kill() {} };
+                },
+                host: linuxX64,
+            }).prepare(prepareRequest(workbench(withRuntimes({ gpu: true }), 'docker')))
+        ).rejects.toThrow(
+            'requires a GPU but the Docker daemon has no NVIDIA container runtime (it has io.containerd.runc.v2, runc)'
+        );
+        expect(spawned).toEqual([]);
+    });
+
+    test('the docker provider refuses a gpu Workbench on macOS before contacting the daemon', async () => {
+        const commands: string[][] = [];
+        await expect(
+            new DockerRuntimeProvider({
+                findExecutable: () => '/usr/bin/docker',
+                command: dockerDouble(commands, undefined, DOCKER_RUNTIMES_NVIDIA),
+                host: macArm,
+            }).prepare(prepareRequest(workbench(withRuntimes({ gpu: true }), 'docker')))
+        ).rejects.toThrow('Docker on macOS cannot give a container a GPU');
+        expect(commands).toEqual([]);
     });
 
     test('the e2b provider refuses gpu before creating anything', async () => {
@@ -584,10 +783,25 @@ describe('smoke runtime selection', () => {
             new RuntimeSmoke({
                 workbench: workbench(withRuntimes({ gpu: true })),
                 workspaceDirectory: root,
-                registry: new RuntimeRegistry([recorder('local', calls)]),
+                registry: new RuntimeRegistry([recorder('local', calls)], linuxX64),
             }).check()
-        ).rejects.toThrow('GPU requirements are not checked on the local runtime');
+        ).rejects.toThrow(
+            'requires a GPU but none was found: nvidia-smi is not installed'
+        );
         expect(calls).toEqual([]);
+    });
+
+    test('passes a gpu requirement on the GPUs the host has', async () => {
+        const calls: string[] = [];
+        await expect(
+            new RuntimeSmoke({
+                workbench: workbench(withRuntimes({ gpu: true })),
+                workspaceDirectory: root,
+                environment: { OPENROUTER_API_KEY: 'fixture-key' },
+                registry: new RuntimeRegistry([recorder('local', calls)], linuxNvidia),
+            }).check()
+        ).rejects.toThrow('local prepared');
+        expect(calls).toEqual(['local:default']);
     });
 
     test('accepts an unchecked gpu requirement when told to', async () => {
@@ -598,11 +812,22 @@ describe('smoke runtime selection', () => {
                 allowUncheckedGpu: true,
                 workspaceDirectory: root,
                 environment: { OPENROUTER_API_KEY: 'fixture-key' },
-                registry: new RuntimeRegistry([recorder('local', calls)]),
+                registry: new RuntimeRegistry([recorder('local', calls)], linuxX64),
             }).check()
         ).rejects.toThrow('local prepared');
         expect(calls).toEqual(['local:default']);
     });
+});
+
+/** `docker info --format '{{json .Runtimes}}'` from a daemon without and with the NVIDIA Container Toolkit, status trimmed. */
+const DOCKER_RUNTIMES_RUNC = JSON.stringify({
+    'io.containerd.runc.v2': { path: 'runc', status: {} },
+    runc: { path: 'runc', status: {} },
+});
+const DOCKER_RUNTIMES_NVIDIA = JSON.stringify({
+    'io.containerd.runc.v2': { path: 'runc', status: {} },
+    nvidia: { path: 'nvidia-container-runtime' },
+    runc: { path: 'runc', status: {} },
 });
 
 function dockerDouble(
@@ -610,7 +835,8 @@ function dockerDouble(
     daemon: { cpus: number; memoryBytes: number } = {
         cpus: 8,
         memoryBytes: 16 * 1024 ** 3,
-    }
+    },
+    runtimes = DOCKER_RUNTIMES_RUNC
 ) {
     return async (command: string[]): Promise<DockerCommandResult> => {
         commands.push(command);
@@ -620,6 +846,8 @@ function dockerDouble(
             stderr: '',
         });
         if (command[1] === 'version') return ok('28.1.1\n');
+        if (command[1] === 'info' && command[3] === '{{json .Runtimes}}')
+            return ok(`${runtimes}\n`);
         if (command[1] === 'info') return ok(`${daemon.cpus} ${daemon.memoryBytes}\n`);
         if (command[1] === 'image' && command[2] === 'pull')
             return ok('sha256:local\n');

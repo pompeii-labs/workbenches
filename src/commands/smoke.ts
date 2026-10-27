@@ -64,7 +64,8 @@ export const smokeCommand = defineCommand({
         },
         'allow-unchecked-gpu': {
             type: 'boolean',
-            description: 'Accept a GPU requirement on a runtime that cannot check it',
+            description:
+                'Accept a local GPU requirement when GPU discovery finds no GPU',
             default: false,
         },
         json: {

@@ -1,10 +1,48 @@
 import type { WorkbenchRequirements, WorkbenchRuntimeConfig } from '../types.js';
+import type { GpuInventory, HostGpu } from './gpus.js';
 
 export interface WorkbenchRuntimeView {
     name: string;
     image?: string;
     class?: string;
     docker_engine?: { mode: 'host'; authorization: 'explicit' };
+}
+
+/** What this host has for a Workbench that needs a GPU. */
+export interface WorkbenchGpuView {
+    /** The GPUs discovery found on this host. */
+    host: HostGpu[];
+    /** Why discovery found none. */
+    reason?: string;
+    /** Whether `gpu: true` passes on the local runtime here, when the Workbench declares it. */
+    local?: 'passes' | 'refused';
+}
+
+export function describeGpu(
+    inventory: GpuInventory,
+    runtimes: WorkbenchRuntimeView[]
+): WorkbenchGpuView {
+    const local: WorkbenchGpuView['local'] = inventory.gpus.length
+        ? 'passes'
+        : 'refused';
+    return {
+        host: inventory.gpus,
+        ...(inventory.reason ? { reason: inventory.reason } : {}),
+        ...(runtimes.some((runtime) => runtime.name === 'local') ? { local } : {}),
+    };
+}
+
+export function renderGpu(gpu: WorkbenchGpuView): string {
+    const found = gpu.host.length
+        ? gpu.host
+              .map((entry) =>
+                  entry.memory_gb === undefined
+                      ? entry.name
+                      : `${entry.name} (${entry.memory_gb} GiB)`
+              )
+              .join(', ')
+        : `none: ${gpu.reason ?? 'no GPU found'}`;
+    return gpu.local ? `${found} · ${gpu.local} on local` : found;
 }
 
 /** The runtime facts the Workbench summary renders as labelled fields. */

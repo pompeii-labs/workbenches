@@ -15,7 +15,8 @@ A headless run is almost always waiting on a permission prompt. Check `wb ps --j
 | `Required CLI tool is unavailable: X` | A tool the Workbench declares is missing on the host or in the image. Install it, or use another declared runtime. |
 | `Docker CLI is unavailable on the host` | Install and start Docker, or use another runtime. |
 | `Workbench X does not declare runtime: Y` | Pick one of the listed runtimes. |
-| `GPU requirements are not checked on the local runtime. Pass --allow-unchecked-gpu to run anyway.` | Confirm with the person that the host has the GPU, then pass the flag. |
+| `requires a GPU but none was found: <reason>. Pass --allow-unchecked-gpu to run on a GPU discovery cannot see.` | GPU discovery (`nvidia-smi` on Linux, `system_profiler` on macOS) found no GPU, for the reason given. Fix the driver or install `nvidia-smi`; pass the flag only after the person confirms the host has the GPU. |
+| `requires a GPU but the Docker daemon has no NVIDIA container runtime` | Install the NVIDIA Container Toolkit and run `nvidia-ctk runtime configure --runtime=docker`, then restart Docker; ask the person first. On macOS use the local runtime instead. |
 | `Host Docker engine access requires explicit --allow-host-docker authorization` | Only the person can grant this. Explain that it gives the run administrative access to their Docker daemon. |
 | `Use a registry publisher/name, full HTTPS GitHub URL, or an explicit local path.` from `wb add` | A bare name is not a registry reference. Use `publisher/name`, a full HTTPS GitHub URL, or a path. |
 | `Registry Workbench does not exist: org/name. Internal workbenches need a key for their organization` | Have the person run `wb login --org <org>`. |

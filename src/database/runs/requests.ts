@@ -15,7 +15,7 @@ export interface StoredRunRequest {
     task: string;
     workspaces?: WorkbenchWorkspaceBinding[];
     allow_host_docker?: boolean;
-    /** The caller accepted a GPU requirement the runtime cannot verify. */
+    /** The caller accepted a local GPU requirement GPU discovery could not confirm. */
     allow_unchecked_gpu?: boolean;
     reference?: string;
     session_id?: string;

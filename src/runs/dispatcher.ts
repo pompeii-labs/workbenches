@@ -34,7 +34,7 @@ export interface PrepareRunOptions {
     mode: 'foreground' | 'detached' | 'interactive';
     workspaces?: WorkbenchWorkspaceBinding[];
     allowHostDocker?: boolean;
-    /** Accept a GPU requirement the runtime cannot verify. A resumed session inherits it. */
+    /** Accept a local GPU requirement GPU discovery could not confirm. A resumed session inherits it. */
     allowUncheckedGpu?: boolean;
     reference?: string;
     session?: StoredSession;
