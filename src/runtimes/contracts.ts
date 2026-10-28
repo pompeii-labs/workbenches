@@ -201,6 +201,11 @@ export interface PreparedRuntime {
     readonly nativeAuthentication: 'persistent' | 'unavailable';
     /** The runner credential store this runtime mounts, when the host can write it directly. */
     readonly credentials?: RuntimeCredentialFiles | undefined;
+    /**
+     * Where the person's own runner sign-ins are inside this runtime, when the
+     * host named their directory, as a worker does for the starting member.
+     */
+    readonly credentialRoot?: string | undefined;
     pathFor(hostPath: string): string;
     preflight(): Promise<PreflightResult>;
     execute(

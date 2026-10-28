@@ -46,6 +46,7 @@ import { validateCommand } from './commands/validate.js';
 import { viewCommand } from './commands/view.js';
 import { waitCommand } from './commands/wait.js';
 import { whoamiCommand } from './commands/whoami.js';
+import { workerCommand } from './commands/worker.js';
 import { AuthenticationRequiredError } from './connections/error.js';
 import { Connection } from './database/connection.js';
 import { ModelCatalog } from './models/catalog.js';
@@ -53,6 +54,7 @@ import { RegistryClient } from './registry/index.js';
 import { workbenchHome } from './storage.js';
 import { StudioProcess } from './studio/index.js';
 import { Services } from './workbench/services.js';
+import { WorkerProcess } from './workers/process.js';
 
 let bareInvocation = import.meta.main && process.argv.length === 2;
 
@@ -97,6 +99,7 @@ export const workbenchCommand = defineCommand({
         send: sendCommand,
         wait: waitCommand,
         answer: answerCommand,
+        worker: workerCommand,
     },
 });
 
@@ -131,6 +134,12 @@ if (import.meta.main) {
             connection.close();
         }
         process.exit(code);
+    }
+    if (process.argv[2] === '__worker-daemon') {
+        const home = process.argv[3];
+        if (!home) process.exit(2);
+        RegistryClient.configureApiUrl(extractApiUrl(process.argv.slice(4)).apiUrl);
+        process.exit(await new WorkerProcess(home).run());
     }
     if (process.argv[2] === '__studio') {
         const home = process.argv[3];

@@ -1,6 +1,14 @@
 import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import {
+    mkdir,
+    mkdtemp,
+    readdir,
+    readFile,
+    rm,
+    stat,
+    writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SnapshotGuard } from '../src/catalog/guard.js';
@@ -473,6 +481,31 @@ describe('durable Workbench runs', () => {
         } finally {
             RegistryClient.configureApiUrl(undefined);
         }
+    });
+
+    test('gives a detached run exactly the environment it is dispatched with', async () => {
+        const home = await temporaryHome();
+        const { dispatcher } = open(home);
+        const resolved = await fixtureReference(home, 'opencode');
+        const run = await dispatcher.prepare({
+            resolved,
+            task: 'inspect',
+            mode: 'detached',
+        });
+        const output = join(home, 'environment.txt');
+        dispatcher.workerCommand = () => ['/bin/sh', '-c', `env > "${output}"`];
+        await dispatcher
+            .dispatch({
+                id: run.id,
+                cwd: home,
+                environment: { PATH: '/usr/bin:/bin', GIVEN: 'only-this' },
+            })
+            .catch(() => undefined);
+        const lines = (await readFile(output, 'utf8')).split('\n');
+        expect(lines).toContain('GIVEN=only-this');
+        expect(lines).toContain(`WORKBENCH_HOME=${home}`);
+        // Nothing of the dispatching process is merged back over it.
+        expect(lines.some((line) => line.startsWith('HOME='))).toBe(false);
     });
 
     test('refuses to start a run while a worker of the earlier file layout is alive', async () => {

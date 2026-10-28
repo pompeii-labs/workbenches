@@ -27,6 +27,8 @@ export interface StartDetachedRunOptions {
     allowUncheckedGpu: boolean;
     connection?: string;
     project?: string;
+    /** The host environment the run inherits instead of this process's own. */
+    environment?: Record<string, string | undefined>;
 }
 
 /** Owns resolution, preflight, persistence, and startup for a detached run. */
@@ -59,11 +61,13 @@ export class DetachedRunLauncher {
                 selectedRuntime(resolved.workbench).docker?.engine !== undefined,
                 options.allowHostDocker
             );
+            const inherited = options.environment ?? process.env;
             const environment = {
-                ...process.env,
+                ...inherited,
                 ...new WorkbenchEnvironment().bind(
                     resolved.workbench,
-                    options.environmentOverrides
+                    options.environmentOverrides,
+                    inherited
                 ),
             };
             if (
@@ -99,6 +103,7 @@ export class DetachedRunLauncher {
                 ...(options.allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
                 ...(options.connection ? { connection: options.connection } : {}),
                 ...(options.project ? { project: options.project } : {}),
+                ...(options.environment ? { environment: options.environment } : {}),
             });
             await this.dispatcher.dispatch({
                 id: run.id,

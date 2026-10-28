@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
     assertRepositoryBinding,
     parseRepository,
@@ -76,6 +79,29 @@ describe('GitHub repository input and authority', () => {
         await expect(
             new RepositoryCredentials({ GH_TOKEN: 'bad\nsecret' }).token()
         ).rejects.toThrow('Invalid GitHub credential');
+    });
+
+    test('never asks the GitHub CLI when the caller gave an empty token', async () => {
+        const bin = await mkdtemp(join(tmpdir(), 'workbench-gh-'));
+        try {
+            const marker = join(bin, 'asked');
+            await writeFile(
+                join(bin, 'gh'),
+                `#!/bin/sh\ntouch "${marker}"\necho MUST_NOT_RENDER_ACCOUNT_TOKEN\n`,
+                { mode: 0o755 }
+            );
+            const environment = { PATH: `${bin}:${process.env.PATH ?? ''}` };
+            expect(await new RepositoryCredentials(environment).token()).toBe(
+                'MUST_NOT_RENDER_ACCOUNT_TOKEN'
+            );
+            await rm(marker);
+            await expect(
+                new RepositoryCredentials({ ...environment, GH_TOKEN: '' }).token(true)
+            ).rejects.toThrow('this run was given no GitHub token');
+            expect(await Bun.file(marker).exists()).toBe(false);
+        } finally {
+            await rm(bin, { recursive: true, force: true });
+        }
     });
 
     test('attributes commits to the authenticated GitHub account without exposing its private email', async () => {

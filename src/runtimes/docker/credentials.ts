@@ -5,7 +5,47 @@ import { DockerManagedContainers } from './containers.js';
 import type { DockerUser } from './contracts.js';
 import { dockerCredentialVolume } from './identity.js';
 
-const credentialRoot = '/workbench-credentials';
+/** Where a docker run's runner finds its credential root. */
+export const credentialRoot = '/workbench-credentials';
+
+/** The runner's credential root as a docker run mounts it, and how the runner is pointed at it. */
+export interface DockerCredentials extends RuntimeCredentialFiles {
+    mountArguments(): string[];
+    environment(): Record<string, string | undefined>;
+}
+
+/**
+ * A host directory mounted read-write as the credential root: on a worker,
+ * the starting member's own sign-ins, so the run reads and renews the same
+ * ones their local runs do. The host reads and writes it directly.
+ */
+export class DockerCredentialMount implements DockerCredentials {
+    constructor(
+        private readonly directory: string,
+        private readonly files: RuntimeCredentialFiles,
+        /** How the runner finds its credentials once the directory is mounted. */
+        private readonly contract: RuntimeRunnerContract
+    ) {}
+
+    read(path: string): Promise<string | undefined> {
+        return this.files.read(path);
+    }
+
+    write(path: string, contents: string): Promise<void> {
+        return this.files.write(path, contents);
+    }
+
+    mountArguments(): string[] {
+        return [
+            '--mount',
+            `type=bind,source=${this.directory},target=${credentialRoot}`,
+        ];
+    }
+
+    environment(): Record<string, string | undefined> {
+        return this.contract.credentialEnvironment?.(credentialRoot) ?? {};
+    }
+}
 
 /**
  * The per-runner named volume that holds native credentials for Docker runs.
@@ -13,7 +53,7 @@ const credentialRoot = '/workbench-credentials';
  * Workbench image with no network and a read-only root; file contents travel
  * on standard input and output, never in argv or environment.
  */
-export class DockerCredentialVolume implements RuntimeCredentialFiles {
+export class DockerCredentialVolume implements DockerCredentials {
     readonly name: string;
 
     constructor(

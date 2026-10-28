@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { readFileSync, statSync } from 'node:fs';
 import {
     mkdir,
     mkdtemp,
+    readdir,
     readFile,
     rm,
     stat,
@@ -27,6 +27,7 @@ import {
     DockerManagedContainers,
     DockerRuntimeProvider,
 } from '../src/runtimes/docker/index.js';
+import { DockerMountPlan } from '../src/runtimes/docker/mounts.js';
 import { RuntimeRegistry } from '../src/runtimes/index.js';
 import type { ResolvedWorkbench, SpawnedRunner } from '../src/types.js';
 import { NodeHost } from '../src/workbench/host.js';
@@ -163,6 +164,65 @@ describe('Docker runtime provider', () => {
         expect(commands.find((command) => command.includes('ls'))).toContain(
             `label=dev.workbenches.scope=${scope}`
         );
+    });
+
+    test('forwards a worker repository run its gh variables and no host paths', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        const worker = new DockerMountPlan(
+            request(fixture, {
+                GH_TOKEN: '',
+                GIT_TERMINAL_PROMPT: '0',
+                GH_HOST: 'api.example.test',
+                GH_ENTERPRISE_TOKEN: 'placeholder-proxy-credential',
+                GH_REPO: 'acme/game',
+                WORKBENCH_BRANCH: 'wb/run_1',
+                GIT_CONFIG_GLOBAL: '/host/path/gitconfig',
+                GH_CONFIG_DIR: '/host/path/gh',
+                // GH_PROMPT_DISABLED is set but not listed.
+                GH_PROMPT_DISABLED: '1',
+                WORKBENCH_FORWARD: JSON.stringify([
+                    'GH_TOKEN',
+                    'GIT_TERMINAL_PROMPT',
+                    'GH_HOST',
+                    'GH_ENTERPRISE_TOKEN',
+                    'GH_REPO',
+                    'WORKBENCH_BRANCH',
+                    'GH_UNSET_BY_WORKER',
+                ]),
+            })
+        ).containerEnvironment();
+        expect(worker).toMatchObject({
+            GH_TOKEN: '',
+            GIT_TERMINAL_PROMPT: '0',
+            GH_HOST: 'api.example.test',
+            GH_ENTERPRISE_TOKEN: 'placeholder-proxy-credential',
+            GH_REPO: 'acme/game',
+            WORKBENCH_BRANCH: 'wb/run_1',
+        });
+        // Only the listed names with a value; the list itself and host paths never.
+        expect(worker).not.toHaveProperty('GH_PROMPT_DISABLED');
+        expect(worker).not.toHaveProperty('GH_UNSET_BY_WORKER');
+        expect(worker).not.toHaveProperty('WORKBENCH_FORWARD');
+        expect(worker).not.toHaveProperty('GIT_CONFIG_GLOBAL');
+        expect(worker).not.toHaveProperty('GH_CONFIG_DIR');
+        // A normal run, even with these in its shell, forwards none of them.
+        const normal = new DockerMountPlan(
+            request(fixture, { GH_HOST: 'ghe.example.test', GH_REPO: 'acme/game' })
+        ).containerEnvironment();
+        expect(normal).not.toHaveProperty('GH_HOST');
+        expect(normal).not.toHaveProperty('GH_REPO');
+        expect(normal).not.toHaveProperty('GIT_TERMINAL_PROMPT');
+        // An empty GH_TOKEN alone, which any caller may set for "no token", forwards nothing.
+        const empty = new DockerMountPlan(
+            request(fixture, {
+                GH_TOKEN: '',
+                GH_HOST: 'ghe.example.test',
+                GH_REPO: 'acme/game',
+            })
+        ).containerEnvironment();
+        expect(empty).not.toHaveProperty('GH_TOKEN');
+        expect(empty).not.toHaveProperty('GH_HOST');
+        expect(empty).not.toHaveProperty('GH_REPO');
     });
 
     test('reports unavailable host Docker dependencies before image work', async () => {
@@ -483,12 +543,9 @@ describe('Docker runtime provider', () => {
             host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock(commands),
-            interact(command) {
+            interact(command, options) {
                 interactiveCommand = command;
-                const environmentFile = command[command.indexOf('--env-file') + 1];
-                if (environmentFile) {
-                    interactiveEnvironment = readFileSync(environmentFile, 'utf8');
-                }
+                interactiveEnvironment = containerEnvironmentOf(command, options.env);
                 return Promise.resolve(0);
             },
             user: () => ({ uid: 501, gid: 20 }),
@@ -514,6 +571,55 @@ describe('Docker runtime provider', () => {
             expect(interactiveCommand).toContain('--interactive');
             expect(interactiveEnvironment).toContain(
                 'XDG_DATA_HOME=/workbench-credentials\n'
+            );
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
+    test("mounts the sign-ins a worker names instead of the home's volume", async () => {
+        const fixture = await createFixture({
+            image: 'ghcr.io/example/lux:0.1.0',
+        });
+        const root = join(fixture.root, 'member', '.local', 'share');
+        await mkdir(join(root, 'opencode'), { recursive: true });
+        await writeFile(join(root, 'opencode', 'auth.json'), '{"openai":{}}\n');
+        const commands: string[][] = [];
+        let interactiveCommand: string[] = [];
+        let interactiveEnvironment = '';
+        const prepared = request(fixture);
+        const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock(commands),
+            interact(command, options) {
+                interactiveCommand = command;
+                interactiveEnvironment = containerEnvironmentOf(command, options.env);
+                return Promise.resolve(0);
+            },
+            user: () => ({ uid: 501, gid: 20 }),
+        }).prepare({
+            ...prepared,
+            environment: { ...prepared.environment, WORKBENCH_CREDENTIAL_ROOT: root },
+        });
+        try {
+            await runtime.interact({
+                command: ['opencode', 'auth', 'list'],
+                cwd: runtime.workspaceDirectory,
+                env: runtime.environment,
+            });
+            expect(commands.some((command) => command[1] === 'volume')).toBeFalse();
+            expect(interactiveCommand).toContain(
+                `type=bind,source=${root},target=/workbench-credentials`
+            );
+            expect(interactiveEnvironment).toContain(
+                'XDG_DATA_HOME=/workbench-credentials\n'
+            );
+            expect(interactiveEnvironment).not.toContain('WORKBENCH_CREDENTIAL_ROOT');
+            expect(runtime.credentialRoot).toBe('/workbench-credentials');
+            // The host reads and renews the member's own file.
+            expect(await runtime.credentials?.read('opencode/auth.json')).toBe(
+                '{"openai":{}}\n'
             );
         } finally {
             await runtime.cleanup();
@@ -632,16 +738,16 @@ describe('Docker runtime provider', () => {
                 host: new NodeHost(),
                 findExecutable: () => '/usr/bin/docker',
                 user: () => ({ uid: 501, gid: 20 }),
-                command: async (command) => {
-                    // `opencode auth list` reads the data home the env file names.
+                command: async (command, options) => {
+                    // `opencode auth list` reads the data home the container is given.
                     if (
                         command[1] === 'run' &&
                         command.slice(-2).join(' ') === 'auth list'
                     ) {
-                        const file = command[command.indexOf('--env-file') + 1] ?? '';
-                        const dataHome = readFileSync(file, 'utf8').match(
-                            /^XDG_DATA_HOME=(.*)$/m
-                        )?.[1];
+                        const dataHome = containerEnvironmentOf(
+                            command,
+                            options?.env
+                        ).match(/^XDG_DATA_HOME=(.*)$/m)?.[1];
                         const listed =
                             command.includes(`${volumeName}:/workbench-credentials`) &&
                             volume.has(`${dataHome}/opencode/auth.json`);
@@ -649,11 +755,10 @@ describe('Docker runtime provider', () => {
                     }
                     return base(command);
                 },
-                spawn: (command) => {
-                    const file = command[command.indexOf('--env-file') + 1] ?? '';
+                spawn: (command, options) => {
                     launched.push({
                         argv: command,
-                        environment: readFileSync(file, 'utf8'),
+                        environment: containerEnvironmentOf(command, options.env),
                     });
                     return { exited: Promise.resolve(0) };
                 },
@@ -955,12 +1060,12 @@ describe('Docker runtime provider', () => {
             image: 'ghcr.io/example/lux:0.1.0',
         });
         let spawnedCommand: string[] = [];
-        let spawnedEnvironment: Record<string, string | undefined> = {};
         let containerEnvironment = '';
-        let environmentFileMode = 0;
-        let environmentFile = '';
         const commands: string[][] = [];
-        const dockerEnvironments: Array<Record<string, string | undefined>> = [];
+        const dockerEnvironments: Array<{
+            command: string[];
+            environment: Record<string, string | undefined>;
+        }> = [];
         const mockedDocker = dockerMock(commands);
         const stdout = new Response('runner output').body as ReadableStream<Uint8Array>;
         const stderr = new Response('runner diagnostic')
@@ -970,21 +1075,17 @@ describe('Docker runtime provider', () => {
             stdout: { value: stdout, enumerable: false },
             stderr: { value: stderr, enumerable: false },
         });
+        const temporary = await readdir(tmpdir());
         const runtime = await new DockerRuntimeProvider({
             host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command(command, options) {
-                dockerEnvironments.push(options?.env ?? {});
+                dockerEnvironments.push({ command, environment: options?.env ?? {} });
                 return mockedDocker(command);
             },
             spawn(command, options) {
                 spawnedCommand = command;
-                spawnedEnvironment = options.env ?? {};
-                environmentFile = command[command.indexOf('--env-file') + 1] ?? '';
-                if (environmentFile) {
-                    containerEnvironment = readFileSync(environmentFile, 'utf8');
-                    environmentFileMode = statSync(environmentFile).mode & 0o777;
-                }
+                containerEnvironment = containerEnvironmentOf(command, options.env);
                 return child;
             },
             user: () => ({ uid: 501, gid: 20 }),
@@ -1004,13 +1105,13 @@ describe('Docker runtime provider', () => {
             expect(spawnedCommand).toContain('bridge');
             expect(spawnedCommand).toContain('--read-only');
             expect(spawnedCommand).toContain('501:20');
-            expect(spawnedCommand).toContain('--env-file');
             expect(spawnedCommand).toContain(
                 `${DockerCredentialVolume.nameFor('opencode')}:/workbench-credentials`
             );
-            expect(environmentFileMode).toBe(0o600);
+            // The secret reaches the container by name, never through argv or a file.
             expect(spawnedCommand.join(' ')).not.toContain('super-secret-value');
-            expect(spawnedEnvironment.OPENROUTER_API_KEY).toBeUndefined();
+            expect(spawnedCommand).not.toContain('--env-file');
+            expect(await readdir(tmpdir())).toEqual(temporary);
             expect(containerEnvironment).toContain(
                 'OPENROUTER_API_KEY=super-secret-value\n'
             );
@@ -1038,9 +1139,12 @@ describe('Docker runtime provider', () => {
                 );
             }
             expect(
-                dockerEnvironments.every(
-                    (environment) => environment.OPENROUTER_API_KEY === undefined
-                )
+                dockerEnvironments
+                    .filter(({ command }) => command[1] !== 'run')
+                    .every(
+                        ({ environment }) =>
+                            environment.OPENROUTER_API_KEY === undefined
+                    )
             ).toBeTrue();
             expect(process.stdout).toBe(stdout);
             expect(process.stderr).toBe(stderr);
@@ -1048,7 +1152,6 @@ describe('Docker runtime provider', () => {
             expect(tmpfs).toContain('nosuid,nodev');
             expect(tmpfs).not.toContain('size=');
             await process.exited;
-            await expect(stat(environmentFile)).rejects.toThrow();
             runtime.cancel(process);
         } finally {
             await runtime.cleanup();
@@ -1068,12 +1171,9 @@ describe('Docker runtime provider', () => {
             host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
             command: dockerMock([]),
-            spawn(command) {
+            spawn(command, options) {
                 spawnedCommand = command;
-                const environmentFile = command[command.indexOf('--env-file') + 1];
-                if (environmentFile) {
-                    containerEnvironment = readFileSync(environmentFile, 'utf8');
-                }
+                containerEnvironment = containerEnvironmentOf(command, options.env);
                 return { exited: Promise.resolve(0), kill() {} };
             },
         }).prepare({
@@ -1183,7 +1283,6 @@ describe('Docker runtime provider', () => {
         const commands: string[][] = [];
         const mockedDocker = dockerMock(commands);
         let killed = false;
-        let environmentFile = '';
         const runtime = await new DockerRuntimeProvider({
             host: new NodeHost(),
             findExecutable: () => '/usr/bin/docker',
@@ -1196,8 +1295,7 @@ describe('Docker runtime provider', () => {
                 }
                 return mockedDocker(command);
             },
-            spawn(command) {
-                environmentFile = command[command.indexOf('--env-file') + 1] ?? '';
+            spawn() {
                 return {
                     exited: new Promise(() => {}),
                     kill() {
@@ -1226,7 +1324,6 @@ describe('Docker runtime provider', () => {
                     command.includes('--force')
             )
         ).toBeTrue();
-        await expect(stat(dirname(environmentFile))).rejects.toThrow();
     });
 
     test('waits for an in-progress container removal to finish', async () => {
@@ -1281,24 +1378,45 @@ describe('Docker runtime provider', () => {
         expect(inspections).toBe(2);
     });
 
-    test('rejects environment values that Docker env files cannot represent', async () => {
+    test('passes multi-line values to the container by name', async () => {
         const fixture = await createFixture({
             image: 'ghcr.io/example/lux:0.1.0',
             env: { PROJECT_TOKEN: { required: true } },
         });
+        const runs: Array<{
+            command: string[];
+            environment: Record<string, string | undefined>;
+        }> = [];
+        const mocked = dockerMock([]);
         const runtime = await new RuntimeRegistry([
             new DockerRuntimeProvider({
                 host: new NodeHost(),
                 findExecutable: () => '/usr/bin/docker',
-                command: dockerMock([]),
+                command: (command, options) => {
+                    if (command[1] === 'run')
+                        runs.push({ command, environment: options?.env ?? {} });
+                    return mocked(command);
+                },
             }),
         ])
             .resolve('docker')
             .prepare(request(fixture, { PROJECT_TOKEN: 'line-one\nline-two' }));
         try {
-            await expect(runtime.preflight()).rejects.toThrow(
-                'Docker environment variable contains an unsupported newline: PROJECT_TOKEN'
+            await runtime.preflight();
+            const forwarding = runs.filter((run) =>
+                run.command.some(
+                    (argument, index) =>
+                        argument === '--env' &&
+                        run.command[index + 1] === 'PROJECT_TOKEN'
+                )
             );
+            expect(forwarding.length).toBeGreaterThan(0);
+            for (const run of runs) {
+                expect(run.command.join(' ')).not.toContain('line-one');
+            }
+            for (const run of forwarding) {
+                expect(run.environment.PROJECT_TOKEN).toBe('line-one\nline-two');
+            }
         } finally {
             await runtime.cleanup();
         }
@@ -1498,6 +1616,26 @@ function expectIsolatedHelper(command: string[]): void {
 
 function result(code: number, stdout = '', stderr = ''): DockerCommandResult {
     return { code, stdout, stderr };
+}
+
+/**
+ * What a `docker run` gives its container, one `NAME=value` per line: each
+ * `--env NAME=value` as written, and each `--env NAME` from the CLI's own
+ * environment, the way the Docker CLI resolves them.
+ */
+function containerEnvironmentOf(
+    command: string[],
+    environment: Record<string, string | undefined> = {}
+): string {
+    const lines: string[] = [];
+    command.forEach((argument, index) => {
+        if (argument !== '--env') return;
+        const entry = command[index + 1] ?? '';
+        if (entry.includes('=')) lines.push(entry);
+        else if (environment[entry] !== undefined)
+            lines.push(`${entry}=${environment[entry]}`);
+    });
+    return lines.map((line) => `${line}\n`).join('');
 }
 
 async function createFixture(options: {

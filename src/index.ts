@@ -224,9 +224,9 @@ export {
     type StagedAsset,
     TransferRules,
 } from './runtimes/index.js';
-export {
-    type ResolvedSession,
-    type StoredSession,
+export type {
+    ResolvedSession,
+    StoredSession,
 } from './sessions/index.js';
 export {
     type GitHubInspectionOptions,
