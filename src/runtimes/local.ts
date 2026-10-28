@@ -16,6 +16,7 @@ import type {
     RuntimeSessionOptions,
 } from './contracts.js';
 import { RuntimeError } from './error.js';
+import { readCredentialRoot, withoutHostVariables } from './hostvariables.js';
 import { runnerExecutable } from './runner.js';
 
 export interface LocalRuntimeDependencies {
@@ -44,7 +45,12 @@ export interface LocalRuntimeDependencies {
     ) => Promise<number>;
 }
 
-type ResolvedLocalDependencies = Required<Omit<LocalRuntimeDependencies, 'host'>>;
+type ResolvedLocalDependencies = Required<
+    Omit<LocalRuntimeDependencies, 'host' | 'findExecutable'>
+> & {
+    /** Finds a command on `path`, the `PATH` the run is launched with. */
+    findExecutable: (name: string, path?: string) => string | null;
+};
 
 export class LocalRuntimeProvider implements RuntimeProvider {
     readonly name = 'local';
@@ -54,7 +60,10 @@ export class LocalRuntimeProvider implements RuntimeProvider {
 
     constructor(dependencies: LocalRuntimeDependencies) {
         this.dependencies = {
-            findExecutable: dependencies.findExecutable ?? Bun.which,
+            findExecutable:
+                dependencies.findExecutable ??
+                ((name: string, path?: string) =>
+                    Bun.which(name, path === undefined ? undefined : { PATH: path })),
             spawn: dependencies.spawn ?? LocalRuntime.spawn,
             interact: dependencies.interact ?? LocalRuntime.interactProcess,
         };
@@ -110,6 +119,9 @@ export class LocalRuntime implements PreparedRuntime {
     private readonly allowUncheckedGpu: boolean;
     /** The runner CLI the host must provide. */
     private readonly executable: string;
+    readonly credentialRoot: string | undefined;
+    /** The `PATH` the run is launched with, where its commands are looked for. */
+    private readonly path: string | undefined;
 
     constructor(
         request: RuntimePrepareRequest,
@@ -133,8 +145,10 @@ export class LocalRuntime implements PreparedRuntime {
                   ]
                 : []
         );
+        this.credentialRoot = readCredentialRoot(request.environment);
+        this.path = request.environment.PATH;
         this.environment = {
-            ...request.environment,
+            ...withoutHostVariables(request.environment),
             ...(request.repository
                 ? {
                       WORKBENCH_REPOSITORY: request.repository.name,
@@ -155,13 +169,16 @@ export class LocalRuntime implements PreparedRuntime {
     async preflight(): Promise<PreflightResult> {
         this.assertAvailable('preflight');
         try {
-            if (this.requiresGitHubCli && !this.dependencies.findExecutable('gh'))
+            // A command is found where the run will launch it: on its own PATH.
+            const findExecutable = (name: string) =>
+                this.dependencies.findExecutable(name, this.path);
+            if (this.requiresGitHubCli && !findExecutable('gh'))
                 throw new Error(
                     'GitHub CLI (gh) is required for authenticated repository runs'
                 );
             const result = new WorkbenchPreflight({
                 environment: this.environment,
-                findExecutable: this.dependencies.findExecutable,
+                findExecutable,
             }).check(this.workbench, this.executable);
             const requirements = await this.requirementsPreflight.verify(
                 this.workbench,
@@ -180,7 +197,7 @@ export class LocalRuntime implements PreparedRuntime {
         this.assertAvailable('launch');
         const child = this.dependencies.spawn(invocation.command, {
             cwd: invocation.cwd,
-            env: invocation.env,
+            env: withoutHostVariables(invocation.env),
             stdin: 'ignore',
             stdout: 'pipe',
             stderr: 'pipe',
@@ -197,7 +214,7 @@ export class LocalRuntime implements PreparedRuntime {
         this.assertAvailable('launch');
         return this.dependencies.interact(invocation.command, {
             cwd: invocation.cwd,
-            env: invocation.env,
+            env: withoutHostVariables(invocation.env),
             stdin: 'inherit',
             stdout: 'inherit',
             stderr: 'inherit',
@@ -223,7 +240,7 @@ export class LocalRuntime implements PreparedRuntime {
         try {
             return this.dependencies.spawn(invocation.command, {
                 cwd: invocation.cwd,
-                env: invocation.env,
+                env: withoutHostVariables(invocation.env),
                 stdin: options.stdin,
                 stdout: 'pipe',
                 stderr: 'pipe',

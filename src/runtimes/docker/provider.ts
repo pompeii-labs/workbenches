@@ -1,7 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
+import { HostCredentialFiles } from '../../connections/credentials.js';
 import { HostOutcomeCapture } from '../../outcomes/index.js';
 import { RequirementsPreflight } from '../../workbench/requirements.js';
 import { requirementsOf, selectedRuntime } from '../../workbench/runtimes.js';
@@ -11,9 +8,14 @@ import type {
     RuntimeProvider,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
+import { readCredentialRoot } from '../hostvariables.js';
 import { DockerClient } from './client.js';
 import type { DockerRuntimeDependencies } from './contracts.js';
-import { DockerCredentialVolume } from './credentials.js';
+import {
+    DockerCredentialMount,
+    type DockerCredentials,
+    DockerCredentialVolume,
+} from './credentials.js';
 import { DockerImageManager } from './images.js';
 import { DockerMountPlan } from './mounts.js';
 import { DockerRuntime } from './runtime.js';
@@ -66,7 +68,8 @@ export class DockerRuntimeProvider implements RuntimeProvider {
         const client = new DockerClient(
             executable,
             this.dependencies,
-            DockerMountPlan.environmentNames(request.workbench)
+            DockerMountPlan.environmentNames(request.workbench),
+            request.environment
         );
         await client.require(
             [executable, 'version', '--format', '{{.Server.Version}}'],
@@ -98,30 +101,21 @@ export class DockerRuntimeProvider implements RuntimeProvider {
             ? await client.resolveHostSocket()
             : undefined;
         const image = await new DockerImageManager(client).prepare(request);
-        let stateDirectory: string | undefined;
         let outcome: HostOutcomeCapture | undefined;
         try {
-            // A runner without a credential file gets no volume and no mount.
             const credentials =
-                request.purpose === 'build' || !request.runner.credentialEnvironment
+                request.purpose === 'build'
                     ? undefined
-                    : new DockerCredentialVolume(
+                    : await this.credentials(
+                          request,
                           client,
-                          image.preparation.immutableReference,
-                          request.workbench.manifest.runner,
-                          request.runner,
-                          client.user
+                          image.preparation.immutableReference
                       );
-            await credentials?.prepare();
             const mounts = new DockerMountPlan(request, hostSocket);
             await mounts.verify();
             outcome = request.outcome
                 ? await HostOutcomeCapture.create(request)
                 : undefined;
-            const directory = await mkdtemp(
-                join(tmpdir(), 'workbench-docker-runtime-')
-            );
-            stateDirectory = directory;
             return new DockerRuntime({
                 request,
                 client,
@@ -129,28 +123,47 @@ export class DockerRuntimeProvider implements RuntimeProvider {
                 mounts,
                 ...(credentials ? { credentials } : {}),
                 preparation: image.preparation,
-                stateDirectory: directory,
                 ...(outcome ? { outcome } : {}),
                 requirements: this.requirements,
-                cleanupPreparation: async () => {
-                    await Promise.all([
-                        image.cleanup(),
-                        rm(directory, {
-                            recursive: true,
-                            force: true,
-                        }),
-                    ]);
-                },
+                cleanupPreparation: () => image.cleanup(),
             });
         } catch (error) {
             await Promise.all([
                 image.cleanup(),
-                ...(stateDirectory
-                    ? [rm(stateDirectory, { recursive: true, force: true })]
-                    : []),
                 ...(outcome ? [outcome.cleanup()] : []),
             ]);
             throw error;
         }
+    }
+
+    /**
+     * The runner's credential root. A worker names the starting member's own
+     * sign-ins, which any runner may keep there. Otherwise it is the Workbench
+     * home's volume, and a runner without a credential file gets none.
+     */
+    private async credentials(
+        request: RuntimePrepareRequest,
+        client: DockerClient,
+        image: string
+    ): Promise<DockerCredentials | undefined> {
+        const runner = request.runner;
+        if (!runner) return undefined;
+        const root = readCredentialRoot(request.environment);
+        if (root)
+            return new DockerCredentialMount(
+                root,
+                new HostCredentialFiles(root),
+                runner
+            );
+        if (!runner.credentialEnvironment) return undefined;
+        const volume = new DockerCredentialVolume(
+            client,
+            image,
+            request.workbench.manifest.runner,
+            runner,
+            client.user
+        );
+        await volume.prepare();
+        return volume;
     }
 }

@@ -27,7 +27,12 @@ export class DockerClient {
     constructor(
         readonly executable: string,
         dependencies: DockerClientDependencies,
-        private readonly protectedEnvironmentNames: string[]
+        private readonly protectedEnvironmentNames: string[],
+        /**
+         * The environment the Docker CLI runs with: the run's own, so a pull
+         * uses the run's registry credential and never this process's.
+         */
+        readonly baseEnvironment: Record<string, string | undefined> = process.env
     ) {
         this.commandProcess = dependencies.command ?? DockerClient.commandProcess;
         this.spawnProcess = dependencies.spawn ?? DockerClient.spawnProcess;
@@ -43,7 +48,7 @@ export class DockerClient {
     ): Promise<DockerCommandResult> {
         return this.commandProcess(command, {
             ...options,
-            env: this.environment(options.env ?? process.env),
+            env: this.processEnvironment(options),
         });
     }
 
@@ -62,7 +67,7 @@ export class DockerClient {
     spawn(command: string[], options: DockerSpawnOptions): SpawnedRunner {
         return this.spawnProcess(command, {
             ...options,
-            env: this.environment(options.env ?? process.env),
+            env: this.processEnvironment(options),
         });
     }
 
@@ -72,8 +77,21 @@ export class DockerClient {
     ): Promise<number> {
         return this.interactProcess(command, {
             ...options,
-            env: this.environment(options.env ?? process.env),
+            env: this.processEnvironment(options),
         });
+    }
+
+    /**
+     * The CLI's own environment without credentials, plus the values the
+     * command forwards into a container by name.
+     */
+    private processEnvironment(
+        options: DockerProcessOptions
+    ): Record<string, string | undefined> {
+        return {
+            ...this.environment(options.env ?? this.baseEnvironment),
+            ...options.forward,
+        };
     }
 
     environment(

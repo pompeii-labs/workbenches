@@ -9,11 +9,35 @@ export interface ClaudeCodeRoute {
     secureStorageDirectory: string;
 }
 
+/**
+ * Where Claude Code keeps the person's login inside a credential root a host
+ * named, as a worker does for a member's sign-in, their local runs, and their
+ * docker runs alike.
+ */
+export function claudeCodeLoginDirectory(root: string): string {
+    return `${root.replace(/\/+$/, '')}/claude`;
+}
+
+/**
+ * The credential store holding the person's own login in a runtime: in the
+ * sign-ins a host named there, else on the local runtime the host's default,
+ * which is empty, else none.
+ */
+export function claudeCodeLogin(
+    runtime: string,
+    credentialRoot: string | undefined
+): string | undefined {
+    if (credentialRoot) return claudeCodeLoginDirectory(credentialRoot);
+    return runtime === 'local' ? '' : undefined;
+}
+
 export interface ClaudeCodeRouteRequest {
     /** The catalog provider of the selected route. */
     provider: string;
     /** The runtime the route runs in. */
     runtime: string;
+    /** Where a host named the person's sign-ins in that runtime, as a worker does for a member. */
+    credentialRoot?: string | undefined;
     /** The runtime environment, filtered to the selected route. */
     environment: Record<string, string | undefined>;
     /** The variables the catalog names for the provider's key. */
@@ -44,13 +68,14 @@ const gateways: Record<string, string> = {
 /**
  * The route policy. An Anthropic key is an API route. Without one, Anthropic
  * uses a `CLAUDE_CODE_OAUTH_TOKEN` from the person's own environment, a
- * subscription, on any runtime, or else on the local runtime the person's own
- * login, which is a subscription only when `claude auth status` reported
- * `oauth`; a Console login, or one it did not report, is billed by usage.
- * Other runtimes hold no login, so they need an API key or the token. Only the
- * local login route can read the person's login; every other route points the
- * credential store at the empty session config directory, so a cached login
- * can never reach a gateway.
+ * subscription, on any runtime, or else the person's own login where the
+ * runtime holds one: on the local runtime, or where a host named their
+ * sign-ins. That login is a subscription only when `claude auth status`
+ * reported `oauth`; a Console login, or one it did not report, is billed by
+ * usage. A runtime without a login needs an API key or the token. Only the
+ * Anthropic routes without a key read the person's login; every other route
+ * points the credential store at the empty session config directory, so a
+ * cached login can never reach a gateway.
  */
 export function claudeCodeRoute(request: ClaudeCodeRouteRequest): ClaudeCodeRoute {
     const key = request.keys
@@ -85,7 +110,8 @@ export function claudeCodeRoute(request: ClaudeCodeRouteRequest): ClaudeCodeRout
         };
     }
     const token = request.oauthToken?.trim();
-    if (!token && request.runtime !== 'local') {
+    const login = claudeCodeLogin(request.runtime, request.credentialRoot);
+    if (!token && login === undefined) {
         throw new Error(
             `Claude Code on the ${request.runtime} runtime needs ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN`
         );
@@ -96,6 +122,6 @@ export function claudeCodeRoute(request: ClaudeCodeRouteRequest): ClaudeCodeRout
             token || request.authenticationMethod === 'oauth'
                 ? 'subscription'
                 : 'metered',
-        secureStorageDirectory: request.runtime === 'local' ? '' : isolated,
+        secureStorageDirectory: login ?? isolated,
     };
 }

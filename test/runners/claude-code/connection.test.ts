@@ -280,6 +280,36 @@ describe('Claude Code routes', () => {
         ).toBe('subscription');
     });
 
+    test("reads the person's login in the sign-ins a host named, on either runtime", () => {
+        for (const [runtime, credentialRoot] of [
+            ['local', '/worker/members/mem_1/.local/share'],
+            ['docker', '/workbench-credentials'],
+        ] as const)
+            expect(
+                claudeCodeRoute({
+                    ...base,
+                    provider: 'anthropic',
+                    runtime,
+                    credentialRoot,
+                    authenticationMethod: 'oauth',
+                })
+            ).toEqual({
+                environment: {},
+                billing: 'subscription',
+                secureStorageDirectory: `${credentialRoot}/claude`,
+            });
+        // A key still never reads it, and a gateway never sees it.
+        expect(
+            claudeCodeRoute({
+                ...base,
+                provider: 'anthropic',
+                runtime: 'docker',
+                credentialRoot: '/workbench-credentials',
+                environment: { ANTHROPIC_API_KEY: 'anthropic-key' },
+            }).secureStorageDirectory
+        ).toBe('/session/claude-code');
+    });
+
     test('a remote runtime takes the environment token as a subscription, never a login', () => {
         for (const runtime of ['e2b', 'daytona', 'unknown']) {
             expect(

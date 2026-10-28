@@ -20,6 +20,11 @@ export interface DockerProcessOptions {
     env?: Record<string, string | undefined>;
     /** Written to standard input, so the content never appears in argv. */
     input?: string;
+    /**
+     * Values a `docker run` passes into the container by name with
+     * `--env NAME`, so they appear neither in argv nor in a file.
+     */
+    forward?: Record<string, string>;
 }
 
 export interface DockerSpawnOptions extends DockerProcessOptions {

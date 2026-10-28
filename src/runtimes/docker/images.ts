@@ -97,7 +97,12 @@ export class DockerImageManager {
                     context,
                 ],
                 'Failed to provision engine-managed Git tools in Docker image',
-                { env: { ...process.env, BUILDX_METADATA_PROVENANCE: 'min' } }
+                {
+                    env: {
+                        ...this.client.baseEnvironment,
+                        BUILDX_METADATA_PROVENANCE: 'min',
+                    },
+                }
             );
             const prepared = await this.client.inspectImage(tag);
             if (!prepared?.Id) {
@@ -193,7 +198,12 @@ export class DockerImageManager {
                     staged.context,
                 ],
                 `Failed to build Docker image for ${request.workbench.manifest.name}`,
-                { env: { ...process.env, BUILDX_METADATA_PROVENANCE: 'min' } }
+                {
+                    env: {
+                        ...this.client.baseEnvironment,
+                        BUILDX_METADATA_PROVENANCE: 'min',
+                    },
+                }
             );
             const inspected = await this.client.inspectImage(tag);
             if (!inspected?.Id) {

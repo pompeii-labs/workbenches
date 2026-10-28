@@ -291,9 +291,29 @@ export class RegistryClient {
         const token = this.sameOrigin(new URL(registry.artifactUrl))
             ? await this.keyring.select(registry.reference.publisher)
             : undefined;
+        return this.fetchArchive(
+            registry.artifactUrl,
+            {
+                selector: registry.selector,
+                source: registry.source,
+                revision: registry.revision,
+            },
+            token
+        );
+    }
+
+    /**
+     * Downloads and validates a package archive. A signed URL carries its own
+     * authorization, so no key is sent unless `token` is given.
+     */
+    async fetchArchive(
+        url: string,
+        origin: { selector: string; source: string; revision: string },
+        token?: string
+    ): Promise<RemoteWorkbenchPackage> {
         let response: Response;
         try {
-            response = await this.fetcher(registry.artifactUrl, {
+            response = await this.fetcher(url, {
                 headers: {
                     Accept: 'application/json',
                     'User-Agent': WORKBENCH_USER_AGENT,
@@ -319,12 +339,7 @@ export class RegistryClient {
         const manifest = this.manifestParser.parse(
             Bun.YAML.parse(new TextDecoder().decode(manifestFile.bytes))
         );
-        const summary = {
-            selector: registry.selector,
-            manifest,
-            source: registry.source,
-            revision: registry.revision,
-        };
+        const summary = { ...origin, manifest };
         this.packageValidator.validate(summary, files);
         return { ...summary, files };
     }

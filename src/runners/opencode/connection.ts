@@ -1,9 +1,14 @@
 import type { ModelCatalogHarnessProviderRoute } from '../../models/index.js';
-import type { RunnerConnection } from '../runner.js';
+import type { RunnerConnection, RunnerWorkerSignIn } from '../runner.js';
 import { v2Method } from './authentication.js';
 
 /** The OpenCode release whose provider capabilities Workbench reads from the catalog. */
 const OPENCODE_CATALOG_VERSION = '1.18.30';
+
+/** The ChatGPT sign-in that returns to a callback on `localhost:1455` of the machine running it. */
+const CHATGPT_BROWSER = 'ChatGPT Pro/Plus (browser)';
+/** The same ChatGPT sign-in as a device code, entered in any browser. */
+const CHATGPT_HEADLESS = 'ChatGPT Pro/Plus (headless)';
 
 /**
  * OpenCode reads the catalog's capabilities for its verified release, or else
@@ -54,14 +59,14 @@ export const openCodeConnection: RunnerConnection = {
                       id: 'chatgpt',
                       label: 'ChatGPT subscription',
                       nativeProvider: 'openai',
-                      nativeMethod: 'ChatGPT Pro/Plus (browser)',
+                      nativeMethod: CHATGPT_BROWSER,
                       authenticationMethod: 'oauth',
                   }
                 : {
                       id: 'chatgpt',
                       label: 'ChatGPT subscription (headless)',
                       nativeProvider: 'openai',
-                      nativeMethod: 'ChatGPT Pro/Plus (headless)',
+                      nativeMethod: CHATGPT_HEADLESS,
                       authenticationMethod: 'oauth',
                   },
             {
@@ -76,24 +81,7 @@ export const openCodeConnection: RunnerConnection = {
     hostSignIn: {
         executable: 'opencode',
         versionCommand: ['--version'],
-        arguments: (nativeProvider, nativeMethod, version) =>
-            isOpenCodeV2(version ?? '2.0.0')
-                ? [
-                      'auth',
-                      'login',
-                      nativeProvider,
-                      '--standalone',
-                      ...(nativeMethod && nativeMethod !== 'Manually enter API Key'
-                          ? ['--method', v2Method(nativeMethod)]
-                          : []),
-                  ]
-                : [
-                      'auth',
-                      'login',
-                      '--provider',
-                      nativeProvider,
-                      ...(nativeMethod ? ['--method', nativeMethod] : []),
-                  ],
+        arguments: loginArguments,
         async exportCredential(executable, environment, provider, version) {
             if (!isOpenCodeV2(version)) return undefined;
             const child = Bun.spawn(
@@ -128,6 +116,46 @@ export const openCodeConnection: RunnerConnection = {
     },
     inRunSignIn: true,
 };
+
+/**
+ * `opencode auth login` as a worker runs it for a member following it from
+ * another machine. The ChatGPT subscription's browser form finishes by
+ * redirecting to the worker's own `localhost`, which the member's browser
+ * cannot reach, so on a worker it always signs in with its device code.
+ */
+export const openCodeWorkerSignIn: RunnerWorkerSignIn = {
+    versionCommand: ['--version'],
+    arguments: (nativeProvider, nativeMethod, version) =>
+        loginArguments(
+            nativeProvider,
+            nativeMethod === CHATGPT_BROWSER ? CHATGPT_HEADLESS : nativeMethod,
+            version
+        ),
+};
+
+function loginArguments(
+    nativeProvider: string,
+    nativeMethod?: string,
+    version?: string
+): string[] {
+    return isOpenCodeV2(version ?? '2.0.0')
+        ? [
+              'auth',
+              'login',
+              nativeProvider,
+              '--standalone',
+              ...(nativeMethod && nativeMethod !== 'Manually enter API Key'
+                  ? ['--method', v2Method(nativeMethod)]
+                  : []),
+          ]
+        : [
+              'auth',
+              'login',
+              '--provider',
+              nativeProvider,
+              ...(nativeMethod ? ['--method', nativeMethod] : []),
+          ];
+}
 
 export function isOpenCodeV2(version: string): boolean {
     return /^(?:opencode\s+)?v?2\./.test(version.trim());

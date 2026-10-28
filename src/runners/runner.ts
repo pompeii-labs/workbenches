@@ -95,6 +95,31 @@ export interface RunnerHostSignIn {
     ) => Promise<Record<string, unknown> | undefined>;
 }
 
+/**
+ * A runner's own command-line sign-in as a worker runs it for a member, in a
+ * pseudo-terminal with the member's directory as its home, while the person
+ * follows it from `wb connect --worker`.
+ */
+export interface RunnerWorkerSignIn {
+    /**
+     * The sign-in's arguments for one native provider and, when given, its
+     * native method, for a person whose browser is on another machine.
+     */
+    arguments(
+        nativeProvider: string,
+        nativeMethod?: string,
+        version?: string
+    ): readonly string[];
+    /** Some runner releases changed their sign-in arguments. */
+    versionCommand?: readonly string[];
+    /**
+     * Points the sign-in at the member's sign-ins, where the worker's runs of
+     * theirs find its login on either runtime, when the runner would not
+     * otherwise keep it there.
+     */
+    environment?(root: string): Record<string, string>;
+}
+
 /** How a runner lists the credentials it holds inside a runtime. */
 export interface RunnerCredentialProbe {
     /** The native command that lists them. It runs read-only without network. */
@@ -161,6 +186,10 @@ export abstract class Runner {
      * provider keys. `--env-file` and `--env` admit them for this runner.
      */
     readonly nativeCredentialVariables: readonly string[] = [];
+    /** How a worker runs this runner's own sign-in for a member. Undefined when it cannot. */
+    readonly workerSignIn?: RunnerWorkerSignIn | undefined;
+    /** The oldest release of the harness CLI this runner works with, when an older one is known to fail. */
+    readonly minimumVersion?: string | undefined;
     /** How `wb connect`, runs, `view` and `smoke` reach the runner's model providers. */
     abstract readonly connection: RunnerConnection;
 

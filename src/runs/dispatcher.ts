@@ -41,11 +41,14 @@ export interface PrepareRunOptions {
     connection?: string;
     /** An existing project name or slug for a new session. */
     project?: string;
+    /** The host environment repository access is resolved from. Defaults to this process's. */
+    environment?: Record<string, string | undefined>;
 }
 
 export interface DispatchRunOptions {
     id: string;
     cwd: string;
+    /** The whole environment of the detached process. Defaults to this process's. */
     environment?: Record<string, string | undefined>;
     waitForInitialTurn?: boolean;
 }
@@ -105,7 +108,10 @@ export class RunDispatcher {
             options.session?.repository ??
             (options.resolved.repository
                 ? await (
-                      await RepositoryGitHub.forEnvironment(process.env, true)
+                      await RepositoryGitHub.forEnvironment(
+                          options.environment ?? process.env,
+                          true
+                      )
                   ).resolve(options.resolved.repository, id)
                 : undefined);
         if (repository) {
@@ -117,7 +123,7 @@ export class RunDispatcher {
                 this.home,
                 this.checkouts,
                 repository,
-                process.env
+                options.environment ?? process.env
             ).assertCredentialsOwnedByEngine(workbench);
         }
         // Capture package bytes only. Workspace ownership and identity are unchanged.
@@ -268,9 +274,9 @@ export class RunDispatcher {
         try {
             const child = Bun.spawn(this.workerCommand(options.id), {
                 cwd: options.cwd,
+                // A given environment replaces this process's own; it is never merged over it.
                 env: {
-                    ...process.env,
-                    ...options.environment,
+                    ...(options.environment ?? process.env),
                     WORKBENCH_HOME: this.home,
                 },
                 stdin: 'ignore',

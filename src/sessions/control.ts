@@ -32,7 +32,11 @@ export class SessionControl {
     async send(
         id: string,
         task: string,
-        delivery: 'send' | 'steer' | 'queue' = 'send'
+        delivery: 'send' | 'steer' | 'queue' = 'send',
+        /** The environment a continuation of a closed session runs with. */
+        environment: Record<string, string | undefined> = process.env,
+        /** The connection a continuation of a closed session uses. */
+        connection?: string
     ): Promise<SessionInputResult> {
         const activity = await this.lifecycle.resolve(id);
         const run = activity.run;
@@ -48,7 +52,8 @@ export class SessionControl {
                     task,
                     delivery: 'send',
                     mode: 'detached',
-                    environment: process.env,
+                    environment,
+                    ...(connection ? { connection } : {}),
                 });
                 return {
                     session_id: result.sessionId,

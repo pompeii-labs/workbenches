@@ -212,6 +212,18 @@ export class RunStore {
         return this.#events.read(id);
     }
 
+    /** The run's events whose sequence is after `sequence`, in order. */
+    async readEventsAfter(id: string, sequence: number): Promise<WorkbenchEvent[]> {
+        RunStore.validateId(id);
+        return this.#events.afterSequence(id, sequence);
+    }
+
+    /** The run's last event, or undefined before its first. */
+    async lastEvent(id: string): Promise<WorkbenchEvent | undefined> {
+        RunStore.validateId(id);
+        return this.#events.last(id);
+    }
+
     async latest(): Promise<StoredRun> {
         const latest = (await this.list())[0];
         if (!latest) throw new Error('No Workbench runs have been dispatched');
