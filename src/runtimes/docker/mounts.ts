@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { ActiveModelCatalog, ModelRouter } from '../../models/index.js';
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RuntimePrepareRequest } from '../contracts.js';
+import { readContainerForwardNames } from '../hostvariables.js';
 import type { DockerHostSocket } from './contracts.js';
 
 interface DockerMount {
@@ -152,6 +153,7 @@ export class DockerMountPlan {
                     this.request.environment[name],
                 ])
             ),
+            ...this.forwardedEnvironment(),
             ...(this.request.repository?.delivery === 'pr'
                 ? Object.fromEntries(
                       [
@@ -170,6 +172,22 @@ export class DockerMountPlan {
                   )
                 : {}),
         };
+    }
+
+    /**
+     * What a Workbench Worker hands a repository run so `gh` and git work
+     * through the site's proxy inside the container: exactly the names it
+     * lists in `WORKBENCH_FORWARD`, with their values from the same
+     * environment. A run whose environment has no such list forwards nothing.
+     */
+    private forwardedEnvironment(): Record<string, string> {
+        const environment = this.request.environment;
+        const forwarded: Record<string, string> = {};
+        for (const name of readContainerForwardNames(environment)) {
+            const value = environment[name];
+            if (value !== undefined) forwarded[name] = value;
+        }
+        return forwarded;
     }
 
     static environmentNames(workbench: ResolvedWorkbench): string[] {

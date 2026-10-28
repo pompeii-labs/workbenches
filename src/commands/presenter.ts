@@ -90,6 +90,11 @@ export class CliPresenter {
         this.message(message);
     }
 
+    /** One plain line on stdout, the same in a terminal and in a pipe. */
+    text(line: string): void {
+        this.#stdout(`${line}\n`);
+    }
+
     detail(label: string, value: string): void {
         if (!this.#interactive) {
             this.#stdout(`${label}\t${value}\n`);

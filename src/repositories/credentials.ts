@@ -15,8 +15,13 @@ export class RepositoryCredentials {
 
     async token(required = false): Promise<string | undefined> {
         let token = this.environment.GH_TOKEN || this.environment.GITHUB_TOKEN;
+        // A GH_TOKEN that is set but empty means the caller has no token to
+        // give, as a worker sets it for a run without one: the account's own
+        // GitHub CLI login is never asked instead.
+        const withheld = !token && this.environment.GH_TOKEN === '';
         if (
             !token &&
+            !withheld &&
             Bun.which(
                 'gh',
                 this.environment.PATH ? { PATH: this.environment.PATH } : undefined
@@ -41,7 +46,9 @@ export class RepositoryCredentials {
         }
         if (required && !token) {
             throw new Error(
-                'Authenticated repository execution requires GitHub access. Set GH_TOKEN or run gh auth login.'
+                withheld
+                    ? 'Authenticated repository execution requires GitHub access, and this run was given no GitHub token.'
+                    : 'Authenticated repository execution requires GitHub access. Set GH_TOKEN or run gh auth login.'
             );
         }
         if (token && /[\r\n\0]/.test(token))

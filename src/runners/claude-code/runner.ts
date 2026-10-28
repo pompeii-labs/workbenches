@@ -19,6 +19,7 @@ import {
     type RunnerSession,
     type RunnerSessionStartOptions,
 } from '../session.js';
+import { CLAUDE_CODE_VERSION } from './capabilities.js';
 import type { ClaudeCodeConfigStaging, StagedClaudeCodeConfig } from './config.js';
 import { claudeCodeConnection } from './connection.js';
 import { ClaudeCodeCost, runtimeCostStore } from './cost.js';
@@ -30,7 +31,12 @@ import {
     withoutClaudeVariables,
 } from './invocation.js';
 import { type ClaudeCodeSpawn, executeOnHost } from './process.js';
-import { type ClaudeCodeRoute, claudeCodeRoute } from './routes.js';
+import {
+    type ClaudeCodeRoute,
+    claudeCodeLogin,
+    claudeCodeLoginDirectory,
+    claudeCodeRoute,
+} from './routes.js';
 import {
     ClaudeCodeSessionAdapter,
     defaultSpawn,
@@ -57,8 +63,22 @@ export class ClaudeCodeRunner extends Runner {
     /** A Claude Code session takes its input over piped standard input. */
     readonly standardInput = true;
     readonly connection = claudeCodeConnection;
+    /** Older releases refuse the options the session starts Claude Code with. */
+    override readonly minimumVersion = CLAUDE_CODE_VERSION;
     /** A `claude setup-token` subscription token, taken from the person's own environment on any runtime. */
     override readonly nativeCredentialVariables = ['CLAUDE_CODE_OAUTH_TOKEN'];
+    /**
+     * `claude auth login` with a claude.ai subscription, into the member's
+     * sign-ins on a worker, where their local and docker runs there read and
+     * renew it. Its own credential store, never the account's default, keeps
+     * the macOS keychain entry of the account's own login out of reach.
+     */
+    override readonly workerSignIn = {
+        arguments: () => ['auth', 'login', '--claudeai'],
+        environment: (root: string) => ({
+            CLAUDE_SECURESTORAGE_CONFIG_DIR: claudeCodeLoginDirectory(root),
+        }),
+    };
 
     constructor(private readonly dependencies: ClaudeCodeRunnerDependencies) {
         super();
@@ -107,6 +127,7 @@ type ClaudeCodeTarget = Pick<
     | 'workspaces'
     | 'pathFor'
     | 'execute'
+    | 'credentialRoot'
 >;
 
 /** The config directory inside a session's state that keeps the native session. */
@@ -205,9 +226,9 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
             env: {
                 ...withoutClaudeVariables(runtime.environment),
                 CLAUDE_CONFIG_DIR: configDirectory,
-                // Only the host can hold the person's login.
                 CLAUDE_SECURESTORAGE_CONFIG_DIR:
-                    runtime.name === 'local' ? '' : configDirectory,
+                    claudeCodeLogin(runtime.name, runtime.credentialRoot) ??
+                    configDirectory,
                 ...(token ? { CLAUDE_CODE_OAUTH_TOKEN: token } : {}),
             },
         };
@@ -393,13 +414,14 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
     }
 
     #route(
-        target: Pick<ClaudeCodeTarget, 'name' | 'environment'>,
+        target: Pick<ClaudeCodeTarget, 'name' | 'environment' | 'credentialRoot'>,
         configuration: ResolvedRunnerConfiguration,
         configDirectory: string
     ): ClaudeCodeRoute {
         return claudeCodeRoute({
             provider: configuration.provider,
             runtime: target.name,
+            credentialRoot: target.credentialRoot,
             environment: this.#router.environmentForRoute(
                 this.#workbench,
                 configuration,

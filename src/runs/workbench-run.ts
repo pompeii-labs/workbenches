@@ -155,6 +155,10 @@ export class WorkbenchRun {
                 model_route: {
                     canonical: configuration.canonicalModel,
                     provider: configuration.provider,
+                    // Whether a subscription or a key pays for the run, when known.
+                    ...(configuration.authenticationMethod
+                        ? { method: configuration.authenticationMethod }
+                        : {}),
                     ...(configuration.catalogVersion
                         ? { catalog_version: configuration.catalogVersion }
                         : {}),

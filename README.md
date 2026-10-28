@@ -145,6 +145,10 @@ wb unpublish acme/core         # make a public workbench internal again
 
 Each push needs a higher manifest version than the last. Publishing is the one act that makes a stored version public, and it always goes through review. `wb publish .#core` pushes and submits in one step. Saved internal workbenches show as `internal` in `wb list --saved` and `wb view`.
 
+### Self-hosted workers for workbenches.dev
+
+If you run Workbenches on [workbenches.dev](https://workbenches.dev), `wb login` and then `wb worker start --name <name>` connects this machine to it as a self-hosted runner: runs you start there execute here instead of in a hosted sandbox. A worker is yours alone until you share it with your organization. Each member connects their own runners on it from any machine with `wb connect --worker <slug> <runner>`. This needs a workbenches.dev account; nothing else in `wb` depends on it. See [Workers](docs/REFERENCE.md#workers).
+
 ## What is in a Workbench?
 
 A Workbench is a small, versioned package owned by a project or expert:
@@ -323,6 +327,7 @@ wb status                  # live progress of active and recent runs
 wb studio --no-open        # dashboard on 9292, local API on 9293
 wb studio --port 9392 --api-port 9393
 wb mcp                     # serve Workbench tools to a coding agent over stdio
+wb worker start            # self-hosted worker for workbenches.dev
 wb send wb_... "Check the rollback too"
 wb resume wb_... --task "Run the checks"
 wb outcome wbo_...         # inspect returned results

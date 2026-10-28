@@ -178,6 +178,10 @@ class GuardedRuntime implements PreparedRuntime {
         return this.runtime.credentials;
     }
 
+    get credentialRoot(): string | undefined {
+        return this.runtime.credentialRoot;
+    }
+
     pathFor(hostPath: string): string {
         try {
             return this.runtime.pathFor(hostPath);

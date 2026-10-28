@@ -146,6 +146,10 @@ export class InteractiveRun {
                 model_route: {
                     canonical: prepared.configuration.canonicalModel,
                     provider: prepared.configuration.provider,
+                    // Whether a subscription or a key pays for the run, when known.
+                    ...(prepared.configuration.authenticationMethod
+                        ? { method: prepared.configuration.authenticationMethod }
+                        : {}),
                     ...(prepared.configuration.catalogVersion
                         ? { catalog_version: prepared.configuration.catalogVersion }
                         : {}),

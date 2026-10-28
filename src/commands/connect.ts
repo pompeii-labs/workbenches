@@ -1,4 +1,4 @@
-import { autocomplete, type Option, password, select } from '@clack/prompts';
+import { password, select } from '@clack/prompts';
 import { defineCommand } from 'citty';
 import {
     type ConnectionAuthenticationMethod,
@@ -8,11 +8,8 @@ import { AuthenticationRequiredError } from '../connections/error.js';
 import type { ConnectionWorkbench } from '../connections/setup.js';
 import {
     type ConnectionTarget,
-    connectionAuthenticationMethods,
     connectionHarnesses,
-    connectionProviders,
     harnessLabel,
-    runtimeLabel,
 } from '../connections/targets.js';
 import { ModelCatalog } from '../models/catalog.js';
 import { ModelRouter } from '../models/routing.js';
@@ -21,7 +18,9 @@ import { type RuntimeKeyProvider, RuntimeSecretStore } from '../runtimes/secrets
 import { workbenchHome } from '../storage.js';
 import { selectedRuntime, WorkbenchResolver, withRuntime } from '../workbench/index.js';
 import { ModelConnection } from './connection.js';
+import { type ConnectionChoice, selectConnectionTarget } from './connectiontarget.js';
 import { CliPresenter } from './presenter.js';
+import { connectWorker } from './workerconnect.js';
 
 export const connectCommand = defineCommand({
     meta: {
@@ -32,8 +31,14 @@ export const connectCommand = defineCommand({
     args: () => ({
         workbench: {
             type: 'positional',
-            description: 'Saved alias or local Workbench reference',
+            description:
+                'Saved alias or local Workbench reference, or the runner with --worker',
             required: false,
+        },
+        worker: {
+            type: 'string',
+            description:
+                'Connect a runner for your own runs on this worker, by its slug',
         },
         dir: {
             type: 'string',
@@ -76,6 +81,18 @@ export const connectCommand = defineCommand({
     }),
     async run({ args }) {
         const output = new CliPresenter();
+        if (args.worker) {
+            await connectWorker(
+                {
+                    worker: args.worker,
+                    runner: args.workbench ?? args.harness,
+                    ...(args.provider ? { provider: args.provider } : {}),
+                    ...(args.method ? { method: args.method } : {}),
+                },
+                output
+            );
+            return;
+        }
         const home = workbenchHome();
         const runners = RunnerRegistry.standard();
         const requested = args.runtime?.trim().toLowerCase();
@@ -171,12 +188,6 @@ export const connectCommand = defineCommand({
         }
     },
 });
-
-/** A runtime, harness, and provider, with the method once one is chosen. */
-interface ConnectionChoice extends Omit<ConnectionTarget, 'method'> {
-    methods: ConnectionAuthenticationMethod[];
-    method?: ConnectionAuthenticationMethod;
-}
 
 async function chooseConnectionKind(
     runners: Pick<RunnerRegistry, 'find' | 'list'>
@@ -329,129 +340,4 @@ async function connectionTargetForWorkbench(
         await resolved.cleanup();
         throw error;
     }
-}
-
-/** Chooses the target from flags or prompts. Without `chooseMethod`, a method is chosen only when given. */
-async function selectConnectionTarget(
-    input: {
-        runtime?: string;
-        harness?: string;
-        provider?: string;
-        method?: string;
-        providers?: string[];
-    },
-    chooseMethod: boolean,
-    runners: Pick<RunnerRegistry, 'find' | 'list'>
-): Promise<ConnectionChoice> {
-    const interactive = process.stdin.isTTY && process.stderr.isTTY;
-    const runtime = await chooseOption({
-        ...(input.runtime ? { provided: input.runtime } : {}),
-        values: [...connectionRuntimes],
-        interactive,
-        message: 'Choose a runtime',
-        labels: Object.fromEntries(
-            connectionRuntimes.map((value) => [value, runtimeLabel(value)])
-        ),
-        hints: {
-            local: 'this machine',
-            docker: 'local container',
-            e2b: 'cloud sandbox',
-            daytona: 'cloud sandbox',
-        },
-        flag: '--runtime',
-    });
-    const harnesses = connectionHarnesses(runners);
-    const harness = await chooseOption({
-        ...(input.harness ? { provided: input.harness } : {}),
-        values: harnesses,
-        interactive,
-        message: 'Choose a harness',
-        labels: Object.fromEntries(
-            harnesses.map((value) => [value, harnessLabel(value, runners)])
-        ),
-        flag: '--harness',
-    });
-    const catalog = ModelCatalog.current();
-    const providers = connectionProviders(harness, catalog, runners).filter(
-        (candidate) => !input.providers || input.providers.includes(candidate.id)
-    );
-    const provider = await chooseOption({
-        ...(input.provider ? { provided: input.provider } : {}),
-        values: providers.map((candidate) => candidate.id),
-        interactive,
-        message: 'Choose a provider',
-        labels: Object.fromEntries(
-            providers.map((candidate) => [candidate.id, candidate.label])
-        ),
-        flag: '--provider',
-        searchable: true,
-    });
-    const methods = connectionAuthenticationMethods(
-        runtime,
-        harness,
-        provider,
-        catalog,
-        runners
-    );
-    if (!chooseMethod && !input.method) return { runtime, harness, provider, methods };
-    const methodId = await chooseOption({
-        ...(input.method ? { provided: input.method } : {}),
-        values: methods.map((method) => method.id),
-        interactive,
-        message: 'Choose an authentication method',
-        labels: Object.fromEntries(methods.map((method) => [method.id, method.label])),
-        flag: '--method',
-    });
-    const method = methods.find((candidate) => candidate.id === methodId);
-    if (!method) throw new Error('An authentication method must be selected');
-    return { runtime, harness, provider, methods, method };
-}
-
-async function chooseOption<T extends string>(options: {
-    provided?: string;
-    values: T[];
-    interactive: boolean;
-    message: string;
-    labels: Record<string, string>;
-    hints?: Partial<Record<T, string>>;
-    flag: string;
-    searchable?: boolean;
-}): Promise<T> {
-    if (options.provided) {
-        const normalized = options.provided.trim().toLowerCase();
-        const value = options.values.find((candidate) => candidate === normalized);
-        if (!value) {
-            throw new Error(
-                `Invalid ${options.flag} value ${options.provided}. Expected one of: ${options.values.join(', ')}`
-            );
-        }
-        return value;
-    }
-    const only = options.values[0];
-    if (options.values.length === 1 && only) return only;
-    if (!options.interactive) {
-        throw new Error(
-            `wb connect requires ${options.flag} in a non-interactive terminal`
-        );
-    }
-    const promptOptions: { message: string; options: Option<T>[] } = {
-        message: options.message,
-        options: options.values.map((value) => {
-            const hint = options.hints?.[value];
-            return {
-                value,
-                label: options.labels[value] ?? value,
-                ...(hint ? { hint } : {}),
-            } as Option<T>;
-        }),
-    };
-    const selected = options.searchable
-        ? await autocomplete<T>({
-              ...promptOptions,
-              placeholder: `Search ${options.message.slice('Choose a '.length)}`,
-              maxItems: 7,
-          })
-        : await select<T>(promptOptions);
-    if (typeof selected === 'symbol') throw new Error('Connection setup cancelled');
-    return selected;
 }

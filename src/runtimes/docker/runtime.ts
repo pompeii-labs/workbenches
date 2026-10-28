@@ -1,6 +1,4 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type {
     OutcomeSink,
     RuntimeOutcomeCollection,
@@ -34,7 +32,12 @@ import type {
     DockerPreparation,
     DockerUser,
 } from './contracts.js';
-import type { DockerCredentialVolume } from './credentials.js';
+import {
+    credentialRoot,
+    DockerCredentialMount,
+    type DockerCredentials,
+} from './credentials.js';
+import { DockerContainerEnvironment } from './environment.js';
 import type { DockerMountPlan } from './mounts.js';
 
 export interface DockerRuntimeOptions {
@@ -42,9 +45,8 @@ export interface DockerRuntimeOptions {
     client: DockerClient;
     hostSocket?: DockerHostSocket;
     mounts: DockerMountPlan;
-    credentials?: DockerCredentialVolume;
+    credentials?: DockerCredentials;
     preparation: DockerPreparation;
-    stateDirectory: string;
     outcome?: HostOutcomeCapture;
     requirements: RequirementsPreflight;
     cleanupPreparation(): Promise<void>;
@@ -102,8 +104,14 @@ export class DockerRuntime implements PreparedRuntime {
         this.workbench = options.mounts.remap(options.request.workbench);
     }
 
-    get credentials(): DockerCredentialVolume | undefined {
+    get credentials(): DockerCredentials | undefined {
         return this.options.credentials;
+    }
+
+    get credentialRoot(): string | undefined {
+        return this.options.credentials instanceof DockerCredentialMount
+            ? credentialRoot
+            : undefined;
     }
 
     pathFor(hostPath: string): string {
@@ -188,40 +196,35 @@ export class DockerRuntime implements PreparedRuntime {
         this.assertAvailable('launch');
         const [entrypoint, ...args] = invocation.command;
         if (!entrypoint) throw new Error('Runner command is empty');
-        const environmentFile = this.writeEnvironmentFile(invocation.env);
-        try {
-            return await this.options.client.interact(
-                [
-                    this.options.client.executable,
-                    'run',
-                    '--rm',
-                    '--init',
-                    '--interactive',
-                    ...(process.stdin.isTTY ? ['--tty'] : []),
-                    '--network',
-                    'bridge',
-                    '--read-only',
-                    ...this.containerArguments(),
-                    '--env-file',
-                    environmentFile,
-                    '--workdir',
-                    invocation.cwd,
-                    '--entrypoint',
-                    entrypoint,
-                    this.preparation.immutableReference,
-                    ...args,
-                ],
-                {
-                    cwd: process.cwd(),
-                    env: process.env,
-                    stdin: 'inherit',
-                    stdout: 'inherit',
-                    stderr: 'inherit',
-                }
-            );
-        } finally {
-            rmSync(environmentFile, { force: true });
-        }
+        const environment = new DockerContainerEnvironment(invocation.env);
+        return this.options.client.interact(
+            [
+                this.options.client.executable,
+                'run',
+                '--rm',
+                '--init',
+                '--interactive',
+                ...(process.stdin.isTTY ? ['--tty'] : []),
+                '--network',
+                'bridge',
+                '--read-only',
+                ...this.containerArguments(),
+                ...environment.arguments,
+                '--workdir',
+                invocation.cwd,
+                '--entrypoint',
+                entrypoint,
+                this.preparation.immutableReference,
+                ...args,
+            ],
+            {
+                cwd: process.cwd(),
+                forward: environment.forward,
+                stdin: 'inherit',
+                stdout: 'inherit',
+                stderr: 'inherit',
+            }
+        );
     }
 
     launch(invocation: RunnerInvocation): SpawnedRunner {
@@ -263,49 +266,40 @@ export class DockerRuntime implements PreparedRuntime {
         const [entrypoint, ...args] = invocation.command;
         if (!entrypoint) throw new Error('Runner command is empty');
         const name = `workbench-${randomBytes(10).toString('hex')}`;
-        const environmentFile = this.writeEnvironmentFile(invocation.env);
-        let child: SpawnedRunner;
-        try {
-            child = this.options.client.spawn(
-                [
-                    this.options.client.executable,
-                    'run',
-                    '--rm',
-                    '--init',
-                    '--name',
-                    name,
-                    ...(this.options.request.run
-                        ? DockerManagedContainers.labels(this.options.request.run)
-                        : []),
-                    ...(options.stdin === 'pipe' ? ['--interactive'] : []),
-                    ...(publishedPort
-                        ? ['--publish', `127.0.0.1::${publishedPort}`]
-                        : []),
-                    '--network',
-                    'bridge',
-                    '--read-only',
-                    ...this.containerArguments(),
-                    '--env-file',
-                    environmentFile,
-                    '--workdir',
-                    invocation.cwd,
-                    '--entrypoint',
-                    entrypoint,
-                    this.preparation.immutableReference,
-                    ...args,
-                ],
-                {
-                    cwd: process.cwd(),
-                    env: process.env,
-                    stdin: options.stdin,
-                    stdout: 'pipe',
-                    stderr: 'pipe',
-                }
-            );
-        } catch (error) {
-            rmSync(environmentFile, { force: true });
-            throw error;
-        }
+        const environment = new DockerContainerEnvironment(invocation.env);
+        const child = this.options.client.spawn(
+            [
+                this.options.client.executable,
+                'run',
+                '--rm',
+                '--init',
+                '--name',
+                name,
+                ...(this.options.request.run
+                    ? DockerManagedContainers.labels(this.options.request.run)
+                    : []),
+                ...(options.stdin === 'pipe' ? ['--interactive'] : []),
+                ...(publishedPort ? ['--publish', `127.0.0.1::${publishedPort}`] : []),
+                '--network',
+                'bridge',
+                '--read-only',
+                ...this.containerArguments(),
+                ...environment.arguments,
+                '--workdir',
+                invocation.cwd,
+                '--entrypoint',
+                entrypoint,
+                this.preparation.immutableReference,
+                ...args,
+            ],
+            {
+                cwd: process.cwd(),
+                forward: environment.forward,
+                stdin: options.stdin,
+                stdout: 'pipe',
+                stderr: 'pipe',
+            }
+        );
         const tracked: SpawnedRunner = {
             ...(child.stdin ? { stdin: child.stdin } : {}),
             ...(child.stdout ? { stdout: child.stdout } : {}),
@@ -313,7 +307,6 @@ export class DockerRuntime implements PreparedRuntime {
             ...(child.kill ? { kill: () => child.kill?.() } : {}),
             exited: child.exited.finally(() => {
                 this.active.delete(name);
-                rmSync(environmentFile, { force: true });
             }),
         };
         this.active.set(name, tracked);
@@ -427,9 +420,9 @@ export class DockerRuntime implements PreparedRuntime {
     ): Promise<DockerCommandResult> {
         const [entrypoint, ...args] = command;
         if (!entrypoint) throw new Error('Docker command is empty');
-        const environmentFile = this.writeEnvironmentFile(environment);
-        try {
-            return await this.options.client.run([
+        const container = new DockerContainerEnvironment(environment);
+        return this.options.client.run(
+            [
                 this.options.client.executable,
                 'run',
                 '--rm',
@@ -437,17 +430,15 @@ export class DockerRuntime implements PreparedRuntime {
                 options.network,
                 ...(options.readOnly ? ['--read-only'] : []),
                 ...this.containerArguments(),
-                '--env-file',
-                environmentFile,
+                ...container.arguments,
                 ...(workdir ? ['--workdir', workdir] : []),
                 '--entrypoint',
                 entrypoint,
                 this.preparation.immutableReference,
                 ...args,
-            ]);
-        } finally {
-            rmSync(environmentFile, { force: true });
-        }
+            ],
+            { forward: container.forward }
+        );
     }
 
     private containerArguments(): string[] {
@@ -476,21 +467,6 @@ export class DockerRuntime implements PreparedRuntime {
                 : ['--memory', `${Math.ceil(requirements.memory_gb * 1024)}m`]),
             ...(requirements.gpu ? ['--gpus', 'all'] : []),
         ];
-    }
-
-    private writeEnvironmentFile(
-        environment: Record<string, string | undefined>
-    ): string {
-        const path = join(
-            this.options.stateDirectory,
-            `environment-${randomBytes(10).toString('hex')}`
-        );
-        writeFileSync(path, DockerRuntime.serializeEnvironment(environment), {
-            mode: 0o600,
-            flag: 'wx',
-        });
-        chmodSync(path, 0o600);
-        return path;
     }
 
     private async removeContainer(name: string): Promise<void> {
@@ -564,25 +540,6 @@ export class DockerRuntime implements PreparedRuntime {
                 'Runtime has already been cleaned up'
             );
         }
-    }
-
-    private static serializeEnvironment(
-        environment: Record<string, string | undefined>
-    ): string {
-        const defined = Object.entries(environment).flatMap(([name, value]) =>
-            value === undefined ? [] : [[name, value] as const]
-        );
-        return `${defined
-            .toSorted(([left], [right]) => left.localeCompare(right))
-            .map(([name, value]) => {
-                if (/[\0\r\n]/.test(value)) {
-                    throw new Error(
-                        `Docker environment variable contains an unsupported newline: ${name}`
-                    );
-                }
-                return `${name}=${value}`;
-            })
-            .join('\n')}\n`;
     }
 
     private static userArguments(user: DockerUser | undefined): string[] {

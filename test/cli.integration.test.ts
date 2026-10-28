@@ -2822,7 +2822,8 @@ describe('CLI integration', () => {
         expect(commands).toContain('--workdir /workspace');
         expect(commands).toContain('--entrypoint /bin/sh');
         expect(commands).toContain('workbench-context opencode serve');
-        expect(commands).toContain('--env-file');
+        expect(commands).toContain('--env OPENROUTER_API_KEY ');
+        expect(commands).not.toContain('--env-file');
         expect(commands).toContain('dev.workbenches.managed=true');
         expect(commands).toContain(`dev.workbenches.run=${runId}`);
         expect(commands).not.toContain(secret);

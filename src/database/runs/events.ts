@@ -63,6 +63,20 @@ export class RunEventStore {
             });
     }
 
+    /** Events whose sequence is after `sequence`, in sequence order. */
+    afterSequence(runId: string, sequence: number): WorkbenchEvent[] {
+        return this.database
+            .all(
+                'SELECT payload FROM events WHERE run_id = ? AND sequence > ? ORDER BY sequence',
+                runId,
+                sequence
+            )
+            .map((row) => {
+                if (typeof row.payload !== 'string') throw this.invalid(runId);
+                return this.parse(row.payload, runId);
+            });
+    }
+
     last(runId: string): WorkbenchEvent | undefined {
         const row = this.database.one(
             'SELECT payload FROM events WHERE run_id = ? ORDER BY id DESC LIMIT 1',
