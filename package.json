@@ -105,14 +105,14 @@
         "@clack/prompts": "^1.5.1",
         "@modelcontextprotocol/sdk": "^1.32.1",
         "citty": "^0.2.2",
-        "e2b": "2.51.0",
+        "e2b": "2.61.0",
         "marked": "^18.0.7",
         "picocolors": "^1.1.1",
         "tar-stream": "^3.2.0"
     },
     "overrides": {
         "@babel/core": "7.29.7",
-        "fast-uri": "3.1.8",
+        "fast-uri": "3.1.9",
         "js-yaml": "4.3.2"
     }
 }
