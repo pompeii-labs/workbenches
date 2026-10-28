@@ -27,17 +27,18 @@ Sources: `.#name` and `/path#name` select one package in a repo, `org/name` is t
 
 | Command | What it does |
 | --- | --- |
-| `wb run <ALIAS> [PROMPT]` | Requires a task through the positional prompt, `--task`, `--task-file`, or `--stdin`. `--final`, `--json`, or `--detach` choose the output. `--dir` sets the workspace; `--repo owner/name [--ref]` works on an isolated GitHub checkout; `--workspace NAME=PATH` binds named workspaces; `--env-file`, `--env NAME=value`, `--connection`, `--runtime`, `--project`, `--allow-host-docker`. Unknown options are rejected. |
+| `wb run <ALIAS> [PROMPT]` | Requires a task through the positional prompt, `--task`, `--task-file`, or `--stdin`. `--final`, `--json`, or `--detach` choose the output. `--dir` sets the workspace; `--repo owner/name [--ref]` works on an isolated GitHub checkout; `--workspace NAME=PATH` binds named workspaces; `--env-file`, `--env NAME=value`, `--connection`, `--runtime`, `--project`, `--allow-host-docker`, `--allow-unchecked-gpu` (only after the person confirms the host has the GPU discovery missed). Unknown options are rejected. |
 | `wb project create <NAME> [--json]` | Create a local project. Works the same with or without `wb login`. |
 | `wb project list [--json]` | Projects with task counts. `--project <name-or-slug>` on `run` must name one of them. |
 | `wb ps [--all] [--json]` | Active and resumable sessions, with `needs_input` and pending requests. |
+| `wb status [--line\|--json]` | Live progress of every active run on the machine and runs that ended in the last 10 minutes: plan bar from the agent's todo list, current todo, elapsed time, cost, and pending input first. `--line` prints one line for a status bar such as Claude Code's `statusLine`. |
 | `wb wait <SESSION\|RUN> [--run] [--after SEQ] [--timeout SECONDS] [--json]` | Read-only. Returns at the next turn boundary, terminal state, or input request. |
 | `wb send <SESSION> [TEXT\|--task-file F\|--stdin] [--steer\|--queue] [--json]` | Send to an idle session, steer the active turn, or queue a follow-up. Uses the inherited environment for credentials. |
 | `wb resume <SESSION> [PROMPT\|--task T\|--task-file F\|--stdin] [--detach] [--json\|--final] [--env-file] [--env] [--connection]` | Continue a resumable session with new input. Use `wb send` for agent-driven session control. |
 | `wb answer <SESSION> <REQUEST> [RESPONSE\|--response-file F\|--stdin\|--reject] [--json]` | Answer one pending permission or question. |
 | `wb attach [SESSION] [--json\|--final]` | Replay and follow the latest run. Read-only. |
 | `wb kill <SESSION>` | Cancel the active run. |
-| `wb outcome <RUN\|OUTCOME> [--json] [--apply] [--export DIR] [--workspace DIR]` | Inspect a run's durable result, apply pending changes, or export a bundle. |
+| `wb outcome <RUN\|OUTCOME> [--json] [--apply] [--export DIR] [--workspace DIR]` | Inspect a run's durable result, apply pending changes, or export a bundle. `--recover` collects partial work from a failed E2B run's sandbox without new model work; `--discard-recovery` abandons it. |
 | `wb clean [--older-than 30d] [--include-sessions] [--apply]` | Preview, then remove old run data. |
 | `wb mcp` | Serve the Workbench tools (`search`, `view`, `run`, `wait`, `send`, `answer`, `cancel`, `runs`, `sessions`, `push`, `projects`, `create_project`, `tasks`) to an MCP client over stdio. |
 | `wb studio [--image REF] [--port 9292] [--api-port 9293] [--no-open] [--json]` | Start the local dashboard in Docker, or open the running one. Pulls the pinned image when missing. `wb studio status` and `wb studio stop` take `--json`. |
@@ -69,7 +70,20 @@ Sources: `.#name` and `/path#name` select one package in a repo, `org/name` is t
 | --- | --- |
 | `wb connect [WORKBENCH] [--runtime] [--harness] [--provider] [--method] [--stdin\|--remove]` | Save the default provider and sign-in method for a runner and runtime, fill that runtime's credential store, and check it. `--stdin` reads an API key (a terminal gets a hidden prompt instead), `--remove` deletes the provider's entry. Exits 3 when not ready. |
 | `wb connect --runtime e2b\|daytona [--stdin\|--status\|--remove]` | Save, check, or remove a sandbox provider key. |
+| `wb connect --worker <WORKER> <RUNNER> [--provider] [--method]` | Sign the calling member in to a runner on a workbenches.dev worker, from any machine with `wb login`. Relays the runner's own sign-in, or a hidden API-key prompt, to the worker; needs a person at the terminal. |
 | `wb update [--check]` | Update the CLI binary. |
+
+## Workers (workbenches.dev)
+
+| Command | What it does |
+| --- | --- |
+| `wb worker start [--name NAME] [--org SLUG] [--runtimes docker,local] [--slots N]` | Register this machine on first use (needs `wb login`), then install and start the background service. `--runtimes` only narrows what the machine can run; both flags are remembered. |
+| `wb worker status [--json]` | Online or offline and since when, organization, busy slots, and one line per active run. |
+| `wb worker logs [-f]` | The lifecycle log: names, ids, states, short task excerpts, never credentials or task output. |
+| `wb worker stop [--now]` | Wait for active runs (`--now` cancels them), then stop the service until the next `start`. |
+| `wb worker remove [--now]` | Stop, remove the service, and revoke the worker's key. Safe to rerun when the API was unreachable. |
+
+A worker's state lives in `$WORKBENCH_HOME/worker`: its key (`worker.json`, owner-only), its own engine sessions, and one directory per member under `members/`, which holds that member's runner sign-ins. Never open those files.
 
 ## Anonymous counts
 
@@ -94,6 +108,6 @@ Registry organization keys and runtime keys live in owner-only files in the same
 
 - Provider keys named in the model catalog (see `connections.md`).
 - `E2B_API_KEY`, `DAYTONA_API_KEY`, `DAYTONA_API_URL`.
-- `GH_TOKEN`, `GITHUB_TOKEN` for private GitHub sources and `--repo` runs (falls back to `gh auth token`).
+- `GH_TOKEN`, `GITHUB_TOKEN` for private GitHub sources and `--repo` runs (falls back to `gh auth token`). A `GH_TOKEN` exported as an empty string means no token: the `gh auth token` fallback is skipped.
 - `WORKBENCH_HOME`, `NO_COLOR`, `FORCE_COLOR`.
 - `DO_NOT_TRACK` disables anonymous save and run counts.

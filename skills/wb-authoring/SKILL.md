@@ -77,7 +77,7 @@ Classify the task (new work, upgrade, narrow edit) and give each class its own b
 
 ### 8. Fit the runtime, then verify mechanically
 
-Declare every runtime the work can honestly run in, default first, with `requirements` for what it truly needs (OS, CPU, memory, GPU). Write the Dockerfile for `docker`, `e2b`, and `daytona` to the image contract in [references/runtimes.md](references/runtimes.md): the runner and every declared tool inside, any numeric user, a read-only root, writable state only under the temporary home, versions pinned, and a comment on why each dependency exists. Daytona needs a published image.
+Declare every runtime the work can honestly run in, default first, with `requirements` for what it truly needs (OS, CPU, memory, GPU). Write the Dockerfile for `docker`, `e2b`, and `daytona` to the image contract in [references/runtimes.md](references/runtimes.md): the runner and every declared tool inside, any numeric user, a read-only root, writable state only under the temporary home, versions pinned, and a comment on why each dependency exists. Daytona needs a published image. A package a team sends to its own workbenches.dev worker is checked against that machine; what that changes is in the worker section of [references/runtimes.md](references/runtimes.md).
 
 Choose the model and routes per [references/models.md](references/models.md). Leave `routes` out unless a provider genuinely must be excluded, so consumers can use whichever provider key they hold.
 

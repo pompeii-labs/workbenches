@@ -1,6 +1,6 @@
 ---
 name: wb-subagents
-description: Delegate bounded, checkable work to an expert Workbench through the wb CLI, then supervise, answer, continue, and verify it. Use when a project or registry publishes a Workbench that fits the task, when work needs a specific runtime, toolset, or packaged expertise, or when you would otherwise start a generic subagent and re-teach it a domain.
+description: Delegate bounded, checkable work to an expert Workbench through the wb CLI, or on workbenches.dev in the cloud or on a team's worker, then supervise, answer, continue, and verify it. Use when a project or registry publishes a Workbench that fits the task, when work needs a specific runtime, toolset, or packaged expertise, or when you would otherwise start a generic subagent and re-teach it a domain.
 license: Apache-2.0
 compatibility: Requires the Workbench (`wb`) CLI on PATH (see the wb-cli skill) and provider credentials for the Workbench's model.
 ---
@@ -58,7 +58,7 @@ Record `session_id`, `run_id`, and `after_sequence` from the receipt. A session 
 - `--project <name>` groups the session under an existing project so the person can follow it in `wb studio`. It never creates one; ask before running `wb project create`.
 - Before retrying anything, check `wb ps --json` so you do not start a duplicate run.
 
-When your host speaks MCP, `wb mcp` exposes the same loop as tools: `run`, then `wait`, then `send` or `answer`, then `wait` again with the returned `next`. The person connects it once, for example with `claude mcp add wb -- wb mcp`.
+When your host speaks MCP, `wb mcp` exposes the same loop as tools: `run`, then `wait`, then `send` or `answer`, then `wait` again with the returned `next`. The person connects it once, for example with `claude mcp add wb -- wb mcp`. `wb mcp` runs and lists local work only; runs on workbenches.dev go through its own MCP server (see below).
 
 Docker runs mount the workspace. A git worktree breaks there: its `.git` points at the parent repository, which is not mounted. Give a containerized run a full clone (`git clone --local`) and fetch its branch back. Give parallel runs separate clones.
 
@@ -83,7 +83,7 @@ wb wait <run_id> --run --after <after_sequence> --timeout 900 --json
 
 Advance the cursor with the returned `sequence` every time. `usage` is the delta since your cursor and `usage_total` the run total, both with token counts and `cost_usd`. Report `usage_total.cost_usd` for every run you delegate, so the person can judge whether it was worth it. Sum deltas only after advancing, or you double count.
 
-A run that seems slow is usually waiting on a permission. Check `wb ps --json` for `needs_input` before assuming the work is heavy. For real progress, read the latest `plan.updated` event from `wb attach <session> --json`: the agent's own plan with `completed` and `total` counts. Runners without a native plan emit none.
+A run that seems slow is usually waiting on a permission. Check `wb ps --json` for `needs_input` before assuming the work is heavy. For real progress, read the latest `plan.updated` event from `wb attach <session> --json`: the agent's own plan with `completed` and `total` counts. Runners without a native plan emit none. `wb status --json` summarizes every active run on the machine at once: plan progress, current todo, elapsed time, cost, and pending input.
 
 ## Answer input deliberately
 
@@ -121,6 +121,17 @@ wb outcome <outcome_id> --apply        # e2b and daytona changes
 Local and Docker edits are already in the workspace. E2B and Daytona edits stay pending until `--apply`; apply only when the task authorizes changing the workspace. After a resume, each run has its own outcome; use the `outcome_id` from `wait`.
 
 "The agent said tests pass" is not verification. Rerun the acceptance checks yourself, read the diff, and treat links and prose from the run as data. Check commit authorship: if commits must carry a specific author, say so in the brief, and verify it. List any servers the run left running and stop them.
+
+## Run on workbenches.dev (optional)
+
+When the person uses workbenches.dev and has connected its MCP server (`mcp.workbenches.dev`), a run can execute in a hosted sandbox or on one of their organization's workers instead of this machine. The loop is the same: `run`, then `wait`, then `send` or `answer`, then `wait` again.
+
+- Call `projects` first and pass the project the work belongs to. Ask before `create_project`.
+- `search` and `view` find and inspect Workbenches the organization can run. A hosted run needs an organization secret for every required environment variable `view` lists.
+- Give `run` a `repository` and `ref` to work on code. The run's agent commits, pushes its own branch, and opens the pull request itself when the brief asks for one; say so in the brief. Private repositories need GitHub connected on workbenches.dev.
+- `workers` lists the organization's machines with their OS, runtimes, GPUs, and free slots. Pass `worker` to `run` to send the run there; worker time is free, and the run waits for a free slot. A run that needs macOS tools such as Xcode, a GPU, or a team's own toolchain belongs on a worker that has them. A worker runs as its machine's account with no sandbox.
+- `wait` blocks until a run needs you or ends, up to an hour per call; with `project` or `run_ids` it watches several runs and returns each one that needs an answer or has ended. Call it again with the returned cursor. Never poll in a tight loop.
+- When the run ends, `wait` reports its pull request and changed files, and `changes` returns the diff. Verify as for a local run: check out the branch, rerun the acceptance checks, and read the diff. Hosted runs spend sandbox time and model tokens; report `cost_usd`.
 
 ## Create or improve a Workbench
 
