@@ -332,6 +332,8 @@ Local Workbenches use the runner's normal local credential store. For a runner w
 
 Environment-backed provider routes remain supported through inherited environment, `--env-file`, or `--env`. The CLI checks whether an allowed route is ready but does not interpret or rewrite provider tokens. Because some runners keep all provider logins in one native file, an E2B sandbox receives the native store for that runner rather than a parsed provider-specific subset. Treat the sandbox provider and Workbench image as part of the credential trust boundary.
 
+`wb connect --worker <slug> <runner>` connects a runner on an organization's worker, for your own runs there, from any machine; see [Member sign-ins](#member-sign-ins).
+
 Each runner is distributed by its own project and must be installed in the selected runtime:
 
 ```sh
@@ -673,6 +675,98 @@ wb logout --org example  # revoke that key and forget it
 ```
 
 `--org` on `login` must match the organization approved in the browser, or nothing is stored. `wb push`, `wb publish`, `wb unpublish`, and `wb image push` use the default organization, or the one named with `--org <slug>`. `wb logout` without a flag signs out of the default; removing the last key deletes the credential file. `--publisher` was removed and now fails with a pointer to `--org`. A credential file from an older CLI is ignored: run `wb login` once.
+
+### Workers
+
+A worker connects your own machine to workbenches.dev as a self-hosted runner: runs started there execute on it instead of in a hosted sandbox. It needs a workbenches.dev account, and nothing else in `wb` depends on it. It is personal at first: only the runs you start go to it. As its owner you can share it with your organization on workbenches.dev, and then every member's runs can go to it, local runs included. Every run executes as the machine's account, with no sandbox, so anyone who runs on a worker can read everything that account can, other members' sign-ins included: share a machine set aside for the work, such as a Mac mini your team builds on. workbenches.dev stays the orchestrator: a run started from the dashboard, the API, or `mcp.workbenches.dev` can go to a worker instead of a Daytona sandbox, and the worker reports the same normalized events a cloud run does. Everything is done from a shell on the host, usually over SSH; no desktop session is needed. `wb worker` supports macOS and Linux. On Windows, `wb worker start` fails with "wb worker is not supported on Windows yet".
+
+```sh
+wb worker start --name mini [--org acme] [--runtimes docker,local] [--slots 2]
+wb worker status [--json]
+wb worker logs [-f]
+wb worker stop [--now]
+wb worker remove [--now]
+wb connect --worker mini claude-code               # or opencode or pi, from any machine
+```
+
+`start` on a machine that is not yet a worker registers it first, with your own `wb login` for the default organization or the one `--org` names; you need to be a member of it, and you become the worker's owner. It stores a worker key in `$WORKBENCH_HOME/worker/worker.json` (mode 0600). The key can only connect as that worker, and your login key never reaches it. On a registered machine `--name` may be left out; a different name fails with `This machine is already the worker mini. Run wb worker remove first.` The registration follows `--api-url`, and the worker keeps using the API it registered with.
+
+`start` then installs and starts a background service, and returns: a launchd agent in the user's background domain (`user/<uid>`) on macOS, and a systemd user service with lingering enabled on Linux, so the worker keeps running after the SSH session ends. It prints `Worker mini is online for acme. 1 slot, runtimes docker, local. Follow it with: wb worker logs -f` once the worker connects, or that it started and is still connecting. A worker offers every runtime this machine can run; `--runtimes` only narrows that, for example `--runtimes docker` turns local runs off. `--slots` sets how many runs it takes at once. Both are remembered for the next `start`. The service runs with the `PATH` of the shell that started it, so Docker and runner CLIs are found the same way.
+
+| Runtime | Offered | What a run gets |
+| --- | --- | --- |
+| `docker` | When Docker is reachable as the worker starts | One container per run from the Workbench's own image, sized by its `requirements`. The host needs only `wb` and Docker. |
+| `local` | Always | The run executes on the host as the account that started the worker, with this machine's tools and Docker, and the starting member's directory as its home. |
+
+The worker checks both each time it starts, and the person who starts a run never picks one: workbenches.dev places a run on the first runtime its Workbench declares that the worker offers.
+
+#### How a worker run differs from `wb run`
+
+Everything a worker does differently from `wb run` on the same machine is here.
+
+| | On a worker |
+| --- | --- |
+| Who runs | The owner, and every member of the organization once the owner shares it |
+| As whom | The machine's account, local or docker, with no sandbox |
+| Home of a local run | The starting member's directory; an empty one for a run started with an organization API key |
+| Credentials | The connection the run asks for, else the member's connection for its runner, else the provider keys workbenches.dev sends with the run. A member whose connection cannot serve the Workbench gets an error naming `wb connect --worker`, never the organization's keys |
+| The account's own logins | Never used: runner sign-ins, `gh`, git configuration, and Docker settings of the account stay out of every run |
+| Docker | Every run reaches the daemon of the account's current Docker context, resolved when the worker starts. A docker run mounts the starting member's sign-ins as the runner's credential root |
+| Claude Code on macOS | The member's login is kept in the account's keychain, in an entry of the member's own, so a docker run on a Mac needs an API key or a `claude setup-token` token |
+| OpenCode's ChatGPT subscription | Signs in with its device code, since the browser callback cannot reach the worker |
+| Repositories | Cloned only from GitHub or the worker's own API, following no redirect, with the run's own token |
+| Runner versions | A local run is refused when the machine's runner is older than the engine supports |
+
+`start` fails when this machine can run none of the allowed runtimes. A worker rejects a run whose runtime it does not offer, whose Workbench does not declare that runtime, whose `requirements` (os, cpu, memory_gb, gpu) this machine cannot meet, or that arrives with every slot busy, and the server shows the reason. A worker reports the GPUs it finds, with each name and, for NVIDIA, its memory, every time it connects. A local run that needs a GPU passes on that discovery alone, since a worker run has no `--allow-unchecked-gpu`.
+
+`status` shows whether the worker is online or offline and since when, its organization, how many slots are busy, and one line per active run with its workbench, run id, runtime, and age. `--json` prints the same fields:
+
+```text
+Worker mini is online for acme since 14:02:11 (15m 37s). 1 of 1 slot busy, runtimes docker.
+  threejs-game  wb_d8m99qyw2e4qqhitfff63f1n  docker  12m 8s
+```
+
+`logs` prints the lifecycle log, and `-f` keeps following it:
+
+```text
+[mini] 14:02:11 online, 1 slot, docker 27.3.1, runtimes docker
+[mini] 14:05:40 threejs-game started  wb_d8m99qyw2e4qqhitfff63f1n  by matty  "Build a pirate game..."
+[mini] 14:09:02 threejs-game needs input  permission: bash "npm install"
+[mini] 14:17:48 threejs-game completed in 12m 8s  PR #12
+[mini] 14:30:00 reconnected after 4s offline, 0 events resent
+```
+
+Log lines carry names, ids, states, and a short task excerpt. A run is named by its workbenches.dev run id, and `by` names the member who started it when they have connected a runner on this worker with `wb connect --worker`. Log lines never contain credentials, environment values, or task output. The worker also sends them to workbenches.dev.
+
+`stop` waits for active runs to finish and takes no new ones meanwhile, printing how many runs it is waiting on; `--now` cancels them first. Once no run is active, the worker waits up to 5 seconds for workbenches.dev to store its last events, and sends anything not stored again after the next `start`. Either way the service is stopped and does not start again at boot until the next `start`. `remove` stops the worker the same way, removes the service, revokes the key with workbenches.dev, and deletes it locally. When the API cannot be reached the key is kept, so `remove` can be run again.
+
+Runs are ordinary detached engine sessions in the worker's own engine home, `$WORKBENCH_HOME/worker`, never the account's personal runs, projects, or Studio. A daemon restart or a dropped connection does not stop them. On reconnect the worker lists its runs and sends every event after the sequence the server reports stored, so delivery is at least once and the server dedupes by run and sequence. Events of a session that continues after `send` keep counting up from the previous run's last sequence. Commands from workbenches.dev go through the same session controls as `wb send` (send, steer, queue), `wb answer`, and `wb kill`. A run's time limit cancels it when it is reached. A repository workspace is cloned with the run's token like a hosted run; the agent pushes and opens pull requests itself when the task asks. When a run ends, its outcome is uploaded as a gzip tar of the `wb outcome --export` tree.
+
+A run's credentials, its environment values, and its repository token are held in the worker's memory only and never written to disk or logged. A repository run without a run token gets no token: the worker never falls back to `gh auth token` or any other credential of the account. A `docker` run's Docker client gets a configuration directory of its own, `$WORKBENCH_HOME/worker/docker/<run id>/`, whose `config.json` holds only the run's private image pull credential, or nothing, with the file `0600` in a `0700` directory. The image pull and the pre-run check use it, never the daemon's environment or the account's `docker login`, and the directory is removed when the run ends, or at the next start after a crash. The account's `DOCKER_HOST`, `DOCKER_CONTEXT`, and `DOCKER_CONFIG` never reach a run; every run reaches the daemon through the endpoint of the account's current Docker context, resolved when the worker starts. A Workbench that declares a variable the engine owns is refused. Because the run token lives in memory, an outcome is not uploaded when the worker process restarts during the run; the log says so. A follow-up after a restart runs with the starting member's environment again, without the original start's environment values.
+
+Package downloads are accepted only from the API origin the worker registered with, without following redirects, and up to 64 MiB.
+
+The worker cleans up after itself at start and then hourly. Seven days after a run finishes, its workspace, its saved package, and its engine sessions, runs, events, and outcomes are removed. The lifecycle log is rotated at 5 MiB, keeping one previous file as `worker.log.1`, and the service output `daemon.out` is emptied at 5 MiB.
+
+#### Member sign-ins
+
+Each member who runs on a worker has a directory, `$WORKBENCH_HOME/worker/members/<member id>/`, which is the home of their local runs and holds their runner connections. A member connects a runner there from any machine where they are logged in with `wb login`, their laptop or the worker itself, and the runner does not need to be installed on that machine:
+
+```sh
+wb connect --worker mini claude-code
+wb connect --worker mini opencode --provider openai --method chatgpt
+wb connect --worker mini pi --provider google --method api-key
+```
+
+`wb connect --worker` asks the same provider and method questions `wb connect --runtime local` asks for that runner, or takes them from `--provider` and `--method`, and sends only the choice to workbenches.dev, which asks the worker to carry it out for that member. The worker resolves the method from the same runner code and refuses one the runner does not offer. A connection that is not finished within 10 minutes expires. Your CLI login key never leaves your machine. What you sign in with stays on the worker, where anyone who runs there can read it, so on someone else's worker `wb connect --worker` says so first: `mini is Ada Lovelace's machine. Anyone who runs there can read what you sign in with.`
+
+A subscription method runs the runner's own command-line sign-in for the chosen provider and method, with the member's directory as its home, as the member's local runs run, in a pseudo-terminal on the worker at your terminal's size: `claude auth login --claudeai` for Claude Code, and `opencode auth login` with the provider and method for OpenCode. Its terminal is your terminal: what it draws reaches you through workbenches.dev as it is, and your keys go back raw, so its links, codes, prompts, and menus work as they do on your own machine, Ctrl-C included. Closing `wb connect` cancels it on the worker. Your browser is on another machine, so Claude Code shows a code after you sign in, which you paste at its `Paste code here if prompted` prompt, and OpenCode's ChatGPT subscription signs in with its device code instead of its browser callback. The runner keeps the login in the member's sign-ins, their data home `.local/share` inside their directory: OpenCode in `opencode/auth.json`, and Claude Code in `claude/.credentials.json` on Linux. On macOS Claude Code keeps it in the account's keychain instead, in an entry named for the member's sign-ins, apart from the account's own Claude Code login. Pi has no command-line sign-in, so a Pi subscription cannot be connected on a worker yet; an API key can be.
+
+An API key method asks for the key, which `wb connect` reads with the input hidden and relays once through workbenches.dev, which keeps nothing. Whitespace in what you paste, such as the line break a long key wraps at, is dropped. The worker saves the key in the member's directory (`connections.json`, mode 0600) for the provider's standard variable, such as `OPENROUTER_API_KEY`. It is never logged, written to an event, or sent to workbenches.dev.
+
+A member's most recent connection for a runner is their default on that worker, like `wb connect` on your own machine. A run they start uses it unless it asks for another connection, and only a run that uses it gets the saved key, local and docker, ahead of an organization key of the same name. Their runs read a runner's login in their sign-ins on either runtime: a docker run mounts the member's sign-ins read-write as the runner's credential root, so it uses and renews the same login their local runs do. That mount takes the place of the Workbench home's credential volume, so one member's docker runs never see another's sign-ins or runner state.
+
+A run uses only the connections of the member who started it. Without one for its runner, it uses the provider keys workbenches.dev sends with the run, as a hosted run does; with one the Workbench cannot use, it fails and says to connect again; a run started with an organization API key has no member and uses only those. With neither, the run fails before any model call with the preflight reason and `Run wb connect --worker mini claude-code.` The account's own runner sign-ins and credential variables never reach a run.
 
 ### Internal workbenches, push, publish, unpublish
 
