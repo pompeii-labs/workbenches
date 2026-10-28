@@ -87,7 +87,7 @@ interface RuntimePrepareFields {
     environment: Record<string, string | undefined>;
     assets: RuntimeAsset[];
     authorizations?: { hostDocker: boolean };
-    /** The caller accepted a GPU requirement the runtime cannot verify. */
+    /** The caller accepted a local GPU requirement GPU discovery could not confirm. */
     allowUncheckedGpu?: boolean;
     run?: { id: string; scope: string };
     outcome?: { directory: string; home?: string };

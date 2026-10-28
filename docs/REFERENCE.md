@@ -129,7 +129,7 @@ The creator inspects the target repository and authors the complete package in `
 
 After the creator execution finishes, the engine validates the candidate, checks its version and package scope, and runs `wb smoke`. A failed check makes the authoring result fail with the concrete error.
 
-Candidates that declare environment values, named workspaces, or host Docker access can be verified with the same `--env-file`, repeatable `--env`, repeatable `--workspace`, and `--allow-host-docker` options accepted by `smoke` and `run`. Their values are used only for the final smoke and are never written to the authoring record or improvement evidence. `--runtime <name>` chooses which declared runtime of the candidate the final smoke checks, and `--allow-unchecked-gpu` accepts a GPU requirement the runtime cannot verify.
+Candidates that declare environment values, named workspaces, or host Docker access can be verified with the same `--env-file`, repeatable `--env`, repeatable `--workspace`, and `--allow-host-docker` options accepted by `smoke` and `run`. Their values are used only for the final smoke and are never written to the authoring record or improvement evidence. `--runtime <name>` chooses which declared runtime of the candidate the final smoke checks, and `--allow-unchecked-gpu` accepts a local GPU requirement when GPU discovery finds no GPU.
 
 Scaffold a package with `wb init`. `--runtimes` takes a comma-separated list and writes the `runtimes` map in that order. It defaults to `local`. The `docker`, `e2b`, and `daytona` runtimes need `--image`; `daytona` is written with `class: linux` and that image:
 
@@ -386,10 +386,10 @@ wb smoke project-core --runtime docker
 wb run project-core --runtime e2b --task "Review this migration"
 ```
 
-`wb view` lists every declared runtime and the requirements. Requirements are checked against the selected runtime before anything is prepared or launched:
+`wb view` lists every declared runtime and the requirements. For a Workbench with `gpu: true` it also shows the GPUs found on this machine and whether the local runtime accepts them (`gpu` in `--json`). Requirements are checked against the selected runtime before anything is prepared or launched, and `smoke` lists the GPUs it checked:
 
-- Local compares OS, architecture, CPU count, and total memory with the host. A GPU requirement cannot be verified locally and is refused unless you pass `--allow-unchecked-gpu` to `run`, `smoke`, or `create`.
-- Docker and E2B need `linux` in `os` or no `os` constraint, and refuse a GPU requirement. Docker also needs the host architecture in `arch` and applies `cpu` and `memory_gb` as container limits. E2B does not enforce `arch`, `cpu`, `memory_gb`, or `disk_gb` in this engine, and `smoke` reports them as unchecked.
+- Local compares OS, architecture, CPU count, and total memory with the host. A GPU requirement passes when the engine finds a GPU: `nvidia-smi --query-gpu=name,memory.total` on Linux, `system_profiler SPDisplaysDataType` on macOS. When neither lists one, the run is refused with the reason, such as `nvidia-smi is not installed`. Pass `--allow-unchecked-gpu` to `run`, `smoke`, or `create` to run anyway on a GPU that discovery cannot see.
+- Docker and E2B need `linux` in `os` or no `os` constraint. Docker also needs the host architecture in `arch` and applies `cpu` and `memory_gb` as container limits. Docker runs a GPU requirement when `docker info` lists the NVIDIA container runtime, and passes `--gpus all` to its containers; it refuses one without that runtime, and always on macOS, where Docker containers cannot reach a GPU. E2B refuses a GPU requirement, does not enforce `arch`, `cpu`, `memory_gb`, or `disk_gb` in this engine, and `smoke` reports them as unchecked.
 - Daytona needs its class to match `os`: `linux` needs `linux`, `macos` needs `macos`, `windows` needs `windows`, and `gpu` needs `linux` with `gpu: true`. The engine runs only the `linux` class and refuses `gpu: true`. It applies `cpu`, `memory_gb`, and `disk_gb` as the sandbox's resources, and `smoke` reports `arch` as unchecked.
 
 ### Run in Docker

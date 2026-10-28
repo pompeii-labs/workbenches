@@ -69,7 +69,7 @@ export class LocalRuntimeProvider implements RuntimeProvider {
                 'image is not supported with the local runtime'
             );
         }
-        this.checkRequirements(request);
+        await this.checkRequirements(request);
         const outcome = request.outcome
             ? await HostOutcomeCapture.create(request, {
                   bestEffortWorkspaceChanges: !request.repository,
@@ -80,13 +80,13 @@ export class LocalRuntimeProvider implements RuntimeProvider {
     }
 
     /**
-     * Host requirements are checked here. A GPU requirement cannot be
-     * verified on the host, so it is refused unless the request carries the
-     * caller's explicit acknowledgement.
+     * Host requirements are checked here. A GPU requirement passes when
+     * discovery finds a GPU on the host, or when the request carries the
+     * caller's explicit acknowledgement of a GPU discovery cannot see.
      */
-    private checkRequirements(request: RuntimePrepareRequest): void {
+    private async checkRequirements(request: RuntimePrepareRequest): Promise<void> {
         try {
-            this.requirements.check(request.workbench, {
+            await this.requirements.verify(request.workbench, {
                 allowUncheckedGpu: request.allowUncheckedGpu ?? false,
             });
         } catch (error) {
@@ -163,9 +163,12 @@ export class LocalRuntime implements PreparedRuntime {
                 environment: this.environment,
                 findExecutable: this.dependencies.findExecutable,
             }).check(this.workbench, this.executable);
-            const requirements = this.requirementsPreflight.check(this.workbench, {
-                allowUncheckedGpu: this.allowUncheckedGpu,
-            });
+            const requirements = await this.requirementsPreflight.verify(
+                this.workbench,
+                {
+                    allowUncheckedGpu: this.allowUncheckedGpu,
+                }
+            );
             this.ready = true;
             return { ...result, workspaces: this.workspaces, requirements };
         } catch (error) {

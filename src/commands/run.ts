@@ -127,7 +127,7 @@ export const runCommand = defineCommand({
         'allow-unchecked-gpu': {
             type: 'boolean',
             description:
-                'Run a Workbench with a GPU requirement on a runtime that cannot check it',
+                'Run a Workbench that needs a GPU locally when GPU discovery finds none',
             default: false,
         },
     },
@@ -218,7 +218,7 @@ export const runCommand = defineCommand({
             });
             if (repository) resolved.repository = repository;
             try {
-                selectRuntime(resolved, args, runtimes);
+                await selectRuntime(resolved, args, runtimes);
                 const workspaces = await workbenchWorkspaces.bind({
                     workbench: resolved.workbench,
                     rawArgs,
@@ -366,13 +366,13 @@ function rejectUnknownRunOptions(rawArgs: string[]): void {
 }
 
 /** Binds the requested runtime and refuses requirements it cannot satisfy. */
-function selectRuntime(
+async function selectRuntime(
     resolved: Awaited<ReturnType<WorkbenchResolver['resolve']>>,
     args: { runtime?: string | undefined; 'allow-unchecked-gpu': boolean },
     runtimes: RuntimeRegistry
-): void {
+): Promise<void> {
     resolved.workbench = withRuntime(resolved.workbench, args.runtime);
-    runtimes.requirements.check(resolved.workbench, {
+    await runtimes.requirements.verify(resolved.workbench, {
         ...(args['allow-unchecked-gpu'] ? { allowUncheckedGpu: true } : {}),
     });
 }

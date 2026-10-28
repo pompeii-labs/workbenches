@@ -48,7 +48,7 @@ export class DetachedRunLauncher {
         try {
             resolved.workbench = withRuntime(resolved.workbench, options.runtime);
             const runtimes = RuntimeRegistry.standard();
-            runtimes.requirements.check(resolved.workbench, {
+            await runtimes.requirements.verify(resolved.workbench, {
                 ...(options.allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
             });
             const workspaces = await new WorkbenchWorkspaces().bind({

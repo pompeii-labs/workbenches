@@ -25,7 +25,7 @@ export interface RuntimeSmokeOptions {
     allowHostDocker?: boolean;
     /** Runtime to prepare. Defaults to the first declared runtime. */
     runtime?: string;
-    /** Accept a GPU requirement on a runtime that cannot verify it. */
+    /** Accept a GPU requirement on the local runtime when discovery found no GPU. */
     allowUncheckedGpu?: boolean;
     registry?: RuntimeRegistry;
     reference?: string;
@@ -47,7 +47,7 @@ export class RuntimeSmoke {
         const workspaces = this.options.workspaces ?? [];
         await this.workspaceBindings.validate(workbench, workspaces);
         const registry = this.options.registry ?? RuntimeRegistry.standard();
-        registry.requirements.check(workbench, {
+        await registry.requirements.verify(workbench, {
             ...(this.options.allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
         });
         if (this.options.allowHostDocker && !selected.docker?.engine) {

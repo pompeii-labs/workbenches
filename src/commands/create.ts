@@ -87,7 +87,7 @@ export const createCommand = defineCommand({
         'allow-unchecked-gpu': {
             type: 'boolean',
             description:
-                'Verify a candidate with a GPU requirement on a runtime that cannot check it',
+                'Verify a candidate that needs a GPU locally when GPU discovery finds none',
             default: false,
         },
     },

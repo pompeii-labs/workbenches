@@ -37,7 +37,7 @@ export interface WorkbenchRunOptions {
     workspaces?: WorkbenchWorkspaceBinding[];
     repository?: RepositoryBinding;
     allowHostDocker?: boolean;
-    /** Accept a GPU requirement the selected runtime cannot verify. */
+    /** Accept a local GPU requirement GPU discovery could not confirm. */
     allowUncheckedGpu?: boolean;
     /** Runtime to use. Defaults to the first declared runtime. */
     runtime?: string;

@@ -38,7 +38,7 @@ export interface StoredSession {
     repository?: RepositoryBinding;
     workspaces: WorkbenchWorkspaceBinding[];
     registry?: CatalogRegistryReference;
-    /** The original run accepted a GPU requirement the runtime cannot verify. */
+    /** The original run accepted a local GPU requirement GPU discovery could not confirm. */
     allow_unchecked_gpu?: boolean;
     native_session_id?: string;
     latest_run_id: string;

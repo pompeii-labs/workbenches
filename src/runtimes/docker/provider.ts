@@ -74,16 +74,22 @@ export class DockerRuntimeProvider implements RuntimeProvider {
         );
         // cpu and memory become container limits for the run, never for an
         // image build, so only a run checks that the daemon can satisfy them.
+        // A GPU reaches the run's containers only through the NVIDIA runtime.
         const requirements = requirementsOf(request.workbench.manifest);
-        if (
-            request.purpose !== 'build' &&
-            (requirements.cpu !== undefined || requirements.memory_gb !== undefined)
-        ) {
+        const limited =
+            requirements.cpu !== undefined || requirements.memory_gb !== undefined;
+        if (request.purpose !== 'build' && (limited || requirements.gpu)) {
             try {
-                this.requirements.checkDaemon(
-                    request.workbench,
-                    await client.daemonCapacity()
-                );
+                if (limited)
+                    this.requirements.checkDaemon(
+                        request.workbench,
+                        await client.daemonCapacity()
+                    );
+                if (requirements.gpu)
+                    this.requirements.checkDaemonRuntimes(
+                        request.workbench,
+                        await client.daemonRuntimes()
+                    );
             } catch (error) {
                 throw RuntimeError.from(this.name, 'prepare', error);
             }
