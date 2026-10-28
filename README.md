@@ -147,7 +147,7 @@ Each push needs a higher manifest version than the last. Publishing is the one a
 
 ### Self-hosted workers for workbenches.dev
 
-If you run Workbenches on [workbenches.dev](https://workbenches.dev), `wb worker start --name <name>` connects this machine to it as a self-hosted runner, with your `wb login`: runs you start there execute here instead of in a hosted sandbox. A worker is yours alone until you share it with your organization. Each member connects their own runners on it from any machine with `wb connect --worker <slug> <runner>`. This needs a workbenches.dev account; nothing else in `wb` depends on it. See [Workers](docs/REFERENCE.md#workers).
+If you run Workbenches on [workbenches.dev](https://workbenches.dev), `wb login` and then `wb worker start --name <name>` connects this machine to it as a self-hosted runner: runs you start there execute here instead of in a hosted sandbox. A worker is yours alone until you share it with your organization. Each member connects their own runners on it from any machine with `wb connect --worker <slug> <runner>`. This needs a workbenches.dev account; nothing else in `wb` depends on it. See [Workers](docs/REFERENCE.md#workers).
 
 ## What is in a Workbench?
 
