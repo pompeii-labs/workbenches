@@ -25,10 +25,25 @@ A headless run is almost always waiting on a permission prompt. Check `wb ps --j
 | `Session wb_... needs new input` | Use `wb send wb_... <task>` or pass `--task`, `--task-file`, or `--stdin` to `resume`. |
 | `wb create requires an authoring brief` | Pass `--task`, `--task-file`, or `--stdin`, or use `--from`. |
 | `No project "X". Did you mean "Y"?` | `--project` never creates a project. Use the suggested name, or have the person run `wb project create "X"`. |
-| `A run started by an earlier version of Workbench is still active` | An old detached worker still owns its files. Wait for it or stop it; the message names the run file to remove if the process is gone. `wb mcp` runs refuse the same way. |
+| `A run started by an earlier version of Workbench is still active` | An old detached run process still owns its files. Wait for it or stop it; the message names the run file to remove if the process is gone. `wb mcp` runs refuse the same way. |
 | `Docker isn't running. Start Docker and run wb studio again.` | Ask the person to start Docker, then rerun `wb studio`. |
 | `Docker is using Windows containers` from `wb studio` | Docker Desktop must be switched to Linux containers. |
 | `Studio image X does not match this version of wb` | The image was built for another version of `wb`. Drop `--image` to use the default image, or update `wb`. |
+| `A Docker run cannot pass NAME to the container: the Docker CLI reads that name itself` | The Workbench declares a name the Docker client reads (`DOCKER_*`, `BUILDKIT_*`, `BUILDX_*`, `COMPOSE_*`, `XDG_*`, `HOME`, `PATH`, `TMPDIR`). Its author must rename the variable; use another declared runtime meanwhile. |
+
+## Worker failures
+
+| Symptom | Cause and fix |
+| --- | --- |
+| `Sign in first with wb login` from `wb worker start` or `wb connect --worker` | Have the person run `wb login` on that machine. |
+| `This machine is already the worker X. Run wb worker remove first.` | Drop `--name`, or remove the worker before registering it under another name. |
+| `wb worker is not supported on Windows yet` | Workers run on macOS and Linux only. |
+| A run on the worker reports `Runner CLI is unavailable` or `Required CLI tool is unavailable` although the tool is installed | The service keeps the `PATH` of the shell that ran `start`. Put the tool on that `PATH`, then `wb worker stop` and `wb worker start` (ask first: `stop` waits for active runs). |
+| `<Runner> X on this worker is older than Y, the oldest release Workbench works with` | Update the runner CLI on the worker. |
+| A run fails naming `wb connect --worker <worker> <runner>` | The starting member has no usable connection for that runner on the worker. That member runs the named command from their own machine. |
+| `Workbench X declares reserved variables the engine sets itself: ...` on a worker | Workers refuse Workbenches that declare engine-owned names (`PATH`, `HOME`, `GIT_*`, `DOCKER_*`, `BUN_*`, `NODE_OPTIONS`, GitHub tokens, runner sign-in locations). The author must rename them. |
+| The worker refuses a run for its runtime or `requirements` | The machine offers none of the Workbench's declared runtimes, or cannot meet its `os`, `cpu`, `memory_gb`, or `gpu`. Check `wb worker status` and `wb view` for the Workbench. |
+| A worker run fails at checkout with `The repository could not be fetched` | Read the reason after the colon. The worker needs `git` on the service's `PATH` (on macOS, the Xcode Command Line Tools or Xcode itself). |
 
 Credential errors are in `connections.md`.
 

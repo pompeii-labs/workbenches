@@ -30,6 +30,15 @@ requirements:
 - `requirements` (all optional): `os` (`linux`, `macos`, `windows`), `arch` (`x64`, `arm64`), `cpu`, `memory_gb`, `disk_gb`, `gpu`. Declare only what the work truly depends on. `local` compares them with the host; `docker` turns cpu and memory into container limits; `daytona` sizes the sandbox from them, and gives an undeclared `cpu` or `memory_gb` 2 vCPU and 4 GiB. A runner server alone uses most of a GiB, so declare `memory_gb` when the work builds, installs dependencies, or runs a browser or game. `gpu: true` runs on `local` when the host has a GPU that `nvidia-smi` (Linux) or `system_profiler` (macOS) lists, and on `docker` when the daemon has the NVIDIA container runtime, never on Docker for Mac; `e2b` and `daytona` refuse it.
 - `docker: {engine: {mode: host}}` under the docker runtime asks for the host's Docker daemon. Consumers must pass `--allow-host-docker` on every run. Use it only when the work must run containers itself.
 
+## On a workbenches.dev worker
+
+A team can send a run to its own machine, a worker, instead of a hosted sandbox. The worker runs `local` on the host or any image entry (`docker`, `e2b`, `daytona`) as one Docker container from that image, whichever the manifest declares first that the worker offers. What that means for the package:
+
+- `requirements` are checked against the worker's machine before the run is accepted. Declare `os: [macos]` for work that needs Xcode, so the run never lands on a Linux worker.
+- `local` on a worker uses the tools installed on that machine. Declare every one in `tools` so a missing one fails preflight by name instead of mid-run.
+- A worker refuses a package that declares an engine-owned variable name (`PATH`, `HOME`, `TMPDIR`, `XDG_*`, `DOCKER_*`, `GIT_*`, `WORKBENCH_*`, `BUN_*`, `NODE_OPTIONS`, GitHub tokens, runner sign-in locations). Name variables for the work, such as `GAME_API_URL`.
+- Docker on any host refuses declared names its own CLI reads (`DOCKER_*`, `BUILDKIT_*`, `BUILDX_*`, `COMPOSE_*`, `XDG_*`, `HOME`, `PATH`, `TMPDIR`).
+
 ## What happens at run time
 
 | Runtime | Workspace | Edits | Notes |

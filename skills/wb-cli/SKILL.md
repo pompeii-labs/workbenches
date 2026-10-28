@@ -1,6 +1,6 @@
 ---
 name: wb-cli
-description: Install, set up, and troubleshoot the Workbench CLI (`wb`). Use when `wb` is missing or outdated, when a Workbench run fails preflight (no authenticated route, missing runner or tool, missing E2B or Daytona key, image problems), when choosing or connecting model providers and runtimes, or when you need the exact command, flag, output format, or exit code for `wb`.
+description: Install, set up, and troubleshoot the Workbench CLI (`wb`). Use when `wb` is missing or outdated, when a Workbench run fails preflight (no authenticated route, missing runner or tool, missing E2B or Daytona key, image problems), when choosing or connecting model providers and runtimes, when setting up a machine as a workbenches.dev worker (`wb worker`, `wb connect --worker`) or fixing one, or when you need the exact command, flag, output format, or exit code for `wb`.
 license: Apache-2.0
 ---
 
@@ -86,6 +86,29 @@ A Workbench declares the runtimes it supports; the first is the default. Choose 
 The environment variable always wins over a saved runtime key. Runtime keys never enter the sandbox. `wb connect --runtime <name> --status` checks one.
 
 A Workbench that declares host Docker access needs `--allow-host-docker` on every `run`, `smoke`, `resume`, and `create`. That grants effective administrative access to the host's Docker daemon. Only the person can authorize it; never add the flag on your own initiative.
+
+## Workers (workbenches.dev, optional)
+
+A worker connects a machine to workbenches.dev as a self-hosted runner: runs started there, from the dashboard, the API, or `mcp.workbenches.dev`, execute on that machine instead of a hosted sandbox. Nothing else in `wb` needs it. macOS and Linux only.
+
+```sh
+wb login [--org acme]                    # first, on the worker and on every member's machine
+wb worker start --name mini [--org acme] [--runtimes docker,local] [--slots 2]
+wb worker status [--json]
+wb worker logs [-f]
+wb worker stop [--now]
+wb worker remove [--now]
+wb connect --worker mini claude-code     # each member, from any machine
+```
+
+- **There is no sandbox.** Every run, local or docker, executes as the machine's account, so anyone who runs there can read what that account can, other members' sign-ins included. A worker is personal to the person who started it until they share it with their organization on workbenches.dev. Say this before setting one up, and prefer a machine set aside for the work. Starting a worker lets workbenches.dev run code on the machine: it is the person's decision.
+- `start` registers the machine, makes the caller its owner, and installs a background service (a launchd agent on macOS, a systemd user service with lingering on Linux) that keeps running after SSH ends.
+- **The service keeps the `PATH` of the shell that ran `start`.** Install every runner and every tool the Workbenches declare (for example `xcodebuild`, `xcodegen`, `gh`) on that `PATH` before `start`. A tool added later is found only after `wb worker stop` and `wb worker start`; `stop` waits for active runs, so ask before restarting someone's worker.
+- **Runtimes:** `docker` is offered when Docker is reachable at start and runs the Workbench's own image; `local` is always offered and uses the machine's own tools, with the starting member's directory as home. A run goes to the first runtime its Workbench declares that the worker offers. `--runtimes docker` turns local runs off. The worker refuses a run whose `requirements` the machine does not meet.
+- **Sign-ins:** the account's own runner logins, `gh`, git configuration, and `docker login` never reach a run. Each member connects each runner once with `wb connect --worker <worker> <runner>` from their own machine; it relays the runner's own sign-in to the worker, so a person must be at the terminal. A run uses the starting member's connection, else the provider keys workbenches.dev sends with it. A connection that cannot serve the Workbench fails and names the command; it never falls back to the organization's keys.
+- On macOS, Claude Code keeps logins in the keychain, so a docker run on a Mac needs an API key or a `claude setup-token` token.
+
+Worker errors and fixes are in [references/troubleshooting.md](references/troubleshooting.md).
 
 ## Output and exit codes
 

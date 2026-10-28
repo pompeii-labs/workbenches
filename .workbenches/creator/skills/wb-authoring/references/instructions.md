@@ -20,6 +20,8 @@ Every packaged command, what it does, and what its exit code means. The gate goe
 
 > `gate [dir]` builds the project, serves it, captures every viewport and state listed in `artifacts/evidence.json`, runs the checker, and exits non-zero on any failure. Exit 0 is the only definition of done.
 
+Do not document `wbx`. On the local and Daytona runtimes the engine itself tells the agent that `wbx preview <port> --name <name>` shows the user a server it started. When the user should open the result (a game, a site, a dashboard), say so in the method, and never tell the agent to print `localhost` URLs instead.
+
 ### Method
 
 The order of work and the first skill to load. Keep it short; the workflow skill holds the detail.
