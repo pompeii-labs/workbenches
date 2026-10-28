@@ -140,7 +140,13 @@ export class WorkerEngine implements WorkerRunHost {
                 directory,
                 environment
             );
-        const keys = { ...start.env };
+        // The worker's own process reads these values too, so a reserved
+        // name, such as one that preloads code, never comes from the server.
+        const keys = Object.fromEntries(
+            Object.entries(start.env).filter(
+                ([name]) => !ReservedEnvironment.isReserved(name)
+            )
+        );
         const connection = await this.#connection(
             {
                 connection: start.connection,

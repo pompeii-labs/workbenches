@@ -5,8 +5,8 @@ import { ReservedEnvironment } from '../../workbench/reserved.js';
  * on disk and without secret values in argv: each value is passed by name
  * with `--env NAME` and given to the Docker CLI process, which copies it into
  * the container. A name the CLI reads itself, such as `HOME`, keeps the CLI's
- * own value and is passed inline instead; a Workbench cannot declare those
- * names, so only engine-set paths ever appear in argv.
+ * own value and is passed inline instead; `DockerRuntime` refuses a
+ * Workbench that declares one, so only engine-set paths ever appear in argv.
  */
 export class DockerContainerEnvironment {
     readonly arguments: string[];

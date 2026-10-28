@@ -13,6 +13,7 @@ import type {
 import { workspaceEnvironment } from '../../workbench/bindings.js';
 import { type PreflightResult, WorkbenchPreflight } from '../../workbench/preflight.js';
 import type { RequirementsPreflight } from '../../workbench/requirements.js';
+import { ReservedEnvironment } from '../../workbench/reserved.js';
 import { requirementsOf } from '../../workbench/runtimes.js';
 import type {
     PreparedRuntime,
@@ -120,6 +121,15 @@ export class DockerRuntime implements PreparedRuntime {
 
     async preflight(): Promise<PreflightResult> {
         this.assertAvailable('preflight');
+        // The Docker CLI reads these names itself, so their values could reach
+        // a container only on its command line.
+        const readByCli = Object.keys(this.workbench.manifest.env).filter((name) =>
+            ReservedEnvironment.isReadByDockerCli(name)
+        );
+        if (readByCli.length)
+            throw new Error(
+                `A Docker run cannot pass ${readByCli.join(', ')} to the container: the Docker CLI reads ${readByCli.length === 1 ? 'that name' : 'those names'} itself`
+            );
         const configuration = new WorkbenchPreflight({
             environment: this.environment,
         }).checkConfiguration(this.workbench);

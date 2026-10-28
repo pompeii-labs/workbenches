@@ -991,6 +991,24 @@ describe('Docker runtime provider', () => {
         }
     });
 
+    test('refuses a declared name the Docker CLI reads itself', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        fixture.workbench.manifest.env.DOCKER_PASSWORD = { required: false };
+        const runtime = await new DockerRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: () => '/usr/bin/docker',
+            command: dockerMock([]),
+            spawn: () => ({ exited: Promise.resolve(0) }),
+        }).prepare(request(fixture));
+        try {
+            await expect(runtime.preflight()).rejects.toThrow(
+                'A Docker run cannot pass DOCKER_PASSWORD to the container: the Docker CLI reads that name itself'
+            );
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('fails smoke on a missing in-image tool before spawning a runner', async () => {
         const fixture = await createFixture({
             image: 'ghcr.io/example/lux:0.1.0',
