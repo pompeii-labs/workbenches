@@ -328,11 +328,16 @@ describe('worker engine', () => {
                     // Names the worker isolates itself are not taken from the server.
                     GH_TOKEN: 'MUST_NOT_RENDER_SERVER_TOKEN',
                     GH_CONFIG_DIR: '/MUST_NOT_RENDER_SERVER_DIRECTORY',
+                    // The worker's own process would read these.
+                    BUN_OPTIONS: '--preload ./MUST_NOT_RUN.ts',
+                    NODE_OPTIONS: '--require ./MUST_NOT_RUN.js',
                 },
             })
         );
         expect(session).toBe('wb_launched');
         const options = launched[0];
+        expect(options?.environmentOverrides.file).not.toHaveProperty('BUN_OPTIONS');
+        expect(options?.environmentOverrides.file).not.toHaveProperty('NODE_OPTIONS');
         expect(options).toMatchObject({
             workbench: 'session-ses-1',
             task: 'Build a pirate game with three.js',

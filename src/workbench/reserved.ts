@@ -29,6 +29,9 @@ const reservedNames = new Set([
     'GOCACHE',
     'GOMODCACHE',
     'CARGO_HOME',
+    'NODE_OPTIONS',
+    'NODE_EXTRA_CA_CERTS',
+    'NODE_TLS_REJECT_UNAUTHORIZED',
 ]);
 
 const reservedPrefixes = [
@@ -41,6 +44,7 @@ const reservedPrefixes = [
     'LD_',
     'DYLD_',
     'GIT_',
+    'BUN_',
 ];
 
 /** What the Docker CLI reads from its own environment. */
