@@ -25,9 +25,11 @@ import {
     type ResolvedWorkbenchReference,
     selectedRuntime,
 } from '../workbench/index.js';
+import { RunEventDetails } from './event-details.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
 import { ExecutionPreparation } from './preparation.js';
 import { RunStore } from './store.js';
+import { WorkspacePatches } from './workspace-patches.js';
 
 export interface InteractiveRunSession {
     readonly runId: string;
@@ -166,15 +168,24 @@ export class InteractiveRun {
                       }
                     : {}),
             });
+            const details = new RunEventDetails(
+                RunEventDetails.secrets(
+                    workbench,
+                    environment,
+                    registry.find(workbench.manifest.runner)?.nativeCredentialVariables
+                ),
+                new WorkspacePatches(preparedRuntime)
+            );
             session = await preparedRunner.startSession(preparedRuntime, {
                 configuration: prepared.configuration,
                 ...(prepared.authentication
                     ? { authentication: prepared.authentication }
                     : {}),
                 host: {
-                    emit: async (event) => {
-                        await emitter.emitDraft(event);
-                    },
+                    emit: (event) =>
+                        details.emit(event, async (draft) => {
+                            await emitter.emitDraft(draft);
+                        }),
                     requestPermission: (request) =>
                         this.requestPermission(emitter, request),
                     requestQuestion: (request) =>

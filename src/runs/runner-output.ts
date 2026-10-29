@@ -1,6 +1,7 @@
 import { ActiveModelCatalog, ModelRouter } from '../models/index.js';
 import type { RunnerEventNormalizer, RunnerSummary } from '../runners/runner.js';
 import type { ResolvedWorkbench, SpawnedRunner } from '../types.js';
+import type { RunEventDetails } from './event-details.js';
 import type { RunEvents } from './events.js';
 
 export interface RunnerOutputResult {
@@ -15,7 +16,8 @@ export class RunnerOutput {
 
     constructor(
         private readonly normalizer: RunnerEventNormalizer,
-        private readonly events: RunEvents
+        private readonly events: RunEvents,
+        private readonly details?: RunEventDetails
     ) {}
 
     async consume(
@@ -90,7 +92,11 @@ export class RunnerOutput {
             }
             const normalized = this.normalizer.consume(value);
             for (const event of normalized.events) {
-                await this.events.emitDraft(event);
+                if (!this.details) await this.events.emitDraft(event);
+                else
+                    await this.details.emit(event, async (draft) => {
+                        await this.events.emitDraft(draft);
+                    });
             }
         });
     }

@@ -3,13 +3,17 @@ import { join } from 'node:path';
 
 import { ModelRouter } from '../../../src/models/index.js';
 import { RunnerContextStaging } from '../../../src/runners/context/stage.js';
+import { unifiedDiff } from '../../../src/runners/diff.js';
 import { DiskRunnerFiles } from '../../../src/runners/files/disk.js';
 import { OpenCodeSessionAdapter } from '../../../src/runners/opencode/adapter.js';
 import { OpenCodeSkillStaging } from '../../../src/runners/opencode/skills.js';
 import type { ResolvedWorkbench } from '../../../src/types.js';
 import { modelCatalogFixture } from '../../model-catalog-fixture.js';
 import {
+    RUNNER_CONFORMANCE_DETAILS,
+    RUNNER_CONFORMANCE_LIMITS,
     RUNNER_CONFORMANCE_SHELL_COMMAND,
+    RUNNER_CONFORMANCE_TOOL_OUTPUT,
     RUNNER_CONFORMANCE_UNSAFE_VALUES,
     type RunnerConformanceScenario,
 } from '../../runner-adapter-contract.js';
@@ -144,6 +148,38 @@ export class FakeOpenCodeServer {
                     },
                 });
                 this.emit('session.status', { status: { type: 'idle' } });
+            };
+            return;
+        }
+        if (scenario === 'tool_details' || scenario === 'tool_limits') {
+            const script =
+                scenario === 'tool_details'
+                    ? RUNNER_CONFORMANCE_DETAILS
+                    : RUNNER_CONFORMANCE_LIMITS;
+            const { id: shellId, output: shellOutput, ...shellInput } = script.shell;
+            this.onPrompt = () => {
+                this.emit('session.status', { status: { type: 'busy' } });
+                this.beginAssistant();
+                this.emit('message.part.updated', {
+                    part: completedToolPart('bash', shellId, shellInput, shellOutput),
+                });
+                const edit = script.edit;
+                this.emit('message.part.updated', {
+                    part: completedToolPart(
+                        'edit',
+                        edit.id,
+                        {
+                            filePath: edit.path,
+                            oldString: edit.oldText,
+                            newString: edit.newText,
+                        },
+                        edit.output,
+                        {
+                            diff: `Index: ${edit.path}\n===\n${unifiedDiff(edit.path, edit.oldText, edit.newText).patch}`,
+                        }
+                    ),
+                });
+                this.completeTurn('done');
             };
             return;
         }
@@ -503,11 +539,27 @@ export function contractToolPart(status: 'running' | 'completed') {
             status,
             input: {
                 filePath: '/workspace/output.txt',
-                command: RUNNER_CONFORMANCE_UNSAFE_VALUES[2],
+                content: 'contract output\n',
             },
-            output: RUNNER_CONFORMANCE_UNSAFE_VALUES[3],
+            output: RUNNER_CONFORMANCE_TOOL_OUTPUT.write,
             time: { start: 100, end: 125 },
         },
+    };
+}
+
+function completedToolPart(
+    tool: string,
+    callID: string,
+    input: Record<string, unknown>,
+    output: string,
+    metadata: Record<string, unknown> = {}
+) {
+    return {
+        type: 'tool',
+        messageID: 'message_1',
+        tool,
+        callID,
+        state: { status: 'completed', input, metadata, output },
     };
 }
 
@@ -520,8 +572,8 @@ export function contractShellPart() {
         state: {
             status: 'completed',
             input: { command: RUNNER_CONFORMANCE_SHELL_COMMAND },
-            metadata: { output: RUNNER_CONFORMANCE_UNSAFE_VALUES[3], exit: 0 },
-            output: RUNNER_CONFORMANCE_UNSAFE_VALUES[3],
+            metadata: { output: RUNNER_CONFORMANCE_TOOL_OUTPUT.shell, exit: 0 },
+            output: RUNNER_CONFORMANCE_TOOL_OUTPUT.shell,
             time: { start: 125, end: 150 },
         },
     };

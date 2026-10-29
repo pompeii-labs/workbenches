@@ -5,7 +5,10 @@ import type {
 import type { PreparedClaudeCodeSession } from '../../../src/runners/claude-code/session.js';
 import type { ResolvedWorkbench } from '../../../src/types.js';
 import {
+    RUNNER_CONFORMANCE_DETAILS,
+    RUNNER_CONFORMANCE_LIMITS,
     RUNNER_CONFORMANCE_SHELL_COMMAND,
+    RUNNER_CONFORMANCE_TOOL_OUTPUT,
     type RunnerConformanceScenario,
 } from '../../runner-adapter-contract.js';
 
@@ -195,7 +198,12 @@ export class FakeClaudeCode {
         });
     }
 
-    toolResult(id: string, content: string, isError = false): void {
+    toolResult(
+        id: string,
+        content: unknown,
+        isError = false,
+        structured?: Record<string, unknown>
+    ): void {
         this.emit({
             type: 'user',
             message: {
@@ -211,6 +219,7 @@ export class FakeClaudeCode {
             },
             parent_tool_use_id: null,
             session_id: this.sessionId,
+            ...(structured ? { tool_use_result: structured } : {}),
         });
     }
 
@@ -270,11 +279,11 @@ export class FakeClaudeCode {
                     name: 'write',
                     input: {
                         file_path: '/workspace/output.txt',
-                        content: 'MUST_NOT_RENDER_TOOL_OUTPUT',
+                        content: 'contract output\n',
                     },
                 },
             ]);
-            this.toolResult('call_contract', 'MUST_NOT_RENDER_TOOL_OUTPUT');
+            this.toolResult('call_contract', RUNNER_CONFORMANCE_TOOL_OUTPUT.write);
             this.assistant([
                 {
                     type: 'tool_use',
@@ -283,7 +292,60 @@ export class FakeClaudeCode {
                     input: { command: RUNNER_CONFORMANCE_SHELL_COMMAND },
                 },
             ]);
-            this.toolResult('call_shell', 'MUST_NOT_RENDER_TOOL_OUTPUT');
+            this.toolResult('call_shell', [
+                { type: 'text', text: RUNNER_CONFORMANCE_TOOL_OUTPUT.shell },
+            ]);
+            this.finishTurn(command, {
+                usage: { input_tokens: 5, output_tokens: 7 },
+                total_cost_usd: 0.001,
+            });
+            return;
+        } else if (
+            this.scenario === 'tool_details' ||
+            this.scenario === 'tool_limits'
+        ) {
+            const script =
+                this.scenario === 'tool_details'
+                    ? RUNNER_CONFORMANCE_DETAILS
+                    : RUNNER_CONFORMANCE_LIMITS;
+            const { id: shellId, output: shellOutput, ...shellInput } = script.shell;
+            this.assistant([
+                { type: 'tool_use', id: shellId, name: 'Bash', input: shellInput },
+            ]);
+            this.toolResult(shellId, shellOutput);
+            const edit = script.edit;
+            this.assistant([
+                {
+                    type: 'tool_use',
+                    id: edit.id,
+                    name: 'Edit',
+                    input: {
+                        file_path: edit.path,
+                        old_string: edit.oldText,
+                        new_string: edit.newText,
+                    },
+                },
+            ]);
+            const removed = edit.oldText.split('\n').slice(0, -1);
+            const added = edit.newText.split('\n').slice(0, -1);
+            this.toolResult(edit.id, [{ type: 'text', text: edit.output }], false, {
+                filePath: edit.path,
+                oldString: edit.oldText,
+                newString: edit.newText,
+                originalFile: edit.oldText,
+                structuredPatch: [
+                    {
+                        oldStart: 1,
+                        oldLines: removed.length,
+                        newStart: 1,
+                        newLines: added.length,
+                        lines: [
+                            ...removed.map((line) => `-${line}`),
+                            ...added.map((line) => `+${line}`),
+                        ],
+                    },
+                ],
+            });
             this.finishTurn(command, {
                 usage: { input_tokens: 5, output_tokens: 7 },
                 total_cost_usd: 0.001,

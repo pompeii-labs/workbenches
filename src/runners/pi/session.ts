@@ -1,5 +1,6 @@
 import type { RunnerContext } from '../context/files.js';
 import { runtimeContext } from '../context/runtime.js';
+import { ToolDetails } from '../details.js';
 import { RunnerProcessExit } from '../exit.js';
 import type {
     RunnerAdapterDeclaration,
@@ -182,6 +183,8 @@ class PiRpcSession implements RunnerSession {
     private closed = false;
     private failure: Error | undefined;
     private runtimeReminder: string;
+    /** Shared by every turn, so a later turn's write is diffed against an earlier one. */
+    private readonly details: ToolDetails;
 
     constructor(
         options: RunnerSessionStartOptions &
@@ -193,6 +196,7 @@ class PiRpcSession implements RunnerSession {
             }
     ) {
         this.options = options;
+        this.details = ToolDetails.forSession(options);
         // RPC has no per-prompt system field. Refresh attempt facts alongside
         // the first resumed input, without changing the stored user task.
         this.runtimeReminder =
@@ -254,7 +258,7 @@ class PiRpcSession implements RunnerSession {
         if (this.closed) throw new Error('runner session is closed');
         if (this.failure) throw this.failure;
         if (this.active) throw new Error('runner session is already processing a turn');
-        const turn = createActiveTurn();
+        const turn = createActiveTurn(this.details);
         this.active = turn;
         try {
             const normalized = normalizeRunnerInput(input);
@@ -422,7 +426,7 @@ class PiRpcSession implements RunnerSession {
     }
 }
 
-function createActiveTurn(): ActiveTurn {
+function createActiveTurn(details: ToolDetails): ActiveTurn {
     let resolve!: (result: RunnerTurnResult) => void;
     let reject!: (error: Error) => void;
     const promise = new Promise<RunnerTurnResult>((accepted, rejected) => {
@@ -430,7 +434,7 @@ function createActiveTurn(): ActiveTurn {
         reject = rejected;
     });
     return {
-        adapter: new PiEventAdapter(),
+        adapter: new PiEventAdapter({ details }),
         promise,
         resolve,
         reject,

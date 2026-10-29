@@ -16,12 +16,31 @@ export function scrubShellCommand(command: string): string | undefined {
     return display ? bound(display) : undefined;
 }
 
+/**
+ * A shell command an agent ran, whole, with the same credentials removed as
+ * `scrubShellCommand` removes. Heredoc bodies, lines, and length are kept.
+ */
+export function scrubShellText(command: string): string {
+    return scrub(command, SCRUBS);
+}
+
+/**
+ * Any text an agent's tool read or wrote, with the credentials the shell
+ * scrubber recognizes removed: secret-named fields and flags, authorization
+ * headers, URL user information, recognizable key formats, and long opaque
+ * tokens. Plain `NAME=value` assignments are kept, because outside a command
+ * line they are usually code.
+ */
+export function scrubSecretText(text: string): string {
+    return scrub(text, SECRET_SCRUBS);
+}
+
 /** Names that mark the value after them as a secret. */
 const SECRET_NAME =
     '[a-z0-9_-]*(?:token|key|secret|password|passwd|credentials?|signature)[a-z0-9_-]*';
 
-/** Where commands carry credentials, in the order they are scrubbed. */
-const SCRUBS: readonly (readonly [RegExp, string])[] = [
+/** Where any text carries credentials, in the order they are scrubbed. */
+const SECRET_SCRUBS: readonly (readonly [RegExp, string])[] = [
     // Authorization-bearing headers, in any quoting.
     [
         /\b(authorization|proxy-authorization|cookie)\s*:\s*[^'"\n]+/giu,
@@ -55,6 +74,11 @@ const SCRUBS: readonly (readonly [RegExp, string])[] = [
         `$1$2${REDACTED}`,
     ],
     [/(\bmysql(?:dump|admin)?\b[^;&|\n]*?\s-p)(?=\S)(?!-)\S+/gu, `$1${REDACTED}`],
+];
+
+/** Where commands carry credentials, in the order they are scrubbed. */
+const SCRUBS: readonly (readonly [RegExp, string])[] = [
+    ...SECRET_SCRUBS,
     // The value of every environment assignment: NAME=value command.
     [
         /((?:^|[\s;&|(])(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*)=("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|)]+)/gu,
@@ -65,9 +89,12 @@ const SCRUBS: readonly (readonly [RegExp, string])[] = [
 /** A long run of key-like characters. Opaque when it mixes digits and both cases. */
 const OPAQUE = /[A-Za-z0-9_+=-]{32,}/gu;
 
-function scrub(command: string): string {
+function scrub(
+    command: string,
+    scrubs: readonly (readonly [RegExp, string])[] = SCRUBS
+): string {
     let result = command;
-    for (const [pattern, replacement] of SCRUBS) {
+    for (const [pattern, replacement] of scrubs) {
         result = result.replace(pattern, replacement);
     }
     return redactCredentials(result).replace(OPAQUE, (token) =>

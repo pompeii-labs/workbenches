@@ -9,6 +9,7 @@ import {
     ClaudeCodeEventAdapter,
     failureMessage,
 } from '../src/runners/claude-code/events.js';
+import { ToolDetails } from '../src/runners/details.js';
 
 function assistant(content: unknown[], id = 'msg_1', parent: string | null = null) {
     return {
@@ -18,21 +19,22 @@ function assistant(content: unknown[], id = 'msg_1', parent: string | null = nul
     };
 }
 
-function toolResult(id: string, isError = false) {
+function toolResult(
+    id: string,
+    isError = false,
+    content: unknown = 'Done',
+    structured?: Record<string, unknown>
+) {
     return {
         type: 'user',
         message: {
             role: 'user',
             content: [
-                {
-                    type: 'tool_result',
-                    tool_use_id: id,
-                    content: 'MUST_NOT_RENDER_TOOL_OUTPUT',
-                    is_error: isError,
-                },
+                { type: 'tool_result', tool_use_id: id, content, is_error: isError },
             ],
         },
         parent_tool_use_id: null,
+        ...(structured ? { tool_use_result: structured } : {}),
     };
 }
 
@@ -118,6 +120,7 @@ describe('Claude Code stream-json event normalization', () => {
                 name: 'Write',
                 title: 'Write',
                 target: '/workspace/a.txt',
+                input: { file_path: '/workspace/a.txt', content: 'secret' },
             },
         });
         expect(events).toContainEqual({
@@ -128,6 +131,8 @@ describe('Claude Code stream-json event normalization', () => {
                 title: 'Write',
                 target: '/workspace/a.txt',
                 status: 'completed',
+                input: { file_path: '/workspace/a.txt', content: 'secret' },
+                output: 'Done',
             },
         });
         expect(events.filter((event) => event.type === 'file.changed')).toEqual(
@@ -139,8 +144,113 @@ describe('Claude Code stream-json event normalization', () => {
                 },
             }))
         );
-        expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER');
-        expect(JSON.stringify(events)).not.toContain('secret');
+    });
+
+    test('reports the patch from the structured result, the original file, or a created file', () => {
+        const adapter = new ClaudeCodeEventAdapter({
+            details: new ToolDetails({ workspace: '/workspace' }),
+        });
+        const call = (
+            id: string,
+            name: string,
+            input: Record<string, unknown>,
+            structured: Record<string, unknown>
+        ) => [
+            ...adapter.consume(assistant([{ type: 'tool_use', id, name, input }]))
+                .events,
+            ...adapter.consume(
+                toolResult(
+                    id,
+                    false,
+                    [
+                        { type: 'text', text: 'Applied' },
+                        {
+                            type: 'image',
+                            source: { data: 'MUST_NOT_RENDER_IMAGE_DATA' },
+                        },
+                    ],
+                    structured
+                )
+            ).events,
+        ];
+        const created = call(
+            'create',
+            'Write',
+            { file_path: '/workspace/new.txt', content: 'hello\n' },
+            {
+                type: 'create',
+                filePath: '/workspace/new.txt',
+                content: 'hello\n',
+                structuredPatch: [],
+            }
+        );
+        const edited = call(
+            'edit',
+            'Edit',
+            { file_path: '/workspace/app.ts', old_string: 'one', new_string: 'two' },
+            {
+                filePath: '/workspace/app.ts',
+                originalFile: 'one\n',
+                structuredPatch: [
+                    {
+                        oldStart: 1,
+                        oldLines: 1,
+                        newStart: 1,
+                        newLines: 1,
+                        lines: ['-one', '+two'],
+                    },
+                ],
+            }
+        );
+        const rewritten = call(
+            'rewrite',
+            'Write',
+            { file_path: '/workspace/new.txt', content: 'hello\nworld\n' },
+            { type: 'update', filePath: '/workspace/new.txt' }
+        );
+
+        expect(created.at(-1)?.data).toEqual({
+            path: '/workspace/new.txt',
+            operation: 'write',
+            patch: '--- a/new.txt\n+++ b/new.txt\n@@ -0,0 +1,1 @@\n+hello\n',
+            additions: 1,
+            deletions: 0,
+        });
+        expect(edited.at(-1)?.data).toEqual({
+            path: '/workspace/app.ts',
+            operation: 'edit',
+            patch: '--- a/app.ts\n+++ b/app.ts\n@@ -1,1 +1,1 @@\n-one\n+two\n',
+            additions: 1,
+            deletions: 1,
+        });
+        expect(rewritten.at(-1)?.data).toEqual({
+            path: '/workspace/new.txt',
+            operation: 'write',
+            patch: '--- a/new.txt\n+++ b/new.txt\n@@ -1,1 +1,2 @@\n hello\n+world\n',
+            additions: 1,
+            deletions: 0,
+        });
+        expect(
+            edited.find((event) => event.type === 'tool.completed')?.data.output
+        ).toBe('Applied');
+        expect(JSON.stringify([created, edited, rewritten])).not.toContain(
+            'MUST_NOT_RENDER'
+        );
+    });
+
+    test('names the MCP server and tool of an MCP tool call', () => {
+        const adapter = new ClaudeCodeEventAdapter();
+        const events = adapter.consume(
+            assistant([
+                {
+                    type: 'tool_use',
+                    id: 'mcp',
+                    name: 'mcp__docs__search',
+                    input: { q: 'x' },
+                },
+            ])
+        ).events;
+        expect(events[0]?.data.mcp).toEqual({ server: 'docs', tool: 'search' });
     });
 
     test('reports failed tools without a file change and describes shell commands without their credentials', () => {
@@ -174,6 +284,10 @@ describe('Claude Code stream-json event normalization', () => {
                 name: 'Bash',
                 title: 'List',
                 target: 'GITHUB_TOKEN=[REDACTED] ls -la',
+                input: {
+                    command: 'GITHUB_TOKEN=[REDACTED] ls -la',
+                    description: 'List',
+                },
             },
         });
         expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER');
@@ -187,6 +301,8 @@ describe('Claude Code stream-json event normalization', () => {
                 status: 'failed',
                 error_code: 'runner_error',
                 message: 'Tool failed in runner',
+                input: { file_path: '/workspace/x' },
+                output: 'Done',
             },
         });
         expect(events.some((event) => event.type === 'file.changed')).toBe(false);

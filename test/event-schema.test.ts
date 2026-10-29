@@ -142,3 +142,98 @@ describe('preview.available event schema', () => {
         }
     });
 });
+
+describe('tool and file detail schema', () => {
+    async function validator() {
+        const ajv = new Ajv2020({ allErrors: true });
+        ajv.addFormat('date-time', fullFormats['date-time']);
+        ajv.addFormat('uri', fullFormats.uri);
+        return ajv.compile(
+            JSON.parse(
+                await readFile(
+                    join(
+                        import.meta.dir,
+                        '..',
+                        'schemas',
+                        'events',
+                        'v0',
+                        'workbench-event.schema.json'
+                    ),
+                    'utf8'
+                )
+            )
+        );
+    }
+
+    const event = (type: string, data: Record<string, unknown>) => ({
+        protocol: 0,
+        run_id: 'wb_test00000000000000000000',
+        sequence: 1,
+        timestamp: '2026-10-20T00:00:00.000Z',
+        type,
+        runner: 'opencode',
+        data,
+    });
+
+    test('accepts tool input, output, MCP identity, and a file patch', async () => {
+        const validate = await validator();
+        for (const sample of [
+            event('tool.started', {
+                id: 'call_1',
+                name: 'docs_search',
+                input: { query: 'events' },
+                mcp: { server: 'docs', tool: 'search' },
+            }),
+            event('tool.completed', {
+                id: 'call_1',
+                name: 'bash',
+                status: 'completed',
+                input: { command: 'ls' },
+                input_truncated: true,
+                output: 'a\nb\n',
+                output_truncated: true,
+            }),
+            event('file.changed', {
+                path: '/workspace/a.txt',
+                operation: 'edit',
+                patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-a\n+b\n',
+                additions: 1,
+                deletions: 1,
+                patch_truncated: true,
+            }),
+            event('file.changed', { path: '/workspace/logo.png', operation: 'write' }),
+        ]) {
+            expect({ sample, valid: validate(sample) }).toEqual({
+                sample,
+                valid: true,
+            });
+        }
+    });
+
+    test('rejects malformed details', async () => {
+        const validate = await validator();
+        for (const sample of [
+            event('tool.started', { id: 'call_1', name: 'bash', input: 'ls' }),
+            event('tool.completed', { id: 'call_1', name: 'bash', output: ['a'] }),
+            event('tool.completed', {
+                id: 'call_1',
+                name: 'bash',
+                output_truncated: false,
+            }),
+            event('tool.started', { id: 'call_1', name: 'x', mcp: { server: 'docs' } }),
+            event('file.changed', { path: 'a', operation: 'edit', patch: '@@' }),
+            event('file.changed', {
+                path: 'a',
+                operation: 'edit',
+                patch: '@@',
+                additions: -1,
+                deletions: 0,
+            }),
+        ]) {
+            expect({ sample, valid: validate(sample) }).toEqual({
+                sample,
+                valid: false,
+            });
+        }
+    });
+});

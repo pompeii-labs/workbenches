@@ -1,5 +1,9 @@
 import type { RunnerSessionHost } from '../session.js';
-import { type OpenCodeAdapterProgress, OpenCodeEventAdapter } from './events.js';
+import {
+    type OpenCodeAdapterProgress,
+    OpenCodeEventAdapter,
+    type OpenCodeEventAdapterOptions,
+} from './events.js';
 import { string } from './json.js';
 import type { ActiveTurn } from './turn.js';
 
@@ -44,13 +48,18 @@ export interface OpenCodeProgress extends OpenCodeAdapterProgress {
  * usage step once. This is the one place that records what has been emitted.
  */
 export class TurnProgress {
-    private readonly adapter = new OpenCodeEventAdapter();
+    private readonly adapter: OpenCodeEventAdapter;
     /** How many characters of each assistant text part have been emitted. */
     private readonly text = new Map<string, number>();
     private readonly textParts = new Set<string>();
     private turn: string | undefined;
 
-    constructor(private readonly host: Pick<RunnerSessionHost, 'emit'>) {}
+    constructor(
+        private readonly host: Pick<RunnerSessionHost, 'emit'>,
+        options: OpenCodeEventAdapterOptions = {}
+    ) {
+        this.adapter = new OpenCodeEventAdapter(options);
+    }
 
     /** The input message of the turn being tracked. */
     get inputMessageId(): string | undefined {

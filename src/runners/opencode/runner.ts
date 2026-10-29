@@ -160,7 +160,9 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
     }
 
     events(): RunnerEventNormalizer {
-        return new OpenCodeEventAdapter();
+        return new OpenCodeEventAdapter({
+            mcpServers: this.#workbench.manifest.mcps.map((server) => server.name),
+        });
     }
 
     startSession(runtime: PreparedRuntime, options: PreparedRunnerSessionOptions) {

@@ -1,5 +1,5 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
-import { OpenCodeEventAdapter } from './events.js';
+import { OpenCodeEventAdapter, type OpenCodeEventAdapterOptions } from './events.js';
 import { record, string } from './json.js';
 import type { OpenCodeServer } from './server.js';
 
@@ -9,7 +9,8 @@ export class OpenCodeChildren {
 
     constructor(
         private readonly server: OpenCodeServer,
-        private readonly root: () => string | undefined
+        private readonly root: () => string | undefined,
+        private readonly events: OpenCodeEventAdapterOptions = {}
     ) {}
 
     async observe(info: Record<string, unknown> | undefined): Promise<void> {
@@ -56,7 +57,7 @@ export class OpenCodeChildren {
             return [];
         let adapter = this.adapters.get(sessionId);
         if (!adapter) {
-            adapter = new OpenCodeEventAdapter();
+            adapter = new OpenCodeEventAdapter(this.events);
             this.adapters.set(sessionId, adapter);
         }
         return adapter

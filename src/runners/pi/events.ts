@@ -1,4 +1,5 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
+import { resultText, ToolDetails } from '../details.js';
 import { completionReason } from '../session.js';
 import { describeTool, type ToolDescription } from '../tool.js';
 
@@ -8,11 +9,16 @@ export interface PiAdapterResult {
 }
 
 export class PiEventAdapter {
+    private readonly details: ToolDetails;
     private readonly startedTools = new Set<string>();
     private readonly completedTools = new Set<string>();
     private readonly tools = new Map<
         string,
-        { name: string; description: ToolDescription }
+        {
+            name: string;
+            description: ToolDescription;
+            input: Record<string, unknown> | undefined;
+        }
     >();
     private turnCompleted = false;
     private finalText = '';
@@ -20,6 +26,11 @@ export class PiEventAdapter {
     private completionReason: string | undefined;
     private failureMessage: string | undefined;
     private outputId: string | undefined;
+
+    /** `details` scrubs and bounds tool arguments, results, and patches; a session shares one across turns. */
+    constructor(options: { details?: ToolDetails } = {}) {
+        this.details = options.details ?? new ToolDetails();
+    }
 
     consume(value: unknown): PiAdapterResult {
         const event = record(value);
@@ -115,12 +126,13 @@ export class PiEventAdapter {
         if (this.startedTools.has(id)) return this.result([]);
         this.startedTools.add(id);
         const name = string(event.toolName) ?? 'tool';
-        const description = describeTool(name, record(event.args), undefined);
-        this.tools.set(id, { name, description });
+        const input = record(event.args);
+        const description = describeTool(name, input, undefined);
+        this.tools.set(id, { name, description, input });
         return this.result([
             {
                 type: 'tool.started',
-                data: { id, name, ...description },
+                data: { id, name, ...description, ...this.details.input(name, input) },
             },
         ]);
     }
@@ -129,17 +141,18 @@ export class PiEventAdapter {
         const id = string(event.toolCallId) ?? 'unknown';
         const started = this.tools.get(id);
         const name = string(event.toolName) ?? started?.name ?? 'tool';
-        const input = record(event.args);
+        const input = record(event.args) ?? started?.input;
         const description = input
             ? describeTool(name, input, undefined)
             : (started?.description ?? describeTool(name, undefined, undefined));
         const target = description.target;
+        const arguments_ = this.details.input(name, input);
         const events: WorkbenchEventDraft[] = [];
         if (!this.startedTools.has(id)) {
             this.startedTools.add(id);
             events.push({
                 type: 'tool.started',
-                data: { id, name, ...description },
+                data: { id, name, ...description, ...arguments_ },
             });
         }
         if (!this.completedTools.has(id)) {
@@ -158,11 +171,25 @@ export class PiEventAdapter {
                               message: 'Tool failed in runner',
                           }
                         : {}),
+                    ...arguments_,
+                    ...this.details.output(resultText(record(event.result)?.content)),
                 },
             });
             const changed = changedFile(name, target);
             if (!failed && changed) {
-                events.push({ type: 'file.changed', data: changed });
+                events.push({
+                    type: 'file.changed',
+                    data: {
+                        ...changed,
+                        ...piPatch(
+                            this.details,
+                            name,
+                            string(input?.path) ?? changed.path,
+                            input,
+                            record(record(event.result)?.details)
+                        ),
+                    },
+                });
             }
         }
         return this.result(events);
@@ -199,6 +226,60 @@ function usageData(usage: Record<string, unknown> | undefined) {
 function messageReason(message: Record<string, unknown> | undefined) {
     const reason = string(message?.stopReason) ?? string(message?.reason);
     return reason ? completionReason(reason) : undefined;
+}
+
+/**
+ * The patch of a Pi edit or write, from the tool's own data. A write is
+ * diffed against the run's last write of the file; an edit is applied to that
+ * content when known, and otherwise shown as a diff of the replaced text
+ * placed at the `firstChangedLine` Pi reports. Anything else has no patch
+ * here; the host computes it from the workspace.
+ */
+function piPatch(
+    details: ToolDetails,
+    name: string,
+    path: string,
+    input: Record<string, unknown> | undefined,
+    result: Record<string, unknown> | undefined
+): ReturnType<ToolDetails['patch']> {
+    const tool = name.toLowerCase();
+    if (tool === 'write') {
+        const content = input?.content;
+        return typeof content === 'string' ? details.written(path, content) : {};
+    }
+    if (tool !== 'edit') return {};
+    const edits = piEdits(input);
+    if (!edits) {
+        details.forget(path);
+        return {};
+    }
+    const edited = details.edited(path, edits);
+    if (edited) return details.diff(path, edited.before, edited.after);
+    const [only] = edits;
+    return edits.length === 1 && only
+        ? details.excerpt(
+              path,
+              only.oldText,
+              only.newText,
+              number(result?.firstChangedLine)
+          )
+        : {};
+}
+
+/** Pi's edit replacements: one `oldText` and `newText`, or a list of them as `edits`. */
+function piEdits(
+    input: Record<string, unknown> | undefined
+): { oldText: string; newText: string }[] | undefined {
+    const list = Array.isArray(input?.edits) ? input.edits : [input];
+    const edits = list.flatMap((entry) => {
+        const edit = record(entry);
+        const oldText = edit?.oldText;
+        const newText = edit?.newText;
+        return typeof oldText === 'string' && oldText && typeof newText === 'string'
+            ? [{ oldText, newText }]
+            : [];
+    });
+    return edits.length > 0 && edits.length === list.length ? edits : undefined;
 }
 
 function changedFile(name: string, target: string | undefined) {

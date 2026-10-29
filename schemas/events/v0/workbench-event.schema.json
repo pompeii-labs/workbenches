@@ -460,7 +460,70 @@
                                 "pattern": "^wbo_[a-z0-9]{20,64}$"
                             },
                             "error_code": { "type": "string" },
-                            "message": { "type": "string" }
+                            "message": { "type": "string" },
+                            "input": {
+                                "type": "object",
+                                "description": "The tool call's arguments as the runner reported them, scrubbed of credentials. Its JSON serialization is at most 16384 UTF-8 bytes; when the arguments were larger, the longest strings keep their start followed by \"…[N bytes truncated]\"."
+                            },
+                            "input_truncated": {
+                                "const": true,
+                                "description": "Present when strings in input were shortened to fit its limit."
+                            },
+                            "output": {
+                                "type": "string",
+                                "description": "The tool's result as plain text, scrubbed of credentials and terminal control characters, on tool.completed only. At most 16384 UTF-8 bytes, or the first and last 8192 bytes joined by a \"…[N bytes truncated]…\" line."
+                            },
+                            "output_truncated": {
+                                "const": true,
+                                "description": "Present when the middle of output was removed to fit its limit."
+                            },
+                            "mcp": {
+                                "type": "object",
+                                "description": "The MCP server and tool behind the native tool, when it is an MCP tool.",
+                                "additionalProperties": false,
+                                "required": ["server", "tool"],
+                                "properties": {
+                                    "server": { "type": "string", "minLength": 1 },
+                                    "tool": { "type": "string", "minLength": 1 }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "type": { "const": "file.changed" } } },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "required": ["path", "operation"],
+                        "dependentRequired": {
+                            "patch": ["additions", "deletions"],
+                            "patch_truncated": ["patch"]
+                        },
+                        "properties": {
+                            "path": { "type": "string" },
+                            "operation": { "type": "string" },
+                            "patch": {
+                                "type": "string",
+                                "description": "A unified diff of this change for this path only, with headers \"--- a/<path>\" and \"+++ b/<path>\" relative to the workspace root, scrubbed of injected credential values and recognizable key formats. At most 65536 UTF-8 bytes, cut at a hunk boundary where possible. Absent for binary files and changes the engine could not describe."
+                            },
+                            "additions": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": "Lines the whole change adds, present with patch, counted before any truncation."
+                            },
+                            "deletions": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": "Lines the whole change removes, present with patch, counted before any truncation."
+                            },
+                            "patch_truncated": {
+                                "const": true,
+                                "description": "Present when patch was cut to fit its limit."
+                            }
                         }
                     }
                 }
