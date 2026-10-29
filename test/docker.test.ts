@@ -652,7 +652,7 @@ describe('Docker runtime provider', () => {
                     // What `opencode auth list` prints for the volume's entries.
                     if (
                         command[1] === 'run' &&
-                        command.slice(-2).join(' ') === 'auth list'
+                        command.some((part) => part.includes('opencode auth list'))
                     ) {
                         const entries = Object.keys(
                             JSON.parse(volume.get(authFile) ?? '{}')
@@ -742,7 +742,7 @@ describe('Docker runtime provider', () => {
                     // `opencode auth list` reads the data home the container is given.
                     if (
                         command[1] === 'run' &&
-                        command.slice(-2).join(' ') === 'auth list'
+                        command.some((part) => part.includes('opencode auth list'))
                     ) {
                         const dataHome = containerEnvironmentOf(
                             command,

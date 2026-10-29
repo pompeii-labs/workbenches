@@ -41,7 +41,13 @@ export const openCodeConnection: RunnerConnection = {
     ],
     packagedProviders: true,
     probe: {
-        command: ['opencode', 'auth', 'list'],
+        // OpenCode 2 lists credentials as JSON; OpenCode 1 rejects the flag and lists text.
+        command: [
+            'sh',
+            '-c',
+            'listing=$(opencode auth list --format json 2>/dev/null) && printf "%s\\n" "$listing" || exec opencode auth list',
+            'workbench-opencode',
+        ],
         failsClosed: false,
         authenticated(listing, candidates) {
             const credentials = openCodeCredentials(listing);
@@ -161,8 +167,46 @@ export function isOpenCodeV2(version: string): boolean {
     return /^(?:opencode\s+)?v?2\./.test(version.trim());
 }
 
-/** Each `●` line of the listing names a provider, then its method last. */
+/**
+ * The providers holding a credential, by their method. OpenCode 2 lists them
+ * as JSON, each integration with its connections; OpenCode 1 as text, where
+ * each `●` line names a provider, then its method last.
+ */
 function openCodeCredentials(listing: string): Map<string, string> {
+    return jsonCredentials(listing) ?? textCredentials(listing);
+}
+
+function jsonCredentials(listing: string): Map<string, string> | undefined {
+    const start = listing.indexOf('[');
+    const end = listing.lastIndexOf(']');
+    if (start < 0 || end < start) return undefined;
+    let integrations: unknown;
+    try {
+        integrations = JSON.parse(listing.slice(start, end + 1));
+    } catch {
+        return undefined;
+    }
+    if (
+        !Array.isArray(integrations) ||
+        !integrations.every((integration) => typeof integration?.id === 'string')
+    )
+        return undefined;
+    const credentials = new Map<string, string>();
+    for (const integration of integrations) {
+        const id = integration.id;
+        const connections = integration.connections;
+        if (!Array.isArray(connections)) continue;
+        const methods = connections.map((connection) => connection?.method);
+        if (methods.length === 0) continue;
+        credentials.set(
+            normalizeProvider(id),
+            methods.includes('oauth') ? 'oauth' : 'api'
+        );
+    }
+    return credentials;
+}
+
+function textCredentials(listing: string): Map<string, string> {
     const credentials = new Map<string, string>();
     for (const line of listing
         .split(/\r?\n/)

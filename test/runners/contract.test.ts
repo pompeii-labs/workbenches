@@ -112,7 +112,12 @@ const expected: Record<
         })),
         packagedProviders: true,
         probe: {
-            command: ['opencode', 'auth', 'list'],
+            command: [
+                'sh',
+                '-c',
+                'listing=$(opencode auth list --format json 2>/dev/null) && printf "%s\\n" "$listing" || exec opencode auth list',
+                'workbench-opencode',
+            ],
             failsClosed: false,
             listing: [
                 '┌  Credentials ~/.local/share/opencode/auth.json',
