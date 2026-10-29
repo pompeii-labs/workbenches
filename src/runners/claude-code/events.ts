@@ -1,7 +1,9 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
+import { resultText, ToolDetails } from '../details.js';
 import type { RunnerEventNormalizer, RunnerSummary } from '../runner.js';
 import { completionReason } from '../session.js';
 import { describeTool, type ToolDescription } from '../tool.js';
+import { claudeCodeMcp, claudeCodePatch } from './changes.js';
 import { ClaudeCodeCost } from './cost.js';
 
 export interface ClaudeCodeEventResult {
@@ -48,8 +50,14 @@ const FAILURE_PREFIX = 'Claude Code session failed';
 export class ClaudeCodeEventAdapter implements RunnerEventNormalizer {
     private readonly tools = new Map<
         string,
-        { name: string; description: ToolDescription; target: string | undefined }
+        {
+            name: string;
+            description: ToolDescription;
+            target: string | undefined;
+            input: Record<string, unknown> | undefined;
+        }
     >();
+    private readonly details: ToolDetails;
     private readonly completedTools = new Set<string>();
     private messageId: string | undefined;
     private outputId: string | undefined;
@@ -59,9 +67,13 @@ export class ClaudeCodeEventAdapter implements RunnerEventNormalizer {
     private reason: string | undefined;
     private failure: string | undefined;
 
-    /** `cost` turns the session's cumulative total into per-turn costs. */
-    constructor(options: { cost?: ClaudeCodeCost } = {}) {
+    /**
+     * `cost` turns the session's cumulative total into per-turn costs;
+     * `details` scrubs and bounds tool arguments, results, and patches.
+     */
+    constructor(options: { cost?: ClaudeCodeCost; details?: ToolDetails } = {}) {
         this.cost = options.cost ?? ClaudeCodeCost.fresh();
+        this.details = options.details ?? new ToolDetails();
     }
 
     beginTurn(): void {
@@ -131,10 +143,14 @@ export class ClaudeCodeEventAdapter implements RunnerEventNormalizer {
 
     private user(event: Record<string, unknown>): ClaudeCodeEventResult {
         const events: WorkbenchEventDraft[] = [];
-        for (const block of blocks(record(event.message)?.content)) {
-            if (string(block.type) === 'tool_result') {
-                events.push(...this.toolCompleted(block));
-            }
+        const results = blocks(record(event.message)?.content).filter(
+            (block) => string(block.type) === 'tool_result'
+        );
+        // The structured result describes the message's only tool result.
+        const structured =
+            results.length === 1 ? record(event.tool_use_result) : undefined;
+        for (const block of results) {
+            events.push(...this.toolCompleted(block, structured));
         }
         return { events };
     }
@@ -143,13 +159,38 @@ export class ClaudeCodeEventAdapter implements RunnerEventNormalizer {
         const id = string(block.id);
         if (!id || this.tools.has(id)) return [];
         const name = string(block.name) ?? 'tool';
-        const input = toolInput(record(block.input));
+        const native = record(block.input);
+        const input = toolInput(native);
         const description = describeTool(name, input, undefined);
-        this.tools.set(id, { name, description, target: string(input?.filePath) });
-        return [{ type: 'tool.started', data: { id, name, ...description } }];
+        this.tools.set(id, {
+            name,
+            description,
+            target: string(input?.filePath),
+            input: native,
+        });
+        return [
+            {
+                type: 'tool.started',
+                data: {
+                    id,
+                    name,
+                    ...this.identity(name, description),
+                    ...this.details.input(name, native),
+                },
+            },
+        ];
     }
 
-    private toolCompleted(block: Record<string, unknown>): WorkbenchEventDraft[] {
+    /** The tool's description, and its MCP server and tool when it is an MCP tool. */
+    private identity(name: string, description: ToolDescription) {
+        const mcp = claudeCodeMcp(name);
+        return { ...description, ...(mcp ? { mcp } : {}) };
+    }
+
+    private toolCompleted(
+        block: Record<string, unknown>,
+        structured: Record<string, unknown> | undefined
+    ): WorkbenchEventDraft[] {
         const id = string(block.tool_use_id);
         if (!id || this.completedTools.has(id)) return [];
         this.completedTools.add(id);
@@ -158,27 +199,40 @@ export class ClaudeCodeEventAdapter implements RunnerEventNormalizer {
         const description =
             tool?.description ?? describeTool(name, undefined, undefined);
         const failed = block.is_error === true;
+        const identity = this.identity(name, description);
         const events: WorkbenchEventDraft[] = [];
         if (!tool) {
-            events.push({ type: 'tool.started', data: { id, name, ...description } });
+            events.push({ type: 'tool.started', data: { id, name, ...identity } });
         }
         events.push({
             type: 'tool.completed',
             data: {
                 id,
                 name,
-                ...description,
+                ...identity,
                 status: failed ? 'failed' : 'completed',
                 ...(failed
                     ? { error_code: 'runner_error', message: 'Tool failed in runner' }
                     : {}),
+                ...this.details.input(name, tool?.input),
+                ...this.details.output(resultText(block.content)),
             },
         });
         const operation = FILE_OPERATIONS.get(name.toLowerCase());
         if (!failed && operation && tool?.target) {
             events.push({
                 type: 'file.changed',
-                data: { path: tool.target, operation },
+                data: {
+                    path: tool.target,
+                    operation,
+                    ...claudeCodePatch(
+                        this.details,
+                        name,
+                        tool.target,
+                        tool.input,
+                        structured
+                    ),
+                },
             });
         }
         return events;

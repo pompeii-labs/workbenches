@@ -1,6 +1,8 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
+import { resultText, ToolDetails } from '../details.js';
 import { completionReason } from '../session.js';
 import { describeTool, planFromTodos } from '../tool.js';
+import { openCodeMcp, openCodePatch, openCodePatchedFiles } from './changes.js';
 import { record, string } from './json.js';
 
 export interface OpenCodeAdapterResult {
@@ -15,7 +17,19 @@ export interface OpenCodeAdapterProgress {
     finishedSteps: string[];
 }
 
+/** Tools that change any number of files through one patch. */
+const PATCH_TOOLS = new Set(['apply_patch', 'patch']);
+
+export interface OpenCodeEventAdapterOptions {
+    /** Scrubs and bounds tool arguments, results, and patches. */
+    details?: ToolDetails;
+    /** The Workbench's declared MCP servers, which name its MCP tools. */
+    mcpServers?: readonly string[];
+}
+
 export class OpenCodeEventAdapter {
+    private readonly details: ToolDetails;
+    private readonly mcpServers: readonly string[];
     private readonly startedTools = new Set<string>();
     private readonly completedTools = new Set<string>();
     private readonly finishedSteps = new Set<string>();
@@ -24,6 +38,11 @@ export class OpenCodeEventAdapter {
     private sessionId: string | undefined;
     private completionReason: string | undefined;
     private failureMessage: string | undefined;
+
+    constructor(options: OpenCodeEventAdapterOptions = {}) {
+        this.details = options.details ?? new ToolDetails();
+        this.mcpServers = options.mcpServers ?? [];
+    }
 
     /** The tool calls and usage steps reported so far, by native id. */
     progress(): OpenCodeAdapterProgress {
@@ -107,39 +126,70 @@ export class OpenCodeEventAdapter {
         const name = string(part?.tool) ?? 'tool';
         if (name.toLowerCase() === 'question') return this.result([]);
         const status = string(state?.status) ?? 'unknown';
-        const description = describeTool(
-            name,
-            record(state?.input),
-            record(state?.metadata)
-        );
+        const input = record(state?.input);
+        const metadata = record(state?.metadata);
+        const description = describeTool(name, input, metadata);
+        const mcp = openCodeMcp(name, this.mcpServers);
         const common = {
             id,
             name,
             ...description,
+            ...(mcp ? { mcp } : {}),
         };
+        const arguments_ =
+            input && Object.keys(input).length > 0
+                ? this.details.input(name, input)
+                : {};
         const events: WorkbenchEventDraft[] = [];
         if (!this.startedTools.has(id)) {
             this.startedTools.add(id);
-            events.push({ type: 'tool.started', data: common });
+            events.push({ type: 'tool.started', data: { ...common, ...arguments_ } });
         }
         if (
             (status === 'completed' || status === 'error' || status === 'failed') &&
             !this.completedTools.has(id)
         ) {
             this.completedTools.add(id);
-            const failure = status === 'completed' ? undefined : safeToolFailure(state);
+            const completed = status === 'completed';
+            const failure = completed ? undefined : safeToolFailure(state);
             events.push({
                 type: 'tool.completed',
                 data: {
                     ...common,
-                    status: status === 'completed' ? 'completed' : 'failed',
+                    status: completed ? 'completed' : 'failed',
                     ...(failure ?? {}),
                     ...duration(state),
+                    ...arguments_,
+                    ...this.details.output(
+                        resultText(state?.output) ??
+                            (completed ? undefined : string(state?.error))
+                    ),
                 },
             });
             const changed = changedFile(name, description.target);
-            if (changed) events.push({ type: 'file.changed', data: changed });
-            const plan = status === 'completed' ? planEvent(name, state) : undefined;
+            if (changed) {
+                events.push({
+                    type: 'file.changed',
+                    data: {
+                        ...changed,
+                        ...(completed
+                            ? openCodePatch(
+                                  this.details,
+                                  name,
+                                  string(input?.filePath) ?? changed.path,
+                                  input,
+                                  metadata
+                              )
+                            : {}),
+                    },
+                });
+            }
+            if (completed && PATCH_TOOLS.has(name.toLowerCase())) {
+                for (const data of openCodePatchedFiles(this.details, metadata)) {
+                    events.push({ type: 'file.changed', data });
+                }
+            }
+            const plan = completed ? planEvent(name, state) : undefined;
             if (plan) events.push(plan);
         }
         return this.result(events);

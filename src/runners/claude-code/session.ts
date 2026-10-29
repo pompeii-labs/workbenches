@@ -1,4 +1,5 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
+import { ToolDetails } from '../details.js';
 import { RunnerProcessExit } from '../exit.js';
 import type {
     NormalizedRunnerInput,
@@ -151,7 +152,13 @@ class ClaudeCodeSession implements RunnerSession {
             child.stopTimeoutMs
         );
         this.cost = prepared.cost ?? ClaudeCodeCost.fresh();
-        this.events = new ClaudeCodeEventAdapter({ cost: this.cost });
+        this.events = new ClaudeCodeEventAdapter({
+            cost: this.cost,
+            details: ToolDetails.forSession(
+                options,
+                Object.values(prepared.routeEnvironment)
+            ),
+        });
         this.requests = new ClaudeCodeInputRequests(
             options.host,
             (response) => this.write({ type: 'control_response', response }),

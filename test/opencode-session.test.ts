@@ -922,13 +922,13 @@ describe('OpenCode interactive server adapter', () => {
         expect(server.permissionReplies).toEqual([{ reply: 'once' }]);
         expect(events).toContainEqual({
             type: 'tool.completed',
-            data: {
+            data: expect.objectContaining({
                 id: 'call_1',
                 name: 'read',
                 title: 'Read',
                 target: '/outside/file.ts',
                 status: 'completed',
-            },
+            }),
         });
     });
 

@@ -23,7 +23,6 @@ export const RUNNER_CONFORMANCE_UNSAFE_VALUES = [
     'MUST_NOT_RENDER_REASONING',
     'MUST_NOT_RENDER_CREDENTIAL',
     'MUST_NOT_RENDER_COMMAND_SECRET',
-    'MUST_NOT_RENDER_TOOL_OUTPUT',
     'MUST_NOT_RENDER_IMAGE_DATA',
 ] as const;
 
@@ -33,9 +32,73 @@ export const RUNNER_CONFORMANCE_UNSAFE_VALUES = [
  */
 export const RUNNER_CONFORMANCE_SHELL_COMMAND = `API_TOKEN=${RUNNER_CONFORMANCE_UNSAFE_VALUES[2]} npx tgcheck --json`;
 
+/** What the tool events scenario's write and shell call return. */
+export const RUNNER_CONFORMANCE_TOOL_OUTPUT = {
+    write: 'Wrote output.txt',
+    shell: 'tgcheck: 3 checks passed',
+} as const;
+
+/**
+ * A credential the host passes into the session environment under a
+ * credential name. It matches no recognizable key format, so only exact-value
+ * redaction removes it.
+ */
+export const RUNNER_CONFORMANCE_INJECTED_CREDENTIAL = 'conformance-injected-value-xq';
+
+/** A credential that only its name, or the name of the field holding it, gives away. */
+export const RUNNER_CONFORMANCE_NAMED_CREDENTIAL = 'conformance-named-value-zq';
+
+/**
+ * The shell call and edit every runner fixture makes in the tool details
+ * scenario, each carrying both credentials into its input, output, and patch.
+ */
+export const RUNNER_CONFORMANCE_DETAILS = {
+    shell: {
+        id: 'call_details_shell',
+        command: `API_TOKEN=${RUNNER_CONFORMANCE_NAMED_CREDENTIAL} ./deploy --check`,
+        apiKey: RUNNER_CONFORMANCE_NAMED_CREDENTIAL,
+        note: `uses ${RUNNER_CONFORMANCE_INJECTED_CREDENTIAL}`,
+        output: `api_key=${RUNNER_CONFORMANCE_NAMED_CREDENTIAL}\nloaded ${RUNNER_CONFORMANCE_INJECTED_CREDENTIAL}\n`,
+    },
+    edit: {
+        id: 'call_details_edit',
+        path: '/workspace/config.txt',
+        oldText: 'mode=draft\n',
+        newText: `SERVICE_API_KEY=${RUNNER_CONFORMANCE_NAMED_CREDENTIAL}\nmode=${RUNNER_CONFORMANCE_INJECTED_CREDENTIAL}\n`,
+        output: 'Edited config.txt',
+    },
+} as const;
+
+const limitLines = (word: string) =>
+    Array.from({ length: 4000 }, (_, index) => `${word} line ${index}\n`).join('');
+
+/** The shell call and edit every runner fixture makes in the tool limits scenario, each over its cap. */
+export const RUNNER_CONFORMANCE_LIMITS = {
+    shell: {
+        id: 'call_limits_shell',
+        command: 'cat big.txt',
+        content: 'x'.repeat(40_000),
+        output: `${'h'.repeat(10_000)}${'m'.repeat(20_000)}${'t'.repeat(10_000)}`,
+    },
+    edit: {
+        id: 'call_limits_edit',
+        path: '/workspace/limits.txt',
+        oldText: limitLines('old'),
+        newText: limitLines('new'),
+        output: 'Edited limits.txt',
+    },
+} as const;
+
+/** The session environment every scenario starts with. */
+const CONFORMANCE_ENVIRONMENT = {
+    CONFORMANCE_API_KEY: RUNNER_CONFORMANCE_INJECTED_CREDENTIAL,
+};
+
 export type RunnerConformanceScenario =
     | 'streaming_text'
     | 'tool_events'
+    | 'tool_details'
+    | 'tool_limits'
     | 'permissions'
     | 'questions'
     | 'multi_turn'
@@ -114,12 +177,12 @@ export function runnerAdapterContract(options: {
                 if (supported(options, 'tool_events')) {
                     expect(observed.events).toContainEqual({
                         type: 'tool.started',
-                        data: {
+                        data: expect.objectContaining({
                             id: 'call_contract',
                             name: 'write',
                             title: 'Write',
                             target: '/workspace/output.txt',
-                        },
+                        }),
                     });
                     expect(observed.events).toContainEqual({
                         type: 'tool.completed',
@@ -129,6 +192,10 @@ export function runnerAdapterContract(options: {
                             title: 'Write',
                             target: '/workspace/output.txt',
                             status: 'completed',
+                            input: expect.objectContaining({
+                                content: 'contract output\n',
+                            }),
+                            output: RUNNER_CONFORMANCE_TOOL_OUTPUT.write,
                         }),
                     });
                     expect(observed.events).toContainEqual({
@@ -137,16 +204,20 @@ export function runnerAdapterContract(options: {
                             id: 'call_shell',
                             target: 'API_TOKEN=[REDACTED] npx tgcheck --json',
                             status: 'completed',
+                            input: {
+                                command: 'API_TOKEN=[REDACTED] npx tgcheck --json',
+                            },
+                            output: RUNNER_CONFORMANCE_TOOL_OUTPUT.shell,
                         }),
                     });
                 }
                 if (supported(options, 'file_events')) {
                     expect(observed.events).toContainEqual({
                         type: 'file.changed',
-                        data: {
+                        data: expect.objectContaining({
                             path: '/workspace/output.txt',
                             operation: 'write',
-                        },
+                        }),
                     });
                 }
                 if (supported(options, 'usage')) {
@@ -162,6 +233,104 @@ export function runnerAdapterContract(options: {
                     });
                 }
                 assertSafe(observed.events);
+            } finally {
+                await observed.session.close();
+            }
+        });
+
+        test('reports tool input, output, and patch with every credential redacted', async () => {
+            if (
+                !supported(options, 'tool_events') ||
+                !supported(options, 'file_events')
+            ) {
+                return;
+            }
+            const harness = options.createHarness();
+            harness.arrange('tool_details');
+            const observed = await start(harness);
+            try {
+                await observed.session.prompt('use tools with credentials');
+                const shell = completed(
+                    observed.events,
+                    RUNNER_CONFORMANCE_DETAILS.shell.id
+                );
+                expect(shell.input).toEqual({
+                    command: 'API_TOKEN=[REDACTED] ./deploy --check',
+                    apiKey: '[REDACTED]',
+                    note: 'uses [REDACTED]',
+                });
+                expect(shell.output).toBe('api_key=[REDACTED]\nloaded [REDACTED]\n');
+
+                const edit = completed(
+                    observed.events,
+                    RUNNER_CONFORMANCE_DETAILS.edit.id
+                );
+                expect(edit.output).toBe(RUNNER_CONFORMANCE_DETAILS.edit.output);
+                expect(JSON.stringify(edit.input)).toContain('[REDACTED]');
+
+                const change = changed(
+                    observed.events,
+                    RUNNER_CONFORMANCE_DETAILS.edit.path
+                );
+                expect(change).toEqual({
+                    path: RUNNER_CONFORMANCE_DETAILS.edit.path,
+                    operation: 'edit',
+                    patch: '--- a/config.txt\n+++ b/config.txt\n@@ -1,1 +1,2 @@\n-mode=draft\n+SERVICE_API_KEY=[REDACTED]\n+mode=[REDACTED]\n',
+                    additions: 2,
+                    deletions: 1,
+                });
+
+                const serialized = JSON.stringify(observed.events);
+                expect(serialized).not.toContain(RUNNER_CONFORMANCE_NAMED_CREDENTIAL);
+                expect(serialized).not.toContain(
+                    RUNNER_CONFORMANCE_INJECTED_CREDENTIAL
+                );
+                assertSafe(observed.events);
+            } finally {
+                await observed.session.close();
+            }
+        });
+
+        test('bounds tool input, output, and patch and flags each truncation', async () => {
+            if (
+                !supported(options, 'tool_events') ||
+                !supported(options, 'file_events')
+            ) {
+                return;
+            }
+            const harness = options.createHarness();
+            harness.arrange('tool_limits');
+            const observed = await start(harness);
+            try {
+                await observed.session.prompt('use tools with large data');
+                const shell = completed(
+                    observed.events,
+                    RUNNER_CONFORMANCE_LIMITS.shell.id
+                );
+                expect(shell.input_truncated).toBe(true);
+                expect(bytes(JSON.stringify(shell.input))).toBeLessThanOrEqual(16_384);
+                expect(String(record(shell.input).content)).toMatch(
+                    /^x+…\[\d+ bytes truncated\]$/u
+                );
+                expect(record(shell.input).command).toBe(
+                    RUNNER_CONFORMANCE_LIMITS.shell.command
+                );
+                expect(shell.output_truncated).toBe(true);
+                expect(shell.output).toBe(
+                    `${'h'.repeat(8192)}\n…[23616 bytes truncated]…\n${'t'.repeat(8192)}`
+                );
+
+                const change = changed(
+                    observed.events,
+                    RUNNER_CONFORMANCE_LIMITS.edit.path
+                );
+                expect(change.patch_truncated).toBe(true);
+                expect(bytes(String(change.patch))).toBeLessThanOrEqual(65_536);
+                expect(String(change.patch)).toStartWith(
+                    '--- a/limits.txt\n+++ b/limits.txt\n@@ '
+                );
+                expect(change.additions).toBe(4000);
+                expect(change.deletions).toBe(4000);
             } finally {
                 await observed.session.close();
             }
@@ -260,7 +429,7 @@ export function runnerAdapterContract(options: {
                     text: 'inspect this image',
                     images: [
                         {
-                            data: RUNNER_CONFORMANCE_UNSAFE_VALUES[4],
+                            data: RUNNER_CONFORMANCE_UNSAFE_VALUES[3],
                             mimeType: 'image/png',
                             name: 'fixture.png',
                         },
@@ -362,7 +531,7 @@ async function start(
     const session = await harness.adapter.start({
         workbench: harness.workbench,
         workspaceDirectory: '/workspace',
-        environment: {},
+        environment: { ...CONFORMANCE_ENVIRONMENT },
         configuration: new ModelRouter(modelCatalogFixture).resolve({
             workbench: harness.workbench,
         }),
@@ -383,9 +552,40 @@ async function start(
 
 function assertSafe(events: WorkbenchEventDraft[]): void {
     const serialized = JSON.stringify(events);
-    for (const value of RUNNER_CONFORMANCE_UNSAFE_VALUES) {
+    for (const value of [
+        ...RUNNER_CONFORMANCE_UNSAFE_VALUES,
+        RUNNER_CONFORMANCE_INJECTED_CREDENTIAL,
+    ]) {
         expect(serialized).not.toContain(value);
     }
+}
+
+/** The data of the one `tool.completed` event for call `id`. */
+function completed(events: WorkbenchEventDraft[], id: string): Record<string, unknown> {
+    const matches = events.filter(
+        (event) => event.type === 'tool.completed' && event.data.id === id
+    );
+    expect(matches).toHaveLength(1);
+    return matches[0]?.data ?? {};
+}
+
+/** The data of the one `file.changed` event for `path`. */
+function changed(events: WorkbenchEventDraft[], path: string): Record<string, unknown> {
+    const matches = events.filter(
+        (event) => event.type === 'file.changed' && event.data.path === path
+    );
+    expect(matches).toHaveLength(1);
+    return matches[0]?.data ?? {};
+}
+
+function record(value: unknown): Record<string, unknown> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(Object.entries(value))
+        : {};
+}
+
+function bytes(text: string): number {
+    return new TextEncoder().encode(text).length;
 }
 
 function text(events: WorkbenchEventDraft[]) {

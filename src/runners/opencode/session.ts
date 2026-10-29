@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import type { RuntimeCredentialFiles } from '../../runtimes/contracts.js';
 import type { RunnerContext } from '../context/files.js';
 import { runtimeContext } from '../context/runtime.js';
+import { ToolDetails } from '../details.js';
 import type {
     RunnerInput,
     RunnerInputDelivery,
@@ -54,7 +55,11 @@ export class OpenCodeServerSession implements RunnerSession {
 
     constructor(options: OpenCodeServerSessionOptions) {
         this.options = options;
-        this.emitted = new TurnProgress(options.host);
+        const events = {
+            details: ToolDetails.forSession(options),
+            mcpServers: options.workbench.manifest.mcps.map((server) => server.name),
+        };
+        this.emitted = new TurnProgress(options.host, events);
         // Put refreshed attempt facts beside the first resumed user input.
         this.runtimeReminder =
             options.context && options.session?.nativeSessionId
@@ -71,7 +76,11 @@ export class OpenCodeServerSession implements RunnerSession {
             password: options.password,
             startupTimeoutMs: options.startupTimeoutMs,
         });
-        const children = new OpenCodeChildren(this.server, () => this.state.sessionId);
+        const children = new OpenCodeChildren(
+            this.server,
+            () => this.state.sessionId,
+            events
+        );
         this.router = new OpenCodeEventRouter(
             this.server,
             options.host,

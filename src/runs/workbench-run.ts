@@ -24,10 +24,12 @@ import {
     WorkbenchWorkspaces,
     withRuntime,
 } from '../workbench/index.js';
+import { RunEventDetails } from './event-details.js';
 import { RunEvents, type WorkbenchEvent } from './events.js';
 import { ExecutionPreparation } from './preparation.js';
 import { RunnerOutput } from './runner-output.js';
 import { RunStore } from './store.js';
+import { WorkspacePatches } from './workspace-patches.js';
 
 export interface WorkbenchRunOptions {
     workbenchPath: string;
@@ -242,7 +244,14 @@ export class WorkbenchRun {
         this.options.signal?.addEventListener('abort', abortRunner, { once: true });
         if (this.options.signal?.aborted) abortRunner();
 
-        const output = new RunnerOutput(runner.events(), events);
+        const output = new RunnerOutput(
+            runner.events(),
+            events,
+            new RunEventDetails(
+                RunEventDetails.secrets(workbench, this.environment),
+                new WorkspacePatches(runtime)
+            )
+        );
         try {
             const result = await output.consume(child, () => runtime.cancel(child));
             if (this.options.signal?.aborted) {

@@ -10,7 +10,10 @@ import { PiSessionAdapter } from '../src/runners/pi/session.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { modelCatalogFixture } from './model-catalog-fixture.js';
 import {
+    RUNNER_CONFORMANCE_DETAILS,
+    RUNNER_CONFORMANCE_LIMITS,
     RUNNER_CONFORMANCE_SHELL_COMMAND,
+    RUNNER_CONFORMANCE_TOOL_OUTPUT,
     type RunnerConformanceScenario,
     runnerAdapterContract,
 } from './runner-adapter-contract.js';
@@ -391,14 +394,18 @@ class FakePiRpc {
                 toolName: 'write',
                 args: {
                     path: '/workspace/output.txt',
-                    content: 'MUST_NOT_RENDER_TOOL_OUTPUT',
+                    content: 'contract output\n',
                 },
             });
             this.emit({
                 type: 'tool_execution_end',
                 toolCallId: 'call_contract',
                 toolName: 'write',
-                result: { content: 'MUST_NOT_RENDER_TOOL_OUTPUT' },
+                result: {
+                    content: [
+                        { type: 'text', text: RUNNER_CONFORMANCE_TOOL_OUTPUT.write },
+                    ],
+                },
                 isError: false,
             });
             this.emit({
@@ -411,7 +418,11 @@ class FakePiRpc {
                 type: 'tool_execution_end',
                 toolCallId: 'call_shell',
                 toolName: 'bash',
-                result: { content: 'MUST_NOT_RENDER_TOOL_OUTPUT' },
+                result: {
+                    content: [
+                        { type: 'text', text: RUNNER_CONFORMANCE_TOOL_OUTPUT.shell },
+                    ],
+                },
                 isError: false,
             });
             this.emit({
@@ -426,6 +437,24 @@ class FakePiRpc {
                     },
                 },
             });
+        } else if (
+            this.scenario === 'tool_details' ||
+            this.scenario === 'tool_limits'
+        ) {
+            const script =
+                this.scenario === 'tool_details'
+                    ? RUNNER_CONFORMANCE_DETAILS
+                    : RUNNER_CONFORMANCE_LIMITS;
+            const { id: shellId, output: shellOutput, ...shellInput } = script.shell;
+            this.tool(shellId, 'bash', shellInput, shellOutput);
+            const edit = script.edit;
+            this.tool(
+                edit.id,
+                'edit',
+                { path: edit.path, oldText: edit.oldText, newText: edit.newText },
+                edit.output,
+                { diff: 'native display diff', firstChangedLine: 1 }
+            );
         } else if (this.scenario === 'failures') {
             this.emit({
                 type: 'message_end',
@@ -439,6 +468,23 @@ class FakePiRpc {
         }
         this.emit({ type: 'turn_end', message: { stopReason: 'completed' } });
         this.emit({ type: 'agent_end', messages: [] });
+    }
+
+    private tool(
+        id: string,
+        toolName: string,
+        args: Record<string, unknown>,
+        output: string,
+        details: Record<string, unknown> = {}
+    ): void {
+        this.emit({ type: 'tool_execution_start', toolCallId: id, toolName, args });
+        this.emit({
+            type: 'tool_execution_end',
+            toolCallId: id,
+            toolName,
+            result: { content: [{ type: 'text', text: output }], details },
+            isError: false,
+        });
     }
 
     private text(text: string): void {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
+import { ToolDetails } from '../src/runners/details.js';
 import { PiEventAdapter } from '../src/runners/pi/events.js';
 
 describe('Pi JSON event normalization', () => {
@@ -72,16 +73,19 @@ describe('Pi JSON event normalization', () => {
                 type: 'tool_execution_start',
                 toolCallId: 'call_1',
                 toolName: 'write',
-                args: {
-                    path: '/workspace/result.txt',
-                    content: 'MUST_NOT_RENDER_TOOL_OUTPUT',
-                },
+                args: { path: '/workspace/result.txt', content: 'done\n' },
             }).events,
             ...adapter.consume({
                 type: 'tool_execution_end',
                 toolCallId: 'call_1',
                 toolName: 'write',
-                result: { content: 'MUST_NOT_RENDER_TOOL_OUTPUT' },
+                result: {
+                    content: [
+                        { type: 'text', text: 'Wrote result.txt' },
+                        { type: 'image', data: 'MUST_NOT_RENDER_IMAGE_DATA' },
+                    ],
+                    details: { thinking: 'MUST_NOT_RENDER_REASONING' },
+                },
                 isError: false,
             }).events,
             ...adapter.consume({
@@ -111,6 +115,7 @@ describe('Pi JSON event normalization', () => {
                 name: 'write',
                 title: 'Write',
                 target: '/workspace/result.txt',
+                input: { path: '/workspace/result.txt', content: 'done\n' },
             },
         });
         expect(events).toContainEqual({
@@ -121,6 +126,8 @@ describe('Pi JSON event normalization', () => {
                 title: 'Write',
                 target: '/workspace/result.txt',
                 status: 'completed',
+                input: { path: '/workspace/result.txt', content: 'done\n' },
+                output: 'Wrote result.txt',
             },
         });
         expect(events).toContainEqual({
@@ -144,6 +151,59 @@ describe('Pi JSON event normalization', () => {
             data: { reason: 'stop' },
         });
         expect(JSON.stringify(events)).not.toContain('MUST_NOT_RENDER');
+    });
+
+    test("diffs an edit against the run's earlier write, or places it at the first changed line", () => {
+        const adapter = new PiEventAdapter({
+            details: new ToolDetails({ workspace: '/workspace' }),
+        });
+        const tool = (id: string, toolName: string, args: Record<string, unknown>) => [
+            ...adapter.consume({
+                type: 'tool_execution_start',
+                toolCallId: id,
+                toolName,
+                args,
+            }).events,
+            ...adapter.consume({
+                type: 'tool_execution_end',
+                toolCallId: id,
+                toolName,
+                result: {
+                    content: [{ type: 'text', text: 'ok' }],
+                    details: { firstChangedLine: 10 },
+                },
+                isError: false,
+            }).events,
+        ];
+        tool('call_write', 'write', {
+            path: '/workspace/a.txt',
+            content: 'one\ntwo\n',
+        });
+        const known = tool('call_edit', 'edit', {
+            path: '/workspace/a.txt',
+            oldText: 'two',
+            newText: 'three',
+        });
+        const excerpt = tool('call_other', 'edit', {
+            path: '/workspace/b.txt',
+            oldText: 'keep\nold',
+            newText: 'keep\nnew',
+        });
+
+        expect(known.at(-1)?.data).toEqual({
+            path: '/workspace/a.txt',
+            operation: 'edit',
+            patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+three\n',
+            additions: 1,
+            deletions: 1,
+        });
+        expect(excerpt.at(-1)?.data).toEqual({
+            path: '/workspace/b.txt',
+            operation: 'edit',
+            patch: '--- a/b.txt\n+++ b/b.txt\n@@ -9,2 +9,2 @@\n keep\n-old\n+new\n',
+            additions: 1,
+            deletions: 1,
+        });
     });
 
     test('reduces unknown events to a payload-free marker', () => {
