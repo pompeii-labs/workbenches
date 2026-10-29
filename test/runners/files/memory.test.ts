@@ -168,8 +168,8 @@ describe('an OpenCode runner over in-memory files', () => {
             expect(
                 files.text(`${staged?.path}/.workbench-context/system.md`)
             ).toContain('Be precise.');
-            // Staged skills are read-only until cleanup.
-            expect(files.mode(staged?.path ?? '')).toBe(0o555);
+            // OpenCode writes its service file into the staged directory.
+            expect(files.mode(staged?.path ?? '')).toBe(0o755);
         } finally {
             await prepared.cleanup();
         }

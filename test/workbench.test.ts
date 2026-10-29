@@ -97,7 +97,7 @@ describe('Workbench package', () => {
         expect(
             await stat(join(staged.directory, 'skills', 'lux-migrations', 'SKILL.md'))
         ).toBeTruthy();
-        expect((await stat(staged.directory)).mode & 0o222).toBe(0);
+        expect((await stat(staged.directory)).mode & 0o777).toBe(0o755);
         const invocation = buildOpenCodeInvocation(
             workbench,
             'Plan a migration',
@@ -129,7 +129,7 @@ describe('Workbench package', () => {
                 'utf8'
             )
         ).toContain('# Lux migrations');
-        expect((await stat(staged.directory)).mode & 0o222).toBe(0);
+        expect((await stat(staged.directory)).mode & 0o777).toBe(0o755);
 
         await staged.cleanup();
     });
