@@ -1,6 +1,11 @@
 import type { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import type { CatalogWriter } from '../catalog/writer.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
+import {
+    ActiveModelCatalog,
+    ModelRouter,
+    type RoutedWorkbench,
+} from '../models/index.js';
 import type { RunnerRegistry } from '../runners/registry.js';
 import type { DetachedRunLauncher } from '../runs/detached.js';
 import type { WorkbenchEvent } from '../runs/events.js';
@@ -126,7 +131,9 @@ export class WorkerEngine implements WorkerRunHost {
         const directory = await this.#options.home.ensure(
             this.#options.home.workspaceDirectory(start.run_id)
         );
-        const runner = await this.#runner(start);
+        const { runner, providers } = await this.#package(
+            packageAlias(start.session_id)
+        );
         const environment = await this.#options.environment.build(
             runSpec(start),
             runner
@@ -154,6 +161,7 @@ export class WorkerEngine implements WorkerRunHost {
                 runner,
                 runtime: start.runtime,
             },
+            async () => providers,
             environment,
             keys
         );
@@ -224,12 +232,16 @@ export class WorkerEngine implements WorkerRunHost {
         if (typeof text !== 'string' || !text.trim())
             throw new Error(`${command.kind} requires payload.text`);
         const environment = await this.#continuation(context);
+        const providers = async () => {
+            const stored = await this.#options.services.sessions.read(session);
+            return (await this.#package(stored.reference)).providers;
+        };
         await control.send(
             session,
             text,
             command.kind,
             environment,
-            await this.#connection(context.run, environment)
+            await this.#connection(context.run, providers, environment)
         );
     }
 
@@ -264,14 +276,20 @@ export class WorkerEngine implements WorkerRunHost {
 
     /**
      * The connection a run uses: the one it was asked for, else the member's
-     * most recent connection for the runner, else none, and the engine picks
-     * from the keys it was sent. Only a run that uses the member's connection
+     * most recent connection for the runner when the Workbench allows its
+     * provider, else none, and the engine picks from the keys it was sent, as
+     * a cloud run does. A member's connection the Workbench allows is used
+     * even when it is not signed in, so it fails and says so, never moving to
+     * the organization's keys. Only a run that uses the member's connection
      * gets its key, which replaces an organization key of the same name. A
      * sign-in that saved its own files is in the member's sign-ins, which a run
-     * of theirs finds on either runtime.
+     * of theirs finds on either runtime. `providers` is read only when it
+     * decides, and is undefined when the model catalog cannot list the
+     * Workbench's routes.
      */
     async #connection(
         run: Omit<WorkerRunContext['run'], 'run_id'>,
+        providers: () => Promise<ReadonlySet<string> | undefined>,
         environment: Record<string, string | undefined>,
         keys?: Record<string, string>
     ): Promise<string | undefined> {
@@ -279,6 +297,10 @@ export class WorkerEngine implements WorkerRunHost {
             ? await this.#options.home.readMemberConnection(run.member_id, run.runner)
             : undefined;
         if (!saved) return run.connection ?? undefined;
+        if (!run.connection) {
+            const allowed = await providers();
+            if (allowed && !allowed.has(saved.provider)) return undefined;
+        }
         const connection = run.connection ?? saved.provider;
         if (connection.toLowerCase() === saved.provider && saved.variable) {
             environment[saved.variable] = saved.secret;
@@ -326,13 +348,19 @@ export class WorkerEngine implements WorkerRunHost {
             );
     }
 
-    async #runner(start: RunStart): Promise<string> {
-        const resolved = await new WorkbenchResolver().resolve(
-            packageAlias(start.session_id),
-            { home: this.#options.home.root, savedOnly: true }
-        );
+    /** The runner a saved package names, and the providers its model routes allow. */
+    async #package(
+        alias: string
+    ): Promise<{ runner: string; providers: ReadonlySet<string> | undefined }> {
+        const resolved = await new WorkbenchResolver().resolve(alias, {
+            home: this.#options.home.root,
+            savedOnly: true,
+        });
         try {
-            return resolved.workbench.manifest.runner;
+            return {
+                runner: resolved.workbench.manifest.runner,
+                providers: routeProviders(resolved.workbench),
+            };
         } finally {
             await resolved.cleanup();
         }
@@ -386,6 +414,19 @@ export function packageAlias(sessionId: string): string {
         .replace(/^-+|-+$/g, '');
     if (!slug) throw new WorkerRejection('The run names an invalid session');
     return `session-${slug}`;
+}
+
+/** The providers a Workbench's model may use, or undefined when the catalog cannot say. */
+function routeProviders(workbench: RoutedWorkbench): ReadonlySet<string> | undefined {
+    try {
+        return new Set(
+            new ModelRouter(ActiveModelCatalog.current())
+                .routes(workbench)
+                .map((route) => route.provider.toLowerCase())
+        );
+    } catch {
+        return undefined;
+    }
 }
 
 function message(error: unknown): string {

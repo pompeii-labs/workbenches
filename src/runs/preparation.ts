@@ -370,6 +370,7 @@ export class ExecutionPreparation {
             ...(store ? { store } : {}),
             runners,
         });
+        if (connection) inspector.assertAllowed(connection);
         if (this.options.mode === 'one-shot') {
             return { configuration: await inspector.require(connection) };
         }

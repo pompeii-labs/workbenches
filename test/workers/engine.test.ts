@@ -749,23 +749,25 @@ describe('worker engine', () => {
         expect(other).toBeInstanceOf(AuthenticationRequiredError);
         expect(connections).toEqual([undefined, 'anthropic']);
 
-        // A member connection the Workbench cannot use fails the run, which
-        // says how to connect, and never falls back to the run's keys.
+        // A member connection whose provider the Workbench's routes leave out
+        // is not used for it: the run takes the keys it was sent, as a cloud
+        // run does, and never receives the member's key.
         await home.saveMemberConnection('mem_1', 'claude-code', {
             provider: 'xai',
             method: 'api-key',
             variable: 'XAI_API_KEY',
             secret: 'MUST_NOT_RENDER_UNUSABLE_KEY',
         });
-        const unusable = await run({
+        const outside = await run({
             started_by: { member_id: 'mem_1' },
             env: { ANTHROPIC_API_KEY: 'sk-ant-placeholder' },
         });
-        expect(unusable).toBeInstanceOf(AuthenticationRequiredError);
-        expect(message(unusable)).toEndWith(
-            'Run wb connect --worker mini claude-code.'
+        expect(message(outside)).toBe('preflight passed');
+        expect(connections.at(-1)).toBeUndefined();
+        expect(JSON.stringify(prepared.at(-1))).not.toContain(
+            'MUST_NOT_RENDER_UNUSABLE_KEY'
         );
-        expect(prepared).toHaveLength(2);
+        expect(prepared).toHaveLength(3);
     });
 
     test("refuses a Workbench that declares a variable the engine owns, so it never reads the machine's", async () => {
@@ -849,6 +851,10 @@ describe('worker engine', () => {
                             session_id: 'wb_launched',
                         } as StoredRun;
                     },
+                },
+                // The fake launcher stores no session; a follow-up reads its package alias.
+                sessions: {
+                    read: async () => ({ reference: 'session-ses-1' }) as StoredSession,
                 },
                 control: {
                     send: async (
@@ -1068,6 +1074,129 @@ describe('worker engine', () => {
                 `${home.memberDirectory('mem_2')}/.local/share`
             );
         }
+    });
+
+    test("uses a member's connection only for a Workbench whose routes allow it", async () => {
+        const { home, services } = await engineHome();
+        const runners = RunnerRegistry.standard();
+        const launched: StartDetachedRunOptions[] = [];
+        const sent: Array<string | undefined> = [];
+        const engine = new WorkerEngine({
+            worker: 'mini',
+            api: 'https://api.example.test',
+            home,
+            services: {
+                ...services,
+                launcher: {
+                    start: async (options) => {
+                        launched.push(options);
+                        return {
+                            id: 'wb_launched',
+                            session_id: 'wb_launched',
+                        } as StoredRun;
+                    },
+                },
+                sessions: {
+                    read: async () => ({ reference: 'session-ses-1' }) as StoredSession,
+                },
+                control: {
+                    send: async (
+                        _session,
+                        _text,
+                        _delivery,
+                        _environment,
+                        connection
+                    ) => {
+                        sent.push(connection);
+                        return {
+                            session_id: '',
+                            run_id: '',
+                            input_id: '',
+                            after_sequence: 0,
+                        };
+                    },
+                    answer: async () => {
+                        throw new Error('unexpected');
+                    },
+                    cancel: async () => {
+                        throw new Error('unexpected');
+                    },
+                },
+            },
+            runners,
+            environment: new WorkerRunEnvironment(home, runners, { PATH: '/usr/bin' }),
+            download: async () =>
+                workbenchPackage({
+                    model: {
+                        id: 'openai/gpt-5.6-terra',
+                        routes: [{ provider: 'openrouter' }],
+                    },
+                    runtimes: { local: {} },
+                }),
+            versions: new WorkerRunnerVersions(async () => '1.18.33'),
+        });
+        await home.saveMember({ id: 'mem_1', name: 'matty' });
+        const launch = async () => {
+            const run = start({
+                runtime: 'local',
+                image_pull: null,
+                env: { OPENROUTER_API_KEY: 'organization-key' },
+                started_by: { member_id: 'mem_1' },
+            });
+            await engine.admit(run);
+            await engine.launch(run);
+            return launched.at(-1);
+        };
+        const followUp = () =>
+            engine.command(
+                'wb_launched',
+                {
+                    type: 'command',
+                    command_id: 'c',
+                    run_id: 'run_1',
+                    kind: 'send',
+                    payload: { text: 'Again' },
+                },
+                {
+                    run: {
+                        run_id: 'run_1',
+                        runtime: 'local',
+                        member_id: 'mem_1',
+                        runner: 'opencode',
+                        connection: null,
+                    },
+                }
+            );
+
+        // A ChatGPT sign-in cannot serve an OpenRouter-only Workbench, so the
+        // run uses the organization's key, as a cloud run does.
+        await home.saveMemberConnection('mem_1', 'opencode', {
+            provider: 'openai',
+            method: 'chatgpt',
+        });
+        const outside = await launch();
+        expect(outside?.connection).toBeUndefined();
+        expect(outside?.environmentOverrides.file.OPENROUTER_API_KEY).toBe(
+            'organization-key'
+        );
+        await followUp();
+        expect(sent.at(-1)).toBeUndefined();
+
+        // The member's own OpenRouter key comes first.
+        await home.saveMemberConnection('mem_1', 'opencode', {
+            provider: 'openrouter',
+            method: 'api-key',
+            variable: 'OPENROUTER_API_KEY',
+            secret: 'MUST_NOT_RENDER_MEMBER_KEY',
+        });
+        const inside = await launch();
+        expect(inside?.connection).toBe('openrouter');
+        expect(inside?.environment?.OPENROUTER_API_KEY).toBe(
+            'MUST_NOT_RENDER_MEMBER_KEY'
+        );
+        expect(inside?.environmentOverrides.file.OPENROUTER_API_KEY).toBeUndefined();
+        await followUp();
+        expect(sent.at(-1)).toBe('openrouter');
     });
 
     test('numbers a session consecutively across its runs and reads only new events', async () => {

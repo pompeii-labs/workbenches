@@ -71,6 +71,28 @@ export class ConnectionInspector {
         );
     }
 
+    /** Throws when the Workbench's model routes do not include `connection`, naming those they do. */
+    assertAllowed(connection: string): void {
+        const requested = connection.trim().toLowerCase();
+        const candidates = this.candidates();
+        if (
+            candidates.some(
+                (candidate) =>
+                    candidate.provider.toLowerCase() === requested ||
+                    candidate.nativeProvider.toLowerCase() === requested
+            )
+        )
+            return;
+        const providers = [
+            ...new Set(candidates.map((candidate) => candidate.provider)),
+        ];
+        const shown = providers.slice(0, 8).join(', ');
+        const more = providers.length > 8 ? `, and ${providers.length - 8} more` : '';
+        throw new Error(
+            `${this.#workbench.manifest.name} does not allow connection ${connection}: ${canonicalModel(this.#workbench)} is routed through ${shown}${more}`
+        );
+    }
+
     /** The registered runner the Workbench names. */
     #harness(): Runner {
         return this.#runners.resolve(this.#workbench.manifest.runner);
