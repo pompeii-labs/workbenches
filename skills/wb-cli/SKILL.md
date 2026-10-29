@@ -89,7 +89,7 @@ A Workbench that declares host Docker access needs `--allow-host-docker` on ever
 
 ## Workers (workbenches.dev, optional)
 
-A worker connects a machine to workbenches.dev as a self-hosted runner: runs started there, from the dashboard, the API, or `mcp.workbenches.dev`, execute on that machine instead of a hosted sandbox. Nothing else in `wb` needs it. macOS and Linux only.
+A worker connects a machine to workbenches.dev as a self-hosted runner: runs started there, from the API or `mcp.workbenches.dev`, execute on that machine instead of a hosted sandbox. Nothing else in `wb` needs it. macOS and Linux only.
 
 ```sh
 wb login [--org acme]                    # first, on the worker and on every member's machine
