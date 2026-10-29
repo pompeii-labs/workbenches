@@ -1,4 +1,6 @@
 import type { ConnectionAuthenticationMethod } from '../connections/contracts.js';
+import { HostCredentialFiles } from '../connections/credentials.js';
+import { NativeCredentialFile } from '../connections/nativecredentials.js';
 import {
     connectionAuthenticationMethods,
     providerLabel,
@@ -6,7 +8,7 @@ import {
 import { ActiveModelCatalog } from '../models/snapshot.js';
 import type { RunnerRegistry } from '../runners/registry.js';
 import type { Runner, RunnerWorkerSignIn } from '../runners/runner.js';
-import type { WorkerRunEnvironment } from './environment.js';
+import { WorkerRunEnvironment } from './environment.js';
 import type { WorkerHome } from './home.js';
 import { excerpt, type WorkerLog } from './log.js';
 import { probe } from './machine.js';
@@ -35,6 +37,15 @@ type WorkerConnectPlan = {
     | { kind: 'key'; variable: string }
     | { kind: 'sign-in'; signIn: RunnerWorkerSignIn }
 );
+
+/** What a finished sign-in ran with, so its login can be exported the same way. */
+interface SignedIn {
+    readonly executable: string;
+    readonly environment: Record<string, string | undefined>;
+    readonly version: string;
+    /** The member's directory. */
+    readonly directory: string;
+}
 
 /** A sign-in process attached to a pseudo-terminal. */
 export interface WorkerSignInProcess {
@@ -299,7 +310,12 @@ export class WorkerSignIns {
             this.options.log.write(
                 `sign-in started  ${runner.name}  for ${excerpt(attempt.start.member_name, 40)}`
             );
-            await this.#finish(attempt, plan, await attempt.process.exited);
+            await this.#finish(attempt, plan, await attempt.process.exited, {
+                executable,
+                environment,
+                version,
+                directory,
+            });
         } finally {
             await this.options.environment.release(id);
         }
@@ -308,7 +324,8 @@ export class WorkerSignIns {
     async #finish(
         attempt: Attempt,
         plan: WorkerConnectPlan & { kind: 'sign-in' },
-        code: number
+        code: number,
+        signedIn: SignedIn
     ): Promise<void> {
         const { connect_id: id } = attempt.start;
         const { runner, provider, method } = plan;
@@ -322,10 +339,45 @@ export class WorkerSignIns {
             );
             return;
         }
+        await this.#keepPortable(plan, signedIn);
         // The runner keeps its login in the member's home; this records only which it is.
         await this.#save(attempt, runner, { provider, method: method.id });
         this.options.log.write(`sign-in finished  ${runner.name}`);
         this.#update(id, 'done', `Signed in to ${runner.displayName} on this worker.`);
+    }
+
+    /**
+     * Copies a login the runner keeps outside its credential file, such as in
+     * OpenCode 2's database, into that file in the member's directory. A docker
+     * run gives the file to its image's runner, so the login works whatever
+     * version of the runner the image has. A failed copy leaves the login for
+     * local runs and says so in the log.
+     */
+    async #keepPortable(
+        plan: WorkerConnectPlan & { kind: 'sign-in' },
+        signedIn: SignedIn
+    ): Promise<void> {
+        const { runner, method } = plan;
+        const exportCredential = runner.connection.hostSignIn?.exportCredential;
+        if (!exportCredential) return;
+        try {
+            const value = await exportCredential(
+                signedIn.executable,
+                signedIn.environment,
+                method.nativeProvider,
+                signedIn.version
+            );
+            if (!value) return;
+            await NativeCredentialFile.for(runner.name, this.options.runners).save(
+                new HostCredentialFiles(
+                    WorkerRunEnvironment.credentialRoot(signedIn.directory)
+                ),
+                method.nativeProvider,
+                { type: typeof value.type === 'string' ? value.type : undefined, value }
+            );
+        } catch {
+            this.options.log.write(`sign-in kept for local runs only  ${runner.name}`);
+        }
     }
 
     /**
