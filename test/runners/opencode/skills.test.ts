@@ -53,7 +53,7 @@ describe('OpenCode skill staging', () => {
         );
         expect(files.text(staged.context.prefix)).toContain('# Authored behavior');
         expect(files.mode(staged.context.prefix)).toBe(0o444);
-        expect(files.mode(staged.directory)).toBe(0o555);
+        expect(files.mode(staged.directory)).toBe(0o755);
 
         await staged.cleanup();
         expect(await files.lstat(staged.directory)).toBeUndefined();
