@@ -80,6 +80,20 @@ const FAKE_OPENCODE = [
     'printf "{}" > "$XDG_DATA_HOME/opencode/auth.json"',
 ].join('\n');
 
+/** OpenCode 2, which keeps its login in its database and exports it on request. */
+const FAKE_OPENCODE_V2 = [
+    '#!/bin/sh',
+    'if [ "$1" = "--version" ]; then echo "opencode v2.2.2"; exit 0; fi',
+    'if [ "$1 $2 $3" = "auth export openai" ]; then',
+    '  [ -f "$OPENCODE_DB" ] || exit 5',
+    `  printf '%s' '[{"integrationID":"openai","active":true,"value":{"type":"oauth","access":"access-1","refresh":"refresh-1","expires":1,"metadata":{"accountID":"acct-1"}}}]'`,
+    '  exit 0',
+    'fi',
+    '[ "$1 $2" = "auth login" ] || exit 2',
+    'mkdir -p "$(dirname "$OPENCODE_DB")"',
+    'printf "login" > "$OPENCODE_DB"',
+].join('\n');
+
 /** The person's terminal, scripted: what it shows, what is typed when, and the secrets asked for. */
 class ScriptedTerminal implements WorkerConnectTerminal {
     screen = '';
@@ -133,14 +147,14 @@ class ScriptedTerminal implements WorkerConnectTerminal {
  * person's terminal attaching becomes `connect.attach`, and the sign-in's
  * terminal and the person's keys and secrets pass through as they are.
  */
-async function relay() {
+async function relay(opencode = FAKE_OPENCODE) {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-worker-connect-'));
     // Installed outside the temporary directories, which a sandboxed sign-in
     // on Linux sees as empty ones of its own, as runner CLIs are.
     const bin = await mkdtemp(join(process.cwd(), '.connect-runners-'));
     cleanups.push(() => rm(bin, { recursive: true, force: true }));
     await writeFile(join(bin, 'claude'), `${FAKE_CLAUDE}\n`, { mode: 0o755 });
-    await writeFile(join(bin, 'opencode'), `${FAKE_OPENCODE}\n`, { mode: 0o755 });
+    await writeFile(join(bin, 'opencode'), `${opencode}\n`, { mode: 0o755 });
     const path = `${bin}:/usr/bin:/bin`;
     const server = new FakeWorkerServer();
     const starts: Array<Record<string, unknown>> = [];
@@ -428,6 +442,31 @@ describe('wb connect --worker', () => {
             provider: 'openai',
             method: 'chatgpt',
         });
+    });
+
+    test("copies an OpenCode 2 login into the member's credential file, so any image's OpenCode reads it", async () => {
+        const { home, connect } = await relay(FAKE_OPENCODE_V2);
+        expect(
+            await connect({ runner: 'opencode', provider: 'openai', method: 'chatgpt' })
+        ).toEqual({ message: 'Signed in to OpenCode on this worker.' });
+        const file = join(
+            home.memberDirectory('mem_1'),
+            '.local',
+            'share',
+            'opencode',
+            'auth.json'
+        );
+        expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+            openai: {
+                type: 'oauth',
+                access: 'access-1',
+                refresh: 'refresh-1',
+                expires: 1,
+                metadata: { accountID: 'acct-1' },
+                accountId: 'acct-1',
+            },
+        });
+        expect((await stat(file)).mode & 0o777).toBe(0o600);
     });
 
     test("passes the person's keys raw, so a sign-in's menu works as it does locally", async () => {
