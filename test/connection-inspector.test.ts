@@ -150,6 +150,23 @@ describe('native runner authentication', () => {
         );
     });
 
+    test('refuses a requested connection the routes leave out, naming those they allow', () => {
+        const workbench = fixture('opencode');
+        workbench.manifest.model = {
+            id: 'openai/gpt-5.6-terra',
+            routes: [{ provider: 'openrouter' }],
+        };
+        const connection = inspector(workbench, {
+            runner: runner('opencode'),
+            runtime: runtime('● OpenAI oauth\n'),
+        });
+
+        expect(() => connection.assertAllowed('OpenRouter')).not.toThrow();
+        expect(() => connection.assertAllowed('openai')).toThrow(
+            `${workbench.manifest.name} does not allow connection openai: openai/gpt-5.6-terra is routed through openrouter`
+        );
+    });
+
     test('accepts an unknown config-backed provider without inventing credentials', async () => {
         const workbench = fixture('opencode');
         workbench.manifest.model = {
