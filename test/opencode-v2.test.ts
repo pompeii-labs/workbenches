@@ -327,6 +327,44 @@ describe('OpenCode V2 protocol', () => {
             openCodeConnection.probe.authenticated('● OpenAI oauth', candidates)[0]
                 ?.authenticationMethod
         ).toBe('oauth');
+        // OpenCode 2.2 lists JSON; its text listing names an account, not a method.
+        const json = JSON.stringify([
+            {
+                id: 'openai',
+                name: 'OpenAI',
+                connections: [
+                    {
+                        type: 'credential',
+                        id: 'cred_1',
+                        label: 'OpenAI',
+                        method: 'oauth',
+                    },
+                ],
+            },
+            { id: 'anthropic', name: 'Anthropic', connections: [] },
+        ]);
+        expect(
+            openCodeConnection.probe.authenticated(json, candidates)[0]
+                ?.authenticationMethod
+        ).toBe('oauth');
+        expect(
+            openCodeConnection.probe.authenticated(
+                JSON.stringify([
+                    {
+                        id: 'openai',
+                        connections: [{ type: 'credential', method: 'api' }],
+                    },
+                ]),
+                candidates
+            )[0]?.authenticationMethod
+        ).toBe('api');
+        expect(openCodeConnection.probe.authenticated('[]', candidates)).toEqual([]);
+        expect(
+            openCodeConnection.probe.authenticated(
+                'OpenAI  OpenAI                      stored',
+                candidates
+            )
+        ).toEqual([]);
         expect(
             openCodeConnection.hostSignIn?.arguments(
                 'openai',
