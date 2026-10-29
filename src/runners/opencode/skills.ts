@@ -64,7 +64,8 @@ export class OpenCodeSkillStaging {
                 )
             );
             context = await this.context.stage({ directory, workbench });
-            await files.chmod(directory, 0o555);
+            // OpenCode 2.2 writes its service.json into the config directory as it starts.
+            await files.chmod(directory, 0o755);
         } catch (error) {
             await files.remove(directory);
             throw error;
