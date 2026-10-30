@@ -25,18 +25,19 @@ export function buildOpenCodeInvocation(
         undefined,
         context?.instructions
     );
-    // V2's native database also holds its credentials. CLI runs must not hide
-    // them behind the memory-only database formerly used for V1 automation.
+    // The native database also holds its credentials. CLI runs must not hide
+    // them behind a memory-only database.
     environment.OPENCODE_DB = baseEnv.OPENCODE_DB;
 
     const invocation: RunnerInvocation = {
+        // Without --standalone the CLI talks to the person's background service,
+        // which never sees this run's config. The location is the working directory.
         command: [
             'opencode',
             'run',
+            '--standalone',
             '--model',
             model,
-            '--dir',
-            workspaceDirectory,
             '--format',
             'json',
             task.trim(),
@@ -101,17 +102,8 @@ export function buildOpenCodeServerInvocation(
     if (!password) throw new Error('OpenCode server password must not be empty');
     const invocation: RunnerInvocation = {
         command: [
-            ...(nativeDatabase
-                ? [
-                      'sh',
-                      '-c',
-                      // V2 stores credentials in the same database as sessions. On the
-                      // host, use its native database rather than an empty private one.
-                      // V1 still needs its per-Workbench session database for resume.
-                      'case "$(opencode --version)" in 2.*|v2.*|"opencode v2."*) if [ -n "$WORKBENCH_OPENCODE_NATIVE_DB" ]; then export OPENCODE_DB="$WORKBENCH_OPENCODE_NATIVE_DB"; else unset OPENCODE_DB; fi ;; esac\nexec opencode serve "$@"',
-                      'workbench-opencode',
-                  ]
-                : ['opencode', 'serve']),
+            'opencode',
+            'serve',
             '--hostname',
             binding.hostname,
             '--port',
@@ -129,10 +121,10 @@ export function buildOpenCodeServerInvocation(
                 databasePath,
                 context?.instructions
             ),
+            // OpenCode stores credentials in the same database as sessions. On the
+            // host, use its native database rather than an empty private one.
+            ...(nativeDatabase ? { OPENCODE_DB: baseEnv.OPENCODE_DB } : {}),
             OPENCODE_SERVER_PASSWORD: password,
-            WORKBENCH_OPENCODE_NATIVE_DB: nativeDatabase
-                ? baseEnv.OPENCODE_DB
-                : undefined,
         },
     };
     return context ? context.apply(invocation, workbench) : invocation;
@@ -181,6 +173,9 @@ function buildOpenCodeEnvironment(
                         type: 'remote',
                         url: server.url,
                         enabled: true,
+                        // OpenCode 2 otherwise hides MCP tools inside its Code
+                        // Mode `execute` tool instead of naming them `<server>_<tool>`.
+                        codemode: false,
                         headers: Object.fromEntries(
                             Object.entries(server.headers).map(([name, value]) => [
                                 name,

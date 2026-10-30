@@ -14,6 +14,23 @@ runner_config: ./runner/opencode.json
 - **The package and tool paths.** The package is mounted outside the working tree (`/workbench` in Docker), and image tools live under `/opt` or `/usr/local`. Every path the work touches outside the workspace needs an `external_directory` allow: the package, tool directories, browser profiles, scratch directories under `/tmp`.
 - **Shell.** Allow the commands the work runs. A broad allow with explicit denies for destructive commands is the shape that works in practice.
 
+## MCP servers
+
+OpenCode 2 exposes a server's tools only inside its Code Mode `execute` tool unless the server sets `"codemode": false`. Set it on every server in `mcp` so the tools keep their `<server>_<tool>` names, which permission rules such as `"meshy_*": "ask"` match and which the model sees as tools of their own:
+
+```json
+"mcp": {
+  "meshy": {
+    "type": "local",
+    "command": ["npx", "-y", "@example/meshy-mcp"],
+    "environment": { "MESHY_API_KEY": "{env:MESHY_API_KEY}" },
+    "enabled": true,
+    "codemode": false,
+    "timeout": 120000
+  }
+}
+```
+
 ## What to deny
 
 - Secret files: `*.env` and `*.env.*` (allow `*.env.example`).

@@ -258,6 +258,7 @@ describe('worker engine', () => {
                         requirements: { gpu: true },
                         runtimes: { local: {} },
                     }),
+                versions: new WorkerRunnerVersions(async () => 'opencode v2.2.2'),
             });
         const refused = engine([]).admit(start({ runtime: 'local' }));
         await expect(refused).rejects.toBeInstanceOf(WorkerRejection);
@@ -1035,7 +1036,7 @@ describe('worker engine', () => {
                         docker: { image: 'ghcr.io/example/game:1.0.0' },
                     },
                 }),
-            versions: new WorkerRunnerVersions(async () => '2.1.292 (Claude Code)'),
+            versions: new WorkerRunnerVersions(async () => 'opencode v2.2.2'),
         });
         await home.saveMember({ id: 'mem_1', name: 'matty' });
         await home.saveMemberConnection('mem_1', 'opencode', {
@@ -1133,7 +1134,7 @@ describe('worker engine', () => {
                     },
                     runtimes: { local: {} },
                 }),
-            versions: new WorkerRunnerVersions(async () => '1.18.33'),
+            versions: new WorkerRunnerVersions(async () => 'opencode v2.2.2'),
         });
         await home.saveMember({ id: 'mem_1', name: 'matty' });
         const launch = async () => {

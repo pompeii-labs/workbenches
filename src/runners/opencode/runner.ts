@@ -14,6 +14,7 @@ import {
     type RunnerEventNormalizer,
 } from '../runner.js';
 import { OpenCodeSessionAdapter, type OpenCodeSessionDependencies } from './adapter.js';
+import { OPENCODE_VERSION } from './capabilities.js';
 import { openCodeConnection, openCodeWorkerSignIn } from './connection.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeInvocation, publicInvocation } from './invocation.js';
@@ -52,6 +53,7 @@ export class OpenCodeRunner extends Runner {
     readonly connection = openCodeConnection;
     /** The login lands in the data home, which on a worker is the member's directory. */
     override readonly workerSignIn = openCodeWorkerSignIn;
+    override readonly minimumVersion = OPENCODE_VERSION;
     private readonly skills: OpenCodeSkillStaging;
     private readonly catalog: () => ModelCatalogSnapshot;
 

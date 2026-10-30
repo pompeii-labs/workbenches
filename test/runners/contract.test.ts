@@ -112,24 +112,23 @@ const expected: Record<
         })),
         packagedProviders: true,
         probe: {
-            command: [
-                'sh',
-                '-c',
-                'listing=$(opencode auth list --format json 2>/dev/null) && printf "%s\\n" "$listing" || exec opencode auth list',
-                'workbench-opencode',
-            ],
+            command: ['opencode', 'auth', 'list', '--format', 'json', '--standalone'],
             failsClosed: false,
-            listing: [
-                '┌  Credentials ~/.local/share/opencode/auth.json',
-                '│',
-                '●  OpenAI oauth',
-                '│',
-                '●  GitHub Copilot oauth',
-                '│',
-                '●  OpenRouter api',
-                '│',
-                '└  3 credentials',
-            ].join('\n'),
+            listing: JSON.stringify([
+                {
+                    id: 'openai',
+                    connections: [{ type: 'credential', method: 'oauth' }],
+                },
+                {
+                    id: 'github-copilot',
+                    connections: [{ type: 'credential', method: 'oauth' }],
+                },
+                {
+                    id: 'openrouter',
+                    connections: [{ type: 'credential', method: 'key' }],
+                },
+                { id: 'anthropic', connections: [] },
+            ]),
             authenticated: [
                 {
                     provider: 'openai',

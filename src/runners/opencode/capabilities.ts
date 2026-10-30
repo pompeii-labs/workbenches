@@ -1,12 +1,12 @@
 import type { RunnerAdapterDeclaration } from '../session.js';
 
+/** The oldest OpenCode release whose server protocol the session was verified against. */
+export const OPENCODE_VERSION = '2.2.2';
+
 export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
     native: {
         command: 'opencode',
-        verified: [
-            { version: '1.18.22', surfaces: ['server'] },
-            { version: '1.18.26', surfaces: ['server'] },
-        ],
+        verified: [{ version: OPENCODE_VERSION, surfaces: ['server'] }],
     },
     capabilities: {
         streaming_text: { status: 'supported' },

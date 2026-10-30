@@ -42,7 +42,7 @@ describe('worker runner versions', () => {
 
     test('asks nothing of a runner with no minimum', async () => {
         const { checker, asked } = versions('0.0.1');
-        await checker.check({ displayName: 'OpenCode', executable: 'opencode' });
+        await checker.check({ displayName: 'Pi', executable: 'pi' });
         expect(asked).toEqual([]);
     });
 });

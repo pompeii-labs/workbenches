@@ -78,6 +78,7 @@ export class OpenCodeServer {
     private closed = false;
     private v2 = false;
     private readonly v2Events = new OpenCodeV2Events();
+    private mcpStatus = Promise.withResolvers<void>();
     private readonly oauthMethods = new Map<string, string[]>();
     private readonly oauthAttempts = new Map<string, string>();
 
@@ -186,6 +187,10 @@ export class OpenCodeServer {
             );
         }
         const loop: Promise<void> = consumeSse(response.body, async (value) => {
+            if (record(value)?.type === 'mcp.status.changed') {
+                this.mcpStatus.resolve();
+                this.mcpStatus = Promise.withResolvers<void>();
+            }
             for (const event of this.v2 ? this.v2Events.consume(value) : [value]) {
                 await consume(event);
             }
@@ -212,13 +217,35 @@ export class OpenCodeServer {
     }
 
     /**
+     * Settles on the next MCP server status change the event stream reports,
+     * or when the server closes. Taken before reading `/mcp`, a change reported
+     * during that read is not missed.
+     */
+    mcpStatusChanged(): Promise<void> {
+        return this.mcpStatus.promise;
+    }
+
+    /**
      * The permissions and questions the server is still waiting on, as the
      * events that asked them. A turn resumed on a new stream asks its host
-     * again, since the new stream never repeats an earlier request. A V2
-     * server has no such listing, so it reports none.
+     * again, since the new stream never repeats an earlier request.
      */
     async pendingRequests(): Promise<unknown[]> {
-        if (this.v2) return [];
+        if (this.v2) {
+            const [permissions, forms] = await Promise.all([
+                this.requestJson('/permission/request', { method: 'GET' }),
+                this.requestJson('/form', { method: 'GET' }),
+            ]);
+            // Translated like the events that asked them, so replies find them.
+            return [
+                ...(Array.isArray(permissions) ? permissions : []).flatMap((data) =>
+                    this.v2Events.consume({ type: 'permission.asked', data })
+                ),
+                ...(Array.isArray(forms) ? forms : []).flatMap((form) =>
+                    this.v2Events.consume({ type: 'form.created', data: { form } })
+                ),
+            ];
+        }
         const listed = async (path: string, type: string) => {
             const body = await this.requestJson(path, { method: 'GET' });
             return Array.isArray(body)
@@ -453,6 +480,7 @@ export class OpenCodeServer {
     async close(): Promise<void> {
         if (this.closed) return;
         this.closed = true;
+        this.mcpStatus.resolve();
         this.abort.abort();
         this.child?.kill();
         await Promise.allSettled([
@@ -467,7 +495,11 @@ export class OpenCodeServer {
         if (!this.url) throw new Error('OpenCode server is not ready');
         const url = new URL(this.v2 ? `/api${path}` : path, this.url);
         if (this.v2) {
-            if (path.startsWith('/integration'))
+            if (
+                /^\/(?:integration|mcp|config|permission\/request|form)(?:\/|$)/.test(
+                    path
+                )
+            )
                 url.searchParams.set(
                     'location[directory]',
                     this.options.workspaceDirectory

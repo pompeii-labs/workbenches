@@ -706,9 +706,8 @@ describe('OpenCode interactive server adapter', () => {
         expect(session.id).toBe('ses_native_1');
         expect(server.createdSessions).toBe(0);
         expect(server.resumedSessions).toBe(1);
-        expect(server.spawnEnvironment.OPENCODE_DB).toBe(
-            '/private/workbench/session/native/opencode.sqlite'
-        );
+        // On the host the native database holds the session, not a private one.
+        expect(server.spawnEnvironment.OPENCODE_DB).toBeUndefined();
         server.onPrompt = () => server.completeTurn('done');
         await session.prompt('return the revised report');
         const prompt = server.promptBodies.at(-1);

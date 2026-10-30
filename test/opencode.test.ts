@@ -62,6 +62,7 @@ describe('OpenCode adapter translation', () => {
                 lux: {
                     type: 'remote',
                     enabled: true,
+                    codemode: false,
                     url: 'https://api.luxdb.dev/mcp',
                     headers: { Authorization: 'Bearer {env:LUX_TOKEN}' },
                 },
@@ -89,7 +90,16 @@ describe('OpenCode adapter translation', () => {
             model: 'openai/gpt-5.6-terra',
             instructions: ['.workbenches/core/instructions.md'],
         });
-        expect(visible.command.at(-1)).toBe('do work');
+        expect(visible.command).toEqual([
+            'opencode',
+            'run',
+            '--standalone',
+            '--model',
+            'openai/gpt-5.6-terra',
+            '--format',
+            'json',
+            'do work',
+        ]);
         expect(JSON.stringify(visible.opencode_config)).not.toContain('do work');
         expect(visible.command).not.toContain('/repo/.workbenches/core/workbench.yml');
     });
@@ -171,20 +181,39 @@ describe('OpenCode adapter translation', () => {
             '/workspace'
         );
         expect(invocation.command).toEqual([
-            'sh',
-            '-c',
-            'case "$(opencode --version)" in 2.*|v2.*|"opencode v2."*) if [ -n "$WORKBENCH_OPENCODE_NATIVE_DB" ]; then export OPENCODE_DB="$WORKBENCH_OPENCODE_NATIVE_DB"; else unset OPENCODE_DB; fi ;; esac\nexec opencode serve "$@"',
-            'workbench-opencode',
+            'opencode',
+            'serve',
             '--hostname',
             '127.0.0.1',
             '--port',
             '0',
         ]);
         expect(invocation.cwd).toBe('/workspace');
+        expect(invocation.env.OPENCODE_DB).toBeUndefined();
         expect(invocation.env.OPENCODE_SERVER_PASSWORD).toBe('private-password');
         expect(JSON.stringify(publicInvocation(invocation))).not.toContain(
             'private-password'
         );
+    });
+
+    test('serves the native database on the host and the session database elsewhere', () => {
+        const serve = (nativeDatabase: boolean) =>
+            buildOpenCodeServerInvocation(
+                workbench(),
+                'private-password',
+                { OPENCODE_DB: '/home/person/opencode.db' },
+                undefined,
+                '/workspace',
+                'openai/gpt-5.6-terra',
+                undefined,
+                '/session/opencode.sqlite',
+                undefined,
+                undefined,
+                nativeDatabase
+            );
+        expect(serve(true).env.OPENCODE_DB).toBe('/home/person/opencode.db');
+        expect(serve(false).env.OPENCODE_DB).toBe('/session/opencode.sqlite');
+        expect(serve(false).command.slice(0, 2)).toEqual(['opencode', 'serve']);
     });
 });
 

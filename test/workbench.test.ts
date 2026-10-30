@@ -55,8 +55,9 @@ describe('Workbench package', () => {
         );
         expect(visible.command.at(-1)).toBe('Implement XRANGE support');
         expect(visible.command).not.toContain(fixture.manifestPath);
-        expect(visible.command).toContain('--dir');
-        expect(visible.command).toContain(fixture.repositoryDirectory);
+        // OpenCode 2 has no --dir; the working directory is the location.
+        expect(visible.command).not.toContain('--dir');
+        expect(visible.command).toContain('--standalone');
         expect(invocation.env.PWD).toBe(fixture.repositoryDirectory);
     });
 

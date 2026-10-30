@@ -52,7 +52,7 @@ A team can send a run to its own machine, a worker, instead of a hosted sandbox.
 
 Every image used by `docker`, `e2b`, or `daytona` must:
 
-1. **Contain the runner** at a pinned version: `npm install -g opencode-ai@<version>`, `@earendil-works/pi-coding-agent@<version>`, or `@anthropic-ai/claude-code@<version>`. Nothing can be installed at run time.
+1. **Contain the runner** at a pinned version: `npm install -g @opencode/cli@<version>` (OpenCode 2.2.2 or newer; the older `opencode-ai` package is OpenCode 1, which the engine refuses), `@earendil-works/pi-coding-agent@<version>`, or `@anthropic-ai/claude-code@<version>`. Nothing can be installed at run time.
 2. **Contain every tool the manifest declares** in `tools`, on `PATH`.
 3. **Contain `git` and GNU `tar`** (with `--null` support) for `e2b` and `daytona`, which stage files with them. `--repo` runs also use `git` and `gh`.
 4. **Run as any numeric user.** The engine runs as the host's uid. Never rely on `USER`, a home directory, or files owned by root being writable.
@@ -77,7 +77,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # The runner.
-RUN npm install -g opencode-ai@${OPENCODE_VERSION} \
+RUN npm install -g @opencode/cli@${OPENCODE_VERSION} \
     && chmod -R a+rX "$(npm root -g)"
 
 # The tools this Workbench declares, pinned.
