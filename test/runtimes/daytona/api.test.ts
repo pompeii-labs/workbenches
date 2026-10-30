@@ -8,18 +8,17 @@ import {
 import { client, json, sandboxHandler } from './http.js';
 
 const createOptions = {
-    image: 'debian:bookworm-slim',
+    snapshot: 'wb-fixture',
     labels: { 'dev.workbenches.run': 'wb_x' },
     leaseMinutes: 5,
 };
 
 describe('DaytonaApi', () => {
-    test('creates a sandbox from an image and waits for it to start', async () => {
+    test('creates a sandbox from a snapshot and waits for it to start', async () => {
         const { api, requests } = client(sandboxHandler());
         const sandbox = await api.createSandbox({
-            image: 'debian:bookworm-slim',
+            snapshot: 'wb-fixture',
             labels: { 'dev.workbenches.run': 'wb_x' },
-            resources: { cpu: 2, memoryGb: 4, diskGb: 10 },
             leaseMinutes: 60,
         });
         expect(sandbox.id).toBe('sandbox-1');
@@ -28,12 +27,10 @@ describe('DaytonaApi', () => {
         expect(create?.url.href).toBe(`${defaultDaytonaApiUrl}/sandbox`);
         expect(create?.headers.get('authorization')).toBe('Bearer secret-api-key');
         // Auto-stop is off and Daytona's wall-clock TTL bounds the sandbox's life.
+        // Resources belong to the snapshot, and nothing is built.
         expect(JSON.parse(String(create?.body))).toEqual({
-            buildInfo: { dockerfileContent: 'FROM debian:bookworm-slim' },
+            snapshot: 'wb-fixture',
             labels: { 'dev.workbenches.run': 'wb_x' },
-            cpu: 2,
-            memory: 4,
-            disk: 10,
             autoStopInterval: 0,
             ttlMinutes: 60,
         });
@@ -61,21 +58,9 @@ describe('DaytonaApi', () => {
             });
         });
         await expect(
-            api.createSandbox({ image: 'missing:1', labels: {}, leaseMinutes: 5 })
+            api.createSandbox({ snapshot: 'wb-missing', labels: {}, leaseMinutes: 5 })
         ).rejects.toThrow('entered state build_failed: image not found');
         expect(requests.at(-1)?.method).toBe('DELETE');
-    });
-
-    test('refuses an image reference with whitespace', async () => {
-        const { api, requests } = client(sandboxHandler());
-        await expect(
-            api.createSandbox({ ...createOptions, image: 'debian bookworm' })
-        ).rejects.toMatchObject({
-            name: 'RuntimeError',
-            runtime: 'daytona',
-            message: 'Invalid Daytona image reference: "debian bookworm"',
-        });
-        expect(requests).toHaveLength(0);
     });
 
     describe('when a create request fails without a usable reply', () => {
@@ -251,6 +236,107 @@ describe('DaytonaApi', () => {
                 'Invalid Daytona interval: 1.5 minutes'
             );
             expect(requests).toHaveLength(0);
+        });
+    });
+
+    describe('snapshots', () => {
+        const pinned = `ghcr.io/example/workbench@sha256:${'a'.repeat(64)}`;
+
+        test('creates a snapshot from an image with its resources', async () => {
+            const { api, requests } = client(() =>
+                json({
+                    id: 'snap-1',
+                    name: 'wb-1',
+                    state: 'pending',
+                    imageName: pinned,
+                })
+            );
+            expect(
+                await api.createSnapshot({
+                    name: 'wb-1',
+                    image: pinned,
+                    resources: { cpu: 2, memoryGb: 4, diskGb: 10 },
+                })
+            ).toEqual({ id: 'snap-1', name: 'wb-1', state: 'pending' });
+            expect(requests[0]?.method).toBe('POST');
+            expect(requests[0]?.url.href).toBe(`${defaultDaytonaApiUrl}/snapshots`);
+            expect(JSON.parse(String(requests[0]?.body))).toEqual({
+                name: 'wb-1',
+                imageName: pinned,
+                cpu: 2,
+                memory: 4,
+                disk: 10,
+            });
+        });
+
+        test('joins the existing snapshot when the name is taken', async () => {
+            const { api, requests } = client((request) =>
+                request.method === 'POST'
+                    ? json({ message: 'Snapshot with name wb-1 already exists' }, 409)
+                    : json({ id: 'snap-0', name: 'wb-1', state: 'pulling' })
+            );
+            expect(
+                await api.createSnapshot({ name: 'wb-1', image: pinned, resources: {} })
+            ).toEqual({ id: 'snap-0', name: 'wb-1', state: 'pulling' });
+            expect(requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual([
+                'POST /api/snapshots',
+                'GET /api/snapshots/wb-1',
+            ]);
+        });
+
+        test('reads a snapshot by name with its error reason, and a missing one as absent', async () => {
+            const { api } = client((request) =>
+                request.url.pathname === '/api/snapshots/wb-1'
+                    ? json({
+                          id: 'snap-1',
+                          name: 'wb-1',
+                          state: 'build_failed',
+                          errorReason: 'manifest unknown',
+                      })
+                    : json({ message: 'Snapshot with name wb-2 not found' }, 404)
+            );
+            expect(await api.getSnapshot('wb-1')).toEqual({
+                id: 'snap-1',
+                name: 'wb-1',
+                state: 'build_failed',
+                errorReason: 'manifest unknown',
+            });
+            expect(await api.getSnapshot('wb-2')).toBeUndefined();
+        });
+
+        test('refuses a snapshot reply without an id', async () => {
+            const { api } = client(() => json({ name: 'wb-1', state: 'active' }));
+            await expect(api.getSnapshot('wb-1')).rejects.toThrow(
+                'Daytona returned a snapshot without an id or name'
+            );
+        });
+
+        test('deletes a snapshot by its id, and a missing one is already gone', async () => {
+            const { api, requests } = client((request) =>
+                request.url.pathname === '/api/snapshots/wb-2'
+                    ? json({ message: 'not found' }, 404)
+                    : json({ id: 'snap-1', name: 'wb-1', state: 'error' })
+            );
+            await api.deleteSnapshot('wb-1');
+            await api.deleteSnapshot('wb-2');
+            expect(requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual([
+                'GET /api/snapshots/wb-1',
+                'DELETE /api/snapshots/snap-1',
+                'GET /api/snapshots/wb-2',
+            ]);
+        });
+
+        test('activates a snapshot by id and leaves one that is not inactive', async () => {
+            const { api, requests } = client((request) =>
+                request.method === 'POST'
+                    ? json({ message: 'Snapshot is not in inactive state' }, 400)
+                    : json({ id: 'snap-1', name: 'wb-1', state: 'inactive' })
+            );
+            await api.activateSnapshot('wb-1');
+            expect(requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual([
+                'GET /api/snapshots/wb-1',
+                'POST /api/snapshots/snap-1/activate',
+            ]);
         });
     });
 

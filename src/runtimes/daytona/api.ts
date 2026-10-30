@@ -4,7 +4,10 @@ import type {
     DaytonaCreateOptions,
     DaytonaSandbox,
     DaytonaSandboxSummary,
+    DaytonaSnapshot,
+    DaytonaSnapshotOptions,
 } from './contracts.js';
+import { ImageDigests } from './digests.js';
 import { DaytonaToolbox } from './toolbox.js';
 import {
     DaytonaApiError,
@@ -20,10 +23,12 @@ import {
  * OpenAPI surface at `DAYTONA_API_URL`. Commands and files go to the sandbox's
  * toolbox, reached at `<toolboxProxyUrl>/<sandboxId>` with the same credential.
  * Every toolbox path and payload lives in `DaytonaToolbox`, so that is the
- * one place to adjust if Daytona revises it.
+ * one place to adjust if Daytona revises it. Image digests are read from the
+ * image's registry without the Daytona credential.
  */
 export class DaytonaApi implements DaytonaClient {
     private readonly transport: DaytonaTransport;
+    private readonly digests: ImageDigests;
 
     constructor(options: DaytonaApiOptions) {
         if (!options.apiKey.trim()) {
@@ -34,20 +39,103 @@ export class DaytonaApi implements DaytonaClient {
             );
         }
         this.transport = new DaytonaTransport(options);
+        const fetcher = options.fetch;
+        this.digests = new ImageDigests(
+            (input, init) => fetcher(input, init),
+            this.transport.requestTimeoutMs
+        );
+    }
+
+    imageDigest(reference: string): Promise<string> {
+        return this.digests.resolve(reference);
+    }
+
+    /**
+     * `POST /snapshots`. A resend is safe because a snapshot's name is unique:
+     * Daytona answers 409 for a name that exists, and that snapshot is returned.
+     */
+    async createSnapshot(options: DaytonaSnapshotOptions): Promise<DaytonaSnapshot> {
+        const { resources } = options;
+        const body = {
+            name: options.name,
+            imageName: options.image,
+            ...(resources.cpu ? { cpu: resources.cpu } : {}),
+            ...(resources.memoryGb ? { memory: resources.memoryGb } : {}),
+            ...(resources.diskGb ? { disk: resources.diskGb } : {}),
+        };
+        try {
+            return snapshot(
+                await this.transport.json<unknown>('POST', '/snapshots', {
+                    json: body,
+                    repeatable: true,
+                })
+            );
+        } catch (error) {
+            if (error instanceof DaytonaApiError && error.status === 409) {
+                const existing = await this.getSnapshot(options.name);
+                if (existing) return existing;
+            }
+            throw error;
+        }
+    }
+
+    async getSnapshot(name: string): Promise<DaytonaSnapshot | undefined> {
+        const dto = await this.transport
+            .json<unknown>('GET', `/snapshots/${encodeURIComponent(name)}`)
+            .catch((error) => {
+                if (error instanceof DaytonaApiError && error.status === 404) {
+                    return undefined;
+                }
+                throw error;
+            });
+        return dto === undefined ? undefined : snapshot(dto);
+    }
+
+    async deleteSnapshot(name: string): Promise<void> {
+        const existing = await this.getSnapshot(name);
+        if (!existing) return;
+        try {
+            await this.transport.request(
+                'DELETE',
+                `/snapshots/${encodeURIComponent(existing.id)}`
+            );
+        } catch (error) {
+            if (error instanceof DaytonaApiError && error.status === 404) return;
+            throw error;
+        }
+    }
+
+    /**
+     * `POST /snapshots/{id}/activate`. Daytona answers 400 for a snapshot that
+     * is not inactive, which another run may have just activated.
+     */
+    async activateSnapshot(name: string): Promise<void> {
+        const existing = await this.getSnapshot(name);
+        if (!existing) return;
+        try {
+            await this.transport.request(
+                'POST',
+                `/snapshots/${encodeURIComponent(existing.id)}/activate`
+            );
+        } catch (error) {
+            if (
+                error instanceof DaytonaApiError &&
+                (error.status === 400 || error.status === 404)
+            ) {
+                return;
+            }
+            throw error;
+        }
     }
 
     async createSandbox(options: DaytonaCreateOptions): Promise<DaytonaSandbox> {
+        // Resources belong to the snapshot: Daytona refuses them here.
         const body = {
-            buildInfo: { dockerfileContent: `FROM ${imageReference(options.image)}` },
+            snapshot: options.snapshot,
             labels: options.labels,
             ...(options.env && Object.keys(options.env).length > 0
                 ? { env: options.env }
                 : {}),
-            ...(options.resources?.cpu ? { cpu: options.resources.cpu } : {}),
-            ...(options.resources?.memoryGb
-                ? { memory: options.resources.memoryGb }
-                : {}),
-            ...(options.resources?.diskGb ? { disk: options.resources.diskGb } : {}),
             // A run owns its sandbox until cleanup, so inactivity auto-stop is off
             // (0 disables it; the default is 15 minutes). Daytona's wall-clock TTL
             // is the safety net if this process dies: it destroys the sandbox
@@ -231,13 +319,23 @@ function interval(minutes: number, minimum: number): string {
     return String(minutes);
 }
 
-function imageReference(image: string): string {
-    if (!image.trim() || /[\s\0]/.test(image)) {
-        throw new RuntimeError(
-            'daytona',
-            'prepare',
-            `Invalid Daytona image reference: ${JSON.stringify(image)}`
-        );
+/** A snapshot from a Daytona reply, narrowed to the fields the engine reads. */
+function snapshot(value: unknown): DaytonaSnapshot {
+    const field = (name: string): unknown =>
+        typeof value === 'object' && value !== null
+            ? Reflect.get(value, name)
+            : undefined;
+    const id = field('id');
+    const name = field('name');
+    const state = field('state');
+    const errorReason = field('errorReason');
+    if (typeof id !== 'string' || typeof name !== 'string') {
+        throw new DaytonaApiError('Daytona returned a snapshot without an id or name');
     }
-    return image.trim();
+    return {
+        id,
+        name,
+        state: typeof state === 'string' ? state : 'unknown',
+        ...(typeof errorReason === 'string' && errorReason ? { errorReason } : {}),
+    };
 }

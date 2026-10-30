@@ -80,7 +80,7 @@ function toolbox(
         connections: () => connections,
         sandbox: () =>
             api.createSandbox({
-                image: 'debian:bookworm-slim',
+                snapshot: 'wb-fixture',
                 labels: {},
                 leaseMinutes: 5,
             }),

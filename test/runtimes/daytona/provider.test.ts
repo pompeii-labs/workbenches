@@ -3,6 +3,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { daytonaSnapshotName } from '../../../src/runtimes/daytona/snapshots.js';
 import { RuntimeRegistry } from '../../../src/runtimes/index.js';
 import { RuntimeSmoke } from '../../../src/runtimes/smoke.js';
 import {
@@ -15,6 +16,7 @@ import {
     connection,
     daytonaProvider,
     FakeClient,
+    fakeDigest,
     fixture,
     request,
     track,
@@ -78,15 +80,23 @@ describe('DaytonaRuntimeProvider', () => {
                 reference: 'ghcr.io/example/workbench:1.0.0',
             });
             await runtime.preflight();
+            const snapshot = daytonaSnapshotName(fakeDigest, { cpu: 2, memoryGb: 4 });
+            expect(client.digestRequests).toEqual(['ghcr.io/example/workbench:1.0.0']);
+            expect(client.snapshotOptions).toEqual([
+                {
+                    name: snapshot,
+                    image: `ghcr.io/example/workbench@${fakeDigest}`,
+                    resources: { cpu: 2, memoryGb: 4 },
+                },
+            ]);
             expect(client.createOptions).toHaveLength(1);
             expect(client.createOptions[0]).toEqual({
-                image: 'ghcr.io/example/workbench:1.0.0',
+                snapshot,
                 labels: {
                     'dev.workbenches.managed': 'true',
                     'dev.workbenches.run': run.id,
                     'dev.workbenches.scope': run.scope,
                 },
-                resources: { cpu: 2, memoryGb: 4 },
                 leaseMinutes: 60,
             });
         } finally {
@@ -108,6 +118,23 @@ describe('DaytonaRuntimeProvider', () => {
         }
     });
 
+    test('fails before creating a sandbox when the snapshot cannot be made', async () => {
+        const client = new FakeClient();
+        client.createdSnapshotState = 'build_failed';
+        const runtime = await daytonaProvider({ client }).prepare(
+            request(await fixture())
+        );
+        try {
+            await expect(runtime.preflight()).rejects.toThrow(
+                'of image ghcr.io/example/workbench:1.0.0 failed again with state build_failed'
+            );
+            expect(client.createOptions).toHaveLength(0);
+            expect(client.deleted).toEqual([]);
+        } finally {
+            await runtime.cleanup();
+        }
+    });
+
     test('maps requirements to whole-unit sandbox resources', async () => {
         const client = new FakeClient();
         const runtime = await daytonaProvider({ client }).prepare(
@@ -119,7 +146,7 @@ describe('DaytonaRuntimeProvider', () => {
         );
         try {
             await runtime.preflight();
-            expect(client.createOptions[0]?.resources).toEqual({
+            expect(client.snapshotOptions[0]?.resources).toEqual({
                 cpu: 4,
                 memoryGb: 8,
                 diskGb: 20,
@@ -136,7 +163,10 @@ describe('DaytonaRuntimeProvider', () => {
         );
         try {
             await runtime.preflight();
-            expect(client.createOptions[0]?.resources).toEqual({ cpu: 2, memoryGb: 4 });
+            expect(client.snapshotOptions[0]?.resources).toEqual({
+                cpu: 2,
+                memoryGb: 4,
+            });
         } finally {
             await runtime.cleanup();
         }
@@ -149,7 +179,10 @@ describe('DaytonaRuntimeProvider', () => {
         );
         try {
             await runtime.preflight();
-            expect(client.createOptions[0]?.resources).toEqual({ cpu: 1, memoryGb: 4 });
+            expect(client.snapshotOptions[0]?.resources).toEqual({
+                cpu: 1,
+                memoryGb: 4,
+            });
         } finally {
             await runtime.cleanup();
         }
@@ -169,7 +202,10 @@ describe('DaytonaRuntimeProvider', () => {
         );
         try {
             await runtime.preflight();
-            expect(client.createOptions[0]?.image).toBe('ghcr.io/example/own:1');
+            expect(client.digestRequests).toEqual(['ghcr.io/example/own:1']);
+            expect(client.snapshotOptions[0]?.image).toBe(
+                `ghcr.io/example/own@${fakeDigest}`
+            );
         } finally {
             await runtime.cleanup();
         }

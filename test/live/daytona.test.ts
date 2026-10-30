@@ -3,10 +3,13 @@ import type { RuntimePreview } from '../../src/runtimes/contracts.js';
 import { DaytonaApi } from '../../src/runtimes/daytona/api.js';
 import type { DaytonaSandbox } from '../../src/runtimes/daytona/contracts.js';
 import { SandboxPreviews } from '../../src/runtimes/daytona/previews.js';
+import { SandboxSnapshot } from '../../src/runtimes/daytona/snapshots.js';
 import { TransferRules } from '../../src/runtimes/staging/rules.js';
 
 /**
- * Opt-in: creates real Daytona sandboxes and spends Daytona usage. Run with
+ * Opt-in: creates real Daytona sandboxes from a shared snapshot of
+ * `debian:bookworm-slim`, which is left in place for later runs, and spends
+ * Daytona usage. Run with
  * `DAYTONA_E2E=1 DAYTONA_API_KEY=... bun run test:daytona`.
  */
 const enabled =
@@ -27,8 +30,13 @@ function client(): DaytonaApi {
 }
 
 async function createSandbox(): Promise<DaytonaSandbox> {
-    const sandbox = await client().createSandbox({
-        image: 'debian:bookworm-slim',
+    const api = client();
+    const snapshot = await new SandboxSnapshot(api, {
+        now: () => new Date(),
+        sleep: (milliseconds) => Bun.sleep(milliseconds),
+    }).ready('debian:bookworm-slim', { gpu: false });
+    const sandbox = await api.createSandbox({
+        snapshot,
         labels,
         leaseMinutes: 15,
     });

@@ -38,7 +38,10 @@ export {
     type DaytonaSandboxInfo,
     type DaytonaSandboxSummary,
     type DaytonaSignedPreviewUrl,
+    type DaytonaSnapshot,
+    type DaytonaSnapshotOptions,
     daytonaResources,
+    daytonaSnapshotName,
     defaultDaytonaApiUrl,
 } from './daytona/index.js';
 export {
