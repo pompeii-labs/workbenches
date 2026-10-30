@@ -12,12 +12,15 @@ export interface DaytonaResources {
 }
 
 export interface DaytonaCreateOptions {
-    /** Image reference the sandbox is created from. */
-    image: string;
+    /**
+     * Name of the active snapshot the sandbox is created from. The snapshot
+     * carries the image and the resources; Daytona refuses resources on a
+     * sandbox created from one.
+     */
+    snapshot: string;
     labels: Record<string, string>;
     /** Environment set on the sandbox itself. Command environments are separate. */
     env?: Record<string, string>;
-    resources?: DaytonaResources;
     /**
      * Daytona's wall-clock time to live: it destroys the sandbox this many
      * minutes after creation in any state, even if the engine process died.
@@ -78,11 +81,46 @@ export interface DaytonaSandboxSummary {
     state: string;
 }
 
+export interface DaytonaSnapshotOptions {
+    name: string;
+    /** Image reference the snapshot is made from, pinned to a digest. */
+    image: string;
+    resources: DaytonaResources;
+}
+
+/**
+ * A named Daytona snapshot. `state` moves from `pending` through `pulling`
+ * and possibly `building` or `snapshotting` to `active`, or ends in `error`
+ * or `build_failed` with `errorReason`. Daytona can set an unused snapshot
+ * `inactive`, and it is made usable again by activating it.
+ */
+export interface DaytonaSnapshot {
+    name: string;
+    id: string;
+    state: string;
+    errorReason?: string | undefined;
+}
+
 /**
  * Interactive terminals (a PTY) are not part of this interface. The Daytona
  * runtime does not support interactive native authentication.
  */
 export interface DaytonaClient {
+    /**
+     * The `sha256:` digest an image reference names. A reference pinned with
+     * `@sha256:` is answered without a request.
+     */
+    imageDigest(reference: string): Promise<string>;
+    /** Starts making a snapshot. A name that already exists returns that snapshot. */
+    createSnapshot(options: DaytonaSnapshotOptions): Promise<DaytonaSnapshot>;
+    getSnapshot(name: string): Promise<DaytonaSnapshot | undefined>;
+    /** Deletes a snapshot by name. A snapshot that does not exist is already gone. */
+    deleteSnapshot(name: string): Promise<void>;
+    /**
+     * Makes an inactive snapshot usable again. One that is missing, or no longer
+     * inactive, is left as it is.
+     */
+    activateSnapshot(name: string): Promise<void>;
     createSandbox(options: DaytonaCreateOptions): Promise<DaytonaSandbox>;
     /** Lists sandboxes whose labels include every given label. */
     listSandboxes(labels: Record<string, string>): Promise<DaytonaSandboxSummary[]>;
@@ -116,6 +154,15 @@ export interface DaytonaClient {
      */
     setAutoArchiveInterval?(id: string, minutes: number): Promise<void>;
 }
+
+/** A login for an image registry. */
+export interface RegistryLogin {
+    username: string;
+    secret: string;
+}
+
+/** The login saved for a registry host, or none. */
+export type RegistryLogins = (host: string) => Promise<RegistryLogin | undefined>;
 
 /** Sends one HTTP request. Shaped like the platform `fetch`. */
 export type DaytonaFetch = (

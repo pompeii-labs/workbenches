@@ -25,7 +25,7 @@ describe('DaytonaToolbox', () => {
             return json({}, 404);
         });
         const sandbox = await api.createSandbox({
-            image: 'debian:bookworm-slim',
+            snapshot: 'wb-fixture',
             labels: {},
             leaseMinutes: 5,
         });

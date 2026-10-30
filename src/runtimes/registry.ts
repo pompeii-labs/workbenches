@@ -36,6 +36,7 @@ import {
     type DockerRuntimeDependencies,
     DockerRuntimeProvider,
 } from './docker/index.js';
+import { DockerLogins } from './docker/logins.js';
 import { type E2BRuntimeDependencies, E2BRuntimeProvider } from './e2b/index.js';
 import { RuntimeError } from './error.js';
 import { type LocalRuntimeDependencies, LocalRuntimeProvider } from './local.js';
@@ -93,7 +94,9 @@ export class RuntimeRegistry {
                     ),
                     assets: disk,
                     keys: RuntimeSecretStore,
-                    connector: new DaytonaConnector(fetch),
+                    connector: new DaytonaConnector(fetch, undefined, (host) =>
+                        new DockerLogins().find(host)
+                    ),
                     clock: {
                         now: () => new Date(),
                         sleep: (milliseconds) =>

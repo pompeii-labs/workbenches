@@ -11,6 +11,8 @@ import type {
     DaytonaSandbox,
     DaytonaSandboxInfo,
     DaytonaSignedPreviewUrl,
+    DaytonaSnapshot,
+    DaytonaSnapshotOptions,
 } from '../../../src/runtimes/daytona/contracts.js';
 import type { LogOutput } from '../../../src/runtimes/daytona/follow.js';
 import { DaytonaRuntimeProvider } from '../../../src/runtimes/daytona/provider.js';
@@ -107,9 +109,58 @@ export async function readFirstChunk(
     return new TextDecoder().decode(chunk.value);
 }
 
+/** The digest the fake client resolves every unpinned image reference to. */
+export const fakeDigest = `sha256:${'d'.repeat(64)}`;
+
 export class FakeClient implements DaytonaClient {
     readonly sandbox = new FakeSandbox();
     readonly createOptions: DaytonaCreateOptions[] = [];
+    readonly digestRequests: string[] = [];
+    /** Snapshots Daytona knows, by name. */
+    readonly snapshots = new Map<string, DaytonaSnapshot>();
+    readonly snapshotOptions: DaytonaSnapshotOptions[] = [];
+    readonly deletedSnapshots: string[] = [];
+    /** The state a snapshot this client creates starts in. */
+    createdSnapshotState = 'active';
+    /** What each lookup of an existing snapshot changes about it first, in order. */
+    snapshotProgress: Array<Partial<DaytonaSnapshot>> = [];
+    private createdSnapshots = 0;
+
+    async imageDigest(reference: string): Promise<string> {
+        this.digestRequests.push(reference);
+        return reference.split('@')[1] ?? fakeDigest;
+    }
+
+    async createSnapshot(options: DaytonaSnapshotOptions): Promise<DaytonaSnapshot> {
+        this.snapshotOptions.push(options);
+        const existing = this.snapshots.get(options.name);
+        if (existing) return { ...existing };
+        const snapshot = {
+            name: options.name,
+            id: `snapshot-${++this.createdSnapshots}`,
+            state: this.createdSnapshotState,
+        };
+        this.snapshots.set(options.name, snapshot);
+        return { ...snapshot };
+    }
+
+    async getSnapshot(name: string): Promise<DaytonaSnapshot | undefined> {
+        const snapshot = this.snapshots.get(name);
+        if (!snapshot) return undefined;
+        Object.assign(snapshot, this.snapshotProgress.shift());
+        return { ...snapshot };
+    }
+
+    async deleteSnapshot(name: string): Promise<void> {
+        this.deletedSnapshots.push(name);
+        this.snapshots.delete(name);
+    }
+
+    readonly activatedSnapshots: string[] = [];
+
+    async activateSnapshot(name: string): Promise<void> {
+        this.activatedSnapshots.push(name);
+    }
     readonly deleted: string[] = [];
     /** Every delete attempt fails with this until `deleteFailures` have failed. */
     deleteFailure: Error | undefined;

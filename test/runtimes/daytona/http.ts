@@ -79,7 +79,7 @@ export async function startedSandbox(
 ) {
     const { api, requests } = client(sandboxHandler(toolboxHandler), options);
     const sandbox = await api.createSandbox({
-        image: 'debian:bookworm-slim',
+        snapshot: 'wb-fixture',
         labels: {},
         leaseMinutes: 5,
     });

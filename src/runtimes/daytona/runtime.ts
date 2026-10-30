@@ -22,9 +22,9 @@ import type { DaytonaClient, DaytonaClock, DaytonaSandbox } from './contracts.js
 import { SandboxLifetime } from './lifetime.js';
 import { PreviewUrl } from './preview.js';
 import { SandboxPreviews } from './previews.js';
-import { daytonaResources } from './resources.js';
 import { ServiceLauncher } from './service.js';
 import { SandboxSetup } from './setup.js';
+import { SandboxSnapshot } from './snapshots.js';
 
 /** The port a runner's server binds to inside the sandbox. */
 const servicePort = 4096;
@@ -367,10 +367,13 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
                 snapshots.push(snapshot);
             }
             if (existing) return await this.attach(existing.sandboxId, snapshots);
+            const snapshot = await new SandboxSnapshot(
+                this.options.client,
+                this.options.clock
+            ).ready(this.options.image, requirementsOf(this.workbench.manifest));
             const sandbox = await this.options.client.createSandbox({
-                image: this.options.image,
+                snapshot,
                 labels: runLabels(this.options.run, 'Daytona'),
-                resources: daytonaResources(requirementsOf(this.workbench.manifest)),
                 leaseMinutes: this.leaseMinutes(),
             });
             this.sandbox = sandbox;
