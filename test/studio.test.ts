@@ -1674,13 +1674,23 @@ async function temporaryHome(): Promise<string> {
     return home;
 }
 
+const handedOutPorts = new Set<number>();
+
+/**
+ * A free port no earlier call returned. The system may offer a port again once
+ * its listener closes, so two calls in a row could otherwise get the same one.
+ */
 async function unusedPort(): Promise<number> {
-    const server = createServer();
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address();
-    if (!address || typeof address === 'string') throw new Error('Missing port');
-    await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve()))
-    );
-    return address.port;
+    for (;;) {
+        const server = createServer();
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('Missing port');
+        await new Promise<void>((resolve, reject) =>
+            server.close((error) => (error ? reject(error) : resolve()))
+        );
+        if (handedOutPorts.has(address.port)) continue;
+        handedOutPorts.add(address.port);
+        return address.port;
+    }
 }
