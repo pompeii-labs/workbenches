@@ -43,6 +43,8 @@ export {
     daytonaResources,
     daytonaSnapshotName,
     defaultDaytonaApiUrl,
+    type RegistryLogin,
+    type RegistryLogins,
 } from './daytona/index.js';
 export {
     type DockerCommandResult,

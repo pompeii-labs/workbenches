@@ -155,6 +155,15 @@ export interface DaytonaClient {
     setAutoArchiveInterval?(id: string, minutes: number): Promise<void>;
 }
 
+/** A login for an image registry. */
+export interface RegistryLogin {
+    username: string;
+    secret: string;
+}
+
+/** The login saved for a registry host, or none. */
+export type RegistryLogins = (host: string) => Promise<RegistryLogin | undefined>;
+
 /** Sends one HTTP request. Shaped like the platform `fetch`. */
 export type DaytonaFetch = (
     input: string | URL | Request,

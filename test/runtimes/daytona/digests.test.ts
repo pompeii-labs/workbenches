@@ -90,6 +90,121 @@ describe('image digests', () => {
         });
     });
 
+    test('asks again with the saved login when the registry refuses anonymous access', async () => {
+        const hosts: string[] = [];
+        const basic = `Basic ${btoa('member:saved-secret')}`;
+        const { api, requests } = client(
+            (request) => {
+                const authorization = request.headers.get('authorization');
+                if (request.url.hostname === 'auth.registry.test') {
+                    return json({
+                        token:
+                            authorization === basic
+                                ? 'member-token'
+                                : 'anonymous-token',
+                    });
+                }
+                if (authorization === 'Bearer member-token') {
+                    return new Response(null, {
+                        status: 200,
+                        headers: { 'docker-content-digest': digest },
+                    });
+                }
+                return new Response(null, {
+                    status: 401,
+                    headers: { 'www-authenticate': challenge },
+                });
+            },
+            {
+                registryLogins: async (host: string) => {
+                    hosts.push(host);
+                    return { username: 'member', secret: 'saved-secret' };
+                },
+            }
+        );
+        expect(await api.imageDigest('ghcr.io/example/private:1')).toBe(digest);
+        expect(hosts).toEqual(['ghcr.io']);
+        expect(
+            requests.map(
+                (r) =>
+                    `${r.method} ${r.url.hostname} ${r.headers.get('authorization') ?? '-'}`
+            )
+        ).toEqual([
+            'HEAD ghcr.io -',
+            'GET auth.registry.test -',
+            'HEAD ghcr.io Bearer anonymous-token',
+            'HEAD ghcr.io -',
+            `GET auth.registry.test ${basic}`,
+            'HEAD ghcr.io Bearer member-token',
+        ]);
+    });
+
+    test('sends the saved login itself to a registry that asks for basic access', async () => {
+        const basic = `Basic ${btoa('member:saved-secret')}`;
+        const { api } = client(
+            (request) =>
+                request.headers.get('authorization') === basic
+                    ? new Response(null, {
+                          status: 200,
+                          headers: { 'docker-content-digest': digest },
+                      })
+                    : new Response(null, {
+                          status: 401,
+                          headers: { 'www-authenticate': 'Basic realm="registry"' },
+                      }),
+            {
+                registryLogins: async () => ({
+                    username: 'member',
+                    secret: 'saved-secret',
+                }),
+            }
+        );
+        expect(await api.imageDigest('registry.example.test/team/app:2')).toBe(digest);
+    });
+
+    test('never asks for a login when the image resolves anonymously', async () => {
+        const hosts: string[] = [];
+        const { api } = client(
+            () =>
+                new Response(null, {
+                    status: 200,
+                    headers: { 'docker-content-digest': digest },
+                }),
+            {
+                registryLogins: async (host: string) => {
+                    hosts.push(host);
+                    return undefined;
+                },
+            }
+        );
+        expect(await api.imageDigest('ghcr.io/example/workbench:1')).toBe(digest);
+        expect(hosts).toEqual([]);
+    });
+
+    test('names the image when there is no saved login or the registry refuses it', async () => {
+        const refusing = (registryLogins: () => Promise<unknown>) =>
+            client(
+                () =>
+                    new Response(null, {
+                        status: 401,
+                        headers: { 'www-authenticate': 'Basic realm="registry"' },
+                    }),
+                { registryLogins }
+            ).api;
+        await expect(
+            refusing(async () => undefined).imageDigest('ghcr.io/example/private:1')
+        ).rejects.toThrow(
+            'Could not resolve the digest of image ghcr.io/example/private:1: the registry requires credentials'
+        );
+        await expect(
+            refusing(async () => ({ username: 'member', secret: 'wrong' })).imageDigest(
+                'ghcr.io/example/private:1'
+            )
+        ).rejects.toThrow(
+            'Could not resolve the digest of image ghcr.io/example/private:1: the registry refused the saved login (401)'
+        );
+    });
+
     test('reports a tag the registry does not have', async () => {
         const { api } = client(() => new Response(null, { status: 404 }));
         await expect(api.imageDigest('ghcr.io/example/workbench:9')).rejects.toThrow(

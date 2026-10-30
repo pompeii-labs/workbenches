@@ -1,6 +1,6 @@
 import { WORKBENCH_USER_AGENT } from '../../user-agent.js';
 import { resendable } from '../edge.js';
-import type { DaytonaFetch } from './contracts.js';
+import type { DaytonaFetch, RegistryLogins } from './contracts.js';
 
 export const defaultDaytonaApiUrl = 'https://app.daytona.io/api';
 
@@ -20,6 +20,8 @@ export interface DaytonaApiOptions {
     startTimeoutMs?: number;
     /** Delay between polls of a background command. Default 300 milliseconds. */
     pollIntervalMs?: number;
+    /** Signs in to a registry that refuses to resolve an image anonymously. */
+    registryLogins?: RegistryLogins;
 }
 
 export class DaytonaApiError extends Error {

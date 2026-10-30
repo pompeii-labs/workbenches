@@ -14,6 +14,8 @@ export type {
     DaytonaSignedPreviewUrl,
     DaytonaSnapshot,
     DaytonaSnapshotOptions,
+    RegistryLogin,
+    RegistryLogins,
 } from './contracts.js';
 export type { FollowedCommand, LogOutput } from './follow.js';
 export { DaytonaRuntimeProvider } from './provider.js';

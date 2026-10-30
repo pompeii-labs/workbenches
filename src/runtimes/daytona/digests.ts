@@ -1,7 +1,7 @@
 import { WORKBENCH_USER_AGENT } from '../../user-agent.js';
 import { RuntimeError } from '../error.js';
 import { digestBytes } from '../staging/plan.js';
-import type { DaytonaFetch } from './contracts.js';
+import type { DaytonaFetch, RegistryLogin, RegistryLogins } from './contracts.js';
 
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 
@@ -67,36 +67,30 @@ export function pinnedImage(reference: string, digest: string): string {
 }
 
 /**
- * Resolves image tags to digests through the OCI distribution API, signing
- * in anonymously when the registry asks for a bearer token. It sends no
- * credential of its own, so it reaches public images only.
+ * Resolves image tags to digests through the OCI distribution API. It asks
+ * anonymously first, signing in for a bearer token when the registry asks for
+ * one, and asks again with the login `logins` has for the registry when the
+ * registry refuses, as it does for a private image.
  */
 export class ImageDigests {
     constructor(
         private readonly fetcher: DaytonaFetch,
-        private readonly timeoutMs: number
+        private readonly timeoutMs: number,
+        private readonly logins?: RegistryLogins
     ) {}
 
     async resolve(reference: string): Promise<string> {
         const image = parseImageReference(reference);
         if (image.digest) return image.digest;
         try {
-            const url = `https://${image.host}/v2/${image.repository}/manifests/${encodeURIComponent(image.tag)}`;
-            let response = await this.manifest('HEAD', url);
-            let token: string | undefined;
-            if (response.status === 401) {
-                token = await this.token(response, image.repository);
-                response = await this.manifest('HEAD', url, token);
+            try {
+                return await this.read(image);
+            } catch (error) {
+                if (!(error instanceof RegistryRefusal) || !this.logins) throw error;
+                const login = await this.logins(image.host);
+                if (!login) throw error;
+                return await this.read(image, login);
             }
-            const header = this.digestHeader(response);
-            if (header) return header;
-            // A registry may leave the digest header off a HEAD reply, and the
-            // digest is then the hash of the manifest bytes.
-            response = await this.manifest('GET', url, token);
-            return (
-                this.digestHeader(response) ??
-                (await digestBytes(new Uint8Array(await response.arrayBuffer())))
-            );
         } catch (error) {
             throw new RuntimeError(
                 'daytona',
@@ -107,41 +101,74 @@ export class ImageDigests {
         }
     }
 
+    private async read(image: ImageReference, login?: RegistryLogin): Promise<string> {
+        const url = `https://${image.host}/v2/${image.repository}/manifests/${encodeURIComponent(image.tag)}`;
+        let response = await this.manifest('HEAD', url);
+        let authorization: string | undefined;
+        if (response.status === 401) {
+            authorization = await this.authorization(response, image.repository, login);
+            response = await this.manifest('HEAD', url, authorization);
+        }
+        const header = this.digestHeader(response, login);
+        if (header) return header;
+        // A registry may leave the digest header off a HEAD reply, and the
+        // digest is then the hash of the manifest bytes.
+        response = await this.manifest('GET', url, authorization);
+        return (
+            this.digestHeader(response, login) ??
+            (await digestBytes(new Uint8Array(await response.arrayBuffer())))
+        );
+    }
+
     private async manifest(
         method: 'GET' | 'HEAD',
         url: string,
-        token?: string
+        authorization?: string
     ): Promise<Response> {
         return this.fetcher(url, {
             method,
             headers: {
                 Accept: manifestTypes,
                 'User-Agent': WORKBENCH_USER_AGENT,
-                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                ...(authorization ? { Authorization: authorization } : {}),
             },
             signal: AbortSignal.timeout(this.timeoutMs),
         });
     }
 
     /** The digest a successful reply reports, failing on any other reply. */
-    private digestHeader(response: Response): string | undefined {
+    private digestHeader(
+        response: Response,
+        login?: RegistryLogin
+    ): string | undefined {
         if (!response.ok) {
-            throw new Error(
-                response.status === 401 || response.status === 403
-                    ? `the registry refused anonymous access (${response.status})`
-                    : `the registry answered ${response.status}`
-            );
+            if (response.status === 401 || response.status === 403)
+                throw new RegistryRefusal(
+                    `the registry refused ${login ? 'the saved login' : 'anonymous access'} (${response.status})`
+                );
+            throw new Error(`the registry answered ${response.status}`);
         }
         const digest = response.headers.get('docker-content-digest')?.trim();
         return digest && digestPattern.test(digest) ? digest : undefined;
     }
 
-    /** An anonymous pull token from the challenge in a 401 reply. */
-    private async token(response: Response, repository: string): Promise<string> {
+    /**
+     * The `Authorization` a 401 reply asks for: a pull token from its bearer
+     * challenge, anonymous or for `login`, or `login` itself for basic access.
+     */
+    private async authorization(
+        response: Response,
+        repository: string,
+        login?: RegistryLogin
+    ): Promise<string> {
         await response.body?.cancel().catch(() => {});
+        const basic = login
+            ? `Basic ${btoa(`${login.username}:${login.secret}`)}`
+            : undefined;
         const challenge = bearerChallenge(response.headers.get('www-authenticate'));
         if (!challenge.realm) {
-            throw new Error('the registry requires credentials');
+            if (basic) return basic;
+            throw new RegistryRefusal('the registry requires credentials');
         }
         const url = new URL(challenge.realm);
         if (challenge.service) url.searchParams.set('service', challenge.service);
@@ -150,11 +177,18 @@ export class ImageDigests {
             challenge.scope ?? `repository:${repository}:pull`
         );
         const reply = await this.fetcher(url, {
-            headers: { Accept: 'application/json', 'User-Agent': WORKBENCH_USER_AGENT },
+            headers: {
+                Accept: 'application/json',
+                'User-Agent': WORKBENCH_USER_AGENT,
+                ...(basic ? { Authorization: basic } : {}),
+            },
             signal: AbortSignal.timeout(this.timeoutMs),
         });
         if (!reply.ok) {
-            throw new Error(`the registry token service answered ${reply.status}`);
+            const message = `the registry token service answered ${reply.status}`;
+            throw reply.status === 401 || reply.status === 403
+                ? new RegistryRefusal(message)
+                : new Error(message);
         }
         const body: unknown = await reply.json();
         const token =
@@ -164,9 +198,12 @@ export class ImageDigests {
         if (typeof token !== 'string' || !token) {
             throw new Error('the registry token service returned no token');
         }
-        return token;
+        return `Bearer ${token}`;
     }
 }
+
+/** A registry turned the request away for want of access. */
+class RegistryRefusal extends Error {}
 
 /** The parameters of a `Bearer` challenge, or none for any other scheme. */
 function bearerChallenge(header: string | null): Record<string, string | undefined> {

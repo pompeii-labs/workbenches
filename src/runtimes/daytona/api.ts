@@ -24,7 +24,8 @@ import {
  * toolbox, reached at `<toolboxProxyUrl>/<sandboxId>` with the same credential.
  * Every toolbox path and payload lives in `DaytonaToolbox`, so that is the
  * one place to adjust if Daytona revises it. Image digests are read from the
- * image's registry without the Daytona credential.
+ * image's registry without the Daytona credential, anonymously and then with
+ * `registryLogins` when the registry refuses.
  */
 export class DaytonaApi implements DaytonaClient {
     private readonly transport: DaytonaTransport;
@@ -42,7 +43,8 @@ export class DaytonaApi implements DaytonaClient {
         const fetcher = options.fetch;
         this.digests = new ImageDigests(
             (input, init) => fetcher(input, init),
-            this.transport.requestTimeoutMs
+            this.transport.requestTimeoutMs,
+            options.registryLogins
         );
     }
 
