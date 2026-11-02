@@ -1,5 +1,9 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
+import { openCodeConnection } from '../src/runners/opencode/connection.js';
 import {
     buildOpenCodeInvocation,
     buildOpenCodeServerInvocation,
@@ -62,6 +66,7 @@ describe('OpenCode adapter translation', () => {
                 lux: {
                     type: 'remote',
                     enabled: true,
+                    codemode: false,
                     url: 'https://api.luxdb.dev/mcp',
                     headers: { Authorization: 'Bearer {env:LUX_TOKEN}' },
                 },
@@ -89,7 +94,18 @@ describe('OpenCode adapter translation', () => {
             model: 'openai/gpt-5.6-terra',
             instructions: ['.workbenches/core/instructions.md'],
         });
-        expect(visible.command.at(-1)).toBe('do work');
+        // OpenCode 1's arguments: its working directory flag and no --standalone.
+        expect(visible.command).toEqual([
+            'opencode',
+            'run',
+            '--model',
+            'openai/gpt-5.6-terra',
+            '--dir',
+            '/repo',
+            '--format',
+            'json',
+            'do work',
+        ]);
         expect(JSON.stringify(visible.opencode_config)).not.toContain('do work');
         expect(visible.command).not.toContain('/repo/.workbenches/core/workbench.yml');
     });
@@ -186,6 +202,133 @@ describe('OpenCode adapter translation', () => {
             'private-password'
         );
     });
+
+    test('serves the native database on the host and the session database elsewhere', () => {
+        const serve = (nativeDatabase: boolean) =>
+            buildOpenCodeServerInvocation(
+                workbench(),
+                'private-password',
+                { OPENCODE_DB: '/home/person/opencode.db' },
+                undefined,
+                '/workspace',
+                'openai/gpt-5.6-terra',
+                undefined,
+                '/session/opencode.sqlite',
+                undefined,
+                undefined,
+                nativeDatabase
+            );
+        // The wrapper picks the database once it knows the version.
+        expect(serve(true).env.OPENCODE_DB).toBe('/session/opencode.sqlite');
+        expect(serve(true).env.WORKBENCH_OPENCODE_NATIVE_DB).toBe(
+            '/home/person/opencode.db'
+        );
+        expect(serve(false).env.OPENCODE_DB).toBe('/session/opencode.sqlite');
+        expect(serve(false).env.WORKBENCH_OPENCODE_NATIVE_DB).toBeUndefined();
+        expect(serve(false).command.slice(0, 2)).toEqual(['opencode', 'serve']);
+    });
+});
+
+const binaries = await mkdtemp(join(tmpdir(), 'workbench-opencode-versions-'));
+afterAll(() => rm(binaries, { recursive: true, force: true }));
+
+/**
+ * A directory holding an `opencode` that reports `version`, answers `serve`
+ * with the database it was given, and lists credentials as that release does.
+ */
+async function fakeOpenCode(version: string): Promise<string> {
+    const directory = await mkdtemp(join(binaries, 'bin-'));
+    const listing = version.startsWith('2.')
+        ? `if [ "$*" = "auth list --format json --standalone" ]; then echo '[{"id":"openai","connections":[{"type":"credential","method":"oauth"}]}]'; exit 0; fi`
+        : `if [ "$*" = "auth list" ]; then echo '●  OpenAI oauth'; exit 0; fi`;
+    await writeFile(
+        join(directory, 'opencode'),
+        [
+            '#!/bin/sh',
+            `if [ "$1" = "--version" ]; then echo ${version}; exit 0; fi`,
+            'if [ "$1" = "serve" ]; then echo "database=$(printenv OPENCODE_DB || echo unset)"; exit 0; fi',
+            listing,
+            'echo "unknown arguments: $*" >&2',
+            'exit 1',
+        ].join('\n')
+    );
+    await chmod(join(directory, 'opencode'), 0o755);
+    return directory;
+}
+
+async function run(command: string[], env: Record<string, string | undefined>) {
+    const child = Bun.spawn(command, { env, stdout: 'pipe', stderr: 'ignore' });
+    const output = await new Response(child.stdout).text();
+    return { code: await child.exited, output: output.trim() };
+}
+
+describe('OpenCode 1 and 2 on the same arguments', () => {
+    for (const [version, database] of [
+        ['1.18.26', '/session/opencode.sqlite'],
+        ['2.2.2', '/home/person/opencode.db'],
+        ['opencode v2.2.2', '/home/person/opencode.db'],
+    ] as const) {
+        test(`OpenCode ${version} serves ${database}`, async () => {
+            const invocation = buildOpenCodeServerInvocation(
+                workbench(),
+                'private-password',
+                {
+                    PATH: `${await fakeOpenCode(version)}:/usr/bin:/bin`,
+                    OPENCODE_DB: '/home/person/opencode.db',
+                },
+                undefined,
+                '/workspace',
+                'openai/gpt-5.6-terra',
+                undefined,
+                '/session/opencode.sqlite'
+            );
+            expect(await run(invocation.command, invocation.env)).toEqual({
+                code: 0,
+                output: `database=${database}`,
+            });
+        });
+    }
+
+    test('OpenCode 2 on the host without a native database leaves its own default', async () => {
+        const invocation = buildOpenCodeServerInvocation(
+            workbench(),
+            'private-password',
+            { PATH: `${await fakeOpenCode('2.2.2')}:/usr/bin:/bin` },
+            undefined,
+            '/workspace',
+            'openai/gpt-5.6-terra',
+            undefined,
+            '/session/opencode.sqlite'
+        );
+        expect((await run(invocation.command, invocation.env)).output).toBe(
+            'database=unset'
+        );
+    });
+
+    for (const version of ['1.18.26', '2.2.2']) {
+        test(`the credential probe reads OpenCode ${version}'s own listing`, async () => {
+            const listing = await run(openCodeConnection.probe.command, {
+                PATH: `${await fakeOpenCode(version)}:/usr/bin:/bin`,
+            });
+            expect(listing.code).toBe(0);
+            expect(
+                openCodeConnection.probe.authenticated(listing.output, [
+                    {
+                        provider: 'openai',
+                        nativeProvider: 'openai',
+                        nativeModel: 'gpt-5.6-terra',
+                    },
+                ])
+            ).toEqual([
+                {
+                    provider: 'openai',
+                    nativeProvider: 'openai',
+                    nativeModel: 'gpt-5.6-terra',
+                    authenticationMethod: 'oauth',
+                },
+            ]);
+        });
+    }
 });
 
 function workbench(

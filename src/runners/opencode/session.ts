@@ -17,6 +17,7 @@ import { OpenCodeV2Credentials } from './credentials.js';
 import { openCodeParts } from './input.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
 import { record, string } from './json.js';
+import { OpenCodeMcpStartup } from './mcp.js';
 import { type OpenCodeProgress, TurnProgress } from './progress.js';
 import { TurnRecovery } from './recovery.js';
 import { OpenCodeInputRequests } from './requests.js';
@@ -143,6 +144,7 @@ export class OpenCodeServerSession implements RunnerSession {
             'OpenCode session did not become ready in time',
             this.options.startupTimeoutMs
         );
+        if (this.server.isV2) await new OpenCodeMcpStartup(this.server).wait();
     }
 
     private async openNativeSession(): Promise<void> {

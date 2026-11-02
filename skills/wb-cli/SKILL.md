@@ -33,7 +33,7 @@ The CLI reports anonymous save and run counts, but only for registry Workbenches
 
 `wb` does not ship a model harness. Every Workbench names a runner, and the runner must be installed where the run happens: on the host for the `local` runtime, inside the image for `docker`, `e2b`, and `daytona`.
 
-- `opencode`: as root, `npm install -g opencode-ai`. As a non-root user that fails on the global prefix; use `npm install -g --prefix ~/.local opencode-ai`, which installs to `~/.local/bin`.
+- `opencode`: as root, `npm install -g opencode-ai`, OpenCode 1, the supported default. As a non-root user that fails on the global prefix; use `npm install -g --prefix ~/.local opencode-ai`, which installs to `~/.local/bin`. The `@opencode/cli` package installs OpenCode 2, which is experimental.
 - `pi`: `npm install -g @earendil-works/pi-coding-agent` (as non-root, add `--prefix ~/.local`).
 - `claude-code`: as root, `npm install -g @anthropic-ai/claude-code`. As a non-root user, `npm install -g --prefix ~/.local @anthropic-ai/claude-code`.
 

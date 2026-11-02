@@ -26,7 +26,15 @@ class V2Server {
     onPrompt: (body: Record<string, unknown>) => void = (body) =>
         this.complete(String(body.id));
     pages: unknown[][] = [];
-    async start(host: Partial<RunnerSessionHost> = {}, authentication = false) {
+    config: unknown[] = [];
+    mcp: unknown[][] = [];
+    permissionRequests: unknown[] = [];
+    forms: unknown[] = [];
+    async start(
+        host: Partial<RunnerSessionHost> = {},
+        authentication = false,
+        nativeSessionId?: string
+    ) {
         const workbench = fixtureWorkbench('/package', '/workspace');
         const session = new OpenCodeServerSession({
             workbench,
@@ -50,7 +58,23 @@ class V2Server {
                 expect(new Headers(init.headers).get('Authorization')).toBe(
                     `Basic ${btoa('opencode:test-password')}`
                 );
-                if (path === '/api/info') return Response.json({ version: '2.0.29' });
+                if (path === '/api/info') return Response.json({ version: '2.2.2' });
+                if (path === '/api/config') return Response.json(this.config);
+                if (path === '/api/mcp') {
+                    const data = this.mcp.shift() ?? [];
+                    // A later listing stands for a server whose status changes next.
+                    if (this.mcp.length > 0)
+                        setTimeout(() =>
+                            this.emit('mcp.status.changed', { server: 'fixture' })
+                        );
+                    return Response.json({
+                        location: { directory: '/workspace' },
+                        data,
+                    });
+                }
+                if (path === '/api/permission/request')
+                    return Response.json({ data: this.permissionRequests });
+                if (path === '/api/form') return Response.json({ data: this.forms });
                 if (path === '/api/integration')
                     return Response.json({
                         data: [
@@ -123,6 +147,15 @@ class V2Server {
             startupTimeoutMs: 1000,
             authenticationTimeoutMs: 1000,
             cleanup: async () => {},
+            ...(nativeSessionId
+                ? {
+                      session: {
+                          id: 'wb_fixture',
+                          directory: '/sessions/wb_fixture',
+                          nativeSessionId,
+                      },
+                  }
+                : {}),
             ...(authentication
                 ? {
                       authentication: {
@@ -306,6 +339,82 @@ describe('OpenCode V2 protocol', () => {
                     .filter((event) => event.type === 'output.text')
                     .map((event) => event.data.text)
             ).toEqual(['Recovered']);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('waits for configured MCP servers to start before the first prompt', async () => {
+        const server = new V2Server();
+        server.config = [
+            {
+                type: 'document',
+                info: {
+                    mcp: {
+                        servers: {
+                            fixture: {
+                                type: 'local',
+                                command: ['fixture-mcp'],
+                                timeout: { startup: 5000 },
+                            },
+                        },
+                    },
+                },
+            },
+        ];
+        const connected = { name: 'fixture', status: { status: 'connected' } };
+        server.mcp = [
+            [],
+            [{ ...connected, status: { status: 'pending' } }],
+            [connected],
+        ];
+        const session = await server.start();
+        try {
+            expect(await session.prompt('use the tools')).toEqual({ reason: 'stop' });
+            const paths = server.requests.map((request) => request.path);
+            expect(paths.filter((path) => path === '/api/mcp')).toHaveLength(3);
+            expect(paths.lastIndexOf('/api/mcp')).toBeLessThan(
+                paths.findIndex((path) => path.endsWith('/prompt'))
+            );
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('asks again for a permission still pending when a resumed turn reconnects', async () => {
+        const server = new V2Server();
+        server.permissionRequests = [
+            {
+                id: 'permission_1',
+                sessionID: 'ses_v2',
+                action: 'shell',
+                resources: ['git status'],
+                save: [],
+            },
+        ];
+        server.pages = [[{ id: 'input_1', type: 'user', text: 'hello' }]];
+        const asked: string[] = [];
+        const session = await server.start(
+            {
+                requestPermission: async (request) => {
+                    asked.push(request.action);
+                    queueMicrotask(() => server.complete('input_1', 'Resumed'));
+                    return 'allow_once';
+                },
+            },
+            false,
+            'ses_v2'
+        );
+        try {
+            expect(await session.resumeTurn()).toEqual({ reason: 'stop' });
+            expect(asked).toEqual(['shell']);
+            expect(
+                server.requests.find(
+                    (request) =>
+                        request.path ===
+                        '/api/session/ses_v2/permission/permission_1/reply'
+                )?.body
+            ).toEqual({ decision: 'once' });
         } finally {
             await session.close();
         }

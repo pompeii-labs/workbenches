@@ -3,9 +3,12 @@ import type { RunnerAdapterDeclaration } from '../session.js';
 export const OPENCODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
     native: {
         command: 'opencode',
+        // OpenCode 1 is the supported default. OpenCode 2 is experimental: its
+        // server protocol is still changing between releases.
         verified: [
             { version: '1.18.22', surfaces: ['server'] },
             { version: '1.18.26', surfaces: ['server'] },
+            { version: '2.2.2', surfaces: ['server'] },
         ],
     },
     capabilities: {

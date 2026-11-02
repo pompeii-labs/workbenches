@@ -30,6 +30,8 @@ export function buildOpenCodeInvocation(
     environment.OPENCODE_DB = baseEnv.OPENCODE_DB;
 
     const invocation: RunnerInvocation = {
+        // OpenCode 1's arguments, since nothing has asked the CLI its version
+        // yet. OpenCode 2 runs as a session, through `opencode serve`.
         command: [
             'opencode',
             'run',
@@ -181,6 +183,9 @@ function buildOpenCodeEnvironment(
                         type: 'remote',
                         url: server.url,
                         enabled: true,
+                        // OpenCode 2 otherwise hides MCP tools inside its Code
+                        // Mode `execute` tool instead of naming them `<server>_<tool>`.
+                        codemode: false,
                         headers: Object.fromEntries(
                             Object.entries(server.headers).map(([name, value]) => [
                                 name,

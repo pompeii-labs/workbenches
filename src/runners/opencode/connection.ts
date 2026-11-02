@@ -41,11 +41,13 @@ export const openCodeConnection: RunnerConnection = {
     ],
     packagedProviders: true,
     probe: {
-        // OpenCode 2 lists credentials as JSON; OpenCode 1 rejects the flag and lists text.
+        // OpenCode 2 lists credentials as JSON, and without --standalone from the
+        // person's background service, which may hold another credential store
+        // or not start at all. OpenCode 1 rejects both flags and lists text.
         command: [
             'sh',
             '-c',
-            'listing=$(opencode auth list --format json 2>/dev/null) && printf "%s\\n" "$listing" || exec opencode auth list',
+            'listing=$(opencode auth list --format json --standalone 2>/dev/null) && printf "%s\\n" "$listing" || exec opencode auth list',
             'workbench-opencode',
         ],
         failsClosed: false,
