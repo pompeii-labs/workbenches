@@ -32,7 +32,7 @@ requirements:
 
 ## On a workbenches.dev worker
 
-A team can send a run to its own machine, a worker, instead of a hosted sandbox. The worker runs `local` on the host or any image entry (`docker`, `e2b`, `daytona`) as one Docker container from that image, whichever the manifest declares first that the worker offers. What that means for the package:
+A team can send a run to its own machine, a worker, instead of a hosted sandbox. The worker runs `local` on the host or any image entry (`docker`, `e2b`, `daytona`) as one Docker container from that image, pulled or built from the package's Dockerfile, whichever the manifest declares first that the worker offers. What that means for the package:
 
 - `requirements` are checked against the worker's machine before the run is accepted. Declare `os: [macos]` for work that needs Xcode, so the run never lands on a Linux worker.
 - `local` on a worker uses the tools installed on that machine. Declare every one in `tools` so a missing one fails preflight by name instead of mid-run.
