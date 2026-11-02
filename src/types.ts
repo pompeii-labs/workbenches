@@ -137,5 +137,7 @@ export interface SpawnedRunner {
     };
     stdout?: ReadableStream<Uint8Array>;
     stderr?: ReadableStream<Uint8Array>;
+    /** The process id, for a process on this machine. */
+    pid?: number;
     kill?: () => void;
 }

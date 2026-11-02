@@ -253,6 +253,42 @@ describe('local runtime provider contract', () => {
         );
     });
 
+    test('stops a captured command that outlives its limit', async () => {
+        let killed = false;
+        const exit = Promise.withResolvers<number>();
+        const provider = new LocalRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: (name) => `/bin/${name}`,
+            commandTimeoutMs: 50,
+            spawn: () => ({
+                exited: exit.promise,
+                stdout: new Blob(['partial listing']).stream(),
+                stderr: new Blob([]).stream(),
+                kill: () => {
+                    killed = true;
+                    exit.resolve(143);
+                },
+            }),
+        });
+        const runtime = await new RuntimeRegistry([provider])
+            .resolve('local')
+            .prepare(request);
+
+        await expect(
+            runtime.execute({
+                command: ['opencode', 'auth', 'list'],
+                cwd: '/workspace',
+                env: { PATH: '/bin' },
+            })
+        ).resolves.toEqual({
+            code: 124,
+            stdout: 'partial listing',
+            stderr: 'Stopped after 0.05 seconds without finishing',
+        });
+        expect(killed).toBe(true);
+        await runtime.cleanup();
+    });
+
     test('smokes through the selected provider and rejects local images', async () => {
         const registry = RuntimeRegistry.standard({
             findExecutable: (name) => `/bin/${name}`,
