@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, describe, expect, jest, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -869,6 +869,208 @@ describe('OpenCode turn resume', () => {
         expect(host.ofType('tool.completed')).toHaveLength(1);
         expect(host.ofType('usage.updated')).toHaveLength(1);
         expect(session.progress().finishedSteps).toEqual(['finish_1']);
+        await session.close();
+    });
+});
+
+/** Lets pending promise callbacks run while fake timers hold every timer. */
+async function drain(rounds = 200): Promise<void> {
+    for (let round = 0; round < rounds; round += 1) await Promise.resolve();
+}
+
+describe('OpenCode quiet event stream', () => {
+    afterEach(() => {
+        jest.useRealTimers();
+    });
+
+    test('a stream that stays open but goes quiet mid-turn is caught up from the transcript', async () => {
+        jest.useFakeTimers();
+        const server = new FakeOpenCodeServer();
+        const host = new RecordingHost();
+        const session = await start(server, host);
+        server.onPrompt = () => {
+            server.emit('session.status', { status: { type: 'busy' } });
+            server.emitAssistantText(
+                'message_1',
+                server.currentInputMessageId(),
+                'Hello'
+            );
+            server.emit('message.part.updated', { part: contractToolPart('running') });
+            // The stream stays open, and nothing more arrives on it.
+        };
+        const turn = session.prompt('work');
+        await drain();
+        expect(host.texts).toEqual(['Hello']);
+        server.transcript = finishedTranscript(server.currentInputMessageId());
+
+        jest.advanceTimersByTime(50_000);
+        await drain();
+        expect(server.eventSubscriptions).toBe(1);
+        jest.advanceTimersByTime(20_000);
+        await expect(turn).resolves.toEqual({ reason: 'stop' });
+
+        expect(server.eventSubscriptions).toBe(2);
+        expect(server.openEventStreams).toBe(1);
+        expect(host.texts).toEqual(['Hello', ', world']);
+        expect(host.ofType('tool.started')).toHaveLength(1);
+        expect(host.ofType('tool.completed')).toHaveLength(1);
+        expect(host.ofType('usage.updated')).toHaveLength(1);
+        await session.close();
+    });
+
+    test('a turn whose stream goes quiet twice is caught up twice', async () => {
+        jest.useFakeTimers();
+        const server = new FakeOpenCodeServer();
+        const host = new RecordingHost();
+        const session = await start(server, host);
+        server.onPrompt = () => {
+            server.emitAssistantText(
+                'message_1',
+                server.currentInputMessageId(),
+                'Hello'
+            );
+        };
+        const turn = session.prompt('work');
+        await drain();
+        // The answer is still being written.
+        server.transcript = finishedTranscript(
+            server.currentInputMessageId(),
+            'Hello, wor'
+        ).map((message) =>
+            message.info.role === 'assistant'
+                ? { ...message, info: { ...message.info, time: { created: 1 } } }
+                : message
+        );
+        jest.advanceTimersByTime(70_000);
+        await drain();
+        expect(server.eventSubscriptions).toBe(2);
+        expect(host.texts).toEqual(['Hello', ', wor']);
+
+        server.transcript = finishedTranscript(server.currentInputMessageId());
+        jest.advanceTimersByTime(70_000);
+        await expect(turn).resolves.toEqual({ reason: 'stop' });
+        expect(server.eventSubscriptions).toBe(3);
+        expect(host.texts).toEqual(['Hello', ', wor', 'ld']);
+        expect(host.ofType('tool.completed')).toHaveLength(1);
+        await session.close();
+    });
+
+    test('heartbeats keep a long turn on its stream', async () => {
+        jest.useFakeTimers();
+        const server = new FakeOpenCodeServer();
+        const host = new RecordingHost();
+        const session = await start(server, host);
+        server.onPrompt = () => {
+            server.emit('session.status', { status: { type: 'busy' } });
+            server.emitAssistantText(
+                'message_1',
+                server.currentInputMessageId(),
+                'One'
+            );
+        };
+        const turn = session.prompt('work');
+        await drain();
+        for (let beat = 0; beat < 20; beat += 1) {
+            jest.advanceTimersByTime(10_000);
+            server.emit('server.heartbeat', {});
+            await drain();
+        }
+        expect(server.eventSubscriptions).toBe(1);
+        expect(server.transcriptReads).toBe(0);
+        server.emit('session.status', { status: { type: 'idle' } });
+        await expect(turn).resolves.toEqual({ reason: 'completed' });
+        await session.close();
+    });
+
+    test('a quiet stream with no turn in flight starts no catch-up', async () => {
+        jest.useFakeTimers();
+        const server = new FakeOpenCodeServer();
+        const host = new RecordingHost();
+        const session = await start(server, host);
+        jest.advanceTimersByTime(10 * 60_000);
+        await drain();
+        expect(server.eventSubscriptions).toBe(1);
+        expect(server.transcriptReads).toBe(0);
+        expect(host.events).toEqual([]);
+        await session.close();
+    });
+
+    test('a turn that completes with text that never streamed ends with its final message', async () => {
+        const server = new FakeOpenCodeServer();
+        const host = new RecordingHost();
+        const session = await start(server, host);
+        server.onPrompt = () => {
+            server.transcript = finishedTranscript(
+                server.currentInputMessageId(),
+                'The final report'
+            );
+            server.emit('session.status', { status: { type: 'busy' } });
+            server.emit('message.updated', {
+                info: {
+                    id: 'message_1',
+                    role: 'assistant',
+                    parentID: server.currentInputMessageId(),
+                },
+            });
+            server.emit('session.status', { status: { type: 'idle' } });
+        };
+        await expect(session.prompt('work')).resolves.toEqual({ reason: 'stop' });
+        expect(host.ofType('output.text').at(-1)?.data).toEqual({
+            id: 'output_message_1',
+            text: 'The final report',
+        });
+        expect(host.ofType('tool.completed')).toHaveLength(1);
+        expect(host.ofType('usage.updated')).toHaveLength(1);
+        await session.close();
+    });
+
+    test('a completion after text streamed in part emits only the rest', async () => {
+        const server = new FakeOpenCodeServer();
+        const host = new RecordingHost();
+        const session = await start(server, host);
+        server.onPrompt = () => {
+            server.transcript = finishedTranscript(server.currentInputMessageId());
+            server.emit('session.status', { status: { type: 'busy' } });
+            server.emitAssistantText(
+                'message_1',
+                server.currentInputMessageId(),
+                'Hello'
+            );
+            server.emit('message.part.updated', {
+                part: { ...contractToolPart('completed'), id: 'tool_part_1' },
+            });
+            server.emit('session.status', { status: { type: 'idle' } });
+        };
+        await expect(session.prompt('work')).resolves.toEqual({ reason: 'stop' });
+        expect(host.texts).toEqual(['Hello', ', world']);
+        expect(host.ofType('tool.completed')).toHaveLength(1);
+        expect(server.transcriptReads).toBe(1);
+        await session.close();
+    });
+
+    test('a recovered failed turn reports the provider error', async () => {
+        const server = new FakeOpenCodeServer();
+        const host = new RecordingHost();
+        const session = await start(server, host);
+        server.transcript = [
+            { info: { id: 'msg_input_1', role: 'user' }, parts: [] },
+            {
+                info: {
+                    id: 'message_1',
+                    role: 'assistant',
+                    parentID: 'msg_input_1',
+                    time: { created: 1 },
+                    error: {
+                        name: 'APIError',
+                        data: { message: 'Rate limit exceeded' },
+                    },
+                },
+                parts: [],
+            },
+        ];
+        await expect(session.resumeTurn()).rejects.toThrow(
+            'OpenCode session failed: APIError: Rate limit exceeded'
+        );
         await session.close();
     });
 });

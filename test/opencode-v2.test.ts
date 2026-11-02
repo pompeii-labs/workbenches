@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, jest, test } from 'bun:test';
 import {
     isOpenCodeV2,
     openCodeConnection,
@@ -69,6 +69,15 @@ class V2Server extends FakeOpenCodeV2Server {
         });
         await session.start();
         return session;
+    }
+    count(suffix: string) {
+        return this.requests.filter((request) => request.path.endsWith(suffix)).length;
+    }
+
+    texts() {
+        return this.events
+            .filter((event) => event.type === 'output.text')
+            .map((event) => event.data.text);
     }
 }
 
@@ -515,6 +524,210 @@ describe('OpenCode V2 protocol', () => {
             expect(prompts[1]?.body.delivery).toBe('steer');
         } finally {
             await session.close();
+        }
+    });
+});
+
+/** What a V2 server holds once the turn begun by `inputID` has finished. */
+function finishedTranscript(inputID: string, text: string) {
+    return [
+        { id: inputID, type: 'user', text: 'work' },
+        {
+            id: `answer_${inputID}`,
+            type: 'assistant',
+            content: [{ type: 'text', text }],
+            finish: 'stop',
+            cost: 0.01,
+            tokens: {
+                input: 2,
+                output: 3,
+                reasoning: 0,
+                cache: { read: 0, write: 0 },
+            },
+            time: { completed: 1 },
+        },
+        { id: `idle_${inputID}`, type: 'idle', outcome: 'succeeded' },
+    ];
+}
+
+/** Lets pending promise callbacks run while fake timers hold every timer. */
+async function drain(rounds = 200): Promise<void> {
+    for (let round = 0; round < rounds; round += 1) await Promise.resolve();
+}
+
+describe('OpenCode V2 quiet event stream', () => {
+    afterEach(() => {
+        jest.useRealTimers();
+    });
+
+    test('a stream that stays open but goes quiet mid-turn is caught up from the transcript', async () => {
+        jest.useFakeTimers();
+        const server = new V2Server();
+        const session = await server.start();
+        try {
+            let input = '';
+            server.onPrompt = (body) => {
+                input = String(body.id);
+                server.emit('session.inbox.delivered', { inboxID: input });
+                server.emit('session.step.started', {
+                    assistantMessageID: `answer_${input}`,
+                });
+                server.emit('session.text.started', {
+                    assistantMessageID: `answer_${input}`,
+                    ordinal: 0,
+                });
+                server.emit('session.text.delta', {
+                    assistantMessageID: `answer_${input}`,
+                    ordinal: 0,
+                    delta: 'Hello',
+                });
+                // The stream stays open, and nothing more arrives on it.
+            };
+            const turn = session.prompt('work');
+            await drain();
+            expect(server.texts()).toEqual(['Hello']);
+            server.transcript = finishedTranscript(input, 'Hello, world');
+
+            jest.advanceTimersByTime(50_000);
+            await drain();
+            expect(server.count('/event')).toBe(1);
+            jest.advanceTimersByTime(20_000);
+            expect(await turn).toEqual({ reason: 'stop' });
+
+            expect(server.count('/event')).toBe(2);
+            expect(server.texts()).toEqual(['Hello', ', world']);
+            expect(
+                server.events.filter((event) => event.type === 'usage.updated')
+            ).toHaveLength(1);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('heartbeat comments keep a long turn on its stream', async () => {
+        jest.useFakeTimers();
+        const server = new V2Server();
+        const session = await server.start();
+        try {
+            let input = '';
+            server.onPrompt = (body) => {
+                input = String(body.id);
+                server.emit('session.inbox.delivered', { inboxID: input });
+            };
+            const turn = session.prompt('work');
+            await drain();
+            for (let beat = 0; beat < 12; beat += 1) {
+                jest.advanceTimersByTime(15_000);
+                server.heartbeat();
+                await drain();
+            }
+            expect(server.count('/event')).toBe(1);
+            expect(server.count('/message')).toBe(0);
+            server.completeTurn('Hello V2', input);
+            expect(await turn).toEqual({ reason: 'stop' });
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('a quiet stream with no turn in flight starts no catch-up', async () => {
+        jest.useFakeTimers();
+        const server = new V2Server();
+        const session = await server.start();
+        try {
+            jest.advanceTimersByTime(10 * 60_000);
+            await drain();
+            expect(server.count('/event')).toBe(1);
+            expect(server.count('/message')).toBe(0);
+            expect(server.events).toEqual([]);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('a turn that completes with text that never streamed ends with its final message', async () => {
+        const server = new V2Server();
+        const session = await server.start();
+        try {
+            server.onPrompt = (body) => {
+                const input = String(body.id);
+                server.transcript = finishedTranscript(input, 'The final report');
+                server.emit('session.inbox.delivered', { inboxID: input });
+                server.emit('session.step.started', {
+                    assistantMessageID: `answer_${input}`,
+                });
+                server.emit('session.step.ended', {
+                    assistantMessageID: `answer_${input}`,
+                    finish: 'stop',
+                    cost: 0.01,
+                    tokens: {
+                        input: 2,
+                        output: 3,
+                        reasoning: 0,
+                        cache: { read: 0, write: 0 },
+                    },
+                });
+                server.emit('session.execution.succeeded', {});
+            };
+            expect(await session.prompt('work')).toEqual({ reason: 'stop' });
+            expect(server.texts()).toEqual(['The final report']);
+            expect(
+                server.events.filter((event) => event.type === 'usage.updated')
+            ).toHaveLength(1);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('a streamed turn is reconciled at completion without emitting anything twice', async () => {
+        const server = new V2Server();
+        // One page, so one read of the transcript is one request.
+        server.pageSize = 3;
+        const session = await server.start();
+        try {
+            server.onPrompt = (body) => {
+                server.transcript = finishedTranscript(String(body.id), 'Hello V2');
+                server.completeTurn('Hello V2', String(body.id));
+            };
+            expect(await session.prompt('work')).toEqual({ reason: 'stop' });
+            expect(server.texts()).toEqual(['Hello V2']);
+            expect(
+                server.events.filter((event) => event.type === 'usage.updated')
+            ).toHaveLength(1);
+            expect(server.count('/message')).toBe(1);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('a recovered failed turn reports the recorded error', async () => {
+        const failure = { type: 'ProviderError', message: 'Provider overloaded' };
+        const cases = [
+            // The failed idle record carries the error.
+            [
+                { id: 'answer_1', type: 'assistant', content: [] },
+                { id: 'idle_1', type: 'idle', outcome: 'failed', error: failure },
+            ],
+            // Only the turn's last answer does.
+            [
+                { id: 'answer_1', type: 'assistant', content: [], error: failure },
+                { id: 'idle_1', type: 'idle', outcome: 'failed' },
+            ],
+        ];
+        for (const records of cases) {
+            const server = new V2Server();
+            const session = await server.start();
+            try {
+                server.transcript = [
+                    { id: 'input_1', type: 'user', text: 'work' },
+                    ...records,
+                ];
+                await expect(session.resumeTurn()).rejects.toThrow(
+                    'OpenCode session failed: Provider overloaded'
+                );
+            } finally {
+                await session.close();
+            }
         }
     });
 });

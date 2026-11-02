@@ -245,6 +245,11 @@ export class FakeOpenCodeV2Server {
         this.eventController?.error(new Error('native stream failure'));
     }
 
+    /** Writes the comment OpenCode 2 sends to an open stream every 15 seconds. */
+    heartbeat() {
+        this.eventController?.enqueue(new TextEncoder().encode(': heartbeat\n\n'));
+    }
+
     /** Ends the stream without an error, as a proxy that drops an idle connection does. */
     endEventStream() {
         this.eventController?.close();

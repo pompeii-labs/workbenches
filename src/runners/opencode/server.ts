@@ -67,6 +67,11 @@ export class OpenCodeServer {
     get version(): string | undefined {
         return this.release;
     }
+
+    /** When the current event stream was opened or last carried a line, heartbeats included. */
+    get lastStreamActivity(): number {
+        return this.streamActivity;
+    }
     private readonly abort: AbortController;
     private readonly options: OpenCodeServerOptions;
     private child: SpawnedOpenCodeServer | undefined;
@@ -80,6 +85,7 @@ export class OpenCodeServer {
     private stdoutLoop: Promise<void> | undefined;
     private stderrLoop: Promise<string> | undefined;
     private closed = false;
+    private streamActivity = 0;
     private v2 = false;
     private release: string | undefined;
     private readonly v2Events = new OpenCodeV2Events();
@@ -192,15 +198,23 @@ export class OpenCodeServer {
                 `OpenCode event stream failed with HTTP ${response.status}`
             );
         }
-        const loop: Promise<void> = consumeSse(response.body, async (value) => {
-            if (record(value)?.type === 'mcp.status.changed') {
-                this.mcpStatus.resolve();
-                this.mcpStatus = Promise.withResolvers<void>();
+        const current = () => this.subscription === subscription;
+        this.streamActivity = Date.now();
+        const loop: Promise<void> = consumeSse(
+            response.body,
+            async (value) => {
+                if (record(value)?.type === 'mcp.status.changed') {
+                    this.mcpStatus.resolve();
+                    this.mcpStatus = Promise.withResolvers<void>();
+                }
+                for (const event of this.v2 ? this.v2Events.consume(value) : [value]) {
+                    await consume(event);
+                }
+            },
+            () => {
+                if (current()) this.streamActivity = Date.now();
             }
-            for (const event of this.v2 ? this.v2Events.consume(value) : [value]) {
-                await consume(event);
-            }
-        })
+        )
             .then(() => {
                 // The server never ends the stream on its own, so an end
                 // nobody asked for is a lost stream, not a quiet one.
@@ -211,7 +225,7 @@ export class OpenCodeServer {
                     !this.closed &&
                     !isAbortError(error) &&
                     !subscription.signal.aborted &&
-                    this.subscription === subscription
+                    current()
                 ) {
                     onFailure(
                         new Error('OpenCode event stream failed', { cause: error })
@@ -611,10 +625,12 @@ async function consumeLines(
 
 async function consumeSse(
     stream: ReadableStream<Uint8Array>,
-    consume: (value: unknown) => Promise<void>
+    consume: (value: unknown) => Promise<void>,
+    received: () => void
 ) {
     let data = '';
     await consumeLines(stream, async (line) => {
+        received();
         if (!line.startsWith('data:')) return;
         data += line.slice(5).trimStart();
         if (!data) return;

@@ -28,6 +28,7 @@ import { OpenCodeServer } from './server.js';
 import { OpenCodeSessionState } from './state.js';
 import { withTimeout } from './timing.js';
 import { type ActiveTurn, createActiveTurn, OpenCodeMessageIds } from './turn.js';
+import { StreamWatchdog } from './watchdog.js';
 
 export interface OpenCodeServerSessionOptions extends RunnerSessionStartOptions {
     context?: RunnerContext;
@@ -52,6 +53,7 @@ export class OpenCodeServerSession implements RunnerSession {
     private readonly messageIds = new OpenCodeMessageIds();
     private readonly router: OpenCodeEventRouter;
     private readonly recovery: TurnRecovery;
+    private readonly watchdog: StreamWatchdog;
     private credentials: OpenCodeV2Credentials | undefined;
 
     constructor(options: OpenCodeServerSessionOptions) {
@@ -93,6 +95,9 @@ export class OpenCodeServerSession implements RunnerSession {
             this.state,
             this.router,
             this.emitted
+        );
+        this.watchdog = new StreamWatchdog(this.server, this.state, () =>
+            this.recovery.catchUp()
         );
     }
 
@@ -160,6 +165,7 @@ export class OpenCodeServerSession implements RunnerSession {
             : await this.create();
         this.state.sessionId = sessionId;
         await this.router.subscribe();
+        this.watchdog.start();
     }
 
     private async create(): Promise<string> {
@@ -286,6 +292,7 @@ export class OpenCodeServerSession implements RunnerSession {
     async close(): Promise<void> {
         if (this.state.closed) return;
         this.state.closed = true;
+        this.watchdog.stop();
         this.state.finish('cancelled');
         try {
             if (this.credentials)
