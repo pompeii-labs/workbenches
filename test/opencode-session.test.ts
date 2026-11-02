@@ -19,6 +19,7 @@ import {
     fixtureWorkbench,
     settled,
 } from './runners/opencode/fixture.js';
+import { FakeOpenCodeV2Server } from './runners/opencode/v2fixture.js';
 
 const root = await mkdtemp(join(tmpdir(), 'opencode-session-contract-'));
 const packageDirectory = join(root, '.workbenches', 'core');
@@ -31,6 +32,18 @@ runnerAdapterContract({
     name: 'OpenCode',
     createHarness: () => {
         const server = new FakeOpenCodeServer();
+        return {
+            adapter: server.adapter(),
+            workbench: workbench(),
+            arrange: (scenario) => server.arrange(scenario),
+        };
+    },
+});
+
+runnerAdapterContract({
+    name: 'OpenCode 2',
+    createHarness: () => {
+        const server = new FakeOpenCodeV2Server();
         return {
             adapter: server.adapter(),
             workbench: workbench(),

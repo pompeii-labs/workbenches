@@ -29,6 +29,22 @@ export function v2Message(message: Record<string, unknown>, parentID?: string) {
     };
 }
 
+/** Names the adapter reads in its own internal shape, so a V2 event of the same name is never passed through. */
+const INTERNAL_EVENTS = new Set([
+    'message.updated',
+    'message.part.updated',
+    'message.part.delta',
+    'question.asked',
+    'question.replied',
+    'question.rejected',
+    'session.error',
+    'session.interrupted',
+    'session.succeeded',
+]);
+
+/** V2 events that report nothing a host needs. */
+const SILENT_EVENTS = new Set(['session.status', 'session.idle', 'session.updated']);
+
 export function v2PartId(messageID: string, ordinal: number) {
     return `${messageID}:${ordinal}`;
 }
@@ -98,9 +114,9 @@ export class OpenCodeV2Events {
                         const options = Array.isArray(field.options)
                             ? field.options
                             : [];
+                        // The key names the answer, not the question, so it is no header.
                         return {
                             question: field.title ?? field.description ?? form.title,
-                            header: field.key,
                             multiple: field.type === 'multiselect',
                             custom: field.custom ?? options.length === 0,
                             options: options.map((value) => {
@@ -127,7 +143,10 @@ export class OpenCodeV2Events {
         }
         // V2 execution events are the durable completion boundary. A status
         // notification may arrive late and must not settle the following turn.
-        if (type === 'session.status' || type === 'session.idle') return [];
+        if (SILENT_EVENTS.has(type) || INTERNAL_EVENTS.has(type)) return [];
+        // Anything else outside the message stream is unrecognized, so it
+        // passes on as its type alone.
+        if (data.assistantMessageID === undefined) return [update(type, { sessionID })];
         if (type === 'session.step.started') {
             const message = {
                 id: messageID,
@@ -209,8 +228,13 @@ export class OpenCodeV2Events {
         } else {
             return [];
         }
-        return v2Message(message).parts.map((part) =>
-            update('message.part.updated', { sessionID, part })
-        );
+        // A tool is reported once it is called: before that it has no input
+        // to say what it acts on.
+        return v2Message(message)
+            .parts.filter(
+                (part) =>
+                    part.type !== 'tool' || record(part.state)?.status !== 'pending'
+            )
+            .map((part) => update('message.part.updated', { sessionID, part }));
     }
 }

@@ -97,7 +97,12 @@ export class OpenCodeEventRouter {
         const sessionId = string(properties.sessionID);
         if (!sessionId) return;
         if (sessionId !== state.sessionId) {
-            if (state.active && (await this.children.owns(sessionId))) {
+            // Only part updates carry a descendant's tools and usage.
+            if (
+                type === 'message.part.updated' &&
+                state.active &&
+                (await this.children.owns(sessionId))
+            ) {
                 const drafts = this.children.consume(type, properties, sessionId);
                 for (const draft of drafts) await this.host.emit(draft);
             }

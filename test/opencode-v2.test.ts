@@ -8,28 +8,20 @@ import { OpenCodeServerSession } from '../src/runners/opencode/session.js';
 import { v2Message } from '../src/runners/opencode/v2.js';
 import type { RunnerSessionHost } from '../src/runners/session.js';
 import type { WorkbenchEventDraft } from '../src/runs/index.js';
-import {
-    FakeOpenCodeServer,
-    fixtureConfiguration,
-    fixtureWorkbench,
-} from './runners/opencode/fixture.js';
+import { fixtureConfiguration, fixtureWorkbench } from './runners/opencode/fixture.js';
+import { FakeOpenCodeV2Server } from './runners/opencode/v2fixture.js';
 
-class V2Server {
+const usage = {
+    cost: 0.01,
+    tokens: { input: 2, output: 3, reasoning: 0, cache: { read: 0, write: 0 } },
+};
+
+/** An OpenCode 2 fake that answers each prompt with `Hello V2`, and what its session emitted. */
+class V2Server extends FakeOpenCodeV2Server {
     readonly events: WorkbenchEventDraft[] = [];
-    readonly requests: Array<{
-        path: string;
-        method: string;
-        body: Record<string, unknown>;
-    }> = [];
-    readonly process = new FakeOpenCodeServer();
-    private stream?: ReadableStreamDefaultController<Uint8Array>;
-    onPrompt: (body: Record<string, unknown>) => void = (body) =>
-        this.complete(String(body.id));
-    pages: unknown[][] = [];
-    config: unknown[] = [];
-    mcp: unknown[][] = [];
-    permissionRequests: unknown[] = [];
-    forms: unknown[] = [];
+    override onPrompt: (body: Record<string, unknown>) => void = (body) =>
+        this.completeTurn('Hello V2', String(body.id), usage);
+
     async start(
         host: Partial<RunnerSessionHost> = {},
         authentication = false,
@@ -49,101 +41,9 @@ class V2Server {
                 requestQuestion: async () => ({ outcome: 'rejected' }),
                 ...host,
             },
-            fetch: async (input, init = {}) => {
-                const url = new URL(String(input));
-                const path = url.pathname;
-                const method = init.method ?? 'GET';
-                const body = init.body ? JSON.parse(String(init.body)) : {};
-                this.requests.push({ path, method, body });
-                expect(new Headers(init.headers).get('Authorization')).toBe(
-                    `Basic ${btoa('opencode:test-password')}`
-                );
-                if (path === '/api/info') return Response.json({ version: '2.2.2' });
-                if (path === '/api/config') return Response.json(this.config);
-                if (path === '/api/mcp') {
-                    const data = this.mcp.shift() ?? [];
-                    // A later listing stands for a server whose status changes next.
-                    if (this.mcp.length > 0)
-                        setTimeout(() =>
-                            this.emit('mcp.status.changed', { server: 'fixture' })
-                        );
-                    return Response.json({
-                        location: { directory: '/workspace' },
-                        data,
-                    });
-                }
-                if (path === '/api/permission/request')
-                    return Response.json({ data: this.permissionRequests });
-                if (path === '/api/form') return Response.json({ data: this.forms });
-                if (path === '/api/integration')
-                    return Response.json({
-                        data: [
-                            {
-                                id: 'openai',
-                                methods: [
-                                    { type: 'key' },
-                                    {
-                                        id: 'chatgpt-headless',
-                                        type: 'oauth',
-                                        label: 'Codex device code (legacy)',
-                                    },
-                                ],
-                            },
-                        ],
-                    });
-                if (path.endsWith('/connect/oauth'))
-                    return Response.json({
-                        data: {
-                            attemptID: 'attempt_1',
-                            url: 'https://auth.example/device',
-                            mode: 'auto',
-                        },
-                    });
-                if (path.endsWith('/connect/oauth/attempt_1'))
-                    return Response.json({ data: { status: 'complete' } });
-                if (path === '/api/session')
-                    return Response.json({ data: { id: 'ses_v2' } });
-                if (path === '/api/session/ses_v2')
-                    return Response.json({ data: { id: 'ses_v2' } });
-                if (path === '/api/event')
-                    return new Response(
-                        new ReadableStream({
-                            start: (controller) => {
-                                this.stream = controller;
-                                init.signal?.addEventListener(
-                                    'abort',
-                                    () => controller.close(),
-                                    { once: true }
-                                );
-                            },
-                        })
-                    );
-                if (path.endsWith('/prompt')) {
-                    queueMicrotask(() => this.onPrompt(body));
-                    return Response.json({ data: { id: body.id } });
-                }
-                if (path.endsWith('/interrupt')) {
-                    this.emit('session.execution.interrupted', { reason: 'user' });
-                    return Response.json({ data: {} });
-                }
-                if (path.endsWith('/message')) {
-                    const index = Number(url.searchParams.get('cursor') ?? '0');
-                    return Response.json({
-                        data: this.pages[index] ?? [],
-                        cursor: {
-                            next:
-                                index + 1 < this.pages.length
-                                    ? String(index + 1)
-                                    : null,
-                        },
-                    });
-                }
-                if (path.endsWith('/reply') || method === 'DELETE')
-                    return new Response(null, { status: 204 });
-                return new Response(null, { status: 404 });
-            },
+            fetch: this.fetcher,
             password: () => 'test-password',
-            launch: () => this.process.launch(),
+            launch: () => this.launch(),
             startupTimeoutMs: 1000,
             authenticationTimeoutMs: 1000,
             cleanup: async () => {},
@@ -169,38 +69,6 @@ class V2Server {
         });
         await session.start();
         return session;
-    }
-    emit(type: string, data: Record<string, unknown>) {
-        this.stream?.enqueue(
-            new TextEncoder().encode(
-                `event: ${type}\ndata: ${JSON.stringify({ type, data: { sessionID: 'ses_v2', ...data } })}\n\n`
-            )
-        );
-    }
-    complete(inputID: string, text = 'Hello V2') {
-        this.emit('session.inbox.delivered', { inboxID: inputID });
-        this.emit('session.step.started', { assistantMessageID: `answer_${inputID}` });
-        this.emit('session.text.started', {
-            assistantMessageID: `answer_${inputID}`,
-            ordinal: 0,
-        });
-        this.emit('session.text.delta', {
-            assistantMessageID: `answer_${inputID}`,
-            ordinal: 0,
-            delta: text,
-        });
-        this.emit('session.text.ended', {
-            assistantMessageID: `answer_${inputID}`,
-            ordinal: 0,
-            text,
-        });
-        this.emit('session.step.ended', {
-            assistantMessageID: `answer_${inputID}`,
-            finish: 'stop',
-            cost: 0.01,
-            tokens: { input: 2, output: 3, reasoning: 0, cache: { read: 0, write: 0 } },
-        });
-        this.emit('session.execution.succeeded', {});
     }
 }
 
@@ -284,7 +152,7 @@ describe('OpenCode V2 protocol', () => {
                 server.emit('form.created', {
                     form: {
                         id: 'form_1',
-                        sessionID: 'ses_v2',
+                        sessionID: 'ses_native_1',
                         title: 'Choose',
                         fields: [
                             {
@@ -320,18 +188,17 @@ describe('OpenCode V2 protocol', () => {
         const server = new V2Server();
         const session = await server.start();
         try {
-            server.pages = [
-                [{ id: 'input_1', type: 'user', text: 'hello' }],
-                [
-                    {
-                        id: 'answer_1',
-                        type: 'assistant',
-                        content: [{ type: 'text', text: 'Recovered' }],
-                        finish: 'stop',
-                        time: { completed: 1 },
-                    },
-                    { id: 'idle_1', type: 'idle', outcome: 'succeeded' },
-                ],
+            server.pageSize = 1;
+            server.transcript = [
+                { id: 'input_1', type: 'user', text: 'hello' },
+                {
+                    id: 'answer_1',
+                    type: 'assistant',
+                    content: [{ type: 'text', text: 'Recovered' }],
+                    finish: 'stop',
+                    time: { completed: 1 },
+                },
+                { id: 'idle_1', type: 'idle', outcome: 'succeeded' },
             ];
             expect(await session.resumeTurn()).toEqual({ reason: 'stop' });
             expect(
@@ -383,27 +250,29 @@ describe('OpenCode V2 protocol', () => {
 
     test('asks again for a permission still pending when a resumed turn reconnects', async () => {
         const server = new V2Server();
-        server.permissionRequests = [
+        server.pendingPermissions = [
             {
                 id: 'permission_1',
-                sessionID: 'ses_v2',
+                sessionID: 'ses_native_1',
                 action: 'shell',
                 resources: ['git status'],
                 save: [],
             },
         ];
-        server.pages = [[{ id: 'input_1', type: 'user', text: 'hello' }]];
+        server.transcript = [{ id: 'input_1', type: 'user', text: 'hello' }];
         const asked: string[] = [];
         const session = await server.start(
             {
                 requestPermission: async (request) => {
                     asked.push(request.action);
-                    queueMicrotask(() => server.complete('input_1', 'Resumed'));
+                    queueMicrotask(() =>
+                        server.completeTurn('Resumed', 'input_1', usage)
+                    );
                     return 'allow_once';
                 },
             },
             false,
-            'ses_v2'
+            'ses_native_1'
         );
         try {
             expect(await session.resumeTurn()).toEqual({ reason: 'stop' });
@@ -412,7 +281,7 @@ describe('OpenCode V2 protocol', () => {
                 server.requests.find(
                     (request) =>
                         request.path ===
-                        '/api/session/ses_v2/permission/permission_1/reply'
+                        '/api/session/ses_native_1/permission/permission_1/reply'
                 )?.body
             ).toEqual({ decision: 'once' });
         } finally {
@@ -624,7 +493,7 @@ describe('OpenCode V2 protocol', () => {
             });
             server.onPrompt = (body) => {
                 if (body.delivery === 'steer')
-                    server.complete(String(body.id), 'Steered');
+                    server.completeTurn('Steered', String(body.id), usage);
                 else admitted();
             };
             const turn = session.prompt({
