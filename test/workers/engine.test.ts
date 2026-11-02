@@ -1121,6 +1121,105 @@ describe('worker engine', () => {
         }
     });
 
+    test("reaches a member's Claude Code login through OpenCode's own Claude Agent provider", async () => {
+        const { home, services } = await engineHome();
+        const runners = RunnerRegistry.standard();
+        const launched: StartDetachedRunOptions[] = [];
+        const engine = new WorkerEngine({
+            worker: 'mini',
+            api: 'https://api.example.test',
+            home,
+            services: {
+                ...services,
+                launcher: {
+                    start: async (options) => {
+                        launched.push(options);
+                        return {
+                            id: 'wb_launched',
+                            session_id: 'wb_launched',
+                        } as StoredRun;
+                    },
+                },
+            },
+            runners,
+            environment: new TestRunEnvironment(home, runners, { PATH: '/usr/bin' }),
+            download: async () =>
+                workbenchPackage({
+                    model: {
+                        id: 'anthropic/claude-haiku-5-5',
+                        routes: [{ provider: 'anthropic' }],
+                    },
+                    runtimes: {
+                        local: {},
+                        docker: { image: 'ghcr.io/example/game:1.0.0' },
+                    },
+                }),
+            versions: new WorkerRunnerVersions(async () => 'opencode v2.2.5'),
+        });
+        await home.saveMember({ id: 'mem_1', name: 'matty' });
+        await home.saveMemberConnection('mem_1', 'opencode', {
+            provider: 'anthropic',
+            method: 'claude-subscription',
+            nativeProvider: 'claude-agent',
+        });
+        for (const runtime of ['local', 'docker']) {
+            const run = start({
+                runtime,
+                image_pull: null,
+                env: {},
+                started_by: { member_id: 'mem_1' },
+            });
+            await engine.admit(run);
+            await engine.launch(run);
+            expect(launched.at(-1)?.connection).toBe('claude-agent');
+        }
+    });
+
+    test("sends a Mac worker's docker run on Claude Agent without a login to a Linux worker", async () => {
+        const { home, services } = await engineHome();
+        const runners = RunnerRegistry.standard();
+        const engine = new WorkerEngine({
+            worker: 'mini',
+            api: 'https://api.example.test',
+            home,
+            services: {
+                ...services,
+                launcher: {
+                    start: async () => {
+                        throw new AuthenticationRequiredError(
+                            'Claude Code in the docker runtime has no subscription login for Claude subscription. Run claude auth login.'
+                        );
+                    },
+                },
+            },
+            runners,
+            environment: new TestRunEnvironment(home, runners, {}),
+            host: { describe: () => ({ ...new NodeHost().describe(), os: 'macos' }) },
+            download: async () =>
+                workbenchPackage({
+                    model: {
+                        id: 'anthropic/claude-haiku-5-5',
+                        routes: [{ provider: 'anthropic' }],
+                    },
+                }),
+        });
+        await home.saveMember({ id: 'mem_1', name: 'matty' });
+        await home.saveMemberConnection('mem_1', 'opencode', {
+            provider: 'anthropic',
+            method: 'claude-subscription',
+            nativeProvider: 'claude-agent',
+            signInRunner: 'claude-code',
+        });
+        const run = start({ runtime: 'docker', started_by: { member_id: 'mem_1' } });
+        await engine.admit(run);
+
+        const error = await engine.launch(run).catch((reason: unknown) => reason);
+
+        expect(error instanceof Error ? error.message : '').toBe(
+            "Claude Code in the docker runtime has no subscription login for Claude subscription. On a Mac worker a docker run cannot read Claude Code's login, which the member's own keychain holds. Run this Workbench on a Linux worker."
+        );
+    });
+
     test("uses a member's connection only for a Workbench whose routes allow it", async () => {
         const { home, services } = await engineHome();
         const runners = RunnerRegistry.standard();

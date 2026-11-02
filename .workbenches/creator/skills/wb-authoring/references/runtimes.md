@@ -96,6 +96,17 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && chmod -R a+rX "$(npm root -g)"
 ```
 
+An OpenCode Workbench that runs on a Claude subscription uses OpenCode 2's Claude Agent provider, so it is experimental with OpenCode 2: install OpenCode 2.2.3 or newer and Claude Code too, both pinned. The run reads Claude Code's own login, so the image holds no credential: on a worker it is the member's Claude Code sign-in, elsewhere a `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` in the consumer's environment. E2B and Daytona refuse this route.
+
+```dockerfile
+ARG OPENCODE_VERSION=<pinned 2.2.3 or newer>
+ARG CLAUDE_CODE_VERSION=<pinned version>
+
+# The runner, OpenCode 2, and Claude Code, which its Claude Agent provider runs.
+RUN npm install -g @opencode/cli@${OPENCODE_VERSION} @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+    && chmod -R a+rX "$(npm root -g)"
+```
+
 Start from a base that already carries heavy dependencies when the work needs them (a browser automation image for UI work, a language toolchain image), and add the runner and tools on top.
 
 ## Building and publishing images

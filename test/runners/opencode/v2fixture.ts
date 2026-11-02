@@ -39,6 +39,12 @@ export class FakeOpenCodeV2Server {
         body?: Record<string, unknown>;
     }> = [];
     readonly authenticationRequests: string[] = [];
+    /**
+     * Claude Agent's integration as `/integration` lists it, with the
+     * connections that record a choice of Claude Code. Undefined leaves it out,
+     * as OpenCode does where it cannot start a local `claude`.
+     */
+    claudeAgent: { connections: unknown[] } | undefined = { connections: [] };
     /** Sessions other than the native one, by id, as `GET /session/:id` answers. */
     readonly sessions = new Map<string, Record<string, unknown>>();
     /** What `/api/info` reports. */
@@ -400,8 +406,31 @@ export class FakeOpenCodeV2Server {
                             },
                         ],
                     },
+                    ...(this.claudeAgent
+                        ? [
+                              {
+                                  id: 'claude-agent',
+                                  name: 'Claude Agent',
+                                  methods: [
+                                      {
+                                          id: 'claude-login',
+                                          type: 'external',
+                                          label: 'Claude Code login (claude auth login)',
+                                      },
+                                  ],
+                                  connections: this.claudeAgent.connections,
+                              },
+                          ]
+                        : []),
                 ],
             });
+        }
+        if (path === '/api/integration/claude-agent/connect/external') {
+            this.claudeAgent?.connections.push({
+                type: 'credential',
+                method: 'external',
+            });
+            return new Response(null, { status: 204 });
         }
         if (path === '/api/integration/openai/connect/oauth') {
             this.authenticationRequests.push(`authorize:${body.methodID}`);

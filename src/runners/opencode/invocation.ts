@@ -3,6 +3,7 @@ import { relative } from 'node:path';
 import { modelLabel } from '../../models/label.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
+import { claudeAgentProviders } from './claudeagent.js';
 
 export function buildOpenCodeInvocation(
     workbench: ResolvedWorkbench,
@@ -208,6 +209,8 @@ function buildOpenCodeEnvironment(
         outbox && !/[?*\\]/.test(outbox)
             ? { permission: { external_directory: { [`${outbox}/*`]: 'allow' } } }
             : {};
+    // OpenCode 1 ignores `providers`, and only a Claude Agent route sets it.
+    const providers = claudeAgentProviders(model);
     const config = {
         $schema: 'https://opencode.ai/config.json',
         autoupdate: false,
@@ -216,6 +219,7 @@ function buildOpenCodeEnvironment(
         instructions: [instructionPath],
         ...outboxPermission,
         ...(Object.keys(mcp).length > 0 ? { mcp } : {}),
+        ...(providers ? { providers } : {}),
     };
 
     return {

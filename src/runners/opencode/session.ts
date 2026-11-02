@@ -13,6 +13,7 @@ import type {
 import { normalizeRunnerInput } from '../session.js';
 import { OpenCodeAuthentication } from './authentication.js';
 import { OpenCodeChildren } from './children.js';
+import { CLAUDE_AGENT_PROVIDER, OpenCodeClaudeAgent } from './claudeagent.js';
 import { OpenCodeV2Credentials } from './credentials.js';
 import { openCodeParts } from './input.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
@@ -131,6 +132,12 @@ export class OpenCodeServerSession implements RunnerSession {
                 this.options.startupTimeoutMs
             );
         }
+        if (this.options.configuration.nativeProvider === CLAUDE_AGENT_PROVIDER)
+            await withTimeout(
+                new OpenCodeClaudeAgent(this.server).prepare(),
+                'OpenCode did not ready its Claude Agent provider in time',
+                this.options.startupTimeoutMs
+            );
         if (this.options.authentication)
             await withTimeout(
                 new OpenCodeAuthentication(this.server, this.options.host).complete(

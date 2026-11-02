@@ -391,6 +391,37 @@ describe('wb connect --worker', () => {
         expect(await everyFile(home.root)).not.toContain('MUST_NOT_RENDER');
     });
 
+    test("signs a member's OpenCode Claude subscription in with Claude Code's own sign-in, where both runtimes read it", async () => {
+        const { home, connect } = await relay();
+        const terminal = new ScriptedTerminal([['Paste code here', 'code-123\r']]);
+        const result = await connect(
+            {
+                runner: 'opencode',
+                provider: 'anthropic',
+                method: 'claude-subscription',
+            },
+            terminal
+        );
+        expect(result).toEqual({ message: 'Signed in to Claude Code on this worker.' });
+        const member = home.memberDirectory('mem_1');
+        // The login is Claude Code's, in the sign-ins the claude-code runner reads too.
+        expect(
+            await readFile(
+                join(member, '.local', 'share', 'claude', '.credentials.json'),
+                'utf8'
+            )
+        ).toContain(TOKEN);
+        // OpenCode signed nothing in, and only its choice of route is recorded,
+        // with the provider of its own that a run asks for.
+        await expect(stat(join(member, 'opencode-args'))).rejects.toThrow();
+        expect(await home.readMemberConnection('mem_1', 'opencode')).toEqual({
+            provider: 'anthropic',
+            method: 'claude-subscription',
+            nativeProvider: 'claude-agent',
+            signInRunner: 'claude-code',
+        });
+    });
+
     test("says whose machine it is before signing in on someone else's worker", async () => {
         const notice =
             "mini is Ada's machine. Anyone who runs there can read what you sign in with.";

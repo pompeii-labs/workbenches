@@ -11,4 +11,12 @@ export interface ConnectionAuthenticationMethod {
     nativeProvider: string;
     nativeMethod?: string;
     authenticationMethod: 'api' | 'oauth' | 'native';
+    /**
+     * Another runner whose own login serves this method, such as Claude Code's
+     * for OpenCode's Claude Agent: its probe confirms the login and its sign-in
+     * makes it. The runner itself keeps nothing.
+     */
+    signInRunner?: string;
+    /** Why this method cannot be used on the runtime it was listed for. */
+    unavailable?: string;
 }

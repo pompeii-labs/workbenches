@@ -63,6 +63,10 @@ export class OpenCodeServer {
     get isV2(): boolean {
         return this.v2;
     }
+    /** The OpenCode 2 release `/api/info` reported. OpenCode 1 reports none. */
+    get version(): string | undefined {
+        return this.release;
+    }
     private readonly abort: AbortController;
     private readonly options: OpenCodeServerOptions;
     private child: SpawnedOpenCodeServer | undefined;
@@ -77,6 +81,7 @@ export class OpenCodeServer {
     private stderrLoop: Promise<string> | undefined;
     private closed = false;
     private v2 = false;
+    private release: string | undefined;
     private readonly v2Events = new OpenCodeV2Events();
     private mcpStatus = Promise.withResolvers<void>();
     private readonly oauthMethods = new Map<string, string[]>();
@@ -137,6 +142,7 @@ export class OpenCodeServer {
             ) {
                 const body = record(await info.json());
                 this.v2 = /^2\./.test(string(body?.version) ?? '');
+                if (this.v2) this.release = string(body?.version);
             } else if (!info.ok && info.status !== 404) {
                 throw new Error(
                     `OpenCode API discovery failed with HTTP ${info.status}`

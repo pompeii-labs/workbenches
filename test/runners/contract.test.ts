@@ -51,6 +51,22 @@ const openAiApiKey: ConnectionAuthenticationMethod = {
     authenticationMethod: 'api',
 };
 
+const anthropicSignIn: ConnectionAuthenticationMethod = {
+    id: 'native',
+    label: 'Anthropic sign-in',
+    nativeProvider: 'anthropic',
+    authenticationMethod: 'native',
+};
+
+const claudeSubscription: ConnectionAuthenticationMethod = {
+    id: 'claude-subscription',
+    label: 'Claude subscription through Claude Code (OpenCode 2.2.3 or newer, experimental)',
+    nativeProvider: 'claude-agent',
+    nativeMethod: 'claude-login',
+    authenticationMethod: 'oauth',
+    signInRunner: 'claude-code',
+};
+
 /** What each registered runner declares, as the engine behaved before runners declared it. */
 const expected: Record<
     string,
@@ -83,6 +99,8 @@ const expected: Record<
             local: ConnectionAuthenticationMethod[] | undefined;
             docker: ConnectionAuthenticationMethod[] | undefined;
         };
+        /** Its Anthropic methods by runtime, when it offers its own. */
+        anthropicMethods?: Record<'local' | 'e2b', ConnectionAuthenticationMethod[]>;
         hostSignIn?: { executable: string; plain: string[]; withMethod: string[] };
         manualSignIn?: string;
         inRunSignIn: boolean;
@@ -105,11 +123,35 @@ const expected: Record<
         capabilities: nativeEverywhere,
         builtInCapabilities: nativeEverywhere,
         catalogVersion: '1.18.30',
-        candidates: routes.map((route) => ({
-            provider: route.provider,
-            nativeProvider: route.provider,
-            nativeModel: route.model,
-        })),
+        candidates: routes.flatMap((route) => [
+            {
+                provider: route.provider,
+                nativeProvider: route.provider,
+                nativeModel: route.model,
+            },
+            // Claude Agent serves the same pinned Anthropic model on a Claude Code login.
+            ...(route.provider === 'anthropic'
+                ? [
+                      {
+                          provider: 'anthropic',
+                          nativeProvider: 'claude-agent',
+                          nativeModel: route.model,
+                          authenticationMethod: 'oauth',
+                      },
+                  ]
+                : []),
+        ]),
+        anthropicMethods: {
+            local: [anthropicSignIn, claudeSubscription],
+            e2b: [
+                anthropicSignIn,
+                {
+                    ...claudeSubscription,
+                    unavailable:
+                        'A Claude subscription through OpenCode runs only on the local and docker runtimes: e2b has no Claude Code login to use. Use an Anthropic API key there instead',
+                },
+            ],
+        },
         packagedProviders: true,
         probe: {
             command: [
@@ -416,7 +458,7 @@ describe('runner contract', () => {
                 expect(connection.probe.authenticated('', candidates)).toEqual([]);
             });
 
-            test('offers its own OpenAI methods and leaves other providers generic', () => {
+            test('offers its own OpenAI and Anthropic methods and leaves other providers generic', () => {
                 const connection = runner.connection;
                 expect(
                     connection.methods('local', 'openai', modelCatalogFixture)
@@ -426,7 +468,11 @@ describe('runner contract', () => {
                 ).toEqual(declared.methods.docker);
                 expect(
                     connection.methods('local', 'anthropic', modelCatalogFixture)
-                ).toBeUndefined();
+                ).toEqual(declared.anthropicMethods?.local);
+                if (declared.anthropicMethods)
+                    expect(
+                        connection.methods('e2b', 'anthropic', modelCatalogFixture)
+                    ).toEqual(declared.anthropicMethods.e2b);
             });
 
             test('declares how a subscription is signed in', () => {

@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 
+import { AuthenticationRequiredError } from '../src/connections/error.js';
 import {
     ConnectionInspector,
     type ConnectionInspectorOptions,
 } from '../src/connections/inspector.js';
+import { claudeCodeConnection } from '../src/runners/claude-code/connection.js';
 import type { PreparedRunner } from '../src/runners/runner.js';
 import type { PreparedRuntime } from '../src/runtimes/contracts.js';
 import type { ResolvedWorkbench } from '../src/types.js';
@@ -225,6 +227,139 @@ describe('native runner authentication', () => {
             'Run wb connect fixture --runtime e2b, or pass the provider key'
         );
     });
+});
+
+describe('a login another runner keeps', () => {
+    const subscription = JSON.stringify({
+        loggedIn: true,
+        authMethod: 'claude.ai',
+        subscriptionType: 'max',
+    });
+    const claudeAgent = {
+        provider: 'anthropic',
+        nativeProvider: 'claude-agent',
+        authenticationMethod: 'oauth',
+    };
+
+    /** An OpenCode Workbench on Anthropic, in `name`, where `claude auth status` answers `status`. */
+    function claudeRuntime(
+        status: { code: number; stdout: string; stderr?: string },
+        name = 'local'
+    ) {
+        const commands: string[][] = [];
+        const prepared = runtime('', {
+            name,
+            execute: async (invocation) => {
+                commands.push(invocation.command);
+                const claude =
+                    JSON.stringify(invocation.command) ===
+                    JSON.stringify(claudeCodeConnection.probe.command);
+                return claude
+                    ? { stderr: '', ...status }
+                    : { code: 0, stdout: '[]', stderr: '' };
+            },
+        });
+        const workbench = fixture('opencode');
+        workbench.manifest.model = {
+            id: 'anthropic/claude-sonnet-4-5',
+            routes: [{ provider: 'anthropic' }],
+        };
+        return {
+            commands,
+            claudeProbed: () =>
+                commands.some(
+                    (command) =>
+                        JSON.stringify(command) ===
+                        JSON.stringify(claudeCodeConnection.probe.command)
+                ),
+            inspector: inspector(workbench, {
+                runner: runner('opencode'),
+                runtime: prepared,
+            }),
+        };
+    }
+
+    test('offers Claude Agent for the pinned Anthropic model, after the native route', () => {
+        const { inspector } = claudeRuntime({ code: 0, stdout: subscription });
+        expect(inspector.candidates()).toEqual([
+            {
+                provider: 'anthropic',
+                nativeProvider: 'anthropic',
+                nativeModel: 'claude-sonnet-4-5',
+            },
+            { ...claudeAgent, nativeModel: 'claude-sonnet-4-5' },
+        ]);
+        inspector.assertAllowed('claude-agent');
+    });
+
+    test('asks Claude Code only when the connection is wanted', async () => {
+        const local = claudeRuntime({ code: 0, stdout: subscription });
+        const status = await local.inspector.inspect({ discoverConnections: true });
+        expect(status.ready).toBeFalse();
+        expect(local.claudeProbed()).toBeFalse();
+    });
+
+    for (const wanted of ['preferred', 'requested'] as const) {
+        test(`serves a ${wanted} Claude Agent route from a Claude subscription login`, async () => {
+            const local = claudeRuntime({ code: 0, stdout: subscription });
+            const status = await local.inspector.inspect(
+                wanted === 'preferred'
+                    ? { preferredConnection: claudeAgent }
+                    : { connection: 'claude-agent', discoverConnections: true }
+            );
+            expect(local.claudeProbed()).toBeTrue();
+            expect(status.configuration).toMatchObject({
+                provider: 'anthropic',
+                nativeProvider: 'claude-agent',
+                nativeModel: 'claude-sonnet-4-5',
+                model: 'claude-agent/claude-sonnet-4-5',
+                authenticationMethod: 'oauth',
+            });
+        });
+    }
+
+    for (const [login, stdout] of [
+        ['signed out', JSON.stringify({ loggedIn: false, authMethod: 'none' })],
+        [
+            'signed in with a Console key',
+            JSON.stringify({ loggedIn: true, authMethod: 'api_key' }),
+        ],
+    ] as const) {
+        test(`refuses a Claude Code login that is ${login}, saying what to do`, async () => {
+            const local = claudeRuntime({ code: 0, stdout });
+            const inspected = local.inspector.inspect({
+                preferredConnection: claudeAgent,
+            });
+            await expect(inspected).rejects.toBeInstanceOf(AuthenticationRequiredError);
+            await expect(inspected).rejects.toThrow(
+                'Claude Code in the local runtime has no subscription login for Claude subscription through Claude Code (OpenCode 2.2.3 or newer, experimental). Run claude auth login.'
+            );
+        });
+    }
+
+    test('refuses a runtime without Claude Code, naming the image and the sign-ins', async () => {
+        const docker = claudeRuntime(
+            { code: 1, stdout: '', stderr: 'sh: 1: claude: not found' },
+            'docker'
+        );
+        await expect(
+            docker.inspector.inspect({ preferredConnection: claudeAgent })
+        ).rejects.toThrow(
+            'Claude Code could not report its login in the docker runtime: sh: 1: claude: not found. Claude subscription through Claude Code (OpenCode 2.2.3 or newer, experimental) needs Claude Code installed there, pinned in the image, and signed in. Set CLAUDE_CODE_OAUTH_TOKEN where wb runs, or sign in to Claude Code on a worker with wb connect --worker <worker> claude-code.'
+        );
+    });
+
+    for (const name of ['e2b', 'daytona']) {
+        test(`refuses ${name} before asking Claude Code anything`, async () => {
+            const hosted = claudeRuntime({ code: 0, stdout: subscription }, name);
+            await expect(
+                hosted.inspector.inspect({ preferredConnection: claudeAgent })
+            ).rejects.toThrow(
+                `A Claude subscription through OpenCode runs only on the local and docker runtimes: ${name} has no Claude Code login to use. Use an Anthropic API key there instead.`
+            );
+            expect(hosted.claudeProbed()).toBeFalse();
+        });
+    }
 });
 
 function inspector(
