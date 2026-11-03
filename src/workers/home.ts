@@ -59,6 +59,13 @@ export interface WorkerMemberConnection {
     provider: string;
     /** The id of the method they chose. */
     method: string;
+    /**
+     * The runner's own provider, which their runs ask for, when another
+     * runner's login serves the method, such as OpenCode's `claude-agent`.
+     */
+    nativeProvider?: string;
+    /** The runner whose own login serves the method, when it is another runner's. */
+    signInRunner?: string;
     /** The variable a saved key reaches their runs as. */
     variable?: string;
     /** That key. */
@@ -281,6 +288,12 @@ export class WorkerHome {
         return {
             provider: entry.provider,
             method: entry.method,
+            ...(typeof entry.nativeProvider === 'string' && entry.nativeProvider
+                ? { nativeProvider: entry.nativeProvider }
+                : {}),
+            ...(typeof entry.signInRunner === 'string' && entry.signInRunner
+                ? { signInRunner: entry.signInRunner }
+                : {}),
             ...(typeof entry.variable === 'string' &&
             entry.variable &&
             typeof entry.secret === 'string' &&

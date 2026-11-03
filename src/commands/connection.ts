@@ -78,7 +78,13 @@ export class ModelConnection {
      */
     async connect(flags: { stdin: boolean }): Promise<void> {
         const { target } = this.#options;
+        if (target.method.unavailable) throw new Error(`${target.method.unavailable}.`);
         this.#validate(flags);
+        // Another runner keeps this login, so nothing is written for this one.
+        if (target.method.signInRunner) {
+            await this.#report(await this.#setup.verify(), this.#delegatedAdvice());
+            return;
+        }
         if (target.runtime === 'local') {
             await this.#report(await this.#setup.verify(), this.#localAdvice());
             return;
@@ -258,6 +264,22 @@ export class ModelConnection {
         return target.method.authenticationMethod === 'oauth' && own.length
             ? own.join(' or ')
             : this.#variables();
+    }
+
+    /** How to make the login another runner keeps for this method. */
+    #delegatedAdvice(): string {
+        const { target, workbench } = this.#options;
+        const owner = this.#runners.find(target.method.signInRunner ?? '');
+        if (target.runtime === 'local')
+            return (
+                owner?.connection.manualSignIn ?? `Sign in for ${target.method.label}`
+            );
+        const name = owner?.displayName ?? target.method.label;
+        const variables = owner?.nativeCredentialVariables.join(' or ');
+        const check = workbench
+            ? `, then check it with wb smoke ${workbench.reference} --runtime ${target.runtime}`
+            : '';
+        return `${variables ? `Set ${variables} where wb runs, or sign` : 'Sign'} in to ${name} on a worker with wb connect --worker <worker> ${owner?.name ?? target.harness}${check}`;
     }
 
     #localAdvice(): string {

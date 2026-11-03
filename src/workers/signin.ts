@@ -35,7 +35,8 @@ type WorkerConnectPlan = {
     method: ConnectionAuthenticationMethod;
 } & (
     | { kind: 'key'; variable: string }
-    | { kind: 'sign-in'; signIn: RunnerWorkerSignIn }
+    /** `signInRunner` runs its own sign-in: this runner, or the one keeping the method's login. */
+    | { kind: 'sign-in'; signIn: RunnerWorkerSignIn; signInRunner: Runner }
 );
 
 /** What a finished sign-in ran with, so its login can be exported the same way. */
@@ -216,10 +217,17 @@ export class WorkerSignIns {
                 return `${providerLabel(provider)} has no API key variable, so a worker cannot keep its key.`;
             return { kind: 'key', runner, provider, method, variable };
         }
-        const signIn = runner.workerSignIn;
+        // A method another runner keeps the login for, such as OpenCode's
+        // Claude Agent on Claude Code's, runs that runner's sign-in.
+        const signInRunner = method.signInRunner
+            ? this.options.runners.find(method.signInRunner)
+            : runner;
+        if (!signInRunner)
+            return `This worker has no runner named ${method.signInRunner}.`;
+        const signIn = signInRunner.workerSignIn;
         if (!signIn)
-            return `${runner.displayName} has no command-line sign-in, so a ${runner.displayName} subscription cannot be connected on a worker yet. An API key can be.`;
-        return { kind: 'sign-in', runner, provider, method, signIn };
+            return `${signInRunner.displayName} has no command-line sign-in, so a ${signInRunner.displayName} subscription cannot be connected on a worker yet. An API key can be.`;
+        return { kind: 'sign-in', runner, provider, method, signIn, signInRunner };
     }
 
     /** Asks the person for the key and keeps it for the provider's standard variable. */
@@ -258,7 +266,7 @@ export class WorkerSignIns {
         size: TerminalSize
     ): Promise<void> {
         const { connect_id: id } = attempt.start;
-        const { runner, method, signIn } = plan;
+        const { signInRunner: runner, method, signIn } = plan;
         const executable = this.#which(runner.executable);
         if (!executable) {
             this.#update(
@@ -328,22 +336,37 @@ export class WorkerSignIns {
         signedIn: SignedIn
     ): Promise<void> {
         const { connect_id: id } = attempt.start;
-        const { runner, provider, method } = plan;
+        const { runner, provider, method, signInRunner } = plan;
         if (attempt.ended) return;
         if (code !== 0) {
-            this.options.log.write(`sign-in failed  ${runner.name}`);
+            this.options.log.write(`sign-in failed  ${signInRunner.name}`);
             this.#update(
                 id,
                 'failed',
-                `${runner.displayName} sign-in did not finish (exit ${code}).`
+                `${signInRunner.displayName} sign-in did not finish (exit ${code}).`
             );
             return;
         }
-        await this.#keepPortable(plan, signedIn);
+        // Only a login the runner itself made has anything of its own to copy.
+        if (signInRunner === runner) await this.#keepPortable(plan, signedIn);
         // The runner keeps its login in the member's home; this records only which it is.
-        await this.#save(attempt, runner, { provider, method: method.id });
-        this.options.log.write(`sign-in finished  ${runner.name}`);
-        this.#update(id, 'done', `Signed in to ${runner.displayName} on this worker.`);
+        await this.#save(attempt, runner, {
+            provider,
+            method: method.id,
+            // A run reaches another runner's login only through the runner's own provider.
+            ...(signInRunner === runner
+                ? {}
+                : {
+                      nativeProvider: method.nativeProvider,
+                      signInRunner: signInRunner.name,
+                  }),
+        });
+        this.options.log.write(`sign-in finished  ${signInRunner.name}`);
+        this.#update(
+            id,
+            'done',
+            `Signed in to ${signInRunner.displayName} on this worker.`
+        );
     }
 
     /**

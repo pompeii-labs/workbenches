@@ -1,10 +1,9 @@
 import type { RunnerResumeOptions, RunnerTurnResult } from '../session.js';
-import { record } from './json.js';
 import type { TurnProgress } from './progress.js';
-import type { OpenCodeEventRouter } from './router.js';
+import { type OpenCodeEventRouter, sessionFailure } from './router.js';
 import type { OpenCodeServer } from './server.js';
 import type { OpenCodeSessionState } from './state.js';
-import { OpenCodeTranscript, outputIdFor, type TranscriptTurn } from './transcript.js';
+import { OpenCodeTranscript, type TranscriptTurn } from './transcript.js';
 import { type ActiveTurn, createActiveTurn } from './turn.js';
 
 /**
@@ -16,6 +15,7 @@ import { type ActiveTurn, createActiveTurn } from './turn.js';
  */
 export class TurnRecovery {
     private inflight: Promise<RunnerTurnResult> | undefined;
+    private catching: Promise<ActiveTurn> | undefined;
 
     constructor(
         private readonly server: Pick<
@@ -28,13 +28,27 @@ export class TurnRecovery {
     ) {}
 
     resume(options: RunnerResumeOptions): Promise<RunnerTurnResult> {
-        this.inflight ??= this.run(options).finally(() => {
-            this.inflight = undefined;
-        });
+        this.inflight ??= this.catchUp(options)
+            .then((turn) => turn.promise.finally(() => this.state.release(turn)))
+            .finally(() => {
+                this.inflight = undefined;
+            });
         return this.inflight;
     }
 
-    private async run(options: RunnerResumeOptions): Promise<RunnerTurnResult> {
+    /**
+     * Catches the turn up and resolves once it follows the turn live, without
+     * waiting for it to settle, so a turn whose stream goes quiet again later
+     * can be caught up again.
+     */
+    catchUp(options: RunnerResumeOptions = {}): Promise<ActiveTurn> {
+        this.catching ??= this.run(options).finally(() => {
+            this.catching = undefined;
+        });
+        return this.catching;
+    }
+
+    private async run(options: RunnerResumeOptions): Promise<ActiveTurn> {
         const state = this.state;
         state.assertOpen();
         if (state.failure && !state.streamFailure) throw state.failure;
@@ -87,8 +101,7 @@ export class TurnRecovery {
         } finally {
             this.router.release();
         }
-        const resumed = turn as ActiveTurn;
-        return resumed.promise.finally(() => state.release(resumed));
+        return turn as ActiveTurn;
     }
 
     /** Listens first and reads second, so nothing between the two is missed. */
@@ -143,19 +156,11 @@ export class TurnRecovery {
         replay: TranscriptTurn,
         sessionId: string
     ): Promise<void> {
-        for (const answer of replay.answers) {
-            turn.assistantOutputIds.set(answer.id, outputIdFor(answer.id));
-            turn.seenActivity = true;
-            turn.steering.deliverThrough(answer.parentId);
-            for (const part of answer.parts) {
-                await this.emitted.part(turn, record(part), sessionId);
-                this.state.assertOpen();
-            }
-        }
+        await this.router.emitAnswers(turn, replay.answers, sessionId);
         const end = replay.end;
         if (end?.kind === 'cancelled') this.state.finish('cancelled');
         else if (end?.kind === 'failed') {
-            this.state.failTurn(new Error('OpenCode session failed'));
+            this.state.failTurn(new Error(sessionFailure(end.error)));
         } else if (end?.kind === 'completed') {
             this.state.finish(this.emitted.completionReason() ?? end.finish);
         }

@@ -11,7 +11,9 @@ import { RunnerRegistry } from '../runners/registry.js';
 import type { PreparedRunner, Runner, RunnerConnection } from '../runners/runner.js';
 import type { PreparedRuntime } from '../runtimes/contracts.js';
 import type { ResolvedWorkbench } from '../types.js';
+import { inspectDelegated } from './delegated.js';
 import { AuthenticationRequiredError } from './error.js';
+import { diagnostic, stripTerminalControl } from './listing.js';
 import { ConnectionStore, type RunnerConnectionSelection } from './store.js';
 
 export interface RunnerAuthenticationStatus {
@@ -116,13 +118,25 @@ export class ConnectionInspector {
                 ? { discoverConnections: options.discoverConnections }
                 : {}),
         };
-        const authenticatedRoutes = await inspectNative(
-            nativeOptions,
-            this.#harness(),
-            routes,
-            this.#router,
-            discoveryPreference
-        );
+        const authenticatedRoutes = uniqueAuthenticatedRoutes([
+            ...(await inspectNative(
+                nativeOptions,
+                this.#harness(),
+                routes,
+                this.#router,
+                discoveryPreference
+            )),
+            ...(await inspectDelegated(
+                nativeOptions,
+                this.#harness(),
+                this.#runners,
+                nativeCandidates(this.#harness().connection, routes, this.#router),
+                this.#router,
+                options.connection
+                    ? { provider: '', nativeProvider: options.connection }
+                    : storedPreference
+            )),
+        ]);
         const requested = options.connection
             ? requestedConnection(authenticatedRoutes, options.connection)
             : undefined;
@@ -384,22 +398,6 @@ function providersFromEnvironment(
             ? [route.provider]
             : [];
     });
-}
-
-function stripTerminalControl(value: string): string {
-    // biome-ignore lint/complexity/useRegexLiterals: the literal form trips the control-character safeguard.
-    return value.replaceAll(new RegExp(String.raw`\u001b\[[0-?]*[ -/]*[@-~]`, 'g'), '');
-}
-
-function diagnostic(
-    result: { stdout: string; stderr: string },
-    fallback: string
-): string {
-    const detail = `${result.stderr}\n${result.stdout}`
-        .split(/\r?\n/)
-        .map((line) => stripTerminalControl(line).trim())
-        .find(Boolean);
-    return detail ? `${fallback}: ${detail.slice(0, 500)}` : fallback;
 }
 
 function canonicalModel(workbench: ResolvedWorkbench): string {

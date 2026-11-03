@@ -524,6 +524,46 @@ describe('shared execution preparation', () => {
         }
     }
 
+    test("names what Claude Code lacks instead of starting OpenCode's own sign-in", async () => {
+        const fixture = await createFixture({
+            model: 'anthropic/claude-sonnet-4-5',
+            mode: 'session',
+            allowAuthentication: true,
+            unauthenticated: true,
+        });
+        await new ConnectionStore(fixture.home).save(
+            ConnectionStore.context(fixture.workbench),
+            {
+                provider: 'anthropic',
+                nativeProvider: 'claude-agent',
+                authenticationMethod: 'oauth',
+            }
+        );
+        try {
+            await expect(fixture.preparation.prepare()).rejects.toThrow(
+                'Claude Code in the local runtime has no subscription login for Claude subscription through Claude Code (OpenCode 2.2.3 or newer, experimental). Run claude auth login.'
+            );
+        } finally {
+            await fixture.preparation.cleanup();
+        }
+    });
+
+    test("checks Claude Code's login when a session run asks for Claude Agent with nothing saved", async () => {
+        const fixture = await createFixture({
+            model: 'anthropic/claude-sonnet-4-5',
+            mode: 'session',
+            unauthenticated: true,
+            connection: 'claude-agent',
+        });
+        try {
+            await expect(fixture.preparation.prepare()).rejects.toThrow(
+                'Claude Code in the local runtime has no subscription login for Claude subscription through Claude Code (OpenCode 2.2.3 or newer, experimental). Run claude auth login.'
+            );
+        } finally {
+            await fixture.preparation.cleanup();
+        }
+    });
+
     test('refuses first-run authentication in a run for a runner that cannot finish it there', async () => {
         const fixture = await createFixture({
             runner: 'pi',
@@ -550,6 +590,8 @@ describe('shared execution preparation', () => {
 });
 
 interface FixtureOptions {
+    /** The manifest model. Defaults to `openai/gpt-5.6-terra`. */
+    model?: string;
     repository?: boolean;
     delivery?: 'none' | 'pr';
     runtime?: string;
@@ -558,6 +600,8 @@ interface FixtureOptions {
     captureOutcomes?: boolean;
     allowAuthentication?: boolean;
     unauthenticated?: boolean;
+    /** The connection the run asks for, as `--connection` names it. */
+    connection?: string;
     preflightFailure?: Error;
     runtimeFailure?: Error;
     cleanupFailure?: Error;
@@ -612,7 +656,7 @@ async function createFixture(options: FixtureOptions = {}) {
             version: '0.1.0',
             name: 'preparation-fixture',
             runner: options.runner ?? 'opencode',
-            model: { id: 'openai/gpt-5.6-terra' },
+            model: { id: options.model ?? 'openai/gpt-5.6-terra' },
             runtime: options.runtime ?? 'local',
             instructions: './instructions.md',
             skills: [],
@@ -681,6 +725,7 @@ async function createFixture(options: FixtureOptions = {}) {
             ...(options.allowAuthentication !== undefined
                 ? { allowAuthentication: options.allowAuthentication }
                 : {}),
+            ...(options.connection ? { connection: options.connection } : {}),
         },
         {
             environment: options.unauthenticated
@@ -707,7 +752,13 @@ async function createFixture(options: FixtureOptions = {}) {
                           ),
                   }
                 : {}),
-            runners: new RunnerRegistry([runner]),
+            // The others as registered, for a method another runner's login serves.
+            runners: new RunnerRegistry([
+                runner,
+                ...RunnerRegistry.standard()
+                    .list()
+                    .filter((other) => other.name !== runner.name),
+            ]),
             runtimes: new RuntimeRegistry([provider]),
         }
     );

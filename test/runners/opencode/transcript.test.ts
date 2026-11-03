@@ -132,7 +132,10 @@ describe('OpenCodeTranscript', () => {
             user('msg_1'),
             assistant('a_1', 'msg_1', { error: { name: 'ProviderAuthError' } }),
         ]);
-        expect(failed.turnOf('msg_1').end).toEqual({ kind: 'failed' });
+        expect(failed.turnOf('msg_1').end).toEqual({
+            kind: 'failed',
+            error: { name: 'ProviderAuthError' },
+        });
     });
 
     test('is still running until the message is finished, and when it paused for tool calls', () => {

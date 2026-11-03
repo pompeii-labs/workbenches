@@ -13,10 +13,12 @@ import type {
 import { normalizeRunnerInput } from '../session.js';
 import { OpenCodeAuthentication } from './authentication.js';
 import { OpenCodeChildren } from './children.js';
+import { CLAUDE_AGENT_PROVIDER, OpenCodeClaudeAgent } from './claudeagent.js';
 import { OpenCodeV2Credentials } from './credentials.js';
 import { openCodeParts } from './input.js';
 import { buildOpenCodeServerInvocation } from './invocation.js';
 import { record, string } from './json.js';
+import { OpenCodeMcpStartup } from './mcp.js';
 import { type OpenCodeProgress, TurnProgress } from './progress.js';
 import { TurnRecovery } from './recovery.js';
 import { OpenCodeInputRequests } from './requests.js';
@@ -26,6 +28,7 @@ import { OpenCodeServer } from './server.js';
 import { OpenCodeSessionState } from './state.js';
 import { withTimeout } from './timing.js';
 import { type ActiveTurn, createActiveTurn, OpenCodeMessageIds } from './turn.js';
+import { StreamWatchdog } from './watchdog.js';
 
 export interface OpenCodeServerSessionOptions extends RunnerSessionStartOptions {
     context?: RunnerContext;
@@ -50,6 +53,7 @@ export class OpenCodeServerSession implements RunnerSession {
     private readonly messageIds = new OpenCodeMessageIds();
     private readonly router: OpenCodeEventRouter;
     private readonly recovery: TurnRecovery;
+    private readonly watchdog: StreamWatchdog;
     private credentials: OpenCodeV2Credentials | undefined;
 
     constructor(options: OpenCodeServerSessionOptions) {
@@ -92,6 +96,9 @@ export class OpenCodeServerSession implements RunnerSession {
             this.router,
             this.emitted
         );
+        this.watchdog = new StreamWatchdog(this.server, this.state, () =>
+            this.recovery.catchUp()
+        );
     }
 
     get id(): string | undefined {
@@ -130,6 +137,12 @@ export class OpenCodeServerSession implements RunnerSession {
                 this.options.startupTimeoutMs
             );
         }
+        if (this.options.configuration.nativeProvider === CLAUDE_AGENT_PROVIDER)
+            await withTimeout(
+                new OpenCodeClaudeAgent(this.server).prepare(),
+                'OpenCode did not ready its Claude Agent provider in time',
+                this.options.startupTimeoutMs
+            );
         if (this.options.authentication)
             await withTimeout(
                 new OpenCodeAuthentication(this.server, this.options.host).complete(
@@ -143,6 +156,7 @@ export class OpenCodeServerSession implements RunnerSession {
             'OpenCode session did not become ready in time',
             this.options.startupTimeoutMs
         );
+        if (this.server.isV2) await new OpenCodeMcpStartup(this.server).wait();
     }
 
     private async openNativeSession(): Promise<void> {
@@ -151,6 +165,7 @@ export class OpenCodeServerSession implements RunnerSession {
             : await this.create();
         this.state.sessionId = sessionId;
         await this.router.subscribe();
+        this.watchdog.start();
     }
 
     private async create(): Promise<string> {
@@ -277,6 +292,7 @@ export class OpenCodeServerSession implements RunnerSession {
     async close(): Promise<void> {
         if (this.state.closed) return;
         this.state.closed = true;
+        this.watchdog.stop();
         this.state.finish('cancelled');
         try {
             if (this.credentials)

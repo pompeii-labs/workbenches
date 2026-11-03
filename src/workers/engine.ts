@@ -171,13 +171,13 @@ export class WorkerEngine implements WorkerRunHost {
             environment,
             keys,
             connection
-        ).catch((error: unknown) => {
+        ).catch(async (error: unknown) => {
             // A run uses only its member's sign-ins or the keys it was sent.
             // The engine's own advice names this worker's private package
             // alias, so only its reason is kept.
             if (error instanceof AuthenticationRequiredError)
                 throw new AuthenticationRequiredError(
-                    `${error.message.split('. ')[0]?.replace(/\.$/, '')}. ${this.#signInAdvice(start.runtime, runner)}`
+                    `${error.message.split('. ')[0]?.replace(/\.$/, '')}. ${await this.#signInAdvice(start, runner)}`
                 );
             throw error;
         });
@@ -187,13 +187,18 @@ export class WorkerEngine implements WorkerRunHost {
     /**
      * What makes a run's sign-in work. On a Mac some runners keep a member's
      * sign-in in their own keychain, which no container reads, so connecting
-     * again would not help a docker run.
+     * again would not help a docker run. The runner keeping it is another one
+     * when the member's connection uses that runner's login.
      */
-    #signInAdvice(runtime: string, runner: string): string {
+    async #signInAdvice(start: RunStart, runner: string): Promise<string> {
+        const member = start.started_by.member_id;
+        const saved = member
+            ? await this.#options.home.readMemberConnection(member, runner)
+            : undefined;
+        const owner = this.#options.runners.find(saved?.signInRunner ?? runner);
         const os = (this.#options.host ?? new NodeHost()).describe().os;
-        const harness = this.#options.runners.find(runner);
-        if (runtime === 'docker' && harness?.keychainSignIn && os === 'macos')
-            return `On a Mac worker a docker run cannot read ${harness.displayName}'s login, which the member's own keychain holds. Run this Workbench on a Linux worker.`;
+        if (start.runtime === 'docker' && owner?.keychainSignIn && os === 'macos')
+            return `On a Mac worker a docker run cannot read ${owner.displayName}'s login, which the member's own keychain holds. Run this Workbench on a Linux worker.`;
         return `Run wb connect --worker ${this.#options.worker} ${runner}.`;
     }
 
@@ -314,7 +319,7 @@ export class WorkerEngine implements WorkerRunHost {
             const allowed = await providers();
             if (allowed && !allowed.has(saved.provider)) return undefined;
         }
-        const connection = run.connection ?? saved.provider;
+        const connection = run.connection ?? saved.nativeProvider ?? saved.provider;
         if (connection.toLowerCase() === saved.provider && saved.variable) {
             environment[saved.variable] = saved.secret;
             if (keys) delete keys[saved.variable];

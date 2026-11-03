@@ -5,7 +5,12 @@ import type { TurnProgress } from './progress.js';
 import type { OpenCodeInputRequests } from './requests.js';
 import type { OpenCodeServer } from './server.js';
 import type { OpenCodeSessionState } from './state.js';
-import { outputIdFor } from './transcript.js';
+import {
+    OpenCodeTranscript,
+    outputIdFor,
+    type TranscriptMessage,
+} from './transcript.js';
+import type { ActiveTurn } from './turn.js';
 
 /**
  * Turns the server's native events into the session's events and turn outcomes.
@@ -18,7 +23,7 @@ export class OpenCodeEventRouter {
     private held: unknown[] | undefined;
 
     constructor(
-        private readonly server: Pick<OpenCodeServer, 'subscribe'>,
+        private readonly server: Pick<OpenCodeServer, 'subscribe' | 'requestJson'>,
         private readonly host: Pick<RunnerSessionHost, 'emit'>,
         private readonly state: OpenCodeSessionState,
         private readonly children: Pick<
@@ -97,7 +102,12 @@ export class OpenCodeEventRouter {
         const sessionId = string(properties.sessionID);
         if (!sessionId) return;
         if (sessionId !== state.sessionId) {
-            if (state.active && (await this.children.owns(sessionId))) {
+            // Only part updates carry a descendant's tools and usage.
+            if (
+                type === 'message.part.updated' &&
+                state.active &&
+                (await this.children.owns(sessionId))
+            ) {
                 const drafts = this.children.consume(type, properties, sessionId);
                 for (const draft of drafts) await this.host.emit(draft);
             }
@@ -125,7 +135,7 @@ export class OpenCodeEventRouter {
         }
         if (!active) return;
         if (type === 'session.succeeded') {
-            state.finish(this.emitted.completionReason());
+            await this.complete(active, sessionId);
             return;
         }
         if (type === 'session.interrupted') {
@@ -143,13 +153,9 @@ export class OpenCodeEventRouter {
         }
         if (type === 'session.status') {
             const status = string(record(properties.status)?.type);
-            if (status === 'idle' && (active.seenActivity || active.cancelRequested)) {
-                state.finish(
-                    active.cancelRequested
-                        ? 'cancelled'
-                        : this.emitted.completionReason()
-                );
-            }
+            if (status !== 'idle') return;
+            if (active.cancelRequested) state.finish('cancelled');
+            else if (active.seenActivity) await this.complete(active, sessionId);
             return;
         }
         if (type === 'session.idle') {
@@ -180,6 +186,58 @@ export class OpenCodeEventRouter {
             return;
         }
         await this.emitted.part(active, record(properties.part), sessionId);
+    }
+
+    /** Emits what the transcript holds of a turn's answers past what was already emitted. */
+    async emitAnswers(
+        turn: ActiveTurn,
+        answers: TranscriptMessage[],
+        sessionId: string
+    ): Promise<void> {
+        for (const answer of answers) {
+            turn.assistantOutputIds.set(answer.id, outputIdFor(answer.id));
+            turn.seenActivity = true;
+            turn.steering.deliverThrough(answer.parentId);
+            for (const part of answer.parts) {
+                await this.emitted.part(turn, record(part), sessionId);
+                this.state.assertOpen();
+            }
+        }
+    }
+
+    /**
+     * Settles a turn OpenCode reported complete, after emitting what its
+     * transcript holds that never streamed. Events can be lost between OpenCode
+     * and this client, and the turn's last message must not be among them. A
+     * transcript that cannot be read fails the turn as a lost stream, which a
+     * catch-up can recover; one that does not hold the turn adds nothing.
+     */
+    private async complete(active: ActiveTurn, sessionId: string): Promise<void> {
+        const state = this.state;
+        let transcript: OpenCodeTranscript;
+        try {
+            transcript = new OpenCodeTranscript(
+                await this.server.requestJson(
+                    `/session/${encodeURIComponent(sessionId)}/message`,
+                    { method: 'GET' }
+                )
+            );
+        } catch (error) {
+            if (state.closed || state.active !== active) return;
+            state.streamFailed(
+                new Error('OpenCode transcript could not be read', { cause: error })
+            );
+            return;
+        }
+        if (state.active !== active || active.settled) return;
+        if (transcript.holds(active.inputMessageId)) {
+            const turn = transcript.turnOf(
+                active.inputMessageId,
+                active.inputMessageIds
+            );
+            await this.emitAnswers(active, turn.answers, sessionId);
+        }
+        if (state.active === active) state.finish(this.emitted.completionReason());
     }
 }
 

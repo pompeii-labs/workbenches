@@ -6,6 +6,7 @@ import {
 import type { PreparedRuntime, RuntimeAsset } from '../../runtimes/contracts.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import { isRemoteRuntime } from '../../workbench/runtimes.js';
+import { claudeCodeConnection } from '../claude-code/connection.js';
 import {
     assertRunnerConfiguration,
     type PreparedRunner,
@@ -14,6 +15,11 @@ import {
     type RunnerEventNormalizer,
 } from '../runner.js';
 import { OpenCodeSessionAdapter, type OpenCodeSessionDependencies } from './adapter.js';
+import {
+    CLAUDE_AGENT_PROVIDER,
+    claudeAgentEnvironment,
+    claudeAgentUnavailable,
+} from './claudeagent.js';
 import { openCodeConnection, openCodeWorkerSignIn } from './connection.js';
 import { OpenCodeEventAdapter } from './events.js';
 import { buildOpenCodeInvocation, publicInvocation } from './invocation.js';
@@ -65,12 +71,16 @@ export class OpenCodeRunner extends Runner {
         });
     }
 
-    async prepare(workbench: ResolvedWorkbench): Promise<PreparedRunner> {
+    async prepare(
+        workbench: ResolvedWorkbench,
+        environment: Record<string, string | undefined> = {}
+    ): Promise<PreparedRunner> {
         return PreparedOpenCodeRunner.create(
             workbench,
             this.session,
             this.skills,
-            this.catalog()
+            this.catalog(),
+            environment.CLAUDE_CODE_OAUTH_TOKEN
         );
     }
 }
@@ -85,14 +95,18 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
     readonly #staged: StagedOpenCodeSkills;
     readonly #session: OpenCodeSessionAdapter;
     readonly #router: ModelRouter;
+    /** A `claude setup-token` subscription token from the host, only for the Claude Agent route. */
+    readonly #claudeToken: string | undefined;
 
     private constructor(options: {
         workbench: ResolvedWorkbench;
         staged: StagedOpenCodeSkills;
         session: OpenCodeSessionAdapter;
         catalog: ModelCatalogSnapshot;
+        claudeToken: string | undefined;
     }) {
         this.#router = new ModelRouter(options.catalog);
+        this.#claudeToken = options.claudeToken;
         this.#workbench = options.workbench;
         this.#staged = options.staged;
         this.#session = options.session;
@@ -103,13 +117,15 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
         workbench: ResolvedWorkbench,
         session: OpenCodeSessionAdapter,
         skills: OpenCodeSkillStaging,
-        catalog: ModelCatalogSnapshot
+        catalog: ModelCatalogSnapshot,
+        claudeToken?: string
     ): Promise<PreparedOpenCodeRunner> {
         return new PreparedOpenCodeRunner({
             workbench,
             staged: await skills.stage(workbench),
             session,
             catalog,
+            claudeToken,
         });
     }
 
@@ -122,11 +138,7 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
         return buildOpenCodeInvocation(
             runtime.workbench,
             task,
-            this.#router.environmentForRoute(
-                this.#workbench,
-                configuration,
-                runtime.environment
-            ),
+            this.#routeEnvironment(runtime, configuration),
             runtime.pathFor(this.#staged.directory),
             runtime.workspaceDirectory,
             configuration.model,
@@ -138,11 +150,15 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
     }
 
     native(runtime: PreparedRuntime, command: string[]): RunnerInvocation {
+        // Claude Code's own probe reads the login the Claude Agent route uses.
+        const environment = sameCommand(command, claudeCodeConnection.probe.command)
+            ? claudeAgentEnvironment(runtime.environment, runtime, this.#claudeToken)
+            : runtime.environment;
         return {
             command,
             cwd: runtime.workspaceDirectory,
             env: {
-                ...runtime.environment,
+                ...environment,
                 ...(this.#staged.nativeConfigFile
                     ? {
                           OPENCODE_CONFIG: runtime.pathFor(
@@ -169,11 +185,7 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
             {
                 workbench: runtime.workbench,
                 workspaceDirectory: runtime.workspaceDirectory,
-                environment: this.#router.environmentForRoute(
-                    this.#workbench,
-                    options.configuration,
-                    runtime.environment
-                ),
+                environment: this.#routeEnvironment(runtime, options.configuration),
                 configuration: options.configuration,
                 host: options.host,
                 ...(options.authentication
@@ -218,4 +230,30 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
     cleanup(): Promise<void> {
         return this.#staged.cleanup();
     }
+
+    /**
+     * The selected route's environment. The Claude Agent route reaches Claude
+     * Code's login instead of a provider key, where a runtime has one.
+     */
+    #routeEnvironment(
+        runtime: PreparedRuntime,
+        configuration: ResolvedRunnerConfiguration
+    ): Record<string, string | undefined> {
+        const environment = this.#router.environmentForRoute(
+            this.#workbench,
+            configuration,
+            runtime.environment
+        );
+        if (configuration.nativeProvider !== CLAUDE_AGENT_PROVIDER) return environment;
+        const unavailable = claudeAgentUnavailable(runtime.name);
+        if (unavailable) throw new Error(unavailable);
+        return claudeAgentEnvironment(environment, runtime, this.#claudeToken);
+    }
+}
+
+function sameCommand(left: readonly string[], right: readonly string[]): boolean {
+    return (
+        left.length === right.length &&
+        left.every((part, index) => part === right[index])
+    );
 }

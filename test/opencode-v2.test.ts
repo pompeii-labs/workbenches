@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, jest, test } from 'bun:test';
 import {
     isOpenCodeV2,
     openCodeConnection,
@@ -8,25 +8,25 @@ import { OpenCodeServerSession } from '../src/runners/opencode/session.js';
 import { v2Message } from '../src/runners/opencode/v2.js';
 import type { RunnerSessionHost } from '../src/runners/session.js';
 import type { WorkbenchEventDraft } from '../src/runs/index.js';
-import {
-    FakeOpenCodeServer,
-    fixtureConfiguration,
-    fixtureWorkbench,
-} from './runners/opencode/fixture.js';
+import { fixtureConfiguration, fixtureWorkbench } from './runners/opencode/fixture.js';
+import { FakeOpenCodeV2Server } from './runners/opencode/v2fixture.js';
 
-class V2Server {
+const usage = {
+    cost: 0.01,
+    tokens: { input: 2, output: 3, reasoning: 0, cache: { read: 0, write: 0 } },
+};
+
+/** An OpenCode 2 fake that answers each prompt with `Hello V2`, and what its session emitted. */
+class V2Server extends FakeOpenCodeV2Server {
     readonly events: WorkbenchEventDraft[] = [];
-    readonly requests: Array<{
-        path: string;
-        method: string;
-        body: Record<string, unknown>;
-    }> = [];
-    readonly process = new FakeOpenCodeServer();
-    private stream?: ReadableStreamDefaultController<Uint8Array>;
-    onPrompt: (body: Record<string, unknown>) => void = (body) =>
-        this.complete(String(body.id));
-    pages: unknown[][] = [];
-    async start(host: Partial<RunnerSessionHost> = {}, authentication = false) {
+    override onPrompt: (body: Record<string, unknown>) => void = (body) =>
+        this.completeTurn('Hello V2', String(body.id), usage);
+
+    async start(
+        host: Partial<RunnerSessionHost> = {},
+        authentication = false,
+        nativeSessionId?: string
+    ) {
         const workbench = fixtureWorkbench('/package', '/workspace');
         const session = new OpenCodeServerSession({
             workbench,
@@ -41,88 +41,21 @@ class V2Server {
                 requestQuestion: async () => ({ outcome: 'rejected' }),
                 ...host,
             },
-            fetch: async (input, init = {}) => {
-                const url = new URL(String(input));
-                const path = url.pathname;
-                const method = init.method ?? 'GET';
-                const body = init.body ? JSON.parse(String(init.body)) : {};
-                this.requests.push({ path, method, body });
-                expect(new Headers(init.headers).get('Authorization')).toBe(
-                    `Basic ${btoa('opencode:test-password')}`
-                );
-                if (path === '/api/info') return Response.json({ version: '2.0.29' });
-                if (path === '/api/integration')
-                    return Response.json({
-                        data: [
-                            {
-                                id: 'openai',
-                                methods: [
-                                    { type: 'key' },
-                                    {
-                                        id: 'chatgpt-headless',
-                                        type: 'oauth',
-                                        label: 'Codex device code (legacy)',
-                                    },
-                                ],
-                            },
-                        ],
-                    });
-                if (path.endsWith('/connect/oauth'))
-                    return Response.json({
-                        data: {
-                            attemptID: 'attempt_1',
-                            url: 'https://auth.example/device',
-                            mode: 'auto',
-                        },
-                    });
-                if (path.endsWith('/connect/oauth/attempt_1'))
-                    return Response.json({ data: { status: 'complete' } });
-                if (path === '/api/session')
-                    return Response.json({ data: { id: 'ses_v2' } });
-                if (path === '/api/session/ses_v2')
-                    return Response.json({ data: { id: 'ses_v2' } });
-                if (path === '/api/event')
-                    return new Response(
-                        new ReadableStream({
-                            start: (controller) => {
-                                this.stream = controller;
-                                init.signal?.addEventListener(
-                                    'abort',
-                                    () => controller.close(),
-                                    { once: true }
-                                );
-                            },
-                        })
-                    );
-                if (path.endsWith('/prompt')) {
-                    queueMicrotask(() => this.onPrompt(body));
-                    return Response.json({ data: { id: body.id } });
-                }
-                if (path.endsWith('/interrupt')) {
-                    this.emit('session.execution.interrupted', { reason: 'user' });
-                    return Response.json({ data: {} });
-                }
-                if (path.endsWith('/message')) {
-                    const index = Number(url.searchParams.get('cursor') ?? '0');
-                    return Response.json({
-                        data: this.pages[index] ?? [],
-                        cursor: {
-                            next:
-                                index + 1 < this.pages.length
-                                    ? String(index + 1)
-                                    : null,
-                        },
-                    });
-                }
-                if (path.endsWith('/reply') || method === 'DELETE')
-                    return new Response(null, { status: 204 });
-                return new Response(null, { status: 404 });
-            },
+            fetch: this.fetcher,
             password: () => 'test-password',
-            launch: () => this.process.launch(),
+            launch: () => this.launch(),
             startupTimeoutMs: 1000,
             authenticationTimeoutMs: 1000,
             cleanup: async () => {},
+            ...(nativeSessionId
+                ? {
+                      session: {
+                          id: 'wb_fixture',
+                          directory: '/sessions/wb_fixture',
+                          nativeSessionId,
+                      },
+                  }
+                : {}),
             ...(authentication
                 ? {
                       authentication: {
@@ -137,37 +70,14 @@ class V2Server {
         await session.start();
         return session;
     }
-    emit(type: string, data: Record<string, unknown>) {
-        this.stream?.enqueue(
-            new TextEncoder().encode(
-                `event: ${type}\ndata: ${JSON.stringify({ type, data: { sessionID: 'ses_v2', ...data } })}\n\n`
-            )
-        );
+    count(suffix: string) {
+        return this.requests.filter((request) => request.path.endsWith(suffix)).length;
     }
-    complete(inputID: string, text = 'Hello V2') {
-        this.emit('session.inbox.delivered', { inboxID: inputID });
-        this.emit('session.step.started', { assistantMessageID: `answer_${inputID}` });
-        this.emit('session.text.started', {
-            assistantMessageID: `answer_${inputID}`,
-            ordinal: 0,
-        });
-        this.emit('session.text.delta', {
-            assistantMessageID: `answer_${inputID}`,
-            ordinal: 0,
-            delta: text,
-        });
-        this.emit('session.text.ended', {
-            assistantMessageID: `answer_${inputID}`,
-            ordinal: 0,
-            text,
-        });
-        this.emit('session.step.ended', {
-            assistantMessageID: `answer_${inputID}`,
-            finish: 'stop',
-            cost: 0.01,
-            tokens: { input: 2, output: 3, reasoning: 0, cache: { read: 0, write: 0 } },
-        });
-        this.emit('session.execution.succeeded', {});
+
+    texts() {
+        return this.events
+            .filter((event) => event.type === 'output.text')
+            .map((event) => event.data.text);
     }
 }
 
@@ -251,7 +161,7 @@ describe('OpenCode V2 protocol', () => {
                 server.emit('form.created', {
                     form: {
                         id: 'form_1',
-                        sessionID: 'ses_v2',
+                        sessionID: 'ses_native_1',
                         title: 'Choose',
                         fields: [
                             {
@@ -287,18 +197,17 @@ describe('OpenCode V2 protocol', () => {
         const server = new V2Server();
         const session = await server.start();
         try {
-            server.pages = [
-                [{ id: 'input_1', type: 'user', text: 'hello' }],
-                [
-                    {
-                        id: 'answer_1',
-                        type: 'assistant',
-                        content: [{ type: 'text', text: 'Recovered' }],
-                        finish: 'stop',
-                        time: { completed: 1 },
-                    },
-                    { id: 'idle_1', type: 'idle', outcome: 'succeeded' },
-                ],
+            server.pageSize = 1;
+            server.transcript = [
+                { id: 'input_1', type: 'user', text: 'hello' },
+                {
+                    id: 'answer_1',
+                    type: 'assistant',
+                    content: [{ type: 'text', text: 'Recovered' }],
+                    finish: 'stop',
+                    time: { completed: 1 },
+                },
+                { id: 'idle_1', type: 'idle', outcome: 'succeeded' },
             ];
             expect(await session.resumeTurn()).toEqual({ reason: 'stop' });
             expect(
@@ -306,6 +215,84 @@ describe('OpenCode V2 protocol', () => {
                     .filter((event) => event.type === 'output.text')
                     .map((event) => event.data.text)
             ).toEqual(['Recovered']);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('waits for configured MCP servers to start before the first prompt', async () => {
+        const server = new V2Server();
+        server.config = [
+            {
+                type: 'document',
+                info: {
+                    mcp: {
+                        servers: {
+                            fixture: {
+                                type: 'local',
+                                command: ['fixture-mcp'],
+                                timeout: { startup: 5000 },
+                            },
+                        },
+                    },
+                },
+            },
+        ];
+        const connected = { name: 'fixture', status: { status: 'connected' } };
+        server.mcp = [
+            [],
+            [{ ...connected, status: { status: 'pending' } }],
+            [connected],
+        ];
+        const session = await server.start();
+        try {
+            expect(await session.prompt('use the tools')).toEqual({ reason: 'stop' });
+            const paths = server.requests.map((request) => request.path);
+            expect(paths.filter((path) => path === '/api/mcp')).toHaveLength(3);
+            expect(paths.lastIndexOf('/api/mcp')).toBeLessThan(
+                paths.findIndex((path) => path.endsWith('/prompt'))
+            );
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('asks again for a permission still pending when a resumed turn reconnects', async () => {
+        const server = new V2Server();
+        server.pendingPermissions = [
+            {
+                id: 'permission_1',
+                sessionID: 'ses_native_1',
+                action: 'shell',
+                resources: ['git status'],
+                save: [],
+            },
+        ];
+        server.transcript = [{ id: 'input_1', type: 'user', text: 'hello' }];
+        const asked: string[] = [];
+        const session = await server.start(
+            {
+                requestPermission: async (request) => {
+                    asked.push(request.action);
+                    queueMicrotask(() =>
+                        server.completeTurn('Resumed', 'input_1', usage)
+                    );
+                    return 'allow_once';
+                },
+            },
+            false,
+            'ses_native_1'
+        );
+        try {
+            expect(await session.resumeTurn()).toEqual({ reason: 'stop' });
+            expect(asked).toEqual(['shell']);
+            expect(
+                server.requests.find(
+                    (request) =>
+                        request.path ===
+                        '/api/session/ses_native_1/permission/permission_1/reply'
+                )?.body
+            ).toEqual({ decision: 'once' });
         } finally {
             await session.close();
         }
@@ -515,7 +502,7 @@ describe('OpenCode V2 protocol', () => {
             });
             server.onPrompt = (body) => {
                 if (body.delivery === 'steer')
-                    server.complete(String(body.id), 'Steered');
+                    server.completeTurn('Steered', String(body.id), usage);
                 else admitted();
             };
             const turn = session.prompt({
@@ -537,6 +524,210 @@ describe('OpenCode V2 protocol', () => {
             expect(prompts[1]?.body.delivery).toBe('steer');
         } finally {
             await session.close();
+        }
+    });
+});
+
+/** What a V2 server holds once the turn begun by `inputID` has finished. */
+function finishedTranscript(inputID: string, text: string) {
+    return [
+        { id: inputID, type: 'user', text: 'work' },
+        {
+            id: `answer_${inputID}`,
+            type: 'assistant',
+            content: [{ type: 'text', text }],
+            finish: 'stop',
+            cost: 0.01,
+            tokens: {
+                input: 2,
+                output: 3,
+                reasoning: 0,
+                cache: { read: 0, write: 0 },
+            },
+            time: { completed: 1 },
+        },
+        { id: `idle_${inputID}`, type: 'idle', outcome: 'succeeded' },
+    ];
+}
+
+/** Lets pending promise callbacks run while fake timers hold every timer. */
+async function drain(rounds = 200): Promise<void> {
+    for (let round = 0; round < rounds; round += 1) await Promise.resolve();
+}
+
+describe('OpenCode V2 quiet event stream', () => {
+    afterEach(() => {
+        jest.useRealTimers();
+    });
+
+    test('a stream that stays open but goes quiet mid-turn is caught up from the transcript', async () => {
+        jest.useFakeTimers();
+        const server = new V2Server();
+        const session = await server.start();
+        try {
+            let input = '';
+            server.onPrompt = (body) => {
+                input = String(body.id);
+                server.emit('session.inbox.delivered', { inboxID: input });
+                server.emit('session.step.started', {
+                    assistantMessageID: `answer_${input}`,
+                });
+                server.emit('session.text.started', {
+                    assistantMessageID: `answer_${input}`,
+                    ordinal: 0,
+                });
+                server.emit('session.text.delta', {
+                    assistantMessageID: `answer_${input}`,
+                    ordinal: 0,
+                    delta: 'Hello',
+                });
+                // The stream stays open, and nothing more arrives on it.
+            };
+            const turn = session.prompt('work');
+            await drain();
+            expect(server.texts()).toEqual(['Hello']);
+            server.transcript = finishedTranscript(input, 'Hello, world');
+
+            jest.advanceTimersByTime(50_000);
+            await drain();
+            expect(server.count('/event')).toBe(1);
+            jest.advanceTimersByTime(20_000);
+            expect(await turn).toEqual({ reason: 'stop' });
+
+            expect(server.count('/event')).toBe(2);
+            expect(server.texts()).toEqual(['Hello', ', world']);
+            expect(
+                server.events.filter((event) => event.type === 'usage.updated')
+            ).toHaveLength(1);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('heartbeat comments keep a long turn on its stream', async () => {
+        jest.useFakeTimers();
+        const server = new V2Server();
+        const session = await server.start();
+        try {
+            let input = '';
+            server.onPrompt = (body) => {
+                input = String(body.id);
+                server.emit('session.inbox.delivered', { inboxID: input });
+            };
+            const turn = session.prompt('work');
+            await drain();
+            for (let beat = 0; beat < 12; beat += 1) {
+                jest.advanceTimersByTime(15_000);
+                server.heartbeat();
+                await drain();
+            }
+            expect(server.count('/event')).toBe(1);
+            expect(server.count('/message')).toBe(0);
+            server.completeTurn('Hello V2', input);
+            expect(await turn).toEqual({ reason: 'stop' });
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('a quiet stream with no turn in flight starts no catch-up', async () => {
+        jest.useFakeTimers();
+        const server = new V2Server();
+        const session = await server.start();
+        try {
+            jest.advanceTimersByTime(10 * 60_000);
+            await drain();
+            expect(server.count('/event')).toBe(1);
+            expect(server.count('/message')).toBe(0);
+            expect(server.events).toEqual([]);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('a turn that completes with text that never streamed ends with its final message', async () => {
+        const server = new V2Server();
+        const session = await server.start();
+        try {
+            server.onPrompt = (body) => {
+                const input = String(body.id);
+                server.transcript = finishedTranscript(input, 'The final report');
+                server.emit('session.inbox.delivered', { inboxID: input });
+                server.emit('session.step.started', {
+                    assistantMessageID: `answer_${input}`,
+                });
+                server.emit('session.step.ended', {
+                    assistantMessageID: `answer_${input}`,
+                    finish: 'stop',
+                    cost: 0.01,
+                    tokens: {
+                        input: 2,
+                        output: 3,
+                        reasoning: 0,
+                        cache: { read: 0, write: 0 },
+                    },
+                });
+                server.emit('session.execution.succeeded', {});
+            };
+            expect(await session.prompt('work')).toEqual({ reason: 'stop' });
+            expect(server.texts()).toEqual(['The final report']);
+            expect(
+                server.events.filter((event) => event.type === 'usage.updated')
+            ).toHaveLength(1);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('a streamed turn is reconciled at completion without emitting anything twice', async () => {
+        const server = new V2Server();
+        // One page, so one read of the transcript is one request.
+        server.pageSize = 3;
+        const session = await server.start();
+        try {
+            server.onPrompt = (body) => {
+                server.transcript = finishedTranscript(String(body.id), 'Hello V2');
+                server.completeTurn('Hello V2', String(body.id));
+            };
+            expect(await session.prompt('work')).toEqual({ reason: 'stop' });
+            expect(server.texts()).toEqual(['Hello V2']);
+            expect(
+                server.events.filter((event) => event.type === 'usage.updated')
+            ).toHaveLength(1);
+            expect(server.count('/message')).toBe(1);
+        } finally {
+            await session.close();
+        }
+    });
+
+    test('a recovered failed turn reports the recorded error', async () => {
+        const failure = { type: 'ProviderError', message: 'Provider overloaded' };
+        const cases = [
+            // The failed idle record carries the error.
+            [
+                { id: 'answer_1', type: 'assistant', content: [] },
+                { id: 'idle_1', type: 'idle', outcome: 'failed', error: failure },
+            ],
+            // Only the turn's last answer does.
+            [
+                { id: 'answer_1', type: 'assistant', content: [], error: failure },
+                { id: 'idle_1', type: 'idle', outcome: 'failed' },
+            ],
+        ];
+        for (const records of cases) {
+            const server = new V2Server();
+            const session = await server.start();
+            try {
+                server.transcript = [
+                    { id: 'input_1', type: 'user', text: 'work' },
+                    ...records,
+                ];
+                await expect(session.resumeTurn()).rejects.toThrow(
+                    'OpenCode session failed: Provider overloaded'
+                );
+            } finally {
+                await session.close();
+            }
         }
     });
 });

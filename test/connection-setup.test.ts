@@ -18,10 +18,15 @@ import { HostCredentialFiles } from '../src/connections/credentials.js';
 import { AuthenticationRequiredError } from '../src/connections/error.js';
 import type { RunnerAuthenticationStatus } from '../src/connections/inspector.js';
 import { NativeCredentialFile } from '../src/connections/nativecredentials.js';
-import { ConnectionSetup, type ConnectionWorkbench } from '../src/connections/setup.js';
+import {
+    type ConnectionReadiness,
+    ConnectionSetup,
+    type ConnectionWorkbench,
+} from '../src/connections/setup.js';
 import { HostSignIn } from '../src/connections/signin.js';
 import { ConnectionStore } from '../src/connections/store.js';
 import type { ConnectionTarget } from '../src/connections/targets.js';
+import { claudeAgentMethod } from '../src/runners/opencode/claudeagent.js';
 import type {
     PreparedRuntime,
     RuntimeCredentialFiles,
@@ -811,6 +816,115 @@ class MemoryFiles implements RuntimeCredentialFiles {
         this.#files.set(path, contents);
     }
 }
+
+describe('a Claude subscription through OpenCode', () => {
+    /** The Claude Agent method, as `wb connect` offers it for `runtime`. */
+    const claude = (runtime: ConnectionTarget['runtime']): ConnectionTarget => ({
+        runtime,
+        harness: 'opencode',
+        provider: 'anthropic',
+        method: claudeAgentMethod(runtime),
+    });
+
+    /** Readiness fixed by the test. Claude Code keeps the login, so nothing may be written. */
+    class FixedSetup extends ConnectionSetup {
+        constructor(
+            home: string,
+            target: ConnectionTarget,
+            private readonly readiness: ConnectionReadiness
+        ) {
+            super({ home, target, environment: {} });
+        }
+        override async verify(): Promise<ConnectionReadiness> {
+            return this.readiness;
+        }
+        override async save(): Promise<ConnectionReadiness> {
+            throw new Error('nothing is written for a login Claude Code keeps');
+        }
+    }
+
+    const connect = async (
+        target: ConnectionTarget,
+        readiness: ConnectionReadiness,
+        lines: string[] = []
+    ) => {
+        const home = await temporary('workbench-connection-claude-');
+        const done = new ModelConnection({
+            home,
+            target,
+            workbench: workbench(),
+            output: presenter(lines),
+            environment: {},
+            interactive: true,
+            setup: new FixedSetup(home, target, readiness),
+            signIn: {
+                available: () => true,
+                run: () => Promise.reject(new Error('OpenCode must not sign in')),
+            },
+        }).connect({ stdin: false });
+        return { home, done };
+    };
+
+    test('saves the route once Claude Code reports a subscription, writing nothing of its own', async () => {
+        const lines: string[] = [];
+        const { home, done } = await connect(
+            claude('docker'),
+            { ready: true, saved: false, fromEnvironment: false },
+            lines
+        );
+        await done;
+        expect(
+            await new ConnectionStore(home).find({
+                runner: 'opencode',
+                runtime: 'docker',
+            })
+        ).toEqual({
+            provider: 'anthropic',
+            nativeProvider: 'claude-agent',
+            authenticationMethod: 'oauth',
+            method: 'claude-subscription',
+            nativeMethod: 'claude-login',
+        });
+        expect(lines).toEqual(['ready\tdocker\topencode\tanthropic\n']);
+    });
+
+    for (const [runtime, advice] of [
+        ['local', 'Run claude auth login'],
+        [
+            'docker',
+            'Set CLAUDE_CODE_OAUTH_TOKEN where wb runs, or sign in to Claude Code on a worker with wb connect --worker <worker> claude-code, then check it with wb smoke fixture --runtime docker',
+        ],
+    ] as const) {
+        test(`says how Claude Code signs in for ${runtime}, and saves nothing`, async () => {
+            const { home, done } = await connect(claude(runtime), {
+                ready: false,
+                saved: false,
+                fromEnvironment: false,
+                missing: 'Claude Code has no subscription login',
+            });
+            const failure = await done.catch((error: unknown) => error);
+            expect(failure).toBeInstanceOf(AuthenticationRequiredError);
+            expect((failure as Error).message).toBe(
+                `Claude Code has no subscription login. ${advice}. For one run, --env-file also works.`
+            );
+            expect(await readdir(home)).toEqual([]);
+        });
+    }
+
+    for (const runtime of ['e2b', 'daytona'] as const) {
+        test(`refuses ${runtime} with the reason, before checking anything`, async () => {
+            const { home, done } = await connect(claude(runtime), {
+                ready: true,
+                saved: false,
+                fromEnvironment: false,
+            });
+            await expect(done).rejects.toThrow(
+                `A Claude subscription through OpenCode runs only on the local and docker runtimes: ${runtime} has no Claude Code login to use. Use an Anthropic API key there instead.`
+            );
+            expect(await readdir(home)).toEqual([]);
+        });
+    }
+});
 
 function target(runtime: ConnectionTarget['runtime']): ConnectionTarget {
     return {

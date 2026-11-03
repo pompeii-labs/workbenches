@@ -3,6 +3,7 @@ import { relative } from 'node:path';
 import { modelLabel } from '../../models/label.js';
 import type { ResolvedWorkbench, RunnerInvocation } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
+import { claudeAgentProviders } from './claudeagent.js';
 
 export function buildOpenCodeInvocation(
     workbench: ResolvedWorkbench,
@@ -30,6 +31,8 @@ export function buildOpenCodeInvocation(
     environment.OPENCODE_DB = baseEnv.OPENCODE_DB;
 
     const invocation: RunnerInvocation = {
+        // OpenCode 1's arguments, since nothing has asked the CLI its version
+        // yet. OpenCode 2 runs as a session, through `opencode serve`.
         command: [
             'opencode',
             'run',
@@ -181,6 +184,9 @@ function buildOpenCodeEnvironment(
                         type: 'remote',
                         url: server.url,
                         enabled: true,
+                        // OpenCode 2 otherwise hides MCP tools inside its Code
+                        // Mode `execute` tool instead of naming them `<server>_<tool>`.
+                        codemode: false,
                         headers: Object.fromEntries(
                             Object.entries(server.headers).map(([name, value]) => [
                                 name,
@@ -203,6 +209,8 @@ function buildOpenCodeEnvironment(
         outbox && !/[?*\\]/.test(outbox)
             ? { permission: { external_directory: { [`${outbox}/*`]: 'allow' } } }
             : {};
+    // OpenCode 1 ignores `providers`, and only a Claude Agent route sets it.
+    const providers = claudeAgentProviders(model);
     const config = {
         $schema: 'https://opencode.ai/config.json',
         autoupdate: false,
@@ -211,6 +219,7 @@ function buildOpenCodeEnvironment(
         instructions: [instructionPath],
         ...outboxPermission,
         ...(Object.keys(mcp).length > 0 ? { mcp } : {}),
+        ...(providers ? { providers } : {}),
     };
 
     return {

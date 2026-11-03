@@ -45,4 +45,33 @@ export class ProcessProbe {
             return undefined;
         }
     }
+
+    /** The pids of every process started under the pid, at any depth. */
+    descendants(pid: number): number[] {
+        try {
+            const result = Bun.spawnSync(['ps', '-A', '-o', 'pid=,ppid='], {
+                stdout: 'pipe',
+                stderr: 'ignore',
+                timeout: COMMAND_TIMEOUT_MILLISECONDS,
+            });
+            if (result.exitCode !== 0) return [];
+            const children = new Map<number, number[]>();
+            for (const line of result.stdout.toString().split('\n')) {
+                const [child, parent] = line.trim().split(/\s+/).map(Number);
+                if (!child || !parent) continue;
+                children.set(parent, [...(children.get(parent) ?? []), child]);
+            }
+            const found: number[] = [];
+            const pending = [pid];
+            for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+                for (const child of children.get(next) ?? []) {
+                    found.push(child);
+                    pending.push(child);
+                }
+            }
+            return found;
+        } catch {
+            return [];
+        }
+    }
 }

@@ -18,7 +18,7 @@ export interface TranscriptMessage {
 
 export type TurnEnd =
     | { kind: 'cancelled' }
-    | { kind: 'failed' }
+    | { kind: 'failed'; error: Record<string, unknown> | undefined }
     | { kind: 'completed'; finish: string | undefined };
 
 /** A turn as the transcript holds it. */
@@ -39,7 +39,7 @@ function turnEnd(last: Record<string, unknown>): TurnEnd | undefined {
     if (error) {
         return string(error.name) === 'MessageAbortedError'
             ? { kind: 'cancelled' }
-            : { kind: 'failed' };
+            : { kind: 'failed', error };
     }
     if (
         typeof record(last.time)?.completed === 'number' &&
@@ -72,6 +72,13 @@ export class OpenCodeTranscript {
         return undefined;
     }
 
+    /** Whether the transcript holds the input message `inputId`. */
+    holds(inputId: string): boolean {
+        return this.messages.some(
+            (message) => string(record(message.info)?.id) === inputId
+        );
+    }
+
     /**
      * The turn begun by `inputId`: the assistant messages that answer it or any of
      * `inputIds`, the steering inputs sent to it, in order. A user message that is
@@ -100,7 +107,12 @@ export class OpenCodeTranscript {
                         outcome === 'interrupted'
                             ? { kind: 'cancelled' }
                             : outcome === 'failed'
-                              ? { kind: 'failed' }
+                              ? {
+                                    kind: 'failed',
+                                    error:
+                                        record(info.error) ??
+                                        record(answers.at(-1)?.info.error),
+                                }
                               : {
                                     kind: 'completed',
                                     finish: string(answers.at(-1)?.info.finish),

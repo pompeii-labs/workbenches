@@ -1,6 +1,11 @@
 import type { ModelCatalogHarnessProviderRoute } from '../../models/index.js';
 import type { RunnerConnection, RunnerWorkerSignIn } from '../runner.js';
 import { v2Method } from './authentication.js';
+import {
+    CLAUDE_AGENT_PROVIDER,
+    claudeAgentCandidate,
+    claudeAgentMethod,
+} from './claudeagent.js';
 
 /** The OpenCode release whose provider capabilities Workbench reads from the catalog. */
 const OPENCODE_CATALOG_VERSION = '1.18.30';
@@ -38,26 +43,57 @@ export const openCodeConnection: RunnerConnection = {
             nativeProvider: route.provider,
             nativeModel: route.model,
         },
+        // Last, so it serves Anthropic only when a run or `wb connect` chooses it.
+        ...(route.provider === 'anthropic' ? [claudeAgentCandidate(route)] : []),
     ],
     packagedProviders: true,
     probe: {
-        // OpenCode 2 lists credentials as JSON; OpenCode 1 rejects the flag and lists text.
+        // OpenCode 2 lists credentials as JSON, and without --standalone from the
+        // person's background service, which may hold another credential store
+        // or not start at all. OpenCode 1 rejects both flags and lists text.
         command: [
             'sh',
             '-c',
-            'listing=$(opencode auth list --format json 2>/dev/null) && printf "%s\\n" "$listing" || exec opencode auth list',
+            'listing=$(opencode auth list --format json --standalone 2>/dev/null) && printf "%s\\n" "$listing" || exec opencode auth list',
             'workbench-opencode',
         ],
         failsClosed: false,
         authenticated(listing, candidates) {
             const credentials = openCodeCredentials(listing);
             return candidates.flatMap((candidate) => {
+                // Claude Code keeps that login, so only its own probe confirms it.
+                if (candidate.nativeProvider === CLAUDE_AGENT_PROVIDER) return [];
                 const method = credentials.get(normalizeProvider(candidate.provider));
                 return method ? [{ ...candidate, authenticationMethod: method }] : [];
             });
         },
     },
-    methods(runtime, provider) {
+    methods(runtime, provider, catalog) {
+        if (provider === 'anthropic') {
+            // What the capability alone offers, as for every other provider.
+            const [capability] =
+                openCodeConnection.capabilities(catalog)[provider] ?? [];
+            return [
+                ...(capability
+                    ? [
+                          capability.auth.length === 1 && capability.auth[0] === 'api'
+                              ? {
+                                    id: 'api-key',
+                                    label: 'Anthropic credentials',
+                                    nativeProvider: capability.native_provider,
+                                    authenticationMethod: 'api' as const,
+                                }
+                              : {
+                                    id: 'native',
+                                    label: 'Anthropic sign-in',
+                                    nativeProvider: capability.native_provider,
+                                    authenticationMethod: 'native' as const,
+                                },
+                      ]
+                    : []),
+                claudeAgentMethod(runtime),
+            ];
+        }
         if (provider !== 'openai') return undefined;
         return [
             runtime === 'local'

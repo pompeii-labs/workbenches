@@ -32,7 +32,7 @@ requirements:
 
 ## On a workbenches.dev worker
 
-A team can send a run to its own machine, a worker, instead of a hosted sandbox. The worker runs `local` on the host or any image entry (`docker`, `e2b`, `daytona`) as one Docker container from that image, whichever the manifest declares first that the worker offers. What that means for the package:
+A team can send a run to its own machine, a worker, instead of a hosted sandbox. The worker runs `local` on the host or any image entry (`docker`, `e2b`, `daytona`) as one Docker container from that image, pulled or built from the package's Dockerfile, whichever the manifest declares first that the worker offers. What that means for the package:
 
 - `requirements` are checked against the worker's machine before the run is accepted. Declare `os: [macos]` for work that needs Xcode, so the run never lands on a Linux worker.
 - `local` on a worker uses the tools installed on that machine. Declare every one in `tools` so a missing one fails preflight by name instead of mid-run.
@@ -52,7 +52,7 @@ A team can send a run to its own machine, a worker, instead of a hosted sandbox.
 
 Every image used by `docker`, `e2b`, or `daytona` must:
 
-1. **Contain the runner** at a pinned version: `npm install -g opencode-ai@<version>`, `@earendil-works/pi-coding-agent@<version>`, or `@anthropic-ai/claude-code@<version>`. Nothing can be installed at run time.
+1. **Contain the runner** at a pinned version: `npm install -g opencode-ai@<version>` for OpenCode 1 (1.18 or 1.19), the supported default; `@opencode/cli@<version>` for OpenCode 2 (2.2.2 or newer), which is experimental; `@earendil-works/pi-coding-agent@<version>`; or `@anthropic-ai/claude-code@<version>`. Nothing can be installed at run time.
 2. **Contain every tool the manifest declares** in `tools`, on `PATH`.
 3. **Contain `git` and GNU `tar`** (with `--null` support) for `e2b` and `daytona`, which stage files with them. `--repo` runs also use `git` and `gh`.
 4. **Run as any numeric user.** The engine runs as the host's uid. Never rely on `USER`, a home directory, or files owned by root being writable.
@@ -76,7 +76,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git tar ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# The runner.
+# The runner: OpenCode 1. For experimental OpenCode 2, install @opencode/cli instead.
 RUN npm install -g opencode-ai@${OPENCODE_VERSION} \
     && chmod -R a+rX "$(npm root -g)"
 
@@ -93,6 +93,17 @@ ARG CLAUDE_CODE_VERSION=<pinned version>
 
 # The runner.
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+    && chmod -R a+rX "$(npm root -g)"
+```
+
+An OpenCode Workbench that runs on a Claude subscription uses OpenCode 2's Claude Agent provider, so it is experimental with OpenCode 2: install OpenCode 2.2.3 or newer and Claude Code too, both pinned. The run reads Claude Code's own login, so the image holds no credential: on a worker it is the member's Claude Code sign-in, elsewhere a `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` in the consumer's environment. E2B and Daytona refuse this route.
+
+```dockerfile
+ARG OPENCODE_VERSION=<pinned 2.2.3 or newer>
+ARG CLAUDE_CODE_VERSION=<pinned version>
+
+# The runner, OpenCode 2, and Claude Code, which its Claude Agent provider runs.
+RUN npm install -g @opencode/cli@${OPENCODE_VERSION} @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && chmod -R a+rX "$(npm root -g)"
 ```
 

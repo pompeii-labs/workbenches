@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { RunnerCredentialStore } from '../connections/credentials.js';
+import { delegatedMethod } from '../connections/delegated.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
 import { ConnectionInspector } from '../connections/inspector.js';
 import {
@@ -8,8 +9,10 @@ import {
 } from '../connections/store.js';
 import type { RepositoryCheckoutStore } from '../database/checkouts.js';
 import {
+    ActiveModelCatalog,
     connectAdvice,
     connectCommand,
+    ModelRouter,
     type ResolvedRunnerConfiguration,
 } from '../models/index.js';
 import { OutcomeApplier } from '../outcomes/apply.js';
@@ -376,14 +379,18 @@ export class ExecutionPreparation {
         }
         const preferred = await store?.find(ConnectionStore.context(workbench));
         let status: Awaited<ReturnType<ConnectionInspector['inspect']>> | undefined;
+        let failure: unknown;
         try {
             status = await inspector.inspect({
                 ...(preferred ? { preferredConnection: preferred } : {}),
-                ...(connection ? { discoverConnections: true } : {}),
+                // The requested connection decides what is inspected, as in a
+                // one-shot run, so a login another runner keeps is checked too.
+                ...(connection ? { discoverConnections: true, connection } : {}),
             });
         } catch (error) {
             if (!preferred || !matchesRequestedConnection(preferred, connection))
                 throw error;
+            failure = error;
         }
         const authenticated = connection
             ? status?.connections.find((candidate) =>
@@ -395,12 +402,30 @@ export class ExecutionPreparation {
         if (!connection && status?.configuration)
             return { configuration: status.configuration };
         if (preferred && matchesRequestedConnection(preferred, connection)) {
+            const harness = runners.resolve(workbench.manifest.runner);
+            // Another runner's own login serves it, which no run can sign in to.
+            if (
+                delegatedMethod(
+                    harness.connection,
+                    runtime.name,
+                    preferred.provider,
+                    preferred.nativeProvider,
+                    new ModelRouter(ActiveModelCatalog.current())
+                )
+            ) {
+                throw (
+                    failure ??
+                    new AuthenticationRequiredError(
+                        `${preferred.nativeProvider} is not signed in for ${workbench.manifest.name} in the ${runtime.name} runtime`
+                    )
+                );
+            }
             if (!this.options.allowAuthentication) {
                 throw new AuthenticationRequiredError(
                     `Authentication is required for ${preferred.provider}. Start a foreground task run once to finish ${preferred.nativeProvider} sign-in.`
                 );
             }
-            if (!runners.resolve(workbench.manifest.runner).connection.inRunSignIn) {
+            if (!harness.connection.inRunSignIn) {
                 throw new Error(
                     `First-run authentication for ${workbench.manifest.runner} is not available inside a Workbench run yet`
                 );

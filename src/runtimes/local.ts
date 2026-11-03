@@ -1,5 +1,6 @@
 import type { OutcomeSink, RuntimeOutcomeCollection } from '../outcomes/collection.js';
 import { HostOutcomeCapture } from '../outcomes/runtime.js';
+import { ProcessProbe } from '../processes/probe.js';
 import type { RunnerInvocation, SpawnedRunner } from '../types.js';
 import { workspaceEnvironment } from '../workbench/bindings.js';
 import type { HostDescriber } from '../workbench/host.js';
@@ -31,6 +32,8 @@ export interface LocalRuntimeDependencies {
             stderr: 'pipe';
         }
     ) => SpawnedRunner;
+    /** How long a short command may run before it is stopped. */
+    commandTimeoutMs?: number;
     /** Describes the machine requirements are checked against. */
     host: HostDescriber;
     interact?: (
@@ -52,6 +55,8 @@ type ResolvedLocalDependencies = Required<
     findExecutable: (name: string, path?: string) => string | null;
 };
 
+const processes = new ProcessProbe();
+
 export class LocalRuntimeProvider implements RuntimeProvider {
     readonly name = 'local';
     readonly placement = 'host' as const;
@@ -66,6 +71,7 @@ export class LocalRuntimeProvider implements RuntimeProvider {
                     Bun.which(name, path === undefined ? undefined : { PATH: path })),
             spawn: dependencies.spawn ?? LocalRuntime.spawn,
             interact: dependencies.interact ?? LocalRuntime.interactProcess,
+            commandTimeoutMs: dependencies.commandTimeoutMs ?? 30_000,
         };
         this.requirements = new RequirementsPreflight(dependencies.host);
     }
@@ -193,6 +199,12 @@ export class LocalRuntime implements PreparedRuntime {
         }
     }
 
+    /**
+     * Runs a short command, such as a runner's sign-in listing, and stops it
+     * when it outlives the limit, failing with exit code 124 as `timeout` does.
+     * A runner reading the person's own data home can stall on it, and nothing
+     * else would end the wait.
+     */
     async execute(invocation: RunnerInvocation): Promise<RuntimeCommandResult> {
         this.assertAvailable('launch');
         const child = this.dependencies.spawn(invocation.command, {
@@ -202,11 +214,30 @@ export class LocalRuntime implements PreparedRuntime {
             stdout: 'pipe',
             stderr: 'pipe',
         });
+        let expired = false;
+        const limit = setTimeout(() => {
+            expired = true;
+            // A shell wrapper's own children outlive it unless stopped with it.
+            const started = child.pid ? processes.descendants(child.pid) : [];
+            child.kill?.();
+            for (const pid of started) {
+                try {
+                    process.kill(pid, 'SIGTERM');
+                } catch {}
+            }
+        }, this.dependencies.commandTimeoutMs);
         const [code, stdout, stderr] = await Promise.all([
             child.exited,
             LocalRuntime.read(child.stdout),
             LocalRuntime.read(child.stderr),
-        ]);
+        ]).finally(() => clearTimeout(limit));
+        if (expired) {
+            return {
+                code: 124,
+                stdout,
+                stderr: `Stopped after ${this.dependencies.commandTimeoutMs / 1000} seconds without finishing`,
+            };
+        }
         return { code, stdout, stderr };
     }
 
@@ -319,6 +350,7 @@ export class LocalRuntime implements PreparedRuntime {
         const exited = child.exited.finally(() => clearTimeout(forceTermination));
         return {
             exited,
+            pid: child.pid,
             ...(child.stdin ? { stdin: child.stdin } : {}),
             ...(child.stdout ? { stdout: child.stdout } : {}),
             ...(child.stderr ? { stderr: child.stderr } : {}),
