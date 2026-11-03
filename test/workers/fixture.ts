@@ -11,9 +11,33 @@ import type {
     WorkerRunHost,
 } from '../../src/workers/contracts.js';
 import { WorkerRejection } from '../../src/workers/contracts.js';
+import { WorkerRunEnvironment } from '../../src/workers/environment.js';
 import type { RunStart, WorkerCommand } from '../../src/workers/protocol.js';
 
 export const WORKER_KEY = 'wbk_placeholder-worker-key';
+
+/**
+ * A worker environment whose keychain records the member directories it
+ * unlocks, so no test runs macOS `security`.
+ */
+export class TestRunEnvironment extends WorkerRunEnvironment {
+    readonly unlocked: string[];
+
+    constructor(
+        home: ConstructorParameters<typeof WorkerRunEnvironment>[0],
+        runners: ConstructorParameters<typeof WorkerRunEnvironment>[1],
+        base: Record<string, string | undefined> = {},
+        dockerHost?: string
+    ) {
+        const unlocked: string[] = [];
+        super(home, runners, base, dockerHost, {
+            unlock: async (directory) => {
+                unlocked.push(directory);
+            },
+        });
+        this.unlocked = unlocked;
+    }
+}
 
 type Message = Record<string, unknown> & { type: string };
 

@@ -16,21 +16,19 @@ import type { StoredRun } from '../../src/runs/store.js';
 import { readContainerForwardNames } from '../../src/runtimes/hostvariables.js';
 import type { StoredSession } from '../../src/sessions/store.js';
 import type { RemoteWorkbenchPackage } from '../../src/sources/index.js';
+import { NodeHost } from '../../src/workbench/host.js';
 import { WorkbenchManifestParser } from '../../src/workbench/manifest.js';
 import { Services } from '../../src/workbench/services.js';
 import { WorkerRejection } from '../../src/workers/contracts.js';
 import { packageAlias, WorkerEngine } from '../../src/workers/engine.js';
-import {
-    dockerAuthConfig,
-    WorkerRunEnvironment,
-} from '../../src/workers/environment.js';
+import { dockerAuthConfig } from '../../src/workers/environment.js';
 import { WorkerHome } from '../../src/workers/home.js';
 import { WorkerOutcomeArchive } from '../../src/workers/outcome.js';
 import { parseServerMessage, type RunStart } from '../../src/workers/protocol.js';
 import { WorkerSessionRuns } from '../../src/workers/runs.js';
 import { WorkerRunnerVersions } from '../../src/workers/versions.js';
 import { seedModelCatalogFixture } from '../model-catalog-fixture.js';
-import { bareRepository, runStart } from './fixture.js';
+import { bareRepository, runStart, TestRunEnvironment } from './fixture.js';
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -111,7 +109,7 @@ describe('worker engine', () => {
             home,
             services,
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {}),
+            environment: new TestRunEnvironment(home, runners, {}),
             download: async () => {
                 const base = workbenchPackage();
                 return {
@@ -148,7 +146,7 @@ describe('worker engine', () => {
             home,
             services,
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {}),
+            environment: new TestRunEnvironment(home, runners, {}),
             download: async () => workbenchPackage(manifest),
         });
         expect(await engine.admit(start())).toEqual({
@@ -206,7 +204,7 @@ describe('worker engine', () => {
             home,
             services,
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {}),
+            environment: new TestRunEnvironment(home, runners, {}),
             download: async () => {
                 throw new Error(
                     'The Workbench package could not be downloaded (HTTP 403)'
@@ -245,7 +243,7 @@ describe('worker engine', () => {
                 home,
                 services,
                 runners,
-                environment: new WorkerRunEnvironment(home, runners, {}),
+                environment: new TestRunEnvironment(home, runners, {}),
                 host: {
                     describe: () => facts,
                     gpus: async () =>
@@ -294,7 +292,7 @@ describe('worker engine', () => {
                 },
             },
             runners,
-            environment: new WorkerRunEnvironment(
+            environment: new TestRunEnvironment(
                 home,
                 runners,
                 {
@@ -391,6 +389,51 @@ describe('worker engine', () => {
         expect(await Bun.file(join(dockerConfig, 'config.json')).exists()).toBe(false);
     });
 
+    test("sends a Mac worker's docker run without a Claude Code login to a Linux worker", async () => {
+        const { home, services } = await engineHome();
+        const runners = RunnerRegistry.standard();
+        const engine = (os: string) =>
+            new WorkerEngine({
+                worker: 'mini',
+                api: 'https://api.example.test',
+                home,
+                services: {
+                    ...services,
+                    launcher: {
+                        start: async () => {
+                            throw new AuthenticationRequiredError(
+                                'Claude Code in the docker runtime is not signed in. Run claude auth login.'
+                            );
+                        },
+                    },
+                },
+                runners,
+                environment: new TestRunEnvironment(home, runners, {}),
+                host: { describe: () => ({ ...new NodeHost().describe(), os }) },
+                download: async () =>
+                    workbenchPackage({
+                        runner: 'claude-code',
+                        model: { id: 'anthropic/claude-haiku-5-5' },
+                    }),
+            });
+        const refusal = async (os: string) => {
+            const worker = engine(os);
+            await worker.admit(start({ runtime: 'docker' }));
+            return worker
+                .launch(start({ runtime: 'docker' }))
+                .catch((error: unknown) =>
+                    error instanceof Error ? error.message : ''
+                );
+        };
+
+        expect(await refusal('macos')).toBe(
+            "Claude Code in the docker runtime is not signed in. On a Mac worker a docker run cannot read Claude Code's login, which the member's own keychain holds. Run this Workbench on a Linux worker."
+        );
+        expect(await refusal('linux')).toBe(
+            'Claude Code in the docker runtime is not signed in. Run wb connect --worker mini claude-code.'
+        );
+    });
+
     test('fails a run whose repository cannot be fetched, without its credential', async () => {
         const { home, services } = await engineHome();
         const runners = RunnerRegistry.standard();
@@ -409,7 +452,7 @@ describe('worker engine', () => {
                 },
             },
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {
+            environment: new TestRunEnvironment(home, runners, {
                 PATH: process.env.PATH,
                 HOME: '/home/owner',
             }),
@@ -465,7 +508,7 @@ describe('worker engine', () => {
                 },
             },
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {
+            environment: new TestRunEnvironment(home, runners, {
                 PATH: '/usr/bin',
                 HOME: '/home/owner',
                 DOCKER_HOST: 'unix:///MUST_NOT_RENDER_ACCOUNT_SOCKET',
@@ -525,7 +568,7 @@ describe('worker engine', () => {
             home,
             services: { ...services, control },
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {}),
+            environment: new TestRunEnvironment(home, runners, {}),
             download: async () => workbenchPackage(),
         });
         const command = (
@@ -600,7 +643,7 @@ describe('worker engine', () => {
             home,
             services: { ...services, control },
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {
+            environment: new TestRunEnvironment(home, runners, {
                 PATH: process.env.PATH,
                 HOME: '/home/owner',
             }),
@@ -697,7 +740,7 @@ describe('worker engine', () => {
                 }),
             },
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {
+            environment: new TestRunEnvironment(home, runners, {
                 PATH: `${bin}:/usr/bin:/bin`,
                 HOME: '/home/owner',
             }),
@@ -779,7 +822,7 @@ describe('worker engine', () => {
             home,
             services,
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {}),
+            environment: new TestRunEnvironment(home, runners, {}),
             download: async () =>
                 workbenchPackage({
                     env: { GH_TOKEN: { required: true }, HOME: { required: true } },
@@ -801,7 +844,7 @@ describe('worker engine', () => {
             home,
             services,
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {
+            environment: new TestRunEnvironment(home, runners, {
                 PATH: '/usr/bin',
                 HOME: '/home/owner',
             }),
@@ -881,7 +924,7 @@ describe('worker engine', () => {
                 },
             },
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {
+            environment: new TestRunEnvironment(home, runners, {
                 PATH: '/usr/bin',
                 HOME: '/home/owner',
             }),
@@ -1024,7 +1067,7 @@ describe('worker engine', () => {
                 },
             },
             runners,
-            environment: new WorkerRunEnvironment(home, runners, {
+            environment: new TestRunEnvironment(home, runners, {
                 PATH: '/usr/bin',
                 HOME: '/home/owner',
             }),
@@ -1124,7 +1167,7 @@ describe('worker engine', () => {
                 },
             },
             runners,
-            environment: new WorkerRunEnvironment(home, runners, { PATH: '/usr/bin' }),
+            environment: new TestRunEnvironment(home, runners, { PATH: '/usr/bin' }),
             download: async () =>
                 workbenchPackage({
                     model: {
@@ -1307,7 +1350,7 @@ describe('worker run environment', () => {
     });
 
     test('runs a local run in the starting member home', async () => {
-        const environment = await new WorkerRunEnvironment(home, runners, base).build(
+        const environment = await new TestRunEnvironment(home, runners, base).build(
             local('mem_1'),
             'opencode'
         );
@@ -1323,8 +1366,22 @@ describe('worker run environment', () => {
         expect(JSON.stringify(environment)).not.toContain('MUST_NOT_RENDER');
     });
 
+    test("unlocks the member home's keychain before a local run or sign-in, not a docker run", async () => {
+        const environment = new TestRunEnvironment(home, runners, base);
+        await environment.build(local('mem_1'), 'claude-code');
+        await environment.build(
+            { ...local('mem_2'), runtime: 'docker' },
+            'claude-code'
+        );
+        await environment.signIn('connect_1', `${worker}/members/mem_3`, 'claude-code');
+        expect(environment.unlocked).toEqual([
+            `${worker}/members/mem_1`,
+            `${worker}/members/mem_3`,
+        ]);
+    });
+
     test("points a local run at the machine's Docker daemon, never the account's Docker settings", async () => {
-        const environment = await new WorkerRunEnvironment(
+        const environment = await new TestRunEnvironment(
             home,
             runners,
             base,
@@ -1336,7 +1393,7 @@ describe('worker run environment', () => {
     });
 
     test('keeps git and gh off the account configuration in a local run', async () => {
-        const environment = await new WorkerRunEnvironment(home, runners, {
+        const environment = await new TestRunEnvironment(home, runners, {
             ...base,
             GH_CONFIG_DIR: '/home/owner/MUST_NOT_RENDER_ACCOUNT_GH',
             GIT_CONFIG_GLOBAL: '/home/owner/MUST_NOT_RENDER_ACCOUNT_GITCONFIG',
@@ -1355,7 +1412,7 @@ describe('worker run environment', () => {
     });
 
     test('never gives a local run without a member the account sign-ins', async () => {
-        const environment = await new WorkerRunEnvironment(home, runners, {
+        const environment = await new TestRunEnvironment(home, runners, {
             ...base,
             CLAUDE_CODE_OAUTH_TOKEN: 'MUST_NOT_RENDER_ACCOUNT_TOKEN',
         }).build(local(null), 'claude-code');
@@ -1367,7 +1424,7 @@ describe('worker run environment', () => {
 
     test('gives a docker run a Docker client of its own without the account login', async () => {
         const { home: writable } = await engineHome();
-        const environment = await new WorkerRunEnvironment(
+        const environment = await new TestRunEnvironment(
             writable,
             runners,
             base,
@@ -1399,7 +1456,7 @@ describe('worker run environment', () => {
 
     test("signs a member in as their local runs run, with Claude Code's login kept in their sign-ins", async () => {
         const { home: writable } = await engineHome();
-        const environment = new WorkerRunEnvironment(writable, runners, base);
+        const environment = new TestRunEnvironment(writable, runners, base);
         const member = writable.memberDirectory('mem_1');
         const signIn = await environment.signIn('con_1', member, 'claude-code');
         expect(signIn).toMatchObject({
