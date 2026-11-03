@@ -374,14 +374,16 @@ describe('worker engine', () => {
             DOCKER_CONFIG: dockerConfig,
             DOCKER_HOST: 'unix:///run/docker-under-test.sock',
         });
-        // The run's Docker client holds its own pull credential and nothing of the account's.
-        expect(await Bun.file(join(dockerConfig, 'config.json')).json()).toEqual(
-            dockerAuthConfig({
+        // The run's Docker client holds its own pull credential, and of the
+        // account's configuration only its CLI plugins, which build an image.
+        expect(await Bun.file(join(dockerConfig, 'config.json')).json()).toEqual({
+            ...dockerAuthConfig({
                 registry: 'images.example.test',
                 username: 'workbench',
                 password: 'MUST_NOT_RENDER_IMAGE_PASSWORD',
-            })
-        );
+            }),
+            cliPluginsExtraDirs: ['/home/owner/.docker/cli-plugins'],
+        });
         expect((await stat(join(dockerConfig, 'config.json'))).mode & 0o777).toBe(
             0o600
         );
@@ -1451,7 +1453,7 @@ describe('worker run environment', () => {
             await Bun.file(
                 join(writable.dockerConfigDirectory('run_1'), 'config.json')
             ).json()
-        ).toEqual({});
+        ).toEqual({ cliPluginsExtraDirs: ['/home/owner/.docker/cli-plugins'] });
     });
 
     test("signs a member in as their local runs run, with Claude Code's login kept in their sign-ins", async () => {
