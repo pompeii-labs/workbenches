@@ -12,12 +12,16 @@ import {
     type WorkerConnectTerminal,
 } from '../../src/workers/connect.js';
 import { WorkerDaemon } from '../../src/workers/daemon.js';
-import { WorkerRunEnvironment } from '../../src/workers/environment.js';
 import { WorkerHome } from '../../src/workers/home.js';
 import { WorkerLog } from '../../src/workers/log.js';
 import { WorkerSignIns } from '../../src/workers/signin.js';
 import { seedModelCatalogFixture } from '../model-catalog-fixture.js';
-import { FakeRunHost, FakeWorkerServer, WORKER_KEY } from './fixture.js';
+import {
+    FakeRunHost,
+    FakeWorkerServer,
+    TestRunEnvironment,
+    WORKER_KEY,
+} from './fixture.js';
 
 setDefaultTimeout(30_000);
 
@@ -276,7 +280,7 @@ async function relay(opencode = FAKE_OPENCODE) {
             new WorkerSignIns({
                 home,
                 runners,
-                environment: new WorkerRunEnvironment(home, runners, {
+                environment: new TestRunEnvironment(home, runners, {
                     PATH: path,
                     HOME: join(directory, 'account'),
                     CLAUDE_CODE_OAUTH_TOKEN: 'MUST_NOT_RENDER_ACCOUNT_TOKEN',

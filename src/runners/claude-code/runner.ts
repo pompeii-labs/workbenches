@@ -73,6 +73,7 @@ export class ClaudeCodeRunner extends Runner {
      * renew it. Its own credential store, never the account's default, keeps
      * the macOS keychain entry of the account's own login out of reach.
      */
+    override readonly keychainSignIn = true;
     override readonly workerSignIn = {
         arguments: () => ['auth', 'login', '--claudeai'],
         environment: (root: string) => ({

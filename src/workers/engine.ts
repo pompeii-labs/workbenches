@@ -177,11 +177,24 @@ export class WorkerEngine implements WorkerRunHost {
             // alias, so only its reason is kept.
             if (error instanceof AuthenticationRequiredError)
                 throw new AuthenticationRequiredError(
-                    `${error.message.split('. ')[0]?.replace(/\.$/, '')}. Run wb connect --worker ${this.#options.worker} ${runner}.`
+                    `${error.message.split('. ')[0]?.replace(/\.$/, '')}. ${this.#signInAdvice(start.runtime, runner)}`
                 );
             throw error;
         });
         return run.session_id ?? run.id;
+    }
+
+    /**
+     * What makes a run's sign-in work. On a Mac some runners keep a member's
+     * sign-in in their own keychain, which no container reads, so connecting
+     * again would not help a docker run.
+     */
+    #signInAdvice(runtime: string, runner: string): string {
+        const os = (this.#options.host ?? new NodeHost()).describe().os;
+        const harness = this.#options.runners.find(runner);
+        if (runtime === 'docker' && harness?.keychainSignIn && os === 'macos')
+            return `On a Mac worker a docker run cannot read ${harness.displayName}'s login, which the member's own keychain holds. Run this Workbench on a Linux worker.`;
+        return `Run wb connect --worker ${this.#options.worker} ${runner}.`;
     }
 
     events(session: string, after: number): Promise<WorkbenchEvent[]> {

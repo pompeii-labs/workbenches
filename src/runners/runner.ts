@@ -188,6 +188,8 @@ export abstract class Runner {
     readonly nativeCredentialVariables: readonly string[] = [];
     /** How a worker runs this runner's own sign-in for a member. Undefined when it cannot. */
     readonly workerSignIn?: RunnerWorkerSignIn | undefined;
+    /** On macOS the runner keeps its sign-in in the keychain, which no container reads. */
+    readonly keychainSignIn: boolean = false;
     /** The oldest release of the harness CLI this runner works with, when an older one is known to fail. */
     readonly minimumVersion?: string | undefined;
     /** How `wb connect`, runs, `view` and `smoke` reach the runner's model providers. */

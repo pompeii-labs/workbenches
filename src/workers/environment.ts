@@ -9,6 +9,7 @@ import {
     CREDENTIAL_ROOT_VARIABLE,
 } from '../runtimes/hostvariables.js';
 import type { WorkerHome } from './home.js';
+import { MemberKeychain } from './keychain.js';
 import type { ImagePull, RunStart } from './protocol.js';
 
 /**
@@ -55,7 +56,8 @@ function repositoryVariables(env: Record<string, string>): Record<string, string
 /**
  * The host environment one worker run inherits, built for each launch: for a
  * repository run, the variables that point `gh` at the site's proxy; for a
- * local run, the member directory as its home; for a docker run, a Docker
+ * local run, the member directory as its home, with its own keychain unlocked
+ * on macOS; for a docker run, a Docker
  * client configuration of its own. The member's saved key or token is added
  * by the engine, only to a run that uses their connection.
  *
@@ -81,7 +83,8 @@ export class WorkerRunEnvironment {
         private readonly runners: Pick<RunnerRegistry, 'find' | 'list'>,
         private readonly base: Record<string, string | undefined> = process.env,
         /** The Docker endpoint runs use, resolved from the account's context once. */
-        private readonly dockerHost?: string
+        private readonly dockerHost?: string,
+        private readonly keychain: Pick<MemberKeychain, 'unlock'> = new MemberKeychain()
     ) {}
 
     async build(
@@ -112,6 +115,7 @@ export class WorkerRunEnvironment {
             WorkerRunEnvironment.credentialRoot(member)
         );
         if (run.runtime === 'local') {
+            await this.keychain.unlock(member);
             Object.assign(environment, this.memberEnvironment(member, runner));
             return environment;
         }
@@ -129,6 +133,7 @@ export class WorkerRunEnvironment {
         directory: string,
         runner: string
     ): Promise<Record<string, string | undefined>> {
+        await this.keychain.unlock(directory);
         return {
             ...this.#inherited(),
             ...(await this.#temporary(id)),
