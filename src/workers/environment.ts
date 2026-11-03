@@ -69,7 +69,8 @@ function repositoryVariables(env: Record<string, string>): Record<string, string
  * its own credential, the same as in the cloud: `GH_TOKEN` is always empty,
  * which the engine reads as "no token" and never replaces with a GitHub CLI
  * login, and git and `gh` read no configuration of the account's. The
- * account's Docker settings and runner credential variables are dropped.
+ * account's Docker settings, but for its CLI plugins, and runner credential
+ * variables are dropped.
  */
 export class WorkerRunEnvironment {
     constructor(
@@ -255,8 +256,9 @@ export class WorkerRunEnvironment {
 
     /**
      * A Docker client configuration that holds only the run's own pull
-     * credential, so neither a pull nor the pre-run check can use the
-     * account's Docker login. The file is owner-only and removed when the
+     * credential and the account's CLI plugins, so neither a pull nor the
+     * pre-run check can use the account's Docker login, while a Dockerfile
+     * image still builds with its buildx. The file is owner-only and removed when the
      * run ends. `DOCKER_AUTH_CONFIG` would keep it off disk, but older
      * Docker CLI releases do not read it.
      */
@@ -267,10 +269,21 @@ export class WorkerRunEnvironment {
         );
         await writeFile(
             join(directory, 'config.json'),
-            `${JSON.stringify(run.image_pull ? dockerAuthConfig(run.image_pull) : {})}\n`,
+            `${JSON.stringify(this.#dockerClientConfig(run))}\n`,
             { mode: 0o600 }
         );
         return directory;
+    }
+
+    /** The account's CLI plugins are found through its own Docker configuration directory. */
+    #dockerClientConfig(run: WorkerRunSpec): Record<string, unknown> {
+        const account =
+            this.base.DOCKER_CONFIG?.trim() ||
+            (this.base.HOME ? join(this.base.HOME, '.docker') : undefined);
+        return {
+            ...(run.image_pull ? dockerAuthConfig(run.image_pull) : {}),
+            ...(account ? { cliPluginsExtraDirs: [join(account, 'cli-plugins')] } : {}),
+        };
     }
 }
 

@@ -711,7 +711,7 @@ Everything a worker does differently from `wb run` on the same machine is here.
 | As whom | The machine's account, local or docker, with no sandbox |
 | Home of a local run | The starting member's directory; an empty one for a run started with an organization API key |
 | Credentials | The connection the run asks for, else the member's connection for its runner when the Workbench's model routes allow its provider, else the provider keys workbenches.dev sends with the run. A member connection the routes allow but that is not signed in fails with an error naming `wb connect --worker`, never moving to the organization's keys |
-| The account's own logins | Never used: runner sign-ins, `gh`, git configuration, and Docker settings of the account stay out of every run |
+| The account's own logins | Never used: runner sign-ins, `gh`, git configuration, and Docker settings of the account stay out of every run. A docker run uses only the account's Docker CLI plugins, such as buildx, to build a Dockerfile image |
 | Docker | Every run reaches the daemon of the account's current Docker context, resolved when the worker starts. A docker run mounts the starting member's sign-ins as the runner's credential root |
 | Claude Code on macOS | The member's login is kept in a keychain of the member's own, in their directory, which the worker unlocks before each local run and sign-in. No container can read it, so a Claude Code docker run on a Mac fails before any model call and says to use a Linux worker |
 | OpenCode's ChatGPT subscription | Signs in with its device code, since the browser callback cannot reach the worker |
