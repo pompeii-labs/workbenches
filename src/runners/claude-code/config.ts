@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
 import type { RunnerContextStaging } from '../context/stage.js';
+import { mcpServers } from '../mcp.js';
 import type { RunnerFiles } from '../types.js';
 import {
     type RepositoryInstructionSource,
@@ -261,50 +262,6 @@ function accessRules(request: ClaudeCodeAccess): {
         if (target.access === 'read-write') rules.push(`Edit(/${path}/**)`);
     }
     return { rules, warnings };
-}
-
-/**
- * Declared MCPs in Claude Code's `--mcp-config` format. Header values keep their
- * `${NAME}` references for Claude to expand, so no value is written. An MCP
- * whose referenced environment is unset is left out, as OpenCode does.
- */
-function mcpServers(
-    workbench: ResolvedWorkbench,
-    environment: Record<string, string | undefined>
-): Record<string, { type: 'http'; url: string; headers?: Record<string, string> }> {
-    return Object.fromEntries(
-        workbench.manifest.mcps.flatMap((server) => {
-            const references = new Set(
-                Object.values(server.headers).flatMap(environmentReferences)
-            );
-            for (const name of references) {
-                if (!workbench.manifest.env[name]) {
-                    throw new Error(
-                        `MCP ${server.name} references undeclared environment variable: ${name}`
-                    );
-                }
-            }
-            if ([...references].some((name) => !environment[name])) return [];
-            const headers =
-                Object.keys(server.headers).length > 0 ? server.headers : undefined;
-            return [
-                [
-                    server.name,
-                    {
-                        type: 'http' as const,
-                        url: server.url,
-                        ...(headers ? { headers } : {}),
-                    },
-                ],
-            ];
-        })
-    );
-}
-
-function environmentReferences(value: string): string[] {
-    return [...value.matchAll(/\$\{([A-Z][A-Z0-9_]*)\}/g)].flatMap((match) =>
-        match[1] ? [match[1]] : []
-    );
 }
 
 /** Makes a tree read-only. Symbolic links are never followed or changed. */

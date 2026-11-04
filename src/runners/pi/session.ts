@@ -15,13 +15,22 @@ import type { PiConfigStaging } from './config.js';
 import { PiEventAdapter } from './events.js';
 import { buildPiRpcInvocation } from './invocation.js';
 import { PI_PACKAGE_VERSION } from './providers.js';
+import { PiInputRequests } from './requests.js';
+import {
+    asError,
+    consumeLines,
+    readLimitedText,
+    record,
+    string,
+    withTimeout,
+} from './rpc.js';
 
 export const PI_SESSION_DECLARATION: RunnerAdapterDeclaration = {
     native: {
         command: 'pi',
         verified: [
-            { version: '0.73.1', surfaces: ['json', 'rpc'] },
             { version: PI_PACKAGE_VERSION, surfaces: ['json', 'rpc'] },
+            { version: '1.5.0', surfaces: ['rpc'] },
         ],
     },
     capabilities: {
@@ -34,8 +43,8 @@ export const PI_SESSION_DECLARATION: RunnerAdapterDeclaration = {
             detail: 'Pi does not provide a native permission request protocol.',
         },
         questions: {
-            status: 'unsupported',
-            detail: 'Pi does not provide a native question request protocol.',
+            status: 'supported',
+            detail: 'Questions come from Pi extensions through native RPC dialogs.',
         },
         multi_turn: { status: 'supported' },
         steering: { status: 'supported' },
@@ -182,6 +191,7 @@ class PiRpcSession implements RunnerSession {
     private closed = false;
     private failure: Error | undefined;
     private runtimeReminder: string;
+    private readonly requests: PiInputRequests;
 
     constructor(
         options: RunnerSessionStartOptions &
@@ -193,6 +203,12 @@ class PiRpcSession implements RunnerSession {
             }
     ) {
         this.options = options;
+        this.requests = new PiInputRequests(options.host, async (response) => {
+            const child = this.child;
+            if (!child || this.closed) return;
+            await child.stdin.write(`${JSON.stringify(response)}\n`);
+            await child.stdin.flush?.();
+        });
         // RPC has no per-prompt system field. Refresh attempt facts alongside
         // the first resumed input, without changing the stored user task.
         this.runtimeReminder =
@@ -295,6 +311,7 @@ class PiRpcSession implements RunnerSession {
         if (!this.active || this.closed) return;
         const active = this.active;
         active.cancellationRequested = true;
+        await this.requests.withdrawAll();
         try {
             await this.command('abort');
             this.finishActive('cancelled');
@@ -307,6 +324,7 @@ class PiRpcSession implements RunnerSession {
     async close(): Promise<void> {
         if (this.closed) return;
         this.closed = true;
+        await this.requests.close();
         this.finishActive('cancelled');
         this.rejectResponses(new Error('runner session is closed'));
         await this.child?.stdin.end?.();
@@ -362,6 +380,12 @@ class PiRpcSession implements RunnerSession {
             this.consumeResponse(event);
             return;
         }
+        if (event.type === 'extension_ui_request') {
+            void this.requests
+                .handle(event)
+                .catch((error) => this.fail(asError(error)));
+            return;
+        }
         const active = this.active;
         if (!active) return;
         const result = active.adapter.consume(event);
@@ -369,10 +393,15 @@ class PiRpcSession implements RunnerSession {
             if (draft.type !== 'turn.completed') await this.options.host.emit(draft);
         }
         if (event.type === 'extension_error') {
+            await this.requests.withdrawAll();
             this.failActive(new Error('Pi extension failed'));
             return;
         }
-        if (event.type === 'agent_end') {
+        // `agent_end` closes one low-level run that a retry, compaction
+        // recovery, or queued input can follow; only `agent_settled` ends Pi's
+        // automatic work for the prompt.
+        if (event.type === 'agent_settled') {
+            await this.requests.withdrawAll();
             if (active.cancellationRequested) {
                 this.finishActive('cancelled');
                 return;
@@ -412,6 +441,7 @@ class PiRpcSession implements RunnerSession {
 
     private fail(error: Error): void {
         this.failure ??= error;
+        void this.requests.close().catch(() => {});
         this.failActive(this.failure);
         this.rejectResponses(this.failure);
     }
@@ -465,78 +495,4 @@ function defaultSpawn(
     }
 ): SpawnedPi {
     return Bun.spawn(command, options) as unknown as SpawnedPi;
-}
-
-async function consumeLines(
-    stream: ReadableStream<Uint8Array> | undefined,
-    consume: (line: string) => Promise<void>
-): Promise<void> {
-    if (!stream) return;
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    let pending = '';
-    for (;;) {
-        const next = await reader.read();
-        if (next.done) break;
-        pending += decoder.decode(next.value, { stream: true });
-        if (pending.length > 16 * 1024 * 1024) {
-            throw new Error('Pi RPC emitted an oversized JSON event');
-        }
-        const lines = pending.split('\n');
-        pending = lines.pop() ?? '';
-        for (const line of lines) {
-            const normalized = line.endsWith('\r') ? line.slice(0, -1) : line;
-            if (normalized.trim()) await consume(normalized);
-        }
-    }
-    pending += decoder.decode();
-    if (pending.trim()) await consume(pending);
-}
-
-async function readLimitedText(
-    stream: ReadableStream<Uint8Array> | undefined,
-    limit: number
-): Promise<string> {
-    if (!stream) return '';
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    let output = '';
-    for (;;) {
-        const next = await reader.read();
-        if (next.done) break;
-        if (output.length < limit) output += decoder.decode(next.value);
-    }
-    return output.slice(0, limit);
-}
-
-async function withTimeout<T>(
-    promise: Promise<T>,
-    timeoutMs: number,
-    message: string
-): Promise<T> {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-        return await Promise.race([
-            promise,
-            new Promise<T>((_, reject) => {
-                timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
-            }),
-        ]);
-    } finally {
-        if (timeout) clearTimeout(timeout);
-    }
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : undefined;
-}
-
-function string(value: unknown): string | undefined {
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function asError(error: unknown): Error {
-    return error instanceof Error ? error : new Error(String(error));
 }

@@ -10,6 +10,7 @@ import type {
 } from './contracts.js';
 import { type FollowedCommand, LogFollower, type LogOutput } from './follow.js';
 import { SessionProcess } from './process.js';
+import { StderrFile } from './stderr.js';
 import {
     DaytonaApiError,
     type DaytonaTransport,
@@ -68,6 +69,8 @@ export class DaytonaToolbox implements DaytonaSandbox {
             exports.length > 0
                 ? `${environmentFiles}${crypto.randomUUID()}`
                 : undefined;
+        // Without a receiver for it, standard error stays in the merged stream.
+        const stderr = options.onStderr ? new StderrFile(this) : undefined;
         try {
             // An upload that fails partway can still leave part of the file.
             if (file) {
@@ -76,46 +79,14 @@ export class DaytonaToolbox implements DaytonaSandbox {
                     new TextEncoder().encode(`${exports.join('\n')}\n`)
                 );
             }
+            const line = this.subshell(command, options.cwd, file);
             return await this.launch(
-                this.subshell(command, options.cwd, file),
-                options
+                stderr ? stderr.redirect(line) : line,
+                (session, id) =>
+                    new SessionProcess(this.transport, session, id, options, stderr)
             );
         } catch (error) {
             if (file) await this.run(`rm -f ${quote(file)}`).catch(() => {});
-            throw error;
-        }
-    }
-
-    private async launch(
-        command: string,
-        options: RemoteCommandOptions
-    ): Promise<RemoteCommand> {
-        const session = `wb-${crypto.randomUUID()}`;
-        await this.transport.request('POST', `${this.toolbox}/process/session`, {
-            absolute: true,
-            json: { sessionId: session },
-        });
-        try {
-            const started = await this.transport.json<{ cmdId: string }>(
-                'POST',
-                `${this.toolbox}/process/session/${session}/exec`,
-                {
-                    absolute: true,
-                    json: {
-                        command,
-                        runAsync: true,
-                        suppressInputEcho: true,
-                    },
-                }
-            );
-            return new SessionProcess(
-                this.transport,
-                `${this.toolbox}/process/session/${session}`,
-                started.cmdId,
-                options
-            );
-        } catch (error) {
-            await this.endSession(session);
             throw error;
         }
     }
@@ -125,6 +96,28 @@ export class DaytonaToolbox implements DaytonaSandbox {
         onStdout: LogOutput,
         onFailure: (error: unknown) => void
     ): Promise<FollowedCommand> {
+        return this.launch(
+            this.subshell(command),
+            (session, id) =>
+                new LogFollower(
+                    this.transport,
+                    session,
+                    id,
+                    { stdout: onStdout },
+                    onFailure
+                )
+        );
+    }
+
+    /**
+     * Runs `command` in the background in a session of its own and hands the
+     * session's absolute URL and the command's id to `follow`. A command that
+     * does not start ends its session.
+     */
+    private async launch<T>(
+        command: string,
+        follow: (session: string, id: string) => T
+    ): Promise<T> {
         const session = `wb-${crypto.randomUUID()}`;
         await this.transport.request('POST', `${this.toolbox}/process/session`, {
             absolute: true,
@@ -136,20 +129,10 @@ export class DaytonaToolbox implements DaytonaSandbox {
                 `${this.toolbox}/process/session/${session}/exec`,
                 {
                     absolute: true,
-                    json: {
-                        command: this.subshell(command),
-                        runAsync: true,
-                        suppressInputEcho: true,
-                    },
+                    json: { command, runAsync: true, suppressInputEcho: true },
                 }
             );
-            return new LogFollower(
-                this.transport,
-                `${this.toolbox}/process/session/${session}`,
-                started.cmdId,
-                onStdout,
-                onFailure
-            );
+            return follow(`${this.toolbox}/process/session/${session}`, started.cmdId);
         } catch (error) {
             await this.endSession(session);
             throw error;

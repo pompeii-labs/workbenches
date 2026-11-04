@@ -3,7 +3,9 @@ import { join, resolve } from 'node:path';
 import type { ResolvedWorkbench } from '../../types.js';
 import type { RunnerContext } from '../context/files.js';
 import type { RunnerContextStaging } from '../context/stage.js';
+import { mcpServers } from '../mcp.js';
 import type { RunnerFiles } from '../types.js';
+import { record } from './rpc.js';
 
 /** Pi's staged config directory and context, and how to remove them. */
 export class StagedPiConfig {
@@ -46,6 +48,7 @@ export class PiConfigStaging {
                 }
                 await files.copy(workbench.runnerConfigPath, directory);
             }
+            await this.stageMcp(join(directory, 'mcp.json'), workbench, environment);
             const skillsDirectory = join(directory, 'skills');
             await files.mkdir(skillsDirectory, { recursive: true });
             await Promise.all(
@@ -96,8 +99,57 @@ export class PiConfigStaging {
         return found?.kind === 'directory' ? candidate : undefined;
     }
 
+    /**
+     * Adds the declared MCPs to Pi's user-level `mcp.json`, keeping any servers
+     * the package's `runner_config` already defines; a declared server replaces
+     * one with the same name. Direct exposure declares their tools to the model,
+     * because Pi's default exposure reaches them only from `codemode`, which is
+     * not a default tool.
+     */
+    private async stageMcp(
+        path: string,
+        workbench: ResolvedWorkbench,
+        environment: Record<string, string | undefined>
+    ): Promise<void> {
+        const declared = Object.entries(mcpServers(workbench, environment));
+        if (declared.length === 0) return;
+        const config = (await this.isFile(path))
+            ? packageMcpConfig(
+                  new TextDecoder().decode(await this.files.readFile(path))
+              )
+            : {};
+        const servers = { ...record(config.mcpServers) };
+        for (const [name, { url, headers }] of declared) {
+            servers[name] = {
+                url,
+                ...(headers ? { headers } : {}),
+                exposure: 'direct',
+            };
+        }
+        await this.files.writeFile(
+            path,
+            `${JSON.stringify({ ...config, mcpServers: servers }, null, 2)}\n`
+        );
+    }
+
     private async isFile(path: string): Promise<boolean> {
         const found = await this.files.stat(path).catch(() => undefined);
         return found?.kind === 'file';
     }
+}
+
+function packageMcpConfig(text: string): Record<string, unknown> {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(text);
+    } catch {
+        throw new Error('Pi runner_config mcp.json is not valid JSON');
+    }
+    const config = record(parsed);
+    if (!config || (config.mcpServers !== undefined && !record(config.mcpServers))) {
+        throw new Error(
+            'Pi runner_config mcp.json must be an object with an mcpServers object'
+        );
+    }
+    return config;
 }

@@ -1,100 +1,26 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import type { FollowedCommand } from '../../../src/runtimes/daytona/follow.js';
-import { client, json, type Recorded } from './http.js';
+import {
+    encode,
+    join,
+    sessionOf,
+    stderrMarker as stderr,
+    stdoutMarker as stdout,
+    stopLogServers,
+    logToolbox as toolbox,
+} from './logs.js';
 
-const servers: Bun.Server<undefined>[] = [];
-
-afterEach(() => {
-    for (const server of servers.splice(0)) server.stop(true);
-});
-
-const stdout = new Uint8Array([1, 1, 1]);
-const stderr = new Uint8Array([2, 2, 2]);
-const encode = (text: string) => new TextEncoder().encode(text);
-const join = (...parts: Uint8Array[]) => {
-    const joined = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
-    let offset = 0;
-    for (const part of parts) {
-        joined.set(part, offset);
-        offset += part.length;
-    }
-    return joined;
-};
-
-interface Socket {
-    send(data: Uint8Array | string): void;
-    close(): void;
-}
-
-/**
- * A toolbox whose log stream is a real local WebSocket. `connected` runs for
- * each connection with its index. `refuse` answers the upgrade with an error.
- */
-function toolbox(
-    connected: (index: number, socket: Socket) => void,
-    options: { refuse?: boolean; exited?: () => boolean } = {}
-) {
-    const upgrades: Array<{ path: string; authorization: string | null }> = [];
-    let connections = 0;
-    const server = Bun.serve({
-        hostname: '127.0.0.1',
-        port: 0,
-        fetch(request, server) {
-            const url = new URL(request.url);
-            upgrades.push({
-                path: `${url.pathname}${url.search}`,
-                authorization: request.headers.get('authorization'),
-            });
-            if (options.refuse) return new Response('bad gateway', { status: 502 });
-            if (server.upgrade(request)) return undefined;
-            return new Response('expected a WebSocket', { status: 400 });
-        },
-        websocket: {
-            open(socket) {
-                connected(connections++, socket);
-            },
-            message() {},
-        },
-    });
-    servers.push(server);
-    const handler = (request: Recorded) => {
-        const path = request.url.pathname;
-        if (request.method === 'POST' && path === '/api/sandbox')
-            return json({ id: 'sandbox-1', state: 'started', labels: {} });
-        if (request.method === 'GET' && path === '/api/sandbox/sandbox-1')
-            return json({
-                id: 'sandbox-1',
-                state: 'started',
-                toolboxProxyUrl: `http://127.0.0.1:${server.port}/toolbox/`,
-            });
-        if (path.endsWith('/exec')) return json({ cmdId: 'cmd-1' });
-        if (request.method === 'GET' && path.endsWith('/command/cmd-1'))
-            return json({ id: 'cmd-1', exitCode: options.exited?.() ? 0 : null });
-        return json({});
-    };
-    const { api, requests } = client(handler);
-    return {
-        upgrades,
-        requests,
-        connections: () => connections,
-        sandbox: () =>
-            api.createSandbox({
-                snapshot: 'wb-fixture',
-                labels: {},
-                leaseMinutes: 5,
-            }),
-    };
-}
+afterEach(stopLogServers);
 
 /** Keeps only bytes past what it has already seen, as the announcement log does. */
 function receiver() {
     let seen = 0;
     let text = '';
-    const calls: number[] = [];
+    const calls: Array<{ start: number; length: number }> = [];
     return {
         output: (bytes: Uint8Array, start: number) => {
-            calls.push(start);
+            calls.push({ start, length: bytes.length });
             const skip = seen - start;
             if (skip < 0 || skip >= bytes.length) return;
             text += new TextDecoder().decode(bytes.subarray(skip));
@@ -147,7 +73,12 @@ describe('Daytona log follower', () => {
         await until(() => received.text() === first + second + third);
         expect(fake.connections()).toBe(2);
         expect(failures).toEqual([]);
-        expect(received.calls[0]).toBe(0);
+        expect(received.calls[0]?.start).toBe(0);
+        // The follower passes on only what is new, so every call starts where the last ended.
+        for (const [index, call] of received.calls.entries()) {
+            const previous = received.calls[index - 1];
+            if (previous) expect(call.start).toBe(previous.start + previous.length);
+        }
         expect(fake.upgrades).toEqual([
             {
                 path:
@@ -209,15 +140,3 @@ describe('Daytona log follower', () => {
         expect(String(failures[0])).not.toContain('secret-api-key');
     });
 });
-
-function sessionOf(requests: Recorded[]): string {
-    const created = requests.find(
-        (request) =>
-            request.method === 'POST' &&
-            request.url.pathname.endsWith('/process/session')
-    );
-    const body: unknown = JSON.parse(String(created?.body));
-    if (typeof body !== 'object' || body === null || !('sessionId' in body))
-        throw new Error('No session was created');
-    return String(body.sessionId);
-}
