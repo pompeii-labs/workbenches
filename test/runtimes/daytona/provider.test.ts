@@ -247,7 +247,9 @@ describe('DaytonaRuntimeProvider', () => {
                     })
                 )
             )
-        ).rejects.toThrow('cannot build a local Dockerfile');
+        ).rejects.toThrow(
+            'The reference engine only prepares Daytona sandboxes from published images, not Workbench-local Dockerfiles.'
+        );
     });
 
     for (const daytonaClass of ['windows', 'macos', 'gpu'] as const) {
@@ -272,16 +274,19 @@ describe('DaytonaRuntimeProvider', () => {
     }
 
     for (const runner of ['pi', 'claude-code']) {
-        test(`refuses ${runner}, which reads from standard input`, async () => {
+        test(`prepares ${runner}, which reads from standard input`, async () => {
             const client = new FakeClient();
             const resolved = await fixture();
             resolved.manifest.runner = runner;
-            await expect(
-                daytonaProvider({ client }).prepare(request(resolved))
-            ).rejects.toThrow(
-                'The daytona runtime does not support runners that read from standard input yet'
+            const runtime = await daytonaProvider({ client }).prepare(
+                request(resolved)
             );
-            expect(client.createOptions).toHaveLength(0);
+            try {
+                await runtime.preflight();
+                expect(client.createOptions).toHaveLength(1);
+            } finally {
+                await runtime.cleanup();
+            }
         });
     }
 

@@ -1,183 +1,172 @@
 import type { RuntimeCommandResult } from '../contracts.js';
-import { RuntimeError } from '../error.js';
 import type { RemoteCommand, RemoteCommandOptions } from '../remote/process.js';
-import type { DaytonaTransport } from './transport.js';
+import { LogFollower } from './follow.js';
+import type { StderrFile } from './stderr.js';
+import { DaytonaApiError, type DaytonaTransport } from './transport.js';
+
+/** The code a command reports when it was stopped, as a shell reports SIGTERM. */
+const stoppedCode = 143;
 
 /**
- * A command's status. The toolbox leaves `exitCode` out, or reports null,
- * while the command runs.
- */
-interface CommandStatus {
-    id?: string;
-    exitCode?: number | null;
-}
-
-const maximumPollFailures = 5;
-/** The longest wait between polls while a command's output is unchanged. */
-const maximumIdleIntervalMs = 5_000;
-
-/**
- * A command running in a toolbox session. Output is read by polling the
- * session's logs and appending only what is new, so a dropped poll loses nothing.
+ * A command running in a toolbox session. Its output streams over the
+ * toolbox's log WebSocket as it is written and goes to the caller's receivers
+ * in order. Only a stream the caller does not receive is kept, so it can be
+ * returned by `wait()`; a received stream is never held in memory. With a
+ * stderr file, standard error arrives once the command exits, before `wait()`
+ * resolves.
  */
 export class SessionProcess implements RemoteCommand {
-    private readonly finished: Promise<RuntimeCommandResult>;
-    private stopped = false;
+    readonly #stdout: CommandOutput;
+    readonly #stderr: CommandOutput;
+    readonly #follower: LogFollower;
+    readonly #finished: Promise<RuntimeCommandResult>;
+    /** Output handed to the receivers, one chunk after another. */
+    #delivery: Promise<void> = Promise.resolve();
+    #failure: unknown;
+    #killed = false;
 
     constructor(
         private readonly transport: DaytonaTransport,
         private readonly session: string,
         private readonly command: string,
-        private readonly options: RemoteCommandOptions
+        options: RemoteCommandOptions,
+        /** Where the command's standard error is kept apart, delivered when it exits. */
+        private readonly stderrFile?: StderrFile
     ) {
-        this.finished = this.follow();
+        this.#stdout = new CommandOutput(options.onStdout);
+        this.#stderr = new CommandOutput(options.onStderr);
+        this.#follower = new LogFollower(
+            transport,
+            session,
+            command,
+            {
+                stdout: (bytes) => this.receive(this.#stdout, bytes),
+                stderr: (bytes) => this.receive(this.#stderr, bytes),
+            },
+            (error) => {
+                this.#failure = error;
+            }
+        );
+        this.#finished = this.finish();
     }
 
     wait(): Promise<RuntimeCommandResult> {
-        return this.finished;
+        return this.#finished;
     }
 
+    /**
+     * Writes to the command's standard input. A write to a command that has
+     * exited is dropped, as a local pipe drops it, so the runner fails on the
+     * exit and the standard error `wait()` delivers, not on the toolbox
+     * refusing input to a command it has already cleaned up.
+     */
     async sendStdin(data: string | Uint8Array): Promise<void> {
-        await this.transport.request(
-            'POST',
-            `${this.session}/command/${this.command}/input`,
-            {
-                absolute: true,
-                json: {
-                    data:
-                        typeof data === 'string'
-                            ? data
-                            : new TextDecoder().decode(data),
-                },
-            }
-        );
+        try {
+            await this.transport.request(
+                'POST',
+                `${this.session}/command/${this.command}/input`,
+                {
+                    absolute: true,
+                    json: {
+                        data:
+                            typeof data === 'string'
+                                ? data
+                                : new TextDecoder().decode(data),
+                    },
+                }
+            );
+        } catch (error) {
+            // The follower learns of an exit only after its log stream closes,
+            // which can trail the refused write, and waiting on `exit()` would
+            // last as long as a running command. One status read through the
+            // follower answers now, bounded by the transport's request timeout.
+            const exited = await this.#follower.hasExited().catch(() => false);
+            if (!exited) throw error;
+        }
     }
 
     async closeStdin(): Promise<void> {
-        // The toolbox has no end-of-input operation. Runners that need EOF to
-        // finish are refused before a sandbox is created.
+        // The toolbox has no end-of-input operation. Runners that read input
+        // finish a turn on their own result and end a session by being
+        // stopped, so they never wait for EOF.
     }
 
     async kill(): Promise<void> {
-        this.stopped = true;
-        await this.transport
-            .request('DELETE', this.session, { absolute: true })
-            .catch(() => {});
+        this.#killed = true;
+        await this.#follower.stop();
     }
 
-    private async follow(): Promise<RuntimeCommandResult> {
-        let stdout = '';
-        let stderr = '';
-        // The toolbox logs endpoint takes no offset, so each poll returns the
-        // whole output. Lengths are compared before slicing, and the poll interval
-        // backs off while output is unchanged so idle commands cost little.
-        const drain = async (): Promise<boolean> => {
-            const logs = await this.logs();
-            let changed = false;
-            if (logs.stdout.length > stdout.length) {
-                const added = logs.stdout.slice(stdout.length);
-                stdout = logs.stdout;
-                changed = true;
-                await this.options.onStdout?.(added);
+    /**
+     * Resolves once the command has exited and every byte of its output has
+     * reached its receiver. A known exit code is kept even when the output
+     * after it could not be read, and the session is always ended.
+     */
+    private async finish(): Promise<RuntimeCommandResult> {
+        try {
+            const code = await this.#follower.exit();
+            this.receive(this.#stdout);
+            this.receive(this.#stderr);
+            if (code !== undefined && !this.#killed && this.stderrFile) {
+                const text = await this.stderrFile.collect();
+                if (text)
+                    this.#delivery = this.#delivery.then(() =>
+                        this.#stderr.deliver(text)
+                    );
             }
-            if (logs.stderr.length > stderr.length) {
-                const added = logs.stderr.slice(stderr.length);
-                stderr = logs.stderr;
-                changed = true;
-                await this.options.onStderr?.(added);
-            }
-            return changed;
-        };
-        const base = this.transport.pollIntervalMs;
-        const ceiling = Math.max(base, maximumIdleIntervalMs);
-        let interval = base;
-        let failures = 0;
-        for (;;) {
-            if (this.stopped) {
-                await drain().catch(() => {});
-                return { code: 143, stdout, stderr };
-            }
-            let status: CommandStatus;
-            try {
-                status = await this.transport.json<CommandStatus>(
-                    'GET',
-                    `${this.session}/command/${this.command}`,
-                    { absolute: true }
+            await this.#delivery;
+            if (this.#killed) return { code: stoppedCode, stdout: '', stderr: '' };
+            if (code === undefined) {
+                throw (
+                    this.#failure ??
+                    new DaytonaApiError(
+                        'The Daytona log stream ended before the command exited'
+                    )
                 );
-                this.assertStatus(status);
-            } catch (error) {
-                // A reply that is not a command's status is final, not a passing failure.
-                if (error instanceof RuntimeError) throw error;
-                await this.retryAfter(++failures, error);
-                continue;
             }
-            if (status.exitCode !== undefined && status.exitCode !== null) {
-                // One more read so output written just before exit is not lost.
-                // The exit code is already known, so a failed read must not hide it.
-                await drain().catch(() => {});
-                await this.transport
-                    .request('DELETE', this.session, { absolute: true })
-                    .catch(() => {});
-                return { code: status.exitCode, stdout, stderr };
-            }
-            try {
-                interval = (await drain()) ? base : Math.min(interval * 2, ceiling);
-                failures = 0;
-            } catch (error) {
-                await this.retryAfter(++failures, error);
-                continue;
-            }
-            await this.transport.wait(interval);
+            return {
+                code,
+                stdout: this.#stdout.kept,
+                stderr: this.#stderr.kept,
+            };
+        } finally {
+            // A kill has already ended the session.
+            if (!this.#killed) await this.#follower.stop();
+            await this.stderrFile?.discard();
         }
     }
 
-    /**
-     * A brief network or proxy failure must not end a long run, so wait a little
-     * longer after each one in a row and give up only after several.
-     */
-    private async retryAfter(failures: number, error: unknown): Promise<void> {
-        if (failures >= maximumPollFailures) throw error;
-        await this.transport.wait(this.transport.pollIntervalMs * failures);
+    /** Queues new output for its receiver. Without bytes, ends the stream. */
+    private receive(output: CommandOutput, bytes?: Uint8Array): void {
+        const text = output.decode(bytes);
+        if (text) this.#delivery = this.#delivery.then(() => output.deliver(text));
+    }
+}
+
+/**
+ * One stream of a command's output. It decodes bytes as they arrive, keeping
+ * a character split across chunks whole, and hands the text to its receiver,
+ * or keeps it when there is none.
+ */
+class CommandOutput {
+    readonly #decoder = new TextDecoder();
+    #kept = '';
+
+    constructor(
+        private readonly receiver: ((data: string) => void | Promise<void>) | undefined
+    ) {}
+
+    get kept(): string {
+        return this.#kept;
     }
 
-    /**
-     * The toolbox schema leaves `exitCode` optional, so its absence means the
-     * command is still running. A reply that does not identify the command, such
-     * as a proxy page, is not a status, and a command must never wait on it.
-     */
-    private assertStatus(status: CommandStatus): void {
-        if (
-            typeof status !== 'object' ||
-            status === null ||
-            typeof status.id !== 'string'
-        ) {
-            throw new RuntimeError(
-                'daytona',
-                'launch',
-                'Daytona toolbox returned an unexpected command status: expected JSON with the command id'
-            );
-        }
+    decode(bytes: Uint8Array | undefined): string {
+        return bytes
+            ? this.#decoder.decode(bytes, { stream: true })
+            : this.#decoder.decode();
     }
 
-    private async logs(): Promise<{ stdout: string; stderr: string }> {
-        const response = await this.transport.request(
-            'GET',
-            `${this.session}/command/${this.command}/logs`,
-            { absolute: true, accept: 'application/json,text/plain' }
-        );
-        const text = await response.text();
-        if (!(response.headers.get('content-type') ?? '').includes('json')) {
-            return { stdout: text, stderr: '' };
-        }
-        const body = JSON.parse(text) as {
-            stdout?: string;
-            stderr?: string;
-            output?: string;
-        };
-        return {
-            stdout:
-                body.stdout ?? (body.stderr === undefined ? (body.output ?? '') : ''),
-            stderr: body.stderr ?? '',
-        };
+    async deliver(text: string): Promise<void> {
+        if (this.receiver) await this.receiver(text);
+        else this.#kept += text;
     }
 }

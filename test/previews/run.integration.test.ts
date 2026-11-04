@@ -142,6 +142,7 @@ async function fakeRunners(script: string): Promise<string> {
             '    emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "preview ready" } });',
             '    emit({ type: "turn_end", message: { stopReason: "completed" } });',
             '    emit({ type: "agent_end", messages: [] });',
+            '    emit({ type: "agent_settled", aborted: false });',
             '  }',
             '}',
         ],

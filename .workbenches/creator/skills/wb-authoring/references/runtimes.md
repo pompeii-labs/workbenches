@@ -26,7 +26,7 @@ requirements:
 - The first entry is the default. Consumers pick another with `--runtime`.
 - `local: {}` runs on the host: the runner and every tool must be installed there, and `local` takes no image. Declare it only when host execution is intended.
 - `docker` and `e2b` require `image`: a published reference, or `{build: <package-relative Dockerfile>, context: <dir>}` to build from the package.
-- `daytona` requires `class` (only `linux` runs today). `image` is optional in the schema, but the reference engine cannot prepare a daytona entry without a published `image`. It cannot build a local Dockerfile and does not fall back to the docker image. Runners that read standard input (`pi`, `claude-code`) cannot run on Daytona yet.
+- `daytona` requires `class` (only `linux` runs today). `image` is optional in the schema, but the reference engine prepares Daytona sandboxes only from a published `image`, made into a named snapshot. The engine does not build Workbench-local Dockerfiles on Daytona yet, although Daytona itself can build from a Dockerfile, and does not fall back to the docker image.
 - `requirements` (all optional): `os` (`linux`, `macos`, `windows`), `arch` (`x64`, `arm64`), `cpu`, `memory_gb`, `disk_gb`, `gpu`. Declare only what the work truly depends on. `local` compares them with the host; `docker` turns cpu and memory into container limits; `daytona` sizes the sandbox from them, and gives an undeclared `cpu` or `memory_gb` 2 vCPU and 4 GiB. A runner server alone uses most of a GiB, so declare `memory_gb` when the work builds, installs dependencies, or runs a browser or game. `gpu: true` runs on `local` when the host has a GPU that `nvidia-smi` (Linux) or `system_profiler` (macOS) lists, and on `docker` when the daemon has the NVIDIA container runtime, never on Docker for Mac; `e2b` and `daytona` refuse it.
 - `docker: {engine: {mode: host}}` under the docker runtime asks for the host's Docker daemon. Consumers must pass `--allow-host-docker` on every run. Use it only when the work must run containers itself.
 
@@ -112,7 +112,7 @@ Start from a base that already carries heavy dependencies when the work needs th
 ## Building and publishing images
 
 - `image: {build: ./Dockerfile}` lets `docker` consumers build from the package. `wb build <alias>` builds and caches it ahead of time.
-- `daytona` needs a published image. `e2b` can build from the package's Dockerfile, but a published image avoids a template build on each new tag, and `docker` consumers benefit from one instead of building locally. Publish it with the wb-publishing skill (`wb image push`) and reference it with a versioned tag, never `latest`. Never overwrite a tag a released version references.
+- The reference engine needs a published image for `daytona`. On `e2b` it can build from the package's Dockerfile, but a published image avoids a template build on each new tag, and `docker` consumers benefit from one instead of building locally. Publish it with the wb-publishing skill (`wb image push`) and reference it with a versioned tag, never `latest`. Never overwrite a tag a released version references.
 - Smoke every declared runtime. Smoke on `e2b` and `daytona` creates a billable sandbox.
 
 ## Workspaces and git

@@ -53,8 +53,8 @@ export interface ConnectionSetupOptions {
  * volume through the Workbench image and checks it with the runner inside the
  * container, so it needs a Workbench. `e2b` writes the host store synced into
  * each sandbox and is confirmed by the first run, because checking it would
- * create a billable sandbox. `daytona` has no runner credential store and
- * reads provider variables only. A runner without a credential file has no
+ * create a billable sandbox. Workbench keeps no runner credential store for
+ * `daytona`, which reads provider variables only. A runner without a credential file has no
  * store anywhere: Docker is checked by the runner itself, and E2B reads
  * provider variables only.
  */
@@ -92,7 +92,7 @@ export class ConnectionSetup {
                 ? `The local runtime uses your own ${this.#runner} sign-in; Workbench neither writes nor removes it`
                 : target.runtime === 'docker' || target.runtime === 'e2b'
                   ? `${this.#runner} has no credential store Workbench writes; ${this.#provider} keys reach it only from the environment or --env-file`
-                  : `${runtimeLabel(target.runtime)} has no runner credential store; provider keys reach it only from the environment`
+                  : `Workbench keeps no runner credential store on ${runtimeLabel(target.runtime)}; provider keys reach it only from the environment`
         );
     }
 
@@ -148,7 +148,7 @@ export class ConnectionSetup {
                           ? `Without a Workbench, wb cannot ask ${this.#runner} which providers it is signed in to, and no ${this.#provider} key is in the environment`
                           : target.runtime === 'e2b'
                             ? `${this.#runner} has no credential store Workbench writes, so in E2B it reads ${this.#provider} keys only from the environment or --env-file`
-                            : `Daytona has no runner credential store, so ${this.#runner} there reads ${this.#provider} keys only from the environment`
+                            : `Workbench keeps no runner credential store on Daytona, so ${this.#runner} there reads ${this.#provider} keys only from the environment`
                   );
         }
         // Reading must not create the store, so this skips the private-directory setup.

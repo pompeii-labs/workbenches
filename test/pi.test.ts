@@ -174,7 +174,7 @@ describe('Pi adapter translation', () => {
         ).toBe('# Review\n');
     });
 
-    test('does not inject unsupported question tooling into Pi', async () => {
+    test('uses native extension questions without injecting tooling into Pi', async () => {
         const workbench = await fixture();
         const staged = await staging.stage(workbench, {}, {});
         temporaryDirectories.push(staged.directory);
@@ -182,8 +182,98 @@ describe('Pi adapter translation', () => {
         await expect(lstat(join(staged.directory, 'extensions'))).rejects.toThrow();
     });
 
-    test('fails explicitly when a Workbench declares MCP transport', async () => {
+    test('stages declared MCPs with direct exposure and unexpanded headers', async () => {
         const workbench = await fixture();
+        workbench.manifest.mcps = [
+            {
+                name: 'docs',
+                transport: 'http',
+                url: 'https://example.com/mcp',
+                headers: { Authorization: `Bearer \${DOCS_KEY}` },
+            },
+            {
+                name: 'public',
+                transport: 'http',
+                url: 'https://example.org/mcp',
+                headers: {},
+            },
+        ];
+        workbench.manifest.env = { DOCS_KEY: { required: false } };
+        const staged = await staging.stage(workbench, { DOCS_KEY: 'fake-mcp-key' }, {});
+        temporaryDirectories.push(staged.directory);
+        const text = await readFile(join(staged.directory, 'mcp.json'), 'utf8');
+        expect(JSON.parse(text)).toEqual({
+            mcpServers: {
+                docs: {
+                    url: 'https://example.com/mcp',
+                    headers: { Authorization: `Bearer \${DOCS_KEY}` },
+                    exposure: 'direct',
+                },
+                public: { url: 'https://example.org/mcp', exposure: 'direct' },
+            },
+        });
+        expect(text).not.toContain('fake-mcp-key');
+        expect(
+            buildPiInvocation(
+                workbench,
+                'inspect',
+                {},
+                undefined,
+                undefined,
+                staged.directory
+            ).command[0]
+        ).toBe('pi');
+        expect(
+            buildPiRpcInvocation(workbench, {}, undefined, undefined, staged.directory)
+                .command[0]
+        ).toBe('pi');
+
+        const unset = await staging.stage(workbench, {}, {});
+        temporaryDirectories.push(unset.directory);
+        expect(
+            JSON.parse(await readFile(join(unset.directory, 'mcp.json'), 'utf8'))
+        ).toEqual({
+            mcpServers: {
+                public: { url: 'https://example.org/mcp', exposure: 'direct' },
+            },
+        });
+        workbench.manifest.env = {};
+        await expect(staging.stage(workbench, {}, {})).rejects.toThrow(
+            'MCP docs references undeclared environment variable: DOCS_KEY'
+        );
+    });
+
+    test('never loads the person’s own Pi servers', async () => {
+        const workbench = await fixture();
+        const native = await mkdtemp(join(tmpdir(), 'pi-native-mcp-'));
+        temporaryDirectories.push(native);
+        await writeFile(
+            join(native, 'mcp.json'),
+            '{"mcpServers":{"personal":{"url":"https://personal.example/mcp"}}}'
+        );
+        const staged = await staging.stage(
+            workbench,
+            { PI_CODING_AGENT_DIR: native },
+            {}
+        );
+        temporaryDirectories.push(staged.directory);
+        await expect(lstat(join(staged.directory, 'mcp.json'))).rejects.toThrow();
+    });
+
+    test('adds declared MCPs to the packaged Pi MCP config', async () => {
+        const workbench = await fixture();
+        const config = await mkdtemp(join(tmpdir(), 'pi-package-'));
+        temporaryDirectories.push(config);
+        workbench.runnerConfigPath = config;
+        await writeFile(
+            join(config, 'mcp.json'),
+            JSON.stringify({
+                mcpServers: {
+                    local: { command: 'tools-mcp', args: ['--stdio'] },
+                    docs: { url: 'https://old.example/mcp' },
+                },
+            })
+        );
         workbench.manifest.mcps = [
             {
                 name: 'docs',
@@ -192,8 +282,21 @@ describe('Pi adapter translation', () => {
                 headers: {},
             },
         ];
-        expect(() => buildPiInvocation(workbench, 'inspect', {})).toThrow(
-            'Pi does not provide a native MCP transport'
+
+        const staged = await staging.stage(workbench, {}, {});
+        temporaryDirectories.push(staged.directory);
+        expect(
+            JSON.parse(await readFile(join(staged.directory, 'mcp.json'), 'utf8'))
+        ).toEqual({
+            mcpServers: {
+                local: { command: 'tools-mcp', args: ['--stdio'] },
+                docs: { url: 'https://example.com/mcp', exposure: 'direct' },
+            },
+        });
+
+        await writeFile(join(config, 'mcp.json'), '[]');
+        await expect(staging.stage(workbench, {}, {})).rejects.toThrow(
+            'Pi runner_config mcp.json must be an object with an mcpServers object'
         );
     });
 
@@ -207,6 +310,7 @@ describe('Pi adapter translation', () => {
 
         expect(wrapped.slice(0, 3)).toEqual(['/bin/sh', '-c', expect.any(String)]);
         expect(wrapped.slice(-3)).toEqual(command);
+        expect(wrapped[2]).toContain('cp -R "$source"/. "$config"/');
         expect(environment).toMatchObject({
             PI_CODING_AGENT_DIR: '/tmp/workbench-pi',
             WORKBENCH_PI_CONFIG_DIR: '/workbench-config',

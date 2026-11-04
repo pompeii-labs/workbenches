@@ -233,6 +233,7 @@ describe('local run lifecycle', () => {
             },
             { type: 'turn_end', message: { stopReason: 'stop' } },
             { type: 'agent_end', messages: [] },
+            { type: 'agent_settled', aborted: false },
         ]
             .map((event) => JSON.stringify(event))
             .join('\n');

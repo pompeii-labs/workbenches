@@ -62,7 +62,7 @@ A manifest names a model (`lab/model`) and optionally ordered provider `routes`.
 1. `--connection <provider>` on `run` or `resume`, if authenticated.
 2. The default saved by `wb connect` for this runner and runtime, if authenticated.
 3. The first route in manifest order with a key in the environment.
-4. The runner's own sign-in on `local`, and on `docker` and `e2b` the store `wb connect` fills for runners that keep one. Daytona has no credential store: env only.
+4. The runner's own sign-in on `local`, and on `docker` and `e2b` the store `wb connect` fills for runners that keep one. The engine keeps no runner credential store on Daytona: env only.
 
 Keys come from the environment of the `wb` process, plus `--env-file FILE` and `--env NAME=value`. Each provider has fixed variable names, for example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY` or `GOOGLE_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, and `AI_GATEWAY_API_KEY` (Vercel). After a route is chosen, other providers' keys are stripped from the run. `wb view <alias>` shows each route and which one is ready.
 
@@ -81,7 +81,7 @@ A Workbench declares the runtimes it supports; the first is the default. Choose 
 | `local` | The runner and tools on the host. Edits land in the working tree. |
 | `docker` | A Docker-compatible CLI and daemon. The image holds runner and tools. Edits land in the mounted workspace. |
 | `e2b` | `E2B_API_KEY`, or `wb connect --runtime e2b` once (masked prompt or `--stdin`). Edits come back as a pending outcome. |
-| `daytona` | `DAYTONA_API_KEY`, or `wb connect --runtime daytona`. Only the `linux` class runs today. Published images only. Runners that read standard input (`pi`, `claude-code`) cannot run there. Edits come back as a pending outcome. |
+| `daytona` | `DAYTONA_API_KEY`, or `wb connect --runtime daytona`. Only the `linux` class runs today. Published images only. Edits come back as a pending outcome. |
 
 The environment variable always wins over a saved runtime key. Runtime keys never enter the sandbox. `wb connect --runtime <name> --status` checks one.
 

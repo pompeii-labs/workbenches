@@ -47,7 +47,16 @@ export class PiEventAdapter {
                 },
             ]);
         }
-        if (type === 'agent_end' || type === 'agent_start' || type === 'turn_start') {
+        if (type === 'agent_end') {
+            // A failed attempt Pi retries does not fail the prompt.
+            if (event.willRetry === true) this.failureMessage = undefined;
+            return this.result([]);
+        }
+        if (
+            type === 'agent_settled' ||
+            type === 'agent_start' ||
+            type === 'turn_start'
+        ) {
             return this.result([]);
         }
         if (type === 'extension_error') {

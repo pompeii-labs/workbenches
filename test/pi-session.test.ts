@@ -65,6 +65,117 @@ runnerAdapterContract({
 });
 
 describe('Pi RPC session adapter', () => {
+    for (const boundary of ['cancel', 'end', 'close', 'timeout'] as const) {
+        test(`withdraws extension questions on ${boundary} without blocking RPC`, async () => {
+            const native = new FakePiRpc();
+            native.scenario = 'cancellation';
+            const withdrawn: string[] = [];
+            let requested = () => {};
+            const question = new Promise<void>((resolve) => {
+                requested = resolve;
+            });
+            const session = await new PiSessionAdapter({
+                config,
+                spawn: () => native.process,
+            }).start({
+                workbench,
+                workspaceDirectory: root,
+                environment: {},
+                configuration: new ModelRouter(modelCatalogFixture).resolve({
+                    workbench,
+                }),
+                host: {
+                    emit: async () => {},
+                    requestPermission: async () => 'reject',
+                    requestQuestion: () => {
+                        requested();
+                        return new Promise(() => {});
+                    },
+                    withdrawRequest: async (id) => {
+                        withdrawn.push(id);
+                    },
+                },
+            });
+            try {
+                const turn = session.prompt('wait');
+                await native.waitFor('prompt');
+                native.emit({
+                    type: 'extension_ui_request',
+                    id: 'dialog',
+                    method: 'input',
+                    title: 'Value?',
+                    ...(boundary === 'timeout' ? { timeout: 5 } : {}),
+                });
+                await question;
+                if (boundary === 'cancel') await session.cancelTurn();
+                else if (boundary === 'close') await session.close();
+                else {
+                    if (boundary === 'timeout') {
+                        await Bun.sleep(20);
+                        expect(withdrawn).toEqual(['dialog']);
+                    }
+                    native.settle();
+                }
+                await turn;
+                expect(withdrawn).toEqual(['dialog']);
+                expect(
+                    native.commands.some(
+                        (entry) => entry.type === 'extension_ui_response'
+                    )
+                ).toBeFalse();
+            } finally {
+                await session.close();
+            }
+        });
+    }
+
+    test('completes when Pi settles, not when an attempt it retries ends', async () => {
+        const native = new FakePiRpc();
+        native.scenario = 'cancellation';
+        const text: string[] = [];
+        const session = await new PiSessionAdapter({
+            config,
+            spawn: () => native.process,
+        }).start({
+            workbench,
+            workspaceDirectory: root,
+            environment: {},
+            configuration: new ModelRouter(modelCatalogFixture).resolve({ workbench }),
+            host: {
+                emit: async (event) => {
+                    if (event.type === 'output.text')
+                        text.push(String(event.data.text));
+                },
+                requestPermission: async () => 'reject',
+                requestQuestion: async () => ({ outcome: 'rejected' }),
+            },
+        });
+        try {
+            let ended = false;
+            const turn = session.prompt('retry').finally(() => {
+                ended = true;
+            });
+            await native.waitFor('prompt');
+            native.emit({
+                type: 'message_end',
+                message: { role: 'assistant', stopReason: 'error' },
+            });
+            native.emit({ type: 'agent_end', messages: [], willRetry: true });
+            await Bun.sleep(20);
+            expect(ended).toBeFalse();
+            native.emit({
+                type: 'message_update',
+                assistantMessageEvent: { type: 'text_delta', delta: 'retried' },
+            });
+            native.emit({ type: 'turn_end', message: { stopReason: 'stop' } });
+            native.settle();
+            await expect(turn).resolves.toBeDefined();
+            expect(text.join('')).toBe('retried');
+        } finally {
+            await session.close();
+        }
+    });
+
     test('refreshes current attempt facts once when reopening native context, preserving images and later input', async () => {
         const native = new FakePiRpc();
         const session = await new PiSessionAdapter({
@@ -358,12 +469,21 @@ class FakePiRpc {
 
     private respond(command: Record<string, unknown>): void {
         const type = String(command.type);
+        if (type === 'extension_ui_response') {
+            expect(command).toEqual({
+                type: 'extension_ui_response',
+                id: 'question-contract',
+                value: 'Production',
+            });
+            this.settle();
+            return;
+        }
         if (type === 'abort' && this.abortEndsBeforeResponse) {
             this.emit({
                 type: 'message_end',
                 message: { role: 'assistant', stopReason: 'aborted' },
             });
-            this.emit({ type: 'agent_end', messages: [] });
+            this.settle(true);
         }
         this.emit({
             id: command.id,
@@ -377,6 +497,16 @@ class FakePiRpc {
         if (type !== 'prompt') return;
         const input = String(command.message);
         if (this.scenario === 'cancellation' || this.scenario === 'steering') return;
+        if (this.scenario === 'questions') {
+            this.emit({
+                type: 'extension_ui_request',
+                id: 'question-contract',
+                method: 'select',
+                title: 'Where should this deploy?',
+                options: ['Production', 'Staging'],
+            });
+            return;
+        }
         if (this.scenario === 'streaming_text') {
             this.text('Hello');
             this.text(' world');
@@ -438,7 +568,13 @@ class FakePiRpc {
             });
         }
         this.emit({ type: 'turn_end', message: { stopReason: 'completed' } });
+        this.settle();
+    }
+
+    /** Ends the low-level run and settles, as Pi does once no automatic work remains. */
+    settle(aborted = false): void {
         this.emit({ type: 'agent_end', messages: [] });
+        this.emit({ type: 'agent_settled', aborted });
     }
 
     private text(text: string): void {
@@ -449,7 +585,7 @@ class FakePiRpc {
         });
     }
 
-    private emit(value: unknown): void {
+    emit(value: unknown): void {
         if (!this.closed) {
             this.controller.enqueue(this.encoder.encode(`${JSON.stringify(value)}\n`));
         }

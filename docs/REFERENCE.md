@@ -94,7 +94,7 @@ The Workbench engine reads this file. The selected runner does not. The engine v
 
 This repository contains `workbench`, also available as `wb`: the TypeScript reference engine and command-line client for the standard.
 
-The spec 0 and spec 1 manifests, the OpenCode, Pi, and Claude Code adapters, and local, Docker, E2B, and Daytona runtimes for one-shot, detached, and multi-turn execution are implemented. Daytona refuses runners that read standard input, Pi and Claude Code, because it cannot yet close a runner's standard input. The [runner capability table](EXECUTION.md#reference-runner-adapters) lists what each runner supports. Other runners and remote runtime providers are not yet supported by the reference engine. See [Stability](#stability) for what the 1.0 CLI promises.
+The spec 0 and spec 1 manifests, the OpenCode, Pi, and Claude Code adapters, and local, Docker, E2B, and Daytona runtimes for one-shot, detached, and multi-turn execution are implemented. The [runner capability table](EXECUTION.md#reference-runner-adapters) lists what each runner supports. Other runners and remote runtime providers are not yet supported by the reference engine. See [Stability](#stability) for what the 1.0 CLI promises.
 
 ### Install
 
@@ -532,11 +532,11 @@ wb run project-core --runtime daytona --task "Review this migration"
 
 `wb smoke` makes no model request, but on Daytona it creates a real sandbox to check the runner and tools, which is billable Daytona usage.
 
-The engine creates a fresh Daytona sandbox for each execution and deletes it at cleanup. The sandbox starts from a named Daytona snapshot of the image pinned to its digest, which the engine creates through Daytona's snapshot API the first time it is needed and every later run with the same image and resources reuses; a cold snapshot may take several minutes, and the engine waits up to 30 minutes for it. A tag is resolved to its digest from the registry anonymously, and for a private image with the login Docker keeps for that registry from `docker login` or `wb image login`; Daytona pulls the image itself, so a private registry must also be added to the Daytona account. It never falls back to another runtime entry's image. Daytona pulls the image, so a Workbench-local Dockerfile build is refused; publish the image instead. The image must include the selected runner, every declared tool, `git`, and GNU `tar` with `--null` support. For repository runs the engine installs `git` and `gh` in the sandbox when they are missing (on Daytona, an image without `git` and `gh` needs a root user or passwordless `sudo`).
+The engine creates a fresh Daytona sandbox for each execution and deletes it at cleanup. The sandbox starts from a named Daytona snapshot of the image pinned to its digest, which the engine creates through Daytona's snapshot API the first time it is needed and every later run with the same image and resources reuses; a cold snapshot may take several minutes, and the engine waits up to 30 minutes for it. A tag is resolved to its digest from the registry anonymously, and for a private image with the login Docker keeps for that registry from `docker login` or `wb image login`; Daytona pulls the image itself, so a private registry must also be added to the Daytona account. It never falls back to another runtime entry's image. The reference engine does not build Workbench-local Dockerfiles on Daytona yet, although Daytona itself can build from a Dockerfile; publish the image instead. The image must include the selected runner, every declared tool, `git`, and GNU `tar` with `--null` support. For repository runs the engine installs `git` and `gh` in the sandbox when they are missing (on Daytona, an image without `git` and `gh` needs a root user or passwordless `sudo`).
 
 Staging, exclusions, pending outcomes, and the default 512 MiB transfer limits match E2B: `/workspace`, `/workspaces/<name>`, and `/workbench` hold isolated copies, and remote changes return as pending outcomes that only `wb outcome <id> --apply` applies. `cpu`, `memory_gb`, and `disk_gb` requirements become the snapshot's resources, and so the sandbox's. The sandbox has a 60 minute lifetime: the engine sets Daytona's wall-clock TTL, which destroys the sandbox that long after creation in any state, even if the CLI process dies. It carries the labels `dev.workbenches.managed`, `dev.workbenches.run`, and `dev.workbenches.scope`.
 
-Daytona currently has no native authentication flow, pause or recovery, or cost estimate. Model credentials come from the environment or `--env-file`. See the [Daytona provider contract](EXECUTION.md#reference-daytona-provider) for the full list of limits.
+The reference CLI does not use Daytona's stop, start, pause, archive, or recover operations to preserve or recover sandboxes. It deletes each sandbox at cleanup and resumes linked sessions in fresh sandboxes. The engine provides no native runner authentication flow or cost estimate on Daytona. Model credentials come from the environment or `--env-file`. See the [Daytona provider contract](EXECUTION.md#reference-daytona-provider) for the full list of limits.
 
 ### Returned results
 
@@ -958,7 +958,7 @@ await runtime.suspend?.(7 * 24 * 60); // keep the stopped sandbox for 7 days
 
 #### Keeping previews reachable after a run
 
-A Daytona run with an outbox gets the `wbx` helper, so the agent can announce a server it started with `wbx preview <port> --name <name>`. Daytona refuses runners that read standard input, so previews there are OpenCode only. After `preflight`, `runtime.previews` follows the announcements; call `watch` with a listener, `refresh` at each turn end, and `close` when the run's last turn is over:
+A Daytona run with an outbox gets the `wbx` helper, so the agent can announce a server it started with `wbx preview <port> --name <name>`. After `preflight`, `runtime.previews` follows the announcements; call `watch` with a listener, `refresh` at each turn end, and `close` when the run's last turn is over:
 
 ```ts
 runtime.previews?.watch({

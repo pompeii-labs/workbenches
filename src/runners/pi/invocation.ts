@@ -164,9 +164,4 @@ function validatePiWorkbench(workbench: ResolvedWorkbench): void {
     if (workbench.manifest.runner !== 'pi') {
         throw new Error(`Unsupported runner: ${workbench.manifest.runner}`);
     }
-    if (workbench.manifest.mcps.length > 0) {
-        throw new Error(
-            'Pi does not provide a native MCP transport. This Workbench requires an explicit Pi extension before it can run.'
-        );
-    }
 }

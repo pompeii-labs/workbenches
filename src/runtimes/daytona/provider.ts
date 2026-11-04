@@ -103,13 +103,6 @@ export class DaytonaRuntimeProvider extends RemoteProvider {
         if (selected.class !== 'linux') {
             fail(`class ${selected.class ?? 'unset'} is not available yet`);
         }
-        // The toolbox can write to a command's input but cannot close it, so a
-        // runner that holds a session open over standard input would hang.
-        if (request.purpose !== 'build' && request.runner.standardInput) {
-            fail(
-                'The daytona runtime does not support runners that read from standard input yet'
-            );
-        }
         if (requirementsOf(request.workbench.manifest).gpu) {
             fail('GPU requirements are not supported on the daytona runtime yet');
         }
@@ -121,7 +114,7 @@ export class DaytonaRuntimeProvider extends RemoteProvider {
         }
         if (typeof image !== 'string') {
             return fail(
-                'The daytona runtime creates sandboxes from a published image and cannot build a local Dockerfile. Set runtimes.daytona.image to a published image.'
+                'The reference engine only prepares Daytona sandboxes from published images, not Workbench-local Dockerfiles. Set runtimes.daytona.image to a published image.'
             );
         }
         return image;

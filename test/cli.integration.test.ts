@@ -1694,7 +1694,7 @@ describe('CLI integration', () => {
         });
         expect(missing.code).toBe(AuthenticationRequiredError.exitCode);
         expect(missing.stderr).toContain(
-            'Daytona has no runner credential store, so OpenCode there reads OpenRouter keys only from the environment. Set OPENROUTER_API_KEY where wb runs. For one run, --env-file also works.'
+            'Workbench keeps no runner credential store on Daytona, so OpenCode there reads OpenRouter keys only from the environment. Set OPENROUTER_API_KEY where wb runs. For one run, --env-file also works.'
         );
         const ready = await executeCli(target, {
             ...environment,
@@ -1709,7 +1709,7 @@ describe('CLI integration', () => {
         );
         expect(piped.code).toBe(1);
         expect(piped.stderr).toContain(
-            'Daytona has no runner credential store; provider keys reach it only from the environment'
+            'Workbench keeps no runner credential store on Daytona; provider keys reach it only from the environment'
         );
         expect(await readdir(home)).not.toContain('runtime-credentials');
     });

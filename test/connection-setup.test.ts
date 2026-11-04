@@ -258,21 +258,21 @@ describe('connection setup', () => {
                 },
             });
         expect(() => setup({}).requireStore()).toThrow(
-            'Daytona has no runner credential store'
+            'Workbench keeps no runner credential store on Daytona'
         );
         await expect(setup({}).verify()).resolves.toMatchObject({
             ready: false,
             missing:
-                'Daytona has no runner credential store, so OpenCode there reads OpenRouter keys only from the environment',
+                'Workbench keeps no runner credential store on Daytona, so OpenCode there reads OpenRouter keys only from the environment',
         });
         await expect(
             setup({ OPENROUTER_API_KEY: 'fixture' }).verify()
         ).resolves.toEqual({ ready: true, saved: false, fromEnvironment: true });
         await expect(
             setup({}).save(NativeCredentialFile.for('opencode').apiKey('fixture'))
-        ).rejects.toThrow('Daytona has no runner credential store');
+        ).rejects.toThrow('Workbench keeps no runner credential store on Daytona');
         await expect(setup({}).remove(['openrouter'])).rejects.toThrow(
-            'Daytona has no runner credential store'
+            'Workbench keeps no runner credential store on Daytona'
         );
         expect(await readdir(home)).toEqual([]);
     });
@@ -320,7 +320,7 @@ describe('model connection', () => {
             'Workbench neither writes nor removes it'
         );
         await expect(connect(target('daytona'))).rejects.toThrow(
-            'Daytona has no runner credential store'
+            'Workbench keeps no runner credential store on Daytona'
         );
         await expect(connect(chatgpt('e2b'))).rejects.toThrow(
             '--stdin reads an API key, but ChatGPT subscription (headless) is a sign-in'
