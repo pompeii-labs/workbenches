@@ -160,7 +160,8 @@ const SESSION_CONFIG_ENTRIES = [
  * The copy makes every directory writable before filling it, never with the
  * staged read-only mode. `cp -R` creates a directory with its source mode and
  * then changes it, and Docker Desktop's file sharing refuses to change the
- * mode of a directory created without owner write.
+ * mode of a directory created without owner write. A sandbox runtime copies
+ * only files, so a Workbench without skills has no staged skills directory.
  */
 export function inSessionConfig(
     invocation: RunnerInvocation,
@@ -181,7 +182,7 @@ export function inSessionConfig(
                 'done',
                 'skills="$CLAUDE_CONFIG_DIR/skills"',
                 'mkdir "$skills"',
-                `(cd "$WORKBENCH_CLAUDE_SKILLS" && find . ! -name . -exec sh -c '${copyEntries}' "$skills" {} +)`,
+                `if [ -d "$WORKBENCH_CLAUDE_SKILLS" ]; then (cd "$WORKBENCH_CLAUDE_SKILLS" && find . ! -name . -exec sh -c '${copyEntries}' "$skills" {} +); fi`,
                 'exec "$@"',
             ].join('\n'),
             'workbench-claude',

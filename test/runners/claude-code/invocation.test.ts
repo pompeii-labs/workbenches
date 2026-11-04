@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+    mkdir,
+    mkdtemp,
+    readdir,
+    readFile,
+    rm,
+    symlink,
+    writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -167,6 +175,29 @@ describe('Claude Code invocation', () => {
             expect(await readFile(join(target, 'skills', 'keep.txt'), 'utf8')).toBe(
                 'keep'
             );
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
+    test('starts without a staged skills directory', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'claude-config-no-skills-'));
+        try {
+            const config = join(root, 'config');
+            const wrapped = inSessionConfig(
+                { command: ['true'], env: {} } as unknown as RunnerInvocation,
+                join(root, 'missing')
+            );
+            const [shell, flag, script, ...rest] = wrapped.command;
+            const result = Bun.spawnSync(
+                [shell as string, flag as string, script as string, ...rest],
+                {
+                    env: { ...process.env, CLAUDE_CONFIG_DIR: config, ...wrapped.env },
+                }
+            );
+            expect(result.stderr.toString()).toBe('');
+            expect(result.exitCode).toBe(0);
+            expect(await readdir(join(config, 'skills'))).toEqual([]);
         } finally {
             await rm(root, { recursive: true, force: true });
         }
