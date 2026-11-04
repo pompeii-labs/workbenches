@@ -103,13 +103,6 @@ export class DaytonaRuntimeProvider extends RemoteProvider {
         if (selected.class !== 'linux') {
             fail(`class ${selected.class ?? 'unset'} is not available yet`);
         }
-        // The toolbox can write to a command's input but cannot close it, so a
-        // runner that holds a session open over standard input would hang.
-        if (request.purpose !== 'build' && request.runner.standardInput) {
-            fail(
-                'The daytona runtime does not support runners that read from standard input yet'
-            );
-        }
         if (requirementsOf(request.workbench.manifest).gpu) {
             fail('GPU requirements are not supported on the daytona runtime yet');
         }

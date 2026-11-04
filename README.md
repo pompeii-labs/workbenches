@@ -310,7 +310,7 @@ The E2B control key remains on the host. Harness credentials are staged only for
 
 ### Daytona
 
-Daytona Workbenches get a fresh Daytona sandbox created from the entry's published `image` for each execution (`runtimes.daytona` requires `class`; `image` is optional in the schema, but the reference engine cannot prepare an entry without a published `image`, and there is no fallback to another runtime's image), using the same staging rules and pending outcomes as E2B. The `linux` class and multi-turn sessions are supported; native authentication and sandbox recovery are not. Runners that read standard input, Pi and Claude Code, cannot run on Daytona yet. The Daytona key stays on the host, and model credentials come from your environment.
+Daytona Workbenches get a fresh Daytona sandbox created from the entry's published `image` for each execution (`runtimes.daytona` requires `class`; `image` is optional in the schema, but the reference engine cannot prepare an entry without a published `image`, and there is no fallback to another runtime's image), using the same staging rules and pending outcomes as E2B. The `linux` class and multi-turn sessions are supported; native authentication and sandbox recovery are not. The Daytona key stays on the host, and model credentials come from your environment.
 
 ## Command overview
 

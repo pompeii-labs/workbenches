@@ -81,7 +81,7 @@ A Workbench declares the runtimes it supports; the first is the default. Choose 
 | `local` | The runner and tools on the host. Edits land in the working tree. |
 | `docker` | A Docker-compatible CLI and daemon. The image holds runner and tools. Edits land in the mounted workspace. |
 | `e2b` | `E2B_API_KEY`, or `wb connect --runtime e2b` once (masked prompt or `--stdin`). Edits come back as a pending outcome. |
-| `daytona` | `DAYTONA_API_KEY`, or `wb connect --runtime daytona`. Only the `linux` class runs today. Published images only. Runners that read standard input (`pi`, `claude-code`) cannot run there. Edits come back as a pending outcome. |
+| `daytona` | `DAYTONA_API_KEY`, or `wb connect --runtime daytona`. Only the `linux` class runs today. Published images only. Edits come back as a pending outcome. |
 
 The environment variable always wins over a saved runtime key. Runtime keys never enter the sandbox. `wb connect --runtime <name> --status` checks one.
 

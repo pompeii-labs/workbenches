@@ -94,7 +94,7 @@ The Workbench engine reads this file. The selected runner does not. The engine v
 
 This repository contains `workbench`, also available as `wb`: the TypeScript reference engine and command-line client for the standard.
 
-The spec 0 and spec 1 manifests, the OpenCode, Pi, and Claude Code adapters, and local, Docker, E2B, and Daytona runtimes for one-shot, detached, and multi-turn execution are implemented. Daytona refuses runners that read standard input, Pi and Claude Code, because it cannot yet close a runner's standard input. The [runner capability table](EXECUTION.md#reference-runner-adapters) lists what each runner supports. Other runners and remote runtime providers are not yet supported by the reference engine. See [Stability](#stability) for what the 1.0 CLI promises.
+The spec 0 and spec 1 manifests, the OpenCode, Pi, and Claude Code adapters, and local, Docker, E2B, and Daytona runtimes for one-shot, detached, and multi-turn execution are implemented. The [runner capability table](EXECUTION.md#reference-runner-adapters) lists what each runner supports. Other runners and remote runtime providers are not yet supported by the reference engine. See [Stability](#stability) for what the 1.0 CLI promises.
 
 ### Install
 
@@ -958,7 +958,7 @@ await runtime.suspend?.(7 * 24 * 60); // keep the stopped sandbox for 7 days
 
 #### Keeping previews reachable after a run
 
-A Daytona run with an outbox gets the `wbx` helper, so the agent can announce a server it started with `wbx preview <port> --name <name>`. Daytona refuses runners that read standard input, so previews there are OpenCode only. After `preflight`, `runtime.previews` follows the announcements; call `watch` with a listener, `refresh` at each turn end, and `close` when the run's last turn is over:
+A Daytona run with an outbox gets the `wbx` helper, so the agent can announce a server it started with `wbx preview <port> --name <name>`. After `preflight`, `runtime.previews` follows the announcements; call `watch` with a listener, `refresh` at each turn end, and `close` when the run's last turn is over:
 
 ```ts
 runtime.previews?.watch({
