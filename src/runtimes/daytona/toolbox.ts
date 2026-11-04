@@ -19,6 +19,9 @@ import {
 /** Where each command records its output and exit code in the sandbox. */
 const commandRecords = '/tmp/.workbench-commands';
 
+/** The prefix of the file that carries one background command's environment. */
+const environmentFiles = '/tmp/.workbench-env-';
+
 /** Commands, files, and preview URLs for one sandbox. */
 export class DaytonaToolbox implements DaytonaSandbox {
     constructor(
@@ -51,9 +54,41 @@ export class DaytonaToolbox implements DaytonaSandbox {
         return { code: response.code, stdout: response.result ?? '', stderr: '' };
     }
 
+    /**
+     * Starts a background command. The toolbox keeps every session command
+     * line, so environment values never go on it: they are uploaded to a file
+     * that the command sources and removes before it runs.
+     */
     async start(
         command: string,
         options: RemoteCommandOptions = {}
+    ): Promise<RemoteCommand> {
+        const exports = this.exports(options.env ?? {});
+        const file =
+            exports.length > 0
+                ? `${environmentFiles}${crypto.randomUUID()}`
+                : undefined;
+        try {
+            // An upload that fails partway can still leave part of the file.
+            if (file) {
+                await this.upload(
+                    file,
+                    new TextEncoder().encode(`${exports.join('\n')}\n`)
+                );
+            }
+            return await this.launch(
+                this.subshell(command, options.cwd, file),
+                options
+            );
+        } catch (error) {
+            if (file) await this.run(`rm -f ${quote(file)}`).catch(() => {});
+            throw error;
+        }
+    }
+
+    private async launch(
+        command: string,
+        options: RemoteCommandOptions
     ): Promise<RemoteCommand> {
         const session = `wb-${crypto.randomUUID()}`;
         await this.transport.request('POST', `${this.toolbox}/process/session`, {
@@ -67,7 +102,7 @@ export class DaytonaToolbox implements DaytonaSandbox {
                 {
                     absolute: true,
                     json: {
-                        command: this.subshell(command, options),
+                        command,
                         runAsync: true,
                         suppressInputEcho: true,
                     },
@@ -102,7 +137,7 @@ export class DaytonaToolbox implements DaytonaSandbox {
                 {
                     absolute: true,
                     json: {
-                        command: this.subshell(command, {}),
+                        command: this.subshell(command),
                         runAsync: true,
                         suppressInputEcho: true,
                     },
@@ -300,9 +335,9 @@ export class DaytonaToolbox implements DaytonaSandbox {
         ].join('\n');
     }
 
-    /** A subshell that applies the environment and directory, then runs `command`. */
-    private subshell(command: string, options: RemoteCommandOptions): string {
-        const exports = Object.entries(options.env ?? {}).map(([name, value]) => {
+    /** One `export` line per environment value, for the sandbox's shell to source. */
+    private exports(env: Record<string, string>): string[] {
+        return Object.entries(env).map(([name, value]) => {
             if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
                 throw new RuntimeError(
                     'daytona',
@@ -312,9 +347,19 @@ export class DaytonaToolbox implements DaytonaSandbox {
             }
             return `export ${name}=${quote(value)}`;
         });
+    }
+
+    /**
+     * A subshell that sources and removes the environment file, then applies
+     * the directory and runs `command`. The file is gone before the command
+     * starts, and a removal that fails stops the command.
+     */
+    private subshell(command: string, cwd?: string, environment?: string): string {
         return `(${[
-            ...exports,
-            ...(options.cwd ? [`cd ${quote(options.cwd)}`] : []),
+            ...(environment
+                ? [`. ${quote(environment)}`, `rm -f ${quote(environment)}`]
+                : []),
+            ...(cwd ? [`cd ${quote(cwd)}`] : []),
             command,
         ].join(' && ')})`;
     }
