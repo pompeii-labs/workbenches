@@ -1,10 +1,58 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { client, json, startedSandbox, toolbox } from './http.js';
+import {
+    client,
+    type Handler,
+    json,
+    type Recorded,
+    startedSandbox,
+    toolbox,
+} from './http.js';
+
+const fakeEnv = { FAKE_API_KEY: 'fake-key-value', OTHER: "it's fake" };
+
+/**
+ * Answers a background launch. The request whose path ends with `failing` is
+ * refused, and `execute` answers one-shot commands.
+ */
+function launchHandler(
+    failing?: string,
+    execute: Handler = () => json({ exitCode: 0, result: '' })
+): Handler {
+    return (request) => {
+        const path = request.url.pathname;
+        if (failing && path.endsWith(failing)) {
+            return new Response('launch refused', { status: 400 });
+        }
+        if (path.endsWith('/process/execute')) return execute(request);
+        if (path.endsWith('/exec')) return json({ cmdId: 'cmd-1' });
+        if (path.endsWith('/command/cmd-1')) return json({ id: 'cmd-1' });
+        if (path.endsWith('/logs')) return json({ stdout: '', stderr: '' });
+        return json({});
+    };
+}
+
+function execOf(requests: Recorded[]): string {
+    const exec = requests.find((request) => request.url.pathname.endsWith('/exec'));
+    return JSON.parse(String(exec?.body)).command;
+}
+
+async function uploadOf(requests: Recorded[]): Promise<{ path: string; text: string }> {
+    const upload = requests.filter((request) =>
+        request.url.pathname.endsWith('/files/bulk-upload')
+    );
+    expect(upload).toHaveLength(1);
+    const form = upload[0]?.body;
+    if (!(form instanceof FormData)) throw new Error('The upload is not form data');
+    const file = form.get('files[0].file');
+    if (!(file instanceof Blob)) throw new Error('The upload has no file');
+    return { path: String(form.get('files[0].path')), text: await file.text() };
+}
 
 describe('DaytonaToolbox', () => {
     test('reads the toolbox URL from its endpoint when the sandbox omits it', async () => {
@@ -126,7 +174,7 @@ describe('DaytonaToolbox', () => {
     });
 
     test('refuses an environment variable name that is not a shell identifier', async () => {
-        const { sandbox } = await startedSandbox();
+        const { sandbox, requests } = await startedSandbox();
         await expect(
             sandbox.start('true', { env: { 'A B': 'x' } })
         ).rejects.toMatchObject({
@@ -134,6 +182,101 @@ describe('DaytonaToolbox', () => {
             runtime: 'daytona',
             message: 'Invalid environment variable name: A B',
         });
+        expect(
+            requests.some((request) => request.url.pathname.startsWith('/toolbox'))
+        ).toBeFalse();
+    });
+
+    test('passes a background command its environment through an uploaded file, never its command line', async () => {
+        const { sandbox, requests } = await startedSandbox(launchHandler());
+        const started = await sandbox.start(
+            'if [ -e "$ENV_FILE" ]; then echo present; else printf "%s|%s" "$FAKE_API_KEY" "$OTHER"; fi',
+            { cwd: '/workspace', env: fakeEnv }
+        );
+        await started.kill();
+        const upload = await uploadOf(requests);
+        expect(upload.path).toMatch(/^\/tmp\/\.workbench-env-[0-9a-f-]{36}$/);
+        expect(upload.text).toBe(
+            `export FAKE_API_KEY='fake-key-value'\nexport OTHER='it'"'"'s fake'\n`
+        );
+        const command = execOf(requests);
+        for (const value of Object.values(fakeEnv)) {
+            expect(command).not.toContain(value);
+        }
+        expect(
+            command.startsWith(
+                `(. '${upload.path}' && rm -f '${upload.path}' && cd '/workspace' && `
+            )
+        ).toBeTrue();
+        // The upload comes before the session and its command.
+        const order = requests.map((request) => request.url.pathname);
+        expect(
+            order.findIndex((path) => path.endsWith('/files/bulk-upload'))
+        ).toBeLessThan(order.findIndex((path) => path.endsWith('/process/session')));
+
+        // Sourced by a real POSIX sh, the file is gone before the command runs.
+        const directory = await mkdtemp(join(tmpdir(), 'wb-daytona-env-'));
+        try {
+            const file = join(directory, 'env');
+            await writeFile(file, upload.text);
+            const local = command
+                .replaceAll(upload.path, file)
+                .replace(`cd '/workspace'`, `cd '${directory}'`);
+            const ran = spawnSync('sh', ['-c', local], {
+                env: { PATH: process.env.PATH, ENV_FILE: file },
+                encoding: 'utf8',
+            });
+            expect([ran.status, ran.stdout]).toEqual([0, "fake-key-value|it's fake"]);
+            expect(existsSync(file)).toBeFalse();
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
+    test('removes the environment file when the upload or launch fails', async () => {
+        for (const failing of ['/files/bulk-upload', '/process/session', '/exec']) {
+            const { sandbox, requests } = await startedSandbox(launchHandler(failing));
+            await expect(
+                sandbox.start('opencode serve', { env: fakeEnv })
+            ).rejects.toThrow(`failed with 400: launch refused`);
+            const upload = await uploadOf(requests);
+            const removal = requests.at(-1);
+            expect(removal?.url.pathname.endsWith('/process/execute')).toBeTrue();
+            expect(JSON.parse(String(removal?.body)).command).toContain(
+                `rm -f '${upload.path}'`
+            );
+        }
+    });
+
+    test('keeps the launch error when removing the environment file fails', async () => {
+        const { sandbox, requests } = await startedSandbox(
+            launchHandler(
+                '/exec',
+                () => new Response('removal refused', { status: 400 })
+            )
+        );
+        const failure = await sandbox
+            .start('opencode serve', { env: fakeEnv })
+            .catch((error: unknown) => error);
+        expect(String(failure)).toContain('/exec failed with 400: launch refused');
+        expect(requests.at(-1)?.url.pathname.endsWith('/process/execute')).toBeTrue();
+    });
+
+    test('starts a command without environment values as before, with no upload', async () => {
+        for (const env of [undefined, {}]) {
+            const { sandbox, requests } = await startedSandbox(launchHandler());
+            const started = await sandbox.start('opencode serve', {
+                cwd: '/workspace',
+                ...(env ? { env } : {}),
+            });
+            await started.kill();
+            expect(
+                requests.some((request) =>
+                    request.url.pathname.endsWith('/bulk-upload')
+                )
+            ).toBeFalse();
+            expect(execOf(requests)).toBe(`(cd '/workspace' && opencode serve)`);
+        }
     });
 
     test('uploads a file as multipart form data', async () => {
