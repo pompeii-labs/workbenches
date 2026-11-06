@@ -181,6 +181,7 @@ export {
     type DaytonaRuntimeDependencies,
     DaytonaRuntimeProvider,
     type DaytonaSandbox,
+    type DaytonaSocket,
     DiskAssetSource,
     DiskTransfer,
     type DockerCommandResult,

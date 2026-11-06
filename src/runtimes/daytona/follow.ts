@@ -145,11 +145,11 @@ export class LogFollower implements FollowedCommand {
     }
 
     /** Follows one connection until it closes. */
-    private connect(): Promise<Connection> {
+    private async connect(): Promise<Connection> {
+        const socket = await this.transport.socket(
+            `${this.session}/command/${this.command}/logs?follow=true`
+        );
         return new Promise((resolve, reject) => {
-            const socket = this.transport.socket(
-                `${this.session}/command/${this.command}/logs?follow=true`
-            );
             socket.binaryType = 'arraybuffer';
             this.#socket = socket;
             const demux = new StreamDemux();

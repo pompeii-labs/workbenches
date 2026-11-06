@@ -1,6 +1,6 @@
 import { WORKBENCH_USER_AGENT } from '../../user-agent.js';
 import { resendable } from '../edge.js';
-import type { DaytonaFetch, RegistryLogins } from './contracts.js';
+import type { DaytonaFetch, DaytonaSocket, RegistryLogins } from './contracts.js';
 
 export const defaultDaytonaApiUrl = 'https://app.daytona.io/api';
 
@@ -8,6 +8,11 @@ export interface DaytonaApiOptions {
     apiKey: string;
     /** Sends every request. */
     fetch: DaytonaFetch;
+    /**
+     * Opens every log stream. Defaults to the platform `WebSocket`
+     * constructor given request headers, as Bun and Node accept it.
+     */
+    socket?: DaytonaSocket;
     /** Defaults to the public Daytona API. */
     apiUrl?: string;
     /** Bound on sandbox management calls. Default 30 seconds. */
@@ -46,6 +51,18 @@ type HeaderSocket = new (
 
 function headerSocket(value: unknown): value is HeaderSocket {
     return typeof value === 'function';
+}
+
+/** Opens a socket with the platform constructor, sending the headers with the handshake. */
+async function platformSocket(
+    url: URL,
+    headers: Record<string, string>
+): Promise<WebSocket> {
+    const Socket: unknown = globalThis.WebSocket;
+    if (!headerSocket(Socket)) {
+        throw new DaytonaApiError('This platform has no WebSocket');
+    }
+    return new Socket(url, { headers });
 }
 
 export interface SandboxDto {
@@ -87,6 +104,7 @@ export class DaytonaTransport {
     readonly startTimeoutMs: number;
     readonly pollIntervalMs: number;
     private readonly fetcher: DaytonaFetch;
+    private readonly opener: DaytonaSocket;
     private readonly apiKey: string;
 
     constructor(options: DaytonaApiOptions) {
@@ -96,9 +114,11 @@ export class DaytonaTransport {
             ''
         );
         // Some runtimes require Web platform functions to run with an undefined
-        // `this`, so never call the injected function as a method of this client.
+        // `this`, so never call an injected function as a method of this client.
         const fetcher = options.fetch;
         this.fetcher = (input, init) => fetcher(input, init);
+        const opener = options.socket ?? platformSocket;
+        this.opener = (url, headers) => opener(url, headers);
         this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
         this.commandTimeoutMs = options.commandTimeoutMs ?? 60 * 60_000;
         this.transferTimeoutMs = options.transferTimeoutMs ?? 30 * 60_000;
@@ -172,21 +192,15 @@ export class DaytonaTransport {
 
     /**
      * Opens an authenticated WebSocket to an absolute toolbox URL, given with
-     * its HTTP scheme. The platform WebSocket carries the credential in a
-     * request header, never in the URL.
+     * its HTTP scheme. The credential travels in a request header, never in
+     * the URL.
      */
-    socket(url: string): WebSocket {
+    socket(url: string): Promise<WebSocket> {
         const target = new URL(url);
         target.protocol = target.protocol === 'http:' ? 'ws:' : 'wss:';
-        const Socket: unknown = globalThis.WebSocket;
-        if (!headerSocket(Socket)) {
-            throw new DaytonaApiError('This platform has no WebSocket');
-        }
-        return new Socket(target, {
-            headers: {
-                Authorization: `Bearer ${this.apiKey}`,
-                'User-Agent': WORKBENCH_USER_AGENT,
-            },
+        return this.opener(target, {
+            Authorization: `Bearer ${this.apiKey}`,
+            'User-Agent': WORKBENCH_USER_AGENT,
         });
     }
 

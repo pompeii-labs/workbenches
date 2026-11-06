@@ -170,6 +170,12 @@ export type DaytonaFetch = (
     init?: RequestInit
 ) => Promise<Response>;
 
+/** Opens a WebSocket to a `ws:` or `wss:` URL, sending `headers` with the handshake. */
+export type DaytonaSocket = (
+    url: URL,
+    headers: Record<string, string>
+) => Promise<WebSocket>;
+
 /** Where the provider finds the API key for a request. */
 export interface DaytonaKeys {
     /** The key from the request environment, else the host's own saved key. */

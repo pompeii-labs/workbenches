@@ -44,6 +44,7 @@ export function stopLogServers(): void {
  * `status` answers the command status endpoint; by default the command runs.
  * `execute` answers one-shot commands; by default they succeed with no output.
  * `input` answers writes to the command's standard input; by default they succeed.
+ * `client` adds options to the client the toolbox is reached through.
  */
 export function logToolbox(
     connected: (index: number, socket: LogSocket) => void,
@@ -53,6 +54,7 @@ export function logToolbox(
         status?: () => Response;
         execute?: (request: Recorded) => Response;
         input?: (request: Recorded) => Response;
+        client?: Record<string, unknown>;
     } = {}
 ) {
     const upgrades: Array<{ path: string; authorization: string | null }> = [];
@@ -100,7 +102,7 @@ export function logToolbox(
             );
         return json({});
     };
-    const { api, requests } = client(handler);
+    const { api, requests } = client(handler, options.client);
     return {
         upgrades,
         requests,
