@@ -1,28 +1,16 @@
+import { readLines } from '../stdin/lines.js';
+
 /** Consumes Pi's JSONL stream without retaining partial events indefinitely. */
 export async function consumeLines(
     stream: ReadableStream<Uint8Array> | undefined,
-    consume: (line: string) => Promise<void>
+    consume: (line: string, bytes: number) => Promise<void>
 ): Promise<void> {
     if (!stream) return;
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    let pending = '';
-    for (;;) {
-        const next = await reader.read();
-        if (next.done) break;
-        pending += decoder.decode(next.value, { stream: true });
-        if (pending.length > 16 * 1024 * 1024) {
-            throw new Error('Pi RPC emitted an oversized JSON event');
-        }
-        const lines = pending.split('\n');
-        pending = lines.pop() ?? '';
-        for (const line of lines) {
-            const normalized = line.endsWith('\r') ? line.slice(0, -1) : line;
-            if (normalized.trim()) await consume(normalized);
-        }
-    }
-    pending += decoder.decode();
-    if (pending.trim()) await consume(pending);
+    await readLines(
+        stream.getReader(),
+        consume,
+        'Pi RPC emitted an oversized JSON event'
+    );
 }
 
 export async function readLimitedText(

@@ -25,6 +25,7 @@ const QUESTION_TOOL = 'AskUserQuestion';
  */
 export class ClaudeCodeInputRequests {
     private readonly allowed = new Set<string>();
+    private readonly allowedRequests = new Set<string>();
     private readonly waiting = new Map<string, () => void>();
     private closed = false;
 
@@ -58,6 +59,16 @@ export class ClaudeCodeInputRequests {
         const input = record(request.input) ?? {};
         if (tool === QUESTION_TOOL) await this.question(requestId, input);
         else await this.permission(requestId, tool, input, request);
+    }
+
+    progress(): string[] {
+        return [...this.allowedRequests];
+    }
+
+    restoreAllowed(id: string, request: Record<string, unknown>): void {
+        const tool = string(request.tool_name) ?? 'tool';
+        this.allowed.add(`${tool}\u0000${canonicalJson(record(request.input) ?? {})}`);
+        this.allowedRequests.add(id);
     }
 
     /**
@@ -108,7 +119,10 @@ export class ClaudeCodeInputRequests {
             await this.deny(requestId, 'The user denied this tool call.');
             return;
         }
-        if (decision.value === 'allow_always' && allowAlways) this.allowed.add(key);
+        if (decision.value === 'allow_always' && allowAlways) {
+            this.allowed.add(key);
+            this.allowedRequests.add(requestId);
+        }
         await this.allow(requestId, input);
     }
 

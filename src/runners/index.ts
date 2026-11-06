@@ -1,9 +1,9 @@
-export { CLAUDE_CODE_SESSION_DECLARATION } from './claude-code/capabilities.js';
-export { ClaudeCodeRunner } from './claude-code/runner.js';
 export {
     ClaudeCodeSessionAdapter,
     type ClaudeCodeSessionDependencies,
-} from './claude-code/session.js';
+} from './claude-code/adapter.js';
+export { CLAUDE_CODE_SESSION_DECLARATION } from './claude-code/capabilities.js';
+export { ClaudeCodeRunner } from './claude-code/runner.js';
 export { RunnerContextStaging } from './context/stage.js';
 export { DiskRunnerFiles } from './files/disk.js';
 export { MemoryRunnerFiles } from './files/memory.js';
@@ -18,12 +18,12 @@ export {
     PreparedOpenCodeRunner,
 } from './opencode/runner.js';
 export { OpenCodeSkillStaging, StagedOpenCodeSkills } from './opencode/skills.js';
-export { PiRunner } from './pi/runner.js';
 export {
     PI_SESSION_DECLARATION,
     PiSessionAdapter,
     type PiSessionDependencies,
-} from './pi/session.js';
+} from './pi/adapter.js';
+export { PiRunner } from './pi/runner.js';
 export { redactCredentials } from './redaction.js';
 export { RunnerRegistry } from './registry.js';
 export {
@@ -59,6 +59,7 @@ export {
     type RunnerSessionAdapter,
     type RunnerSessionContext,
     type RunnerSessionHost,
+    type RunnerSessionProgress,
     type RunnerSessionStartOptions,
     type RunnerTurnResult,
     type VerifiedRunnerSurface,

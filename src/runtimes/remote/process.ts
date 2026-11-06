@@ -1,8 +1,9 @@
-import type { SpawnedRunner } from '../../types.js';
+import type { RuntimeProcessHandle, SpawnedRunner } from '../../types.js';
 import type { RuntimeCommandResult } from '../contracts.js';
 
 /** A command started inside a remote sandbox. */
 export interface RemoteCommand {
+    readonly handle?: RuntimeProcessHandle | undefined;
     wait(): Promise<RuntimeCommandResult>;
     sendStdin(data: string | Uint8Array): Promise<void>;
     closeStdin(): Promise<void>;
@@ -87,6 +88,7 @@ export class RemoteProcess {
                 this.stderrController = this.close(this.stderrController);
             });
         this.spawned = {
+            handle: this.command.then((command) => command.handle),
             stdout,
             stderr,
             exited,
@@ -104,6 +106,7 @@ export class RemoteProcess {
                 void this.kill();
             },
         };
+        void this.spawned.handle?.catch(() => {});
     }
 
     /** Stops the command. A command that never started or already ended is left alone. */

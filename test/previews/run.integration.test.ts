@@ -149,7 +149,7 @@ async function fakeRunners(script: string): Promise<string> {
         claude: [
             'const args = Bun.argv.slice(2);',
             'const signedIn = process.env.CLAUDE_CODE_OAUTH_TOKEN === "fixture-subscription-token";',
-            'if (args[0] === "--version") { console.log("2.1.292 (Claude Code)"); process.exit(0); }',
+            'if (args[0] === "--version") { console.log("2.1.318 (Claude Code)"); process.exit(0); }',
             'if (args[0] === "auth") { console.log(JSON.stringify(signedIn ? { loggedIn: true, authMethod: "oauth_token" } : { loggedIn: false })); process.exit(signedIn ? 0 : 1); }',
             'const session = args[args.indexOf("--session-id") + 1] ?? "fixture-session";',
             'const emit = (value: Record<string, unknown>) => process.stdout.write(JSON.stringify({ session_id: session, ...value }) + "\\n");',

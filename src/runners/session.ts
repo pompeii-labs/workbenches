@@ -1,7 +1,19 @@
 import type { RunnerConnectionSelection } from '../connections/store.js';
 import type { ResolvedRunnerConfiguration } from '../models/index.js';
 import type { WorkbenchEventDraft } from '../runs/events.js';
-import type { ResolvedWorkbench } from '../types.js';
+import type { ResolvedWorkbench, RuntimeProcessHandle } from '../types.js';
+
+/**
+ * A session's saved progress: plain JSON a host stores whole and passes back
+ * to the same runner's session after a restart. Each runner defines its own
+ * shape and refuses progress another runner saved.
+ */
+export interface RunnerSessionProgress {
+    /** The runner that saved it. OpenCode progress from earlier releases has none. */
+    readonly runner?: string;
+    /** The runtime command a stdin runner attaches to. */
+    readonly handle?: RuntimeProcessHandle;
+}
 
 export const RUNNER_CAPABILITIES = [
     'streaming_text',
@@ -125,6 +137,8 @@ export interface RunnerResumeOptions {
 }
 
 export interface RunnerSession {
+    /** Plain JSON to store atomically with the events delivered to the host. */
+    progress?(): RunnerSessionProgress;
     readonly id: string | undefined;
     prompt(input: RunnerInput): Promise<RunnerTurnResult>;
     steer?(input: RunnerInput): Promise<RunnerInputDelivery>;
@@ -181,6 +195,7 @@ export interface RunnerSessionContext {
 }
 
 export interface RunnerSessionStartOptions {
+    progress?: RunnerSessionProgress;
     workbench: ResolvedWorkbench;
     workspaceDirectory: string;
     environment: Record<string, string | undefined>;

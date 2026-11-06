@@ -338,33 +338,50 @@ describe('Claude Code routes', () => {
     });
 
     test.each([
-        ['openrouter', 'OPENROUTER_API_KEY', 'https://openrouter.ai/api'],
-        ['vercel', 'AI_GATEWAY_API_KEY', 'https://ai-gateway.vercel.sh/claude-code'],
-    ])('%s is a gateway behind the Anthropic base URL', (provider, key, url) => {
-        for (const runtime of ['local', 'e2b']) {
-            expect(
-                claudeCodeRoute({
-                    ...base,
-                    provider,
-                    runtime,
-                    keys: [key],
-                    environment: { [key]: 'gateway-key', ANTHROPIC_API_KEY: 'unused' },
-                    oauthToken: 'oauth-token',
-                })
-            ).toEqual({
-                environment: {
-                    ANTHROPIC_BASE_URL: url,
-                    ANTHROPIC_AUTH_TOKEN: 'gateway-key',
-                    ANTHROPIC_API_KEY: '',
-                },
-                billing: 'metered',
-                secureStorageDirectory: '/session/claude-code',
-            });
+        [
+            'openrouter',
+            'OPENROUTER_API_KEY',
+            'https://openrouter.ai/api',
+            // OpenRouter reports what it charged, so its key reads each charge.
+            { billing: 'charged', openRouterKey: 'gateway-key' } as const,
+        ],
+        [
+            'vercel',
+            'AI_GATEWAY_API_KEY',
+            'https://ai-gateway.vercel.sh/claude-code',
+            { billing: 'metered' } as const,
+        ],
+    ])(
+        '%s is a gateway behind the Anthropic base URL',
+        (provider, key, url, billing) => {
+            for (const runtime of ['local', 'e2b']) {
+                expect(
+                    claudeCodeRoute({
+                        ...base,
+                        provider,
+                        runtime,
+                        keys: [key],
+                        environment: {
+                            [key]: 'gateway-key',
+                            ANTHROPIC_API_KEY: 'unused',
+                        },
+                        oauthToken: 'oauth-token',
+                    })
+                ).toEqual({
+                    environment: {
+                        ANTHROPIC_BASE_URL: url,
+                        ANTHROPIC_AUTH_TOKEN: 'gateway-key',
+                        ANTHROPIC_API_KEY: '',
+                    },
+                    ...billing,
+                    secureStorageDirectory: '/session/claude-code',
+                });
+            }
+            expect(() =>
+                claudeCodeRoute({ ...base, provider, runtime: 'local', keys: [key] })
+            ).toThrow(`Claude Code needs ${key} for the ${provider} route`);
         }
-        expect(() =>
-            claudeCodeRoute({ ...base, provider, runtime: 'local', keys: [key] })
-        ).toThrow(`Claude Code needs ${key} for the ${provider} route`);
-    });
+    );
 
     test('refuses a provider it cannot reach', () => {
         expect(() =>

@@ -7,19 +7,24 @@ export interface ClaudeCodeCostStore {
     write(total: number): Promise<void>;
 }
 
-/** How a route is paid: per token, or by a Claude subscription. */
-export type ClaudeCodeBilling = 'metered' | 'subscription';
+/**
+ * How a route is paid: per token at Claude Code's own prices, by a Claude
+ * subscription, or per token at what the gateway reports it charged.
+ */
+export type ClaudeCodeBilling = 'metered' | 'subscription' | 'charged';
 
 /**
  * Turns Claude Code's cumulative `total_cost_usd` into per-turn costs. The total
  * spans the whole native session, earlier processes included, so the last total
  * is recorded in the session's store and a resumed process starts from it. A
- * subscription route reports no spend, but its totals are still recorded so a
- * later metered process starts from the right baseline.
+ * subscription route reports no spend, and a charged route reports none from
+ * Claude Code's figure, but their totals are still recorded so a later metered
+ * process starts from the right baseline.
  */
 export class ClaudeCodeCost {
     private reported: number;
     private writing: Promise<void> = Promise.resolve();
+    private replaying = false;
 
     private constructor(
         private readonly billing: ClaudeCodeBilling,
@@ -32,6 +37,20 @@ export class ClaudeCodeCost {
     /** A cost for a new native session that nothing persists. */
     static fresh(billing: ClaudeCodeBilling = 'metered'): ClaudeCodeCost {
         return new ClaudeCodeCost(billing, 0, undefined);
+    }
+
+    total(): number {
+        return this.reported;
+    }
+
+    replay(baseline: number): void {
+        this.reported = baseline;
+        this.replaying = true;
+    }
+
+    commitReplay(): void {
+        this.replaying = false;
+        this.record(this.reported);
     }
 
     /** A cost that starts from the store's recorded total and records each new one. */
@@ -62,7 +81,7 @@ export class ClaudeCodeCost {
 
     private record(total: number): void {
         const store = this.store;
-        if (!store) return;
+        if (!store || this.replaying) return;
         // Cost bookkeeping never fails a turn. A lost write only shifts the next
         // resumed baseline.
         this.writing = this.writing.then(() => store.write(total)).catch(() => {});

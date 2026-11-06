@@ -22,6 +22,7 @@ import type {
     RunnerSessionAdapter,
     RunnerSessionContext,
     RunnerSessionHost,
+    RunnerSessionProgress,
 } from './session.js';
 
 export interface RunnerSummary {
@@ -56,6 +57,7 @@ export interface PreparedRunner {
 }
 
 export interface PreparedRunnerSessionOptions {
+    progress?: RunnerSessionProgress;
     configuration: ResolvedRunnerConfiguration;
     host: RunnerSessionHost;
     session?: RunnerSessionContext;

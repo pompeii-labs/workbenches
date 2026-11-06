@@ -3,7 +3,7 @@ import { ModelRouter } from '../src/models/index.js';
 import {
     ClaudeCodeSessionAdapter,
     type PreparedClaudeCodeSession,
-} from '../src/runners/claude-code/session.js';
+} from '../src/runners/claude-code/adapter.js';
 import type {
     RunnerPermissionDecision,
     RunnerPermissionRequest,
@@ -18,6 +18,7 @@ import { runnerAdapterContract } from './runner-adapter-contract.js';
 import {
     claudeCodeWorkbench,
     FakeClaudeCode,
+    NO_OPENROUTER,
     PREPARED,
 } from './runners/claude-code/fixture.js';
 
@@ -31,6 +32,7 @@ runnerAdapterContract({
             adapter: new ClaudeCodeSessionAdapter({
                 prepare: async () => ({ session: PREPARED, cleanup: async () => {} }),
                 spawn: native.spawn,
+                openRouter: NO_OPENROUTER,
             }),
             workbench,
             arrange(scenario) {
@@ -73,6 +75,7 @@ async function open(
         }),
         spawn: native.spawn,
         stopTimeoutMs: options.stopTimeoutMs ?? 1_000,
+        openRouter: NO_OPENROUTER,
     });
     const session = await adapter.start({
         workbench,

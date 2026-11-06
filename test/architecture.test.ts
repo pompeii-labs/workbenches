@@ -54,8 +54,6 @@ describe('engine architecture', () => {
         // code otherwise reaches runners through RunnerRegistry and the members
         // they declare.
         const allowed = [
-            // The public configureOpenCode helper builds an OpenCode configuration.
-            { path: 'src/models/routing.ts', line: "runner: 'opencode'," },
             // A new Workbench records the OpenCode runner unless told otherwise.
             { path: 'src/commands/init.ts', line: "default: 'opencode'," },
             // The label of the OpenCode model provider, which shares the runner's name.

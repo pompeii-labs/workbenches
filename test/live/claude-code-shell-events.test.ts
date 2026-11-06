@@ -3,12 +3,12 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRouter } from '../../src/models/index.js';
+import { ClaudeCodeSessionAdapter } from '../../src/runners/claude-code/adapter.js';
 import { CLAUDE_CODE_VERSION } from '../../src/runners/claude-code/capabilities.js';
-import { ClaudeCodeSessionAdapter } from '../../src/runners/claude-code/session.js';
 import type { RunnerSession } from '../../src/runners/session.js';
 import type { WorkbenchEventDraft } from '../../src/runs/index.js';
 import { modelCatalogFixture } from '../model-catalog-fixture.js';
-import { claudeCodeWorkbench } from '../runners/claude-code/fixture.js';
+import { claudeCodeWorkbench, NO_OPENROUTER } from '../runners/claude-code/fixture.js';
 
 const SECRET = 'MUST_NOT_RENDER_SHELL_SECRET';
 const KEY = 'sk-ant-api03-0123456789abcdefABCDEF0123456789abcdef';
@@ -83,6 +83,7 @@ test.skipIf(process.env.WORKBENCH_SHELL_EVENTS_E2E !== '1')(
                 prepare: async () => {
                     throw new Error('the test starts a prepared session');
                 },
+                openRouter: NO_OPENROUTER,
             }).startPrepared(
                 {
                     workbench,

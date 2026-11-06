@@ -1,5 +1,8 @@
+import { RuntimeError } from '../error.js';
 import type { RemoteSandbox } from '../remote/runtime.js';
 import { quote } from '../staging/shell.js';
+
+const SAVED_PATH = /^\/tmp\/\.workbench-stderr-[0-9a-f-]{36}$/u;
 
 /**
  * Only the end of a command's standard error is collected. It is read once,
@@ -16,10 +19,26 @@ const collectedBytes = 64 * 1024;
  * its command.
  */
 export class StderrFile {
-    readonly path = `/tmp/.workbench-stderr-${crypto.randomUUID()}`;
     #removed = false;
 
-    constructor(private readonly sandbox: Pick<RemoteSandbox, 'run'>) {}
+    constructor(
+        private readonly sandbox: Pick<RemoteSandbox, 'run'>,
+        readonly path = `/tmp/.workbench-stderr-${crypto.randomUUID()}`
+    ) {}
+
+    /**
+     * The file a saved handle names. Progress is host data, so only a path this
+     * class creates is read or removed.
+     */
+    static saved(sandbox: Pick<RemoteSandbox, 'run'>, path: string): StderrFile {
+        if (!SAVED_PATH.test(path))
+            throw new RuntimeError(
+                'daytona',
+                'launch',
+                'The saved stderr path is not one Workbench created'
+            );
+        return new StderrFile(sandbox, path);
+    }
 
     /** The command line with its standard error sent to the file. */
     redirect(command: string): string {
@@ -37,6 +56,17 @@ export class StderrFile {
                 `tail -c ${collectedBytes} ${path}; S=$?; rm -f ${path}; exit $S`
             );
             this.#removed = true;
+            return result.code === 0 ? result.stdout : '';
+        } catch {
+            return '';
+        }
+    }
+
+    /** Reads the end while keeping the file available to an attaching host. */
+    async read(): Promise<string> {
+        const path = quote(this.path);
+        try {
+            const result = await this.sandbox.run(`tail -c ${collectedBytes} ${path}`);
             return result.code === 0 ? result.stdout : '';
         } catch {
             return '';

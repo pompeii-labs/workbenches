@@ -24,6 +24,9 @@ function fixture() {
         },
         async (response) => {
             sent.push(response);
+        },
+        async (id) => {
+            withdrawn.push(id);
         }
     );
     return {

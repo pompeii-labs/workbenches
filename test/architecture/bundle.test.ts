@@ -30,6 +30,8 @@ const diskBacked = [
 const typeOnly = [
     './types',
     './runners/files',
+    './runners/claude-code/progress',
+    './runners/pi/progress',
     './runtimes/contracts',
     './runtimes/e2b/contracts',
     './runtimes/assets',

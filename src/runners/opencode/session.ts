@@ -160,10 +160,17 @@ export class OpenCodeServerSession implements RunnerSession {
     }
 
     private async openNativeSession(): Promise<void> {
-        const sessionId = this.options.session?.nativeSessionId
-            ? await this.resume(this.options.session.nativeSessionId)
+        const saved = this.options.progress;
+        if (saved && saved.runner !== undefined && saved.runner !== 'opencode')
+            throw new Error('Expected OpenCode progress');
+        const progress = saved as OpenCodeProgress | undefined;
+        const nativeSessionId =
+            this.options.session?.nativeSessionId ?? progress?.sessionId;
+        const sessionId = nativeSessionId
+            ? await this.resume(nativeSessionId)
             : await this.create();
         this.state.sessionId = sessionId;
+        if (progress) this.restoreProgress(progress);
         await this.router.subscribe();
         this.watchdog.start();
     }

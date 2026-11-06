@@ -2,20 +2,20 @@ import type { RunnerContext } from '../context/files.js';
 import { runtimeContext } from '../context/runtime.js';
 import { RunnerProcessExit } from '../exit.js';
 import type {
-    RunnerAdapterDeclaration,
     RunnerInput,
     RunnerInputDelivery,
     RunnerSession,
-    RunnerSessionAdapter,
     RunnerSessionStartOptions,
     RunnerTurnResult,
 } from '../session.js';
 import { normalizeRunnerInput } from '../session.js';
-import type { PiConfigStaging } from './config.js';
+import { StdinReplay } from '../stdin/progress.js';
+import type { PiSessionDependencies, SpawnedPi } from './adapter.js';
 import { PiEventAdapter } from './events.js';
 import { buildPiRpcInvocation } from './invocation.js';
-import { PI_PACKAGE_VERSION } from './providers.js';
+import type { PiProgress } from './progress.js';
 import { PiInputRequests } from './requests.js';
+import { PiResponses } from './responses.js';
 import {
     asError,
     consumeLines,
@@ -25,140 +25,8 @@ import {
     withTimeout,
 } from './rpc.js';
 
-export const PI_SESSION_DECLARATION: RunnerAdapterDeclaration = {
-    native: {
-        command: 'pi',
-        verified: [
-            { version: PI_PACKAGE_VERSION, surfaces: ['json', 'rpc'] },
-            { version: '1.5.0', surfaces: ['rpc'] },
-        ],
-    },
-    capabilities: {
-        streaming_text: { status: 'supported' },
-        tool_events: { status: 'supported' },
-        file_events: { status: 'supported' },
-        usage: { status: 'supported' },
-        permissions: {
-            status: 'unsupported',
-            detail: 'Pi does not provide a native permission request protocol.',
-        },
-        questions: {
-            status: 'supported',
-            detail: 'Questions come from Pi extensions through native RPC dialogs.',
-        },
-        multi_turn: { status: 'supported' },
-        steering: { status: 'supported' },
-        image_input: { status: 'supported' },
-        image_generation: {
-            status: 'unsupported',
-            detail: 'Workbench does not yet provide a normalized image-generation tool or image output event for Pi.',
-        },
-        session_resume: { status: 'supported' },
-        cancellation: { status: 'supported' },
-        failures: { status: 'supported' },
-        unknown_events: { status: 'supported' },
-    },
-};
-
-export interface PiInput {
-    write(value: string): unknown;
-    flush?(): unknown;
-    end?(): void | Promise<void>;
-}
-
-export interface SpawnedPi {
-    exited: Promise<number>;
-    stdin: PiInput;
-    stdout?: ReadableStream<Uint8Array>;
-    stderr?: ReadableStream<Uint8Array>;
-    kill(): void;
-}
-
-export interface PiSessionDependencies {
-    /**
-     * Stages config and context for a session the adapter starts itself with
-     * `start`.
-     */
-    config: PiConfigStaging;
-    spawn?: (
-        command: string[],
-        options: {
-            cwd: string;
-            env: Record<string, string | undefined>;
-            stdin: 'pipe';
-            stdout: 'pipe';
-            stderr: 'pipe';
-        }
-    ) => SpawnedPi;
-    startupTimeoutMs?: number;
-}
-
-export interface PreparedPiSession {
-    context?: RunnerContext;
-    configDirectory: string;
-    spawn: NonNullable<PiSessionDependencies['spawn']>;
-}
-
-export class PiSessionAdapter implements RunnerSessionAdapter {
-    readonly runner = 'pi';
-    readonly declaration = PI_SESSION_DECLARATION;
-    private readonly dependencies: Required<Omit<PiSessionDependencies, 'config'>>;
-    private readonly config: PiConfigStaging;
-
-    constructor(dependencies: PiSessionDependencies) {
-        this.config = dependencies.config;
-        this.dependencies = {
-            spawn: dependencies.spawn ?? defaultSpawn,
-            startupTimeoutMs: dependencies.startupTimeoutMs ?? 10_000,
-        };
-    }
-
-    async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
-        const staged = await this.config.stage(
-            options.workbench,
-            options.environment,
-            {}
-        );
-        return this.startConfigured(
-            options,
-            {
-                context: staged.context,
-                configDirectory: staged.directory,
-                spawn: this.dependencies.spawn,
-            },
-            () => staged.cleanup()
-        );
-    }
-
-    startPrepared(
-        options: RunnerSessionStartOptions,
-        prepared: PreparedPiSession
-    ): Promise<RunnerSession> {
-        return this.startConfigured(options, prepared, async () => {});
-    }
-
-    private async startConfigured(
-        options: RunnerSessionStartOptions,
-        prepared: PreparedPiSession,
-        cleanup: () => Promise<void>
-    ): Promise<RunnerSession> {
-        const session = new PiRpcSession({
-            ...options,
-            ...this.dependencies,
-            ...prepared,
-            cleanup,
-        });
-        try {
-            await session.start();
-            return session;
-        } catch (error) {
-            await session.close().catch(() => {});
-            throw error;
-        }
-    }
-}
-
 interface ActiveTurn {
+    command: string;
     adapter: PiEventAdapter;
     promise: Promise<RunnerTurnResult>;
     resolve: (result: RunnerTurnResult) => void;
@@ -167,13 +35,9 @@ interface ActiveTurn {
     settled: boolean;
 }
 
-interface PendingResponse {
-    command: string;
-    resolve: (value: Record<string, unknown>) => void;
-    reject: (error: Error) => void;
-}
-
-class PiRpcSession implements RunnerSession {
+export class PiRpcSession implements RunnerSession {
+    private readonly replay: StdinReplay;
+    private readonly saved: PiProgress | undefined;
     private readonly options: RunnerSessionStartOptions &
         Required<Omit<PiSessionDependencies, 'config'>> & {
             configuration: RunnerSessionStartOptions['configuration'];
@@ -181,17 +45,19 @@ class PiRpcSession implements RunnerSession {
             context?: RunnerContext;
             cleanup: () => Promise<void>;
         };
-    private readonly responses = new Map<string, PendingResponse>();
+    private readonly responses = new PiResponses();
     private child: SpawnedPi | undefined;
     private stdoutLoop: Promise<void> | undefined;
     private stderrLoop: Promise<string> | undefined;
     private nativeSessionId: string | undefined;
     private active: ActiveTurn | undefined;
+    private resumable: ActiveTurn | undefined;
     private sequence = 0;
     private closed = false;
     private failure: Error | undefined;
     private runtimeReminder: string;
     private readonly requests: PiInputRequests;
+    private failedRequests: ReturnType<PiInputRequests['progress']> | undefined;
 
     constructor(
         options: RunnerSessionStartOptions &
@@ -203,16 +69,43 @@ class PiRpcSession implements RunnerSession {
             }
     ) {
         this.options = options;
-        this.requests = new PiInputRequests(options.host, async (response) => {
-            const child = this.child;
-            if (!child || this.closed) return;
-            await child.stdin.write(`${JSON.stringify(response)}\n`);
-            await child.stdin.flush?.();
+        const saved = options.progress;
+        if (saved && saved.runner !== 'pi') throw new Error('Expected Pi progress');
+        const progress = saved as PiProgress | undefined;
+        this.saved = progress;
+        this.replay = new StdinReplay(options.host, progress, (command) => {
+            this.active = createActiveTurn(command);
         });
+        this.nativeSessionId = progress?.sessionId;
+        this.sequence = progress?.sequence ?? 0;
+        if (progress) this.responses.restore(progress.pendingCommands);
+        if (
+            progress?.sessionId &&
+            options.session?.nativeSessionId &&
+            progress.sessionId !== options.session.nativeSessionId
+        )
+            throw new Error('Pi progress belongs to another session');
+        this.requests = new PiInputRequests(
+            this.replay.host,
+            async (response) => {
+                if (this.replay.silent) return;
+                const child = this.child;
+                if (!child || this.closed) return;
+                await child.stdin.write(`${JSON.stringify(response)}\n`);
+                await child.stdin.flush?.();
+                if (typeof response.id === 'string')
+                    this.replay.answeredRequest(response.id);
+            },
+            (id) => this.replay.expire(id)
+        );
+        if (progress) this.requests.restore(progress);
         // RPC has no per-prompt system field. Refresh attempt facts alongside
         // the first resumed input, without changing the stored user task.
         this.runtimeReminder =
-            options.context && options.session?.nativeSessionId
+            options.context &&
+            (progress
+                ? progress.runtimeReminderPending
+                : options.session?.nativeSessionId)
                 ? runtimeContext(
                       options.workbench,
                       options.workspaceDirectory,
@@ -243,19 +136,49 @@ class PiRpcSession implements RunnerSession {
             stderr: 'pipe',
         });
         this.child = child;
+        this.replay.start();
+        this.replay.afterReplay(() => {
+            if (this.saved) {
+                if (this.saved.activeTurn) this.resumable = this.active;
+                else this.active = undefined;
+                if (this.active)
+                    this.active.cancellationRequested = this.saved.cancelling;
+            }
+        });
         this.stderrLoop = readLimitedText(child.stderr, 64 * 1024);
-        this.stdoutLoop = consumeLines(child.stdout, (line) =>
-            this.consumeLine(line)
-        ).catch((error) => {
-            if (!this.closed) {
-                this.fail(new Error('Pi RPC stream failed', { cause: asError(error) }));
-            }
-        });
-        void child.exited.then((code) => {
-            if (!this.closed) {
-                this.fail(new Error(new RunnerProcessExit('Pi RPC').message(code)));
-            }
-        });
+        this.stdoutLoop = consumeLines(child.stdout, (line, bytes) =>
+            this.replay.line(line, bytes, (value) => this.consumeLine(value))
+        )
+            .then(() => this.replay.end())
+            .catch((error) => {
+                this.replay.fail(asError(error));
+                if (!this.closed) {
+                    this.fail(
+                        new Error('Pi RPC stream failed', { cause: asError(error) })
+                    );
+                }
+            });
+
+        void child.exited
+            .then(async (code) => {
+                // A runtime command's output closes when it exits, so the exit
+                // waits for all of it; a host child's descendants can hold it open.
+                if (child.handle) await this.stdoutLoop;
+                if (!this.closed) {
+                    this.fail(new Error(new RunnerProcessExit('Pi RPC').message(code)));
+                }
+            })
+            .catch((error) => {
+                this.replay.fail(asError(error));
+                this.fail(asError(error));
+            });
+        if (child.handle)
+            this.replay.handle = (await child.handle) ?? this.replay.handle;
+
+        if (this.saved) {
+            await this.replay.caughtUp();
+            return;
+        }
 
         const state = await withTimeout(
             this.command('get_state'),
@@ -270,7 +193,9 @@ class PiRpcSession implements RunnerSession {
         if (this.closed) throw new Error('runner session is closed');
         if (this.failure) throw this.failure;
         if (this.active) throw new Error('runner session is already processing a turn');
-        const turn = createActiveTurn();
+        // The turn is named by the id of the prompt command that starts it.
+        const turn = createActiveTurn(this.nextCommandId());
+        this.replay.startTurn(turn.command);
         this.active = turn;
         try {
             const normalized = normalizeRunnerInput(input);
@@ -281,7 +206,8 @@ class PiRpcSession implements RunnerSession {
                     text: [this.runtimeReminder, normalized.text]
                         .filter(Boolean)
                         .join('\n\n'),
-                })
+                }),
+                turn.command
             );
             this.runtimeReminder = '';
         } catch (error) {
@@ -299,6 +225,35 @@ class PiRpcSession implements RunnerSession {
         }
         await this.command('steer', piPrompt(normalizeRunnerInput(input)));
         return { delivered: Promise.resolve() };
+    }
+
+    progress(): PiProgress {
+        if (this.replay.silent && this.saved) return structuredClone(this.saved);
+        return {
+            runner: 'pi',
+            ...(this.id ? { sessionId: this.id } : {}),
+            ...this.replay.progress(),
+            sequence: this.sequence,
+            cancelling: Boolean(
+                this.active?.cancellationRequested ||
+                    this.responses
+                        .progress()
+                        .some((pending) => pending.command === 'abort')
+            ),
+            pendingCommands: this.responses.progress(),
+            runtimeReminderPending: Boolean(this.runtimeReminder),
+            ...(this.failedRequests ?? this.requests.progress()),
+        };
+    }
+
+    async resumeTurn(): Promise<RunnerTurnResult> {
+        await this.replay.caughtUp();
+        const turn = this.resumable ?? (this.active?.settled ? undefined : this.active);
+        if (!turn) throw new Error('Pi has no turn to resume');
+        return turn.promise.finally(() => {
+            if (this.active === turn) this.active = undefined;
+            if (this.resumable === turn) this.resumable = undefined;
+        });
     }
 
     async followUp(input: RunnerInput): Promise<void> {
@@ -326,7 +281,7 @@ class PiRpcSession implements RunnerSession {
         this.closed = true;
         await this.requests.close();
         this.finishActive('cancelled');
-        this.rejectResponses(new Error('runner session is closed'));
+        this.responses.rejectAll(new Error('runner session is closed'));
         await this.child?.stdin.end?.();
         this.child?.kill();
         await Promise.allSettled([
@@ -337,25 +292,28 @@ class PiRpcSession implements RunnerSession {
         await this.options.cleanup();
     }
 
+    private nextCommandId(): string {
+        this.sequence += 1;
+        return `wb_${this.sequence}`;
+    }
+
     private async command(
         command: string,
-        data: Record<string, unknown> = {}
+        data: Record<string, unknown> = {},
+        id?: string
     ): Promise<Record<string, unknown>> {
         const child = this.child;
         if (!child || this.closed) throw new Error('Pi RPC is not ready');
         if (this.failure) throw this.failure;
-        this.sequence += 1;
-        const id = `wb_${this.sequence}`;
-        const response = new Promise<Record<string, unknown>>((resolve, reject) => {
-            this.responses.set(id, { command, resolve, reject });
-        });
+        id ??= this.nextCommandId();
+        const response = this.responses.start(id, command);
         try {
             await child.stdin.write(
                 `${JSON.stringify({ id, type: command, ...data })}\n`
             );
             await child.stdin.flush?.();
         } catch (error) {
-            this.responses.delete(id);
+            this.responses.forget(id);
             const failure = asError(error);
             this.fail(failure);
             throw failure;
@@ -368,7 +326,7 @@ class PiRpcSession implements RunnerSession {
         try {
             value = JSON.parse(line);
         } catch {
-            await this.options.host.emit({
+            await this.replay.host.emit({
                 type: 'runner.event',
                 data: { native_type: 'malformed' },
             });
@@ -381,16 +339,22 @@ class PiRpcSession implements RunnerSession {
             return;
         }
         if (event.type === 'extension_ui_request') {
+            if (
+                this.replay.silent &&
+                typeof event.id === 'string' &&
+                this.replay.hasAnswer(event.id)
+            )
+                return;
             void this.requests
                 .handle(event)
                 .catch((error) => this.fail(asError(error)));
             return;
         }
         const active = this.active;
-        if (!active) return;
+        if (!active || active.settled) return;
         const result = active.adapter.consume(event);
         for (const draft of result.events) {
-            if (draft.type !== 'turn.completed') await this.options.host.emit(draft);
+            if (draft.type !== 'turn.completed') await this.replay.host.emit(draft);
         }
         if (event.type === 'extension_error') {
             await this.requests.withdrawAll();
@@ -416,50 +380,57 @@ class PiRpcSession implements RunnerSession {
     }
 
     private consumeResponse(event: Record<string, unknown>): void {
-        const id = string(event.id);
-        if (!id) return;
-        const pending = this.responses.get(id);
-        if (!pending) return;
-        this.responses.delete(id);
-        if (event.success === true) pending.resolve(event);
-        else pending.reject(new Error(`Pi command failed: ${pending.command}`));
+        const response = this.responses.consume(event, (action) =>
+            this.replay.commit(action)
+        );
+        if (response && !response.recovered) return;
+        const command =
+            response?.command ??
+            (event.id === this.active?.command ? 'prompt' : undefined);
+        if (command === 'prompt') {
+            if (event.success === true) this.runtimeReminder = '';
+            else this.failActive(new Error('Pi command failed: prompt'));
+        } else if (command === 'abort') {
+            if (event.success === true) this.finishActive('cancelled');
+            else if (this.active) this.active.cancellationRequested = false;
+        }
     }
 
     private finishActive(reason: string): void {
         const active = this.active;
         if (!active || active.settled) return;
         active.settled = true;
+        this.replay.endTurn(active.command);
         active.resolve({ reason });
     }
 
-    private failActive(error: Error): void {
+    private failActive(error: Error, completed = true): void {
         const active = this.active;
         if (!active || active.settled) return;
         active.settled = true;
+        if (completed) this.replay.endTurn(active.command);
         active.reject(error);
     }
 
     private fail(error: Error): void {
+        this.failedRequests ??= this.requests.progress();
         this.failure ??= error;
         void this.requests.close().catch(() => {});
-        this.failActive(this.failure);
-        this.rejectResponses(this.failure);
-    }
-
-    private rejectResponses(error: Error): void {
-        for (const response of this.responses.values()) response.reject(error);
-        this.responses.clear();
+        this.failActive(this.failure, false);
+        this.responses.rejectAll(this.failure, true);
     }
 }
 
-function createActiveTurn(): ActiveTurn {
+function createActiveTurn(command: string): ActiveTurn {
     let resolve!: (result: RunnerTurnResult) => void;
     let reject!: (error: Error) => void;
     const promise = new Promise<RunnerTurnResult>((accepted, rejected) => {
         resolve = accepted;
         reject = rejected;
     });
+    void promise.catch(() => {});
     return {
+        command,
         adapter: new PiEventAdapter(),
         promise,
         resolve,
@@ -482,17 +453,4 @@ function piPrompt(input: ReturnType<typeof normalizeRunnerInput>) {
               }
             : {}),
     };
-}
-
-function defaultSpawn(
-    command: string[],
-    options: {
-        cwd: string;
-        env: Record<string, string | undefined>;
-        stdin: 'pipe';
-        stdout: 'pipe';
-        stderr: 'pipe';
-    }
-): SpawnedPi {
-    return Bun.spawn(command, options) as unknown as SpawnedPi;
 }

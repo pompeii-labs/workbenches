@@ -28,6 +28,8 @@ import type { ActiveTurn } from './turn.js';
  * not sent again: only text past the count is emitted.
  */
 export interface OpenCodeProgress extends OpenCodeAdapterProgress {
+    /** OpenCode saves none, and accepts progress without one as its own. */
+    runner?: 'opencode';
     /** The native session the progress belongs to. */
     sessionId: string;
     /** The first input message of the turn, or none before a turn has started. */

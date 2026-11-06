@@ -5,18 +5,18 @@ import type { RunnerTurnResult } from '../session.js';
  * promise `prompt` returns. It settles once.
  */
 export class ClaudeCodeTurn {
-    readonly command = crypto.randomUUID();
     readonly promise: Promise<RunnerTurnResult>;
     cancelling = false;
     private done = false;
     private resolve!: (result: RunnerTurnResult) => void;
     private reject!: (error: Error) => void;
 
-    constructor() {
+    constructor(readonly command: string = crypto.randomUUID()) {
         this.promise = new Promise((resolve, reject) => {
             this.resolve = resolve;
             this.reject = reject;
         });
+        void this.promise.catch(() => {});
     }
 
     get settled(): boolean {
@@ -40,6 +40,7 @@ interface Steer {
     turn: ClaudeCodeTurn;
     line: string;
     written: boolean;
+    writing: boolean;
     resolve: () => void;
     reject: (error: Error) => void;
 }
@@ -54,6 +55,29 @@ interface Steer {
 export class ClaudeCodeSteering {
     private readonly steers = new Map<string, Steer>();
 
+    /**
+     * A steer whose write was still in flight counts as not written, so an
+     * attaching process writes it again. Claude Code ignores a user message whose
+     * uuid it already took, so it is never delivered twice.
+     */
+    progress(): Array<{ command: string; line: string; written: boolean }> {
+        return [...this.steers].map(([command, steer]) => ({
+            command,
+            line: steer.line,
+            written: steer.written,
+        }));
+    }
+
+    restore(
+        turn: ClaudeCodeTurn,
+        values: Array<{ command: string; line: string; written: boolean }>
+    ): void {
+        for (const value of values) {
+            this.add(turn, value.command, value.line);
+            if (value.written) this.written(value.command);
+        }
+    }
+
     add(turn: ClaudeCodeTurn, command: string, line: string): Promise<void> {
         let resolve!: () => void;
         let reject!: (error: Error) => void;
@@ -63,20 +87,37 @@ export class ClaudeCodeSteering {
         });
         // A caller that never awaits the delivery must not surface its failure.
         void delivered.catch(() => {});
-        this.steers.set(command, { turn, line, written: false, resolve, reject });
+        this.steers.set(command, {
+            turn,
+            line,
+            written: false,
+            writing: false,
+            resolve,
+            reject,
+        });
         return delivered;
     }
 
     /** The turn's steers not written yet, in order, each with its command id. */
     held(turn: ClaudeCodeTurn): Array<{ command: string; line: string }> {
         return [...this.steers.entries()]
-            .filter(([, steer]) => steer.turn === turn && !steer.written)
+            .filter(
+                ([, steer]) => steer.turn === turn && !steer.written && !steer.writing
+            )
             .map(([command, steer]) => ({ command, line: steer.line }));
     }
 
     written(command: string): void {
         const steer = this.steers.get(command);
-        if (steer) steer.written = true;
+        if (steer) {
+            steer.written = true;
+            steer.writing = false;
+        }
+    }
+
+    sending(command: string): void {
+        const steer = this.steers.get(command);
+        if (steer) steer.writing = true;
     }
 
     started(command: string): void {
@@ -105,7 +146,10 @@ export class ClaudeCodeSteering {
         }
     }
 
-    rejectAll(error: Error): void {
-        for (const command of [...this.steers.keys()]) this.drop(command, error);
+    rejectAll(error: Error, retain = false): void {
+        for (const [command, steer] of [...this.steers]) {
+            if (retain) steer.reject(error);
+            else this.drop(command, error);
+        }
     }
 }

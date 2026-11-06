@@ -19,34 +19,34 @@ import {
     type RunnerSession,
     type RunnerSessionStartOptions,
 } from '../session.js';
+import { StdinProcess } from '../stdin/process.js';
+import { ClaudeCodeSessionAdapter, type PreparedClaudeCodeSession } from './adapter.js';
 import { CLAUDE_CODE_VERSION } from './capabilities.js';
 import type { ClaudeCodeConfigStaging, StagedClaudeCodeConfig } from './config.js';
 import { claudeCodeConnection } from './connection.js';
 import { ClaudeCodeCost, runtimeCostStore } from './cost.js';
 import { ClaudeCodeEventAdapter } from './events.js';
+import { userMessage } from './input.js';
 import {
     buildClaudeCodeInvocation,
     inSessionConfig,
     withInput,
     withoutClaudeVariables,
 } from './invocation.js';
-import { type ClaudeCodeSpawn, executeOnHost } from './process.js';
+import type { OpenRouterAccess } from './openrouter.js';
+import { type ClaudeCodeSpawn, defaultSpawn, executeOnHost } from './process.js';
 import {
     type ClaudeCodeRoute,
     claudeCodeLogin,
     claudeCodeLoginDirectory,
     claudeCodeRoute,
 } from './routes.js';
-import {
-    ClaudeCodeSessionAdapter,
-    defaultSpawn,
-    type PreparedClaudeCodeSession,
-    userMessage,
-} from './session.js';
 
 export interface ClaudeCodeRunnerDependencies {
     /** Stages the config directory. The CLI passes one over the local disk. */
     config: ClaudeCodeConfigStaging;
+    /** How the host reads what OpenRouter charged for each turn. */
+    openRouter: OpenRouterAccess;
     /** Reads the model catalog snapshot routes are resolved against, when preparing. */
     catalog: () => ModelCatalogSnapshot;
     /** The host platform. Subprocess scrubbing needs macOS on the local runtime. */
@@ -85,6 +85,7 @@ export class ClaudeCodeRunner extends Runner {
         super();
         // A session started without a runtime runs on this host.
         this.session = new ClaudeCodeSessionAdapter({
+            openRouter: dependencies.openRouter,
             prepare: async (options) => {
                 const runner = await PreparedClaudeCodeRunner.create(
                     options.workbench,
@@ -150,7 +151,7 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
     readonly #router: ModelRouter;
     /** The host environment, the only source of a subscription token. */
     readonly #host: Record<string, string | undefined>;
-    readonly #platform: NodeJS.Platform;
+    readonly #platform: NodeJS.Platform | undefined;
     #repositoryRead = false;
     /** How the route of the last built invocation is paid, for its event normalizer. */
     #billing: ClaudeCodeRoute['billing'] = 'metered';
@@ -162,7 +163,7 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
         session: ClaudeCodeSessionAdapter;
         catalog: ModelCatalogSnapshot;
         host: Record<string, string | undefined>;
-        platform: NodeJS.Platform;
+        platform: NodeJS.Platform | undefined;
     }) {
         this.#workbench = options.workbench;
         this.#staged = options.staged;
@@ -187,7 +188,7 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
             session,
             catalog: dependencies.catalog(),
             host: environment,
-            platform: dependencies.platform ?? process.platform,
+            platform: dependencies.platform,
         });
     }
 
@@ -256,23 +257,7 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
         assertRunnerConfiguration(this.#workbench, options.configuration);
         const start = this.#startOptions(runtime, options);
         const prepared = await this.#prepareSession(runtime, start, (invocation) => {
-            const process = runtime.launchSession(invocation, { stdin: 'pipe' });
-            const input = process.stdin;
-            if (!input) {
-                runtime.cancel(process);
-                throw new Error('Runtime did not expose Claude Code session input');
-            }
-            return {
-                exited: process.exited,
-                stdin: {
-                    write: (value) => input.write(value),
-                    ...(input.flush ? { flush: () => input.flush?.() } : {}),
-                    ...(input.end ? { end: () => input.end?.() } : {}),
-                },
-                ...(process.stdout ? { stdout: process.stdout } : {}),
-                ...(process.stderr ? { stderr: process.stderr } : {}),
-                kill: () => runtime.cancel(process),
-            };
+            return new StdinProcess(runtime).open(invocation, options.progress);
         });
         return this.#session.startPrepared(start, prepared);
     }
@@ -320,6 +305,7 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
             ),
             configuration: options.configuration,
             host: options.host,
+            ...(options.progress ? { progress: options.progress } : {}),
             ...(options.session ? { session: options.session } : {}),
         };
     }
@@ -341,7 +327,9 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
         const route = this.#route(target, options.configuration, configDirectory);
         await this.#readRepository(target);
         const access = this.#access(target);
-        for (const message of [...staged.warnings, ...access.warnings]) {
+        for (const message of options.progress
+            ? []
+            : [...staged.warnings, ...access.warnings]) {
             await options.host.emit({
                 type: 'runner.event',
                 data: { native_type: 'warning', message },
@@ -359,6 +347,7 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
             settings: access.settings,
             additionalDirectories: access.directories,
             routeEnvironment: route.environment,
+            openRouterKey: route.openRouterKey,
             secureStorageDirectory: route.secureStorageDirectory,
             scrubSubprocessEnvironment: this.#scrubs(target),
             answersPrompts: true,
@@ -470,7 +459,9 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
 
     /** Subprocess scrubbing needs bubblewrap on Linux, so it is on only for local macOS. */
     #scrubs(target: ClaudeCodeTarget): boolean {
-        return target.name === 'local' && this.#platform === 'darwin';
+        return (
+            target.name === 'local' && (this.#platform ?? process.platform) === 'darwin'
+        );
     }
 
     /**

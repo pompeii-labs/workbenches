@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import {
     chmod,
     lstat,
@@ -18,6 +18,7 @@ import type {
 } from '../../../src/models/index.js';
 import { ClaudeCodeConfigStaging } from '../../../src/runners/claude-code/config.js';
 import { runtimeCostStore } from '../../../src/runners/claude-code/cost.js';
+import { PLATFORM_OPENROUTER_ACCESS } from '../../../src/runners/claude-code/openrouter.js';
 import { executeOnHost } from '../../../src/runners/claude-code/process.js';
 import {
     ClaudeCodeRunner,
@@ -118,6 +119,8 @@ function runner(platform: NodeJS.Platform = 'darwin'): ClaudeCodeRunner {
         ),
         catalog: () => catalog,
         platform,
+        // These tests stand in for OpenRouter through the platform fetch.
+        openRouter: PLATFORM_OPENROUTER_ACCESS,
     });
 }
 
@@ -658,6 +661,165 @@ describe('Claude Code cost across processes', () => {
         expect(fake.launched[0]?.env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe('');
         await turn(session, fake.natives[0] as FakeClaudeCode, 0.4);
         expect(costs(events)).toEqual([0.4]);
+    });
+});
+
+describe('Claude Code cost from OpenRouter charges', () => {
+    const KEY = 'sk-or-v1-fake-runner-key';
+    let requests: Array<{ url: string; authorization: string | null }> = [];
+    let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, 'fetch'>> | undefined;
+
+    afterEach(() => {
+        fetchSpy?.mockRestore();
+        fetchSpy = undefined;
+        requests = [];
+    });
+
+    /** Stands in for OpenRouter on the host. `charges` maps a generation to its cost. */
+    function openRouter(charges: Record<string, number>) {
+        const handler = async (input: string | URL | Request, init?: RequestInit) => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            requests.push({
+                url: url.href,
+                authorization: new Headers(init?.headers).get('authorization'),
+            });
+            const cost = charges[url.searchParams.get('id') ?? ''];
+            return cost === undefined
+                ? Response.json({ error: { code: 404 } }, { status: 404 })
+                : Response.json({ data: { finish_reason: 'stop', total_cost: cost } });
+        };
+        fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
+            handler as unknown as typeof fetch
+        );
+    }
+
+    /** A turn of two model calls Claude Code reports with their request ids. */
+    async function turn(session: RunnerSession, native: FakeClaudeCode, total: number) {
+        const prompt = session.prompt('work');
+        const line = await native.waitFor((value) => value.type === 'user');
+        const command = String(line.uuid);
+        native.turn(command);
+        for (const id of ['gen-1-first', 'gen-2-second']) {
+            native.emit({
+                type: 'assistant',
+                message: { id: `msg_${id}`, role: 'assistant', content: [] },
+                parent_tool_use_id: null,
+                session_id: native.sessionId,
+                request_id: id,
+            });
+        }
+        native.finishTurn(command, { total_cost_usd: total });
+        await prompt;
+    }
+
+    function costs(events: WorkbenchEventDraft[]): unknown[] {
+        return events
+            .filter((event) => event.type === 'usage.updated')
+            .map((event) => event.data.cost_usd);
+    }
+
+    test('an OpenRouter session reports what OpenRouter charged, read on the host with the route key', async () => {
+        openRouter({ 'gen-1-first': 0.0292, 'gen-2-second': 0.0075 });
+        const { workspace, workbench } = await project();
+        const ready = await prepare(workbench);
+        const fake = fakeRuntime('docker', {
+            workbench,
+            workspace,
+            environment: { OPENROUTER_API_KEY: KEY },
+        });
+        const events: WorkbenchEventDraft[] = [];
+        const context = { id: 'wb_or', directory: '/state/wb_or' };
+        const session = await start(ready, fake.runtime, 'openrouter', context, events);
+        await turn(session, fake.natives[0] as FakeClaudeCode, 0.0713);
+        await session.close();
+
+        expect(costs(events)).toEqual([undefined, expect.closeTo(0.0367, 10)]);
+        expect(events.filter((event) => event.type === 'usage.updated')).toEqual([
+            {
+                type: 'usage.updated',
+                data: {
+                    kind: 'delta',
+                    total_tokens: 2,
+                    input_tokens: 1,
+                    output_tokens: 1,
+                },
+            },
+            {
+                type: 'usage.updated',
+                data: { kind: 'delta', cost_usd: expect.closeTo(0.0367, 10) },
+            },
+        ]);
+        expect(requests).toEqual([
+            {
+                url: 'https://openrouter.ai/api/v1/generation?id=gen-1-first',
+                authorization: `Bearer ${KEY}`,
+            },
+            {
+                url: 'https://openrouter.ai/api/v1/generation?id=gen-2-second',
+                authorization: `Bearer ${KEY}`,
+            },
+        ]);
+        // Claude Code's own total is still the baseline a later process starts from.
+        expect(fake.files.get('/state/wb_or/claude-code/workbench-cost.json')).toBe(
+            '{"total_cost_usd":0.0713}\n'
+        );
+        expect(JSON.stringify(events)).not.toContain(KEY);
+    });
+
+    test('an Anthropic key, a subscription, and Vercel AI Gateway never look up a charge', async () => {
+        openRouter({ 'gen-1-first': 1, 'gen-2-second': 1 });
+        const { workspace, workbench } = await project();
+        const ready = await prepare(workbench);
+
+        const keyed = fakeRuntime('docker', {
+            workbench,
+            workspace,
+            environment: { ANTHROPIC_API_KEY: 'anthropic-key' },
+        });
+        const metered: WorkbenchEventDraft[] = [];
+        const context = { id: 'wb_key', directory: '/state/wb_key' };
+        const session1 = await start(
+            ready,
+            keyed.runtime,
+            'anthropic',
+            context,
+            metered
+        );
+        await turn(session1, keyed.natives[0] as FakeClaudeCode, 0.02);
+        await session1.close();
+
+        const local = fakeRuntime('local', { workbench, workspace });
+        const subscription: WorkbenchEventDraft[] = [];
+        const session2 = await start(
+            ready,
+            local.runtime,
+            'anthropic',
+            undefined,
+            subscription
+        );
+        await turn(session2, local.natives[0] as FakeClaudeCode, 0.4);
+        await session2.close();
+
+        const gateway = fakeRuntime('local', {
+            workbench,
+            workspace,
+            environment: { AI_GATEWAY_API_KEY: 'vercel-key' },
+        });
+        const vercel: WorkbenchEventDraft[] = [];
+        const session3 = await start(
+            ready,
+            gateway.runtime,
+            'vercel',
+            undefined,
+            vercel
+        );
+        await turn(session3, gateway.natives[0] as FakeClaudeCode, 0.05);
+        await session3.close();
+
+        expect(costs(metered)).toEqual([0.02]);
+        expect(costs(subscription)).toEqual([0]);
+        expect(costs(vercel)).toEqual([0.05]);
+        expect(requests).toEqual([]);
     });
 });
 

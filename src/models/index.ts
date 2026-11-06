@@ -13,6 +13,7 @@ export {
     type ResolvedRunnerConfiguration,
     type ResolveModelRouteOptions,
     type RouteConfigurationOptions,
+    type RoutedRunner,
     type RoutedWorkbench,
 } from './routing.js';
 export {

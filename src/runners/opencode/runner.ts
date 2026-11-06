@@ -183,6 +183,7 @@ export class PreparedOpenCodeRunner implements PreparedRunner {
         assertRunnerConfiguration(this.#workbench, options.configuration);
         return this.#session.startPrepared(
             {
+                ...(options.progress ? { progress: options.progress } : {}),
                 workbench: runtime.workbench,
                 workspaceDirectory: runtime.workspaceDirectory,
                 environment: this.#routeEnvironment(runtime, options.configuration),

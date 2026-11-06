@@ -6,6 +6,7 @@ import type {
 import type {
     ResolvedWorkbench,
     RunnerInvocation,
+    RuntimeProcessHandle,
     SpawnedRunner,
     WorkbenchWorkspaceBinding,
 } from '../types.js';
@@ -214,6 +215,8 @@ export interface PreparedRuntime {
     ): Promise<RuntimeCommandResult>;
     interact(invocation: RunnerInvocation): Promise<number>;
     launch(invocation: RunnerInvocation): SpawnedRunner;
+    /** Replays a command's stdout from its start and binds its input and exit. */
+    attachSession?(handle: RuntimeProcessHandle): SpawnedRunner;
     launchSession(
         invocation: RunnerInvocation,
         options: RuntimeSessionOptions

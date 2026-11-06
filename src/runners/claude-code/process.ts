@@ -1,7 +1,9 @@
 import type { RuntimeCommandResult } from '../../runtimes/contracts.js';
-import type { RunnerInvocation } from '../../types.js';
+import type { RunnerInvocation, RuntimeProcessHandle } from '../../types.js';
+import { readLines } from '../stdin/lines.js';
 
 export interface ClaudeCodeChild {
+    handle?: Promise<RuntimeProcessHandle | undefined>;
     exited: Promise<number>;
     stdin: {
         write(value: string): unknown;
@@ -27,7 +29,6 @@ export type ClaudeCodeSpawn = (
 /** Why the child stopped serving the session: its exit code, or a broken output stream. */
 export type ClaudeCodeExit = { code: number } | { error: Error };
 
-const MAXIMUM_LINE_BYTES = 16 * 1024 * 1024;
 const STDERR_TAIL_BYTES = 64 * 1024;
 /** The standard error lines that explain an exit without an `error:` line. */
 const EXIT_DETAIL_LINES = 3;
@@ -58,7 +59,9 @@ export class ClaudeCodeProcess {
      * returned promise settles when the output stream breaks, or when the child
      * exited and its remaining output was consumed.
      */
-    start(consume: (line: string) => Promise<void>): Promise<ClaudeCodeExit> {
+    start(
+        consume: (line: string, bytes: number) => Promise<void>
+    ): Promise<ClaudeCodeExit> {
         if (this.child) throw new Error('Claude Code is already running');
         const child = this.spawn(this.invocation.command, {
             cwd: this.invocation.cwd,
@@ -82,11 +85,12 @@ export class ClaudeCodeProcess {
             ),
             exited.then(async (code) => {
                 // The exit can arrive before the last output, and a failure
-                // is explained by the end of standard error.
-                await settlesWithin(
-                    Promise.allSettled([reading, diagnostics]),
-                    this.stopTimeoutMs
-                );
+                // is explained by the end of standard error. A runtime command's
+                // output closes when it exits, so all of it is read; a host
+                // child's descendants can hold its output open.
+                const output = Promise.allSettled([reading, diagnostics]);
+                if (child.handle) await output;
+                else await settlesWithin(output, this.stopTimeoutMs);
                 return { code };
             }),
         ]);
@@ -95,6 +99,10 @@ export class ClaudeCodeProcess {
     /** Whether the child exited. Its reason settles `start` once its output ends. */
     get exited(): boolean {
         return this.exitCode !== undefined;
+    }
+
+    handle(): Promise<RuntimeProcessHandle | undefined> {
+        return this.child?.handle ?? Promise.resolve(undefined);
     }
 
     async write(line: string): Promise<void> {
@@ -160,29 +168,12 @@ export class ClaudeCodeProcess {
 
     private async readLines(
         stream: ReadableStream<Uint8Array> | undefined,
-        consume: (line: string) => Promise<void>
+        consume: (line: string, bytes: number) => Promise<void>
     ): Promise<void> {
         if (!stream) return;
         const reader = stream.getReader();
         this.readers.push(reader);
-        const decoder = new TextDecoder();
-        let pending = '';
-        for (;;) {
-            const next = await reader.read();
-            if (next.done) break;
-            pending += decoder.decode(next.value, { stream: true });
-            if (pending.length > MAXIMUM_LINE_BYTES) {
-                throw new Error('Claude Code emitted an oversized JSON event');
-            }
-            const lines = pending.split('\n');
-            pending = lines.pop() ?? '';
-            for (const line of lines) {
-                const normalized = line.endsWith('\r') ? line.slice(0, -1) : line;
-                if (normalized.trim()) await consume(normalized);
-            }
-        }
-        pending += decoder.decode();
-        if (pending.trim()) await consume(pending);
+        await readLines(reader, consume, 'Claude Code emitted an oversized JSON event');
     }
 
     private async readStderr(stream: ReadableStream<Uint8Array> | undefined) {
@@ -224,6 +215,14 @@ async function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boo
 
 function asError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error));
+}
+
+/** Starts a child on this host. */
+export function defaultSpawn(
+    command: string[],
+    options: Parameters<ClaudeCodeSpawn>[1]
+): ClaudeCodeChild {
+    return Bun.spawn(command, options) as unknown as ClaudeCodeChild;
 }
 
 /** Runs a short command on this host and collects its output. */

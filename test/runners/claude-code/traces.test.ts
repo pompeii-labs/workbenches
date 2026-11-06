@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ModelRouter } from '../../../src/models/index.js';
+import { ClaudeCodeSessionAdapter } from '../../../src/runners/claude-code/adapter.js';
 import { ClaudeCodeCost } from '../../../src/runners/claude-code/cost.js';
-import { ClaudeCodeSessionAdapter } from '../../../src/runners/claude-code/session.js';
 import type {
     RunnerPermissionDecision,
     RunnerPermissionRequest,
@@ -16,7 +16,7 @@ import type {
 } from '../../../src/runners/session.js';
 import type { WorkbenchEventDraft } from '../../../src/runs/events.js';
 import { modelCatalogFixture } from '../../model-catalog-fixture.js';
-import { claudeCodeWorkbench, PREPARED } from './fixture.js';
+import { claudeCodeWorkbench, NO_OPENROUTER, PREPARED } from './fixture.js';
 
 const fixtures = join(import.meta.dir, '..', '..', 'fixtures', 'claude-code');
 const bin = join(import.meta.dir, 'bin');
@@ -69,6 +69,7 @@ async function replay(
         prepare: async () => {
             throw new Error('replays start prepared sessions');
         },
+        openRouter: NO_OPENROUTER,
     }).startPrepared(
         {
             workbench,
@@ -203,10 +204,7 @@ describe('Claude Code recorded trace replay', () => {
         expect(texts(run.events)).toEqual(['ONE', 'TWO']);
         const outputs = run.events.filter((event) => event.type === 'output.text');
         expect(outputs[0]?.data.id).not.toBe(outputs[1]?.data.id);
-        expect(costs(run.events)).toEqual([
-            0.020271400000000002,
-            expect.closeTo(0.0029314, 7),
-        ]);
+        expect(costs(run.events)).toEqual([0.00131631, expect.closeTo(0.00087308, 8)]);
         expect(JSON.stringify(run.events)).not.toContain('thinking');
         await run.finish();
     });
@@ -225,15 +223,14 @@ describe('Claude Code recorded trace replay', () => {
                 action: 'Bash',
                 resources: ['/workspace/out.txt'],
                 message:
-                    'Allow Bash for echo hello > out.txt? Blocked path: /workspace/out.txt. Reason: Claude requested permissions to edit /workspace/out.txt which is a sensitive file.',
+                    'Allow Bash for echo hello > out.txt? Blocked path: /workspace/out.txt.',
                 allowAlways: true,
             },
             {
                 id: expect.any(String),
                 action: 'Write',
                 resources: ['/workspace/notes.txt'],
-                message:
-                    'Allow Write for /workspace/notes.txt? Reason: Claude requested permissions to edit /workspace/notes.txt which is a sensitive file.',
+                message: 'Allow Write for /workspace/notes.txt?',
                 allowAlways: true,
             },
         ]);
@@ -267,14 +264,20 @@ describe('Claude Code recorded trace replay', () => {
                 question: 'Which color do you prefer?',
                 header: 'Color',
                 options: [
-                    { label: 'Red', description: 'The color red' },
-                    { label: 'Blue', description: 'The color blue' },
+                    {
+                        label: 'Red',
+                        description: 'Choose red as your preferred color.',
+                    },
+                    {
+                        label: 'Blue',
+                        description: 'Choose blue as your preferred color.',
+                    },
                 ],
                 multiple: false,
                 custom: false,
             },
         ]);
-        expect(texts(run.events)).toEqual(['You prefer the color blue.']);
+        expect(texts(run.events)).toEqual(['You prefer blue.']);
         await run.finish();
     });
 
@@ -370,7 +373,8 @@ describe('Claude Code recorded trace replay', () => {
         });
         await until(() => costs(run.events).length === 2);
         expect(texts(run.events)).toEqual([
-            "Command is running in the background. You'll be notified when it completes.",
+            "The harness blocked the foreground `sleep 30`. Its suggested alternative is to run the command in the background, so I'll run the exact same command that way.",
+            "The foreground run of `sleep 30 && echo done` was blocked by the harness, which asked for a background run instead. I ran the same command in the background (task `bv9l5if54`). It will finish in about 30 seconds, and I'll report its output, which should be `done`, when the completion notification arrives.",
         ]);
         expect(run.events).toContainEqual({
             type: 'runner.event',
@@ -385,7 +389,7 @@ describe('Claude Code recorded trace replay', () => {
 
     test('resume: reopens the native session and reports cost from the recorded total', async () => {
         // The earlier process recorded its last cumulative total.
-        let recorded: number | undefined = 0.0232;
+        let recorded: number | undefined = 0.00218939;
         const cost = await ClaudeCodeCost.open('metered', {
             read: async () => recorded,
             write: async (total) => {
@@ -405,9 +409,9 @@ describe('Claude Code recorded trace replay', () => {
             reason: 'end_turn',
         });
         const [delta] = costs(run.events);
-        expect(delta).toBeCloseTo(0.0031395);
+        expect(delta).toBeCloseTo(0.00034549, 8);
         expect(run.session.id).toBe('resumed-native-session');
         await run.finish();
-        expect(recorded).toBeCloseTo(0.0263395);
+        expect(recorded).toBeCloseTo(0.00253488, 8);
     });
 });

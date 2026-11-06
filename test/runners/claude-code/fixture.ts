@@ -1,13 +1,22 @@
+import type { PreparedClaudeCodeSession } from '../../../src/runners/claude-code/adapter.js';
+import type { OpenRouterAccess } from '../../../src/runners/claude-code/openrouter.js';
 import type {
     ClaudeCodeChild,
     ClaudeCodeSpawn,
 } from '../../../src/runners/claude-code/process.js';
-import type { PreparedClaudeCodeSession } from '../../../src/runners/claude-code/session.js';
 import type { ResolvedWorkbench } from '../../../src/types.js';
 import {
     RUNNER_CONFORMANCE_SHELL_COMMAND,
     type RunnerConformanceScenario,
 } from '../../runner-adapter-contract.js';
+
+/** OpenRouter access for a session on another route, which never reads a charge. */
+export const NO_OPENROUTER: OpenRouterAccess = {
+    fetch: async () => {
+        throw new Error('This session reads no OpenRouter charge');
+    },
+    sleep: async () => {},
+};
 
 export const PREPARED: PreparedClaudeCodeSession = {
     paths: {

@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { ModelRouter } from '../src/models/index.js';
 import { RunnerContextStaging } from '../src/runners/context/stage.js';
 import { DiskRunnerFiles } from '../src/runners/files/disk.js';
+import { PiSessionAdapter } from '../src/runners/pi/adapter.js';
 import { PiConfigStaging } from '../src/runners/pi/config.js';
-import { PiSessionAdapter } from '../src/runners/pi/session.js';
 import type { ResolvedWorkbench } from '../src/types.js';
 import { modelCatalogFixture } from './model-catalog-fixture.js';
 import {

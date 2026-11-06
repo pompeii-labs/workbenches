@@ -1,3 +1,4 @@
+import type { RuntimeProcessHandle } from '../../types.js';
 import type { RuntimeCommandResult } from '../contracts.js';
 import type { RemoteCommand, RemoteCommandOptions } from '../remote/process.js';
 import { LogFollower } from './follow.js';
@@ -31,7 +32,8 @@ export class SessionProcess implements RemoteCommand {
         private readonly command: string,
         options: RemoteCommandOptions,
         /** Where the command's standard error is kept apart, delivered when it exits. */
-        private readonly stderrFile?: StderrFile
+        private readonly stderrFile?: StderrFile,
+        readonly handle?: RuntimeProcessHandle
     ) {
         this.#stdout = new CommandOutput(options.onStdout);
         this.#stderr = new CommandOutput(options.onStderr);
@@ -93,13 +95,18 @@ export class SessionProcess implements RemoteCommand {
 
     async kill(): Promise<void> {
         this.#killed = true;
-        await this.#follower.stop();
+        try {
+            await this.#follower.stop();
+        } finally {
+            if (this.handle) await this.stderrFile?.discard();
+        }
     }
 
     /**
      * Resolves once the command has exited and every byte of its output has
      * reached its receiver. A known exit code is kept even when the output
-     * after it could not be read, and the session is always ended.
+     * after it could not be read. An attachable command keeps its log and stderr
+     * until cancellation or sandbox cleanup, so its exit can be replayed.
      */
     private async finish(): Promise<RuntimeCommandResult> {
         try {
@@ -107,7 +114,9 @@ export class SessionProcess implements RemoteCommand {
             this.receive(this.#stdout);
             this.receive(this.#stderr);
             if (code !== undefined && !this.#killed && this.stderrFile) {
-                const text = await this.stderrFile.collect();
+                const text = await (this.handle
+                    ? this.stderrFile.read()
+                    : this.stderrFile.collect());
                 if (text)
                     this.#delivery = this.#delivery.then(() =>
                         this.#stderr.deliver(text)
@@ -129,9 +138,11 @@ export class SessionProcess implements RemoteCommand {
                 stderr: this.#stderr.kept,
             };
         } finally {
-            // A kill has already ended the session.
-            if (!this.#killed) await this.#follower.stop();
-            await this.stderrFile?.discard();
+            if (!this.handle) {
+                // A kill has already ended the session.
+                if (!this.#killed) await this.#follower.stop();
+                await this.stderrFile?.discard();
+            }
         }
     }
 

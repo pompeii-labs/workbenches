@@ -126,7 +126,7 @@ const copyEntries =
     'set -e; for entry do if [ -d "$entry" ] && [ ! -L "$entry" ]; then mkdir "$0/$entry"; else cp -RP "$entry" "$0/$entry"; fi; done';
 
 /**
- * What Claude Code 2.1.292 loads from `CLAUDE_CONFIG_DIR` as user-level
+ * What Claude Code 2.1.318 loads from `CLAUDE_CONFIG_DIR` as user-level
  * behavior: its custom item directories (`commands`, `agents`,
  * `output-styles`, `skills`, `workflows`, `routines`), instruction `rules`,
  * `hooks`, installed `plugins` and `cowork_plugins`, `themes`, and the

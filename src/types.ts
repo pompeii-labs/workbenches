@@ -128,7 +128,18 @@ export interface RunnerInvocation {
     env: Record<string, string | undefined>;
 }
 
+/** A command identity a host can keep as JSON and attach to in its runtime. */
+export interface RuntimeProcessHandle {
+    runtime: 'daytona';
+    sandboxId: string;
+    sessionId: string;
+    commandId: string;
+    stderrPath?: string;
+}
+
 export interface SpawnedRunner {
+    /** Resolves once the remote command has started. */
+    handle?: Promise<RuntimeProcessHandle | undefined>;
     exited: Promise<number>;
     stdin?: {
         write(value: string | Uint8Array): unknown;
