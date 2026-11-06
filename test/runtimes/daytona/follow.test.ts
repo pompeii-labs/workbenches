@@ -108,6 +108,35 @@ describe('Daytona log follower', () => {
         ).toHaveLength(1);
     });
 
+    test('opens every log stream through the socket the host supplies', async () => {
+        const opened: Array<{ url: URL; authorization: string | undefined }> = [];
+        const socket = async (url: URL, headers: Record<string, string>) => {
+            opened.push({ url, authorization: headers.Authorization });
+            return new WebSocket(url, { headers } as unknown as string[]);
+        };
+        let exited = false;
+        const fake = toolbox(
+            (_index, connection) => {
+                connection.send(join(stdout, encode('done\n')));
+                exited = true;
+                connection.close();
+            },
+            { exited: () => exited, client: { socket } }
+        );
+        const sandbox = await fake.sandbox();
+        const received = receiver();
+        followed = await sandbox.follow?.('exec true', received.output, () => {});
+        await until(() => received.text() === 'done\n');
+        expect(opened).toHaveLength(1);
+        expect(opened[0]?.url.protocol).toBe('ws:');
+        expect(opened[0]?.url.pathname).toEndWith('/command/cmd-1/logs');
+        expect(opened[0]?.url.searchParams.get('follow')).toBe('true');
+        expect(opened[0]?.authorization).toBe('Bearer secret-api-key');
+        expect(fake.upgrades).toEqual([
+            expect.objectContaining({ authorization: 'Bearer secret-api-key' }),
+        ]);
+    });
+
     test('stops reconnecting once the command has exited', async () => {
         let exited = false;
         const fake = toolbox(

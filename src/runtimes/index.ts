@@ -40,6 +40,7 @@ export {
     type DaytonaSignedPreviewUrl,
     type DaytonaSnapshot,
     type DaytonaSnapshotOptions,
+    type DaytonaSocket,
     daytonaResources,
     daytonaSnapshotName,
     defaultDaytonaApiUrl,

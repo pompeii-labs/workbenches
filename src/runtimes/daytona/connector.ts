@@ -1,12 +1,21 @@
 import { DaytonaApi } from './api.js';
-import type { DaytonaClient, DaytonaFetch, RegistryLogins } from './contracts.js';
+import type {
+    DaytonaClient,
+    DaytonaFetch,
+    DaytonaSocket,
+    RegistryLogins,
+} from './contracts.js';
 
-/** Opens `DaytonaApi` clients that send their requests through one `fetch`. */
+/**
+ * Opens `DaytonaApi` clients that send their requests through one `fetch`,
+ * and open their log streams through `socket` when the host supplies one.
+ */
 export class DaytonaConnector {
     constructor(
         private readonly fetch: DaytonaFetch,
         private readonly apiUrl?: string,
-        private readonly registryLogins?: RegistryLogins
+        private readonly registryLogins?: RegistryLogins,
+        private readonly socket?: DaytonaSocket
     ) {}
 
     /**
@@ -20,6 +29,7 @@ export class DaytonaConnector {
             fetch: this.fetch,
             ...(url ? { apiUrl: url } : {}),
             ...(this.registryLogins ? { registryLogins: this.registryLogins } : {}),
+            ...(this.socket ? { socket: this.socket } : {}),
         });
     }
 }

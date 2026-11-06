@@ -14,6 +14,7 @@ export type {
     DaytonaSignedPreviewUrl,
     DaytonaSnapshot,
     DaytonaSnapshotOptions,
+    DaytonaSocket,
     RegistryLogin,
     RegistryLogins,
 } from './contracts.js';
