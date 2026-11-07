@@ -715,7 +715,7 @@ describe('worker engine', () => {
             join(bin, 'claude'),
             [
                 '#!/bin/sh',
-                'if [ "$1" = "--version" ]; then echo "2.1.292 (Claude Code)"; exit 0; fi',
+                'if [ "$1" = "--version" ]; then echo "2.1.318 (Claude Code)"; exit 0; fi',
                 'if [ "$1" = "auth" ] && [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then echo \'{"loggedIn":true,"authMethod":"oauth_token"}\'; exit 0; fi',
                 'if [ "$1" = "auth" ]; then echo \'{"loggedIn":false}\'; exit 1; fi',
                 'exit 1',
@@ -752,7 +752,7 @@ describe('worker engine', () => {
                     model: { id: 'anthropic/claude-sonnet-4-5' },
                     runtimes: { local: {} },
                 }),
-            versions: new WorkerRunnerVersions(async () => '2.1.292 (Claude Code)'),
+            versions: new WorkerRunnerVersions(async () => '2.1.318 (Claude Code)'),
         });
         const run = (overrides: Partial<RunStart> = {}) => {
             const local = start({
@@ -866,7 +866,7 @@ describe('worker engine', () => {
             .catch((error: unknown) => error);
         expect(local).toBeInstanceOf(WorkerRejection);
         expect(local instanceof Error ? local.message : '').toBe(
-            'Claude Code 2.1.221 on this worker is older than 2.1.292, the oldest release Workbench works with. Update it on the worker.'
+            'Claude Code 2.1.221 on this worker is older than 2.1.318, the oldest release Workbench works with. Update it on the worker.'
         );
         // A container brings its own Claude Code.
         expect(await engine.admit(start({ runtime: 'docker' }))).toMatchObject({
@@ -939,7 +939,7 @@ describe('worker engine', () => {
                         docker: { image: 'ghcr.io/example/game:1.0.0' },
                     },
                 }),
-            versions: new WorkerRunnerVersions(async () => '2.1.292 (Claude Code)'),
+            versions: new WorkerRunnerVersions(async () => '2.1.318 (Claude Code)'),
         });
         await home.saveMember({ id: 'mem_1', name: 'matty' });
         const launch = async (overrides: Partial<RunStart>) => {
@@ -1080,7 +1080,7 @@ describe('worker engine', () => {
                         docker: { image: 'ghcr.io/example/game:1.0.0' },
                     },
                 }),
-            versions: new WorkerRunnerVersions(async () => '2.1.292 (Claude Code)'),
+            versions: new WorkerRunnerVersions(async () => '2.1.318 (Claude Code)'),
         });
         await home.saveMember({ id: 'mem_1', name: 'matty' });
         await home.saveMemberConnection('mem_1', 'opencode', {

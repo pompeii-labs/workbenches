@@ -7,6 +7,8 @@ export interface ClaudeCodeRoute {
     billing: ClaudeCodeBilling;
     /** `CLAUDE_SECURESTORAGE_CONFIG_DIR`. Empty reads the person's own Claude Code login. */
     secureStorageDirectory: string;
+    /** The key the host reads each generation's charge with, on the OpenRouter route only. */
+    openRouterKey?: string;
 }
 
 /**
@@ -56,7 +58,9 @@ export interface ClaudeCodeRouteRequest {
 /**
  * Anthropic-compatible gateways Claude Code reaches through its base URL. The
  * provider key becomes the bearer token and `ANTHROPIC_API_KEY` stays empty,
- * because Claude Code would otherwise prefer it.
+ * because Claude Code would otherwise prefer it. Claude Code prices OpenRouter
+ * models from its own Anthropic rates, so that route is billed at what
+ * OpenRouter reports it charged instead.
  */
 const gateways: Record<string, string> = {
     // https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration
@@ -89,14 +93,16 @@ export function claudeCodeRoute(request: ClaudeCodeRouteRequest): ClaudeCodeRout
                 `Claude Code needs ${request.keys.join(' or ') || 'a key'} for the ${request.provider} route`
             );
         }
+        const openRouter = request.provider === 'openrouter';
         return {
             environment: {
                 ANTHROPIC_BASE_URL: gateway,
                 ANTHROPIC_AUTH_TOKEN: key,
                 ANTHROPIC_API_KEY: '',
             },
-            billing: 'metered',
+            billing: openRouter ? 'charged' : 'metered',
             secureStorageDirectory: isolated,
+            ...(openRouter ? { openRouterKey: key } : {}),
         };
     }
     if (request.provider !== 'anthropic') {

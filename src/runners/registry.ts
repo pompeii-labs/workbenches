@@ -1,6 +1,7 @@
 import { ActiveModelCatalog } from '../models/index.js';
 import { DiskAssetSource } from '../runtimes/staging/disk.js';
 import { ClaudeCodeConfigStaging } from './claude-code/config.js';
+import { PLATFORM_OPENROUTER_ACCESS } from './claude-code/openrouter.js';
 import { ClaudeCodeRunner } from './claude-code/runner.js';
 import { RunnerContextStaging } from './context/stage.js';
 import { DiskRunnerFiles } from './files/disk.js';
@@ -52,6 +53,7 @@ export class RunnerRegistry {
                     new DiskAssetSource()
                 ),
                 catalog,
+                openRouter: PLATFORM_OPENROUTER_ACCESS,
             }),
         ]);
     }

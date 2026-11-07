@@ -76,7 +76,7 @@ describe('package exports', () => {
     test('loads the storage-free modules and their disk counterparts', () => {
         expect(typeof ActiveModelCatalog.activate).toBe('function');
         expect(typeof ModelRouter).toBe('function');
-        expect(typeof ModelRouter.prototype.configureOpenCode).toBe('function');
+        expect(typeof ModelRouter.prototype.configure).toBe('function');
         expect(typeof MemoryOutcomeSink).toBe('function');
         expect(typeof OutcomeStore).toBe('function');
         expect(typeof OpenCodeRunner).toBe('function');

@@ -13,6 +13,8 @@ import {
     Runner,
     type RunnerEventNormalizer,
 } from '../runner.js';
+import { StdinProcess } from '../stdin/process.js';
+import { PiSessionAdapter, type SpawnedPi } from './adapter.js';
 import type { PiConfigStaging, StagedPiConfig } from './config.js';
 import { piConnection } from './connection.js';
 import { PiEventAdapter } from './events.js';
@@ -21,7 +23,6 @@ import {
     piCredentialCommand,
     publicPiInvocation,
 } from './invocation.js';
-import { PiSessionAdapter, type SpawnedPi } from './session.js';
 
 export class PiRunner extends Runner {
     readonly name = 'pi';
@@ -165,37 +166,17 @@ class PreparedPiRunner implements PreparedRunner {
                 ),
                 configuration: options.configuration,
                 host: options.host,
+                ...(options.progress ? { progress: options.progress } : {}),
                 ...(options.session ? { session: options.session } : {}),
             },
             {
                 context: this.#staged.context.remap((path) => runtime.pathFor(path)),
                 configDirectory: runtime.pathFor(this.#staged.directory),
-                spawn: (command, spawnOptions): SpawnedPi => {
-                    const process = runtime.launchSession(
-                        {
-                            command,
-                            cwd: spawnOptions.cwd,
-                            env: spawnOptions.env,
-                        },
-                        { stdin: 'pipe' }
-                    );
-                    const input = process.stdin;
-                    if (!input) {
-                        runtime.cancel(process);
-                        throw new Error('Runtime did not expose Pi session input');
-                    }
-                    return {
-                        exited: process.exited,
-                        stdin: {
-                            write: (value) => input.write(value),
-                            ...(input.flush ? { flush: () => input.flush?.() } : {}),
-                            ...(input.end ? { end: () => void input.end?.() } : {}),
-                        },
-                        ...(process.stdout ? { stdout: process.stdout } : {}),
-                        ...(process.stderr ? { stderr: process.stderr } : {}),
-                        kill: () => runtime.cancel(process),
-                    };
-                },
+                spawn: (command, spawnOptions): SpawnedPi =>
+                    new StdinProcess(runtime).open(
+                        { command, cwd: spawnOptions.cwd, env: spawnOptions.env },
+                        options.progress
+                    ),
             }
         );
     }

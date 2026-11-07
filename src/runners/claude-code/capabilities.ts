@@ -1,7 +1,7 @@
 import type { RunnerAdapterDeclaration } from '../session.js';
 
 /** The Claude Code release whose stream-json protocol the session was verified against. */
-export const CLAUDE_CODE_VERSION = '2.1.292';
+export const CLAUDE_CODE_VERSION = '2.1.318';
 
 export const CLAUDE_CODE_SESSION_DECLARATION: RunnerAdapterDeclaration = {
     native: {

@@ -7,26 +7,69 @@ import type {
 interface PendingDialog {
     release(): void;
     timeout?: ReturnType<typeof setTimeout>;
+    deadline?: number;
 }
 
 /** Pi extension dialogs use the host question channel, never tool permissions. */
 export class PiInputRequests {
     private readonly waiting = new Map<string, PendingDialog>();
     private closed = false;
+    private readonly closedRequests = new Set<string>();
+    private readonly deadlines = new Map<string, number>();
 
     constructor(
         private readonly host: Pick<
             RunnerSessionHost,
             'requestQuestion' | 'withdrawRequest'
         >,
-        private readonly send: (response: Record<string, unknown>) => Promise<void>
+        private readonly send: (response: Record<string, unknown>) => Promise<void>,
+        /** Withdraws a dialog whose deadline passed while no host was attached. */
+        private readonly expire: (id: string) => Promise<void>
     ) {}
 
+    progress(): { closedRequests: string[]; requestDeadlines: Record<string, number> } {
+        return {
+            closedRequests: [...this.closedRequests],
+            requestDeadlines: Object.fromEntries(
+                [...this.waiting].flatMap(([id, pending]) =>
+                    pending.deadline === undefined ? [] : [[id, pending.deadline]]
+                )
+            ),
+        };
+    }
+
+    restore(progress: {
+        closedRequests: string[];
+        requestDeadlines: Record<string, number>;
+    }): void {
+        for (const id of progress.closedRequests) this.closedRequests.add(id);
+        for (const [id, deadline] of Object.entries(progress.requestDeadlines))
+            this.deadlines.set(id, deadline);
+    }
+
     async handle(event: Record<string, unknown>): Promise<void> {
-        if (this.closed || typeof event.id !== 'string') return;
+        if (
+            this.closed ||
+            typeof event.id !== 'string' ||
+            this.closedRequests.has(event.id)
+        )
+            return;
         const prompt = question(event);
         if (!prompt) return;
         const id = event.id;
+        const deadline =
+            this.deadlines.get(id) ??
+            (typeof event.timeout === 'number' &&
+            Number.isFinite(event.timeout) &&
+            event.timeout > 0
+                ? Date.now() + event.timeout
+                : undefined);
+        this.deadlines.delete(id);
+        if (deadline !== undefined && deadline <= Date.now()) {
+            this.closedRequests.add(id);
+            await this.expire(id);
+            return;
+        }
         let release = () => {};
         const released = new Promise<undefined>((resolve) => {
             release = () => resolve(undefined);
@@ -35,14 +78,14 @@ export class PiInputRequests {
         this.waiting.set(id, pending);
         // Pi resolves its timeout locally without emitting a withdrawal event.
         // Mirror the deadline only to stop offering the host's stale request.
-        if (
-            typeof event.timeout === 'number' &&
-            Number.isFinite(event.timeout) &&
-            event.timeout > 0
-        ) {
-            pending.timeout = setTimeout(() => {
-                void this.withdraw(id).catch(() => {});
-            }, event.timeout);
+        if (deadline !== undefined) {
+            pending.deadline = deadline;
+            pending.timeout = setTimeout(
+                () => {
+                    void this.withdraw(id).catch(() => {});
+                },
+                Math.max(0, deadline - Date.now())
+            );
         }
         try {
             const response = await Promise.race([
@@ -76,6 +119,7 @@ export class PiInputRequests {
         const pending = this.waiting.get(id);
         if (!pending) return;
         this.waiting.delete(id);
+        this.closedRequests.add(id);
         if (pending.timeout) clearTimeout(pending.timeout);
         pending.release();
         await this.host.withdrawRequest?.(id);

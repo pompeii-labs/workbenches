@@ -1,3 +1,5 @@
+import type { RuntimeProcessHandle } from '../../types.js';
+import type { RemoteCommand, RemoteCommandOptions } from '../remote/process.js';
 import type { RemoteSandbox } from '../remote/runtime.js';
 import type { AssetSource } from '../staging/source.js';
 import type { RemoteTransfer } from '../staging/transfer.js';
@@ -36,6 +38,10 @@ export interface DaytonaSandboxInfo {
 }
 
 export interface DaytonaSandbox extends RemoteSandbox {
+    attachSession?(
+        handle: RuntimeProcessHandle,
+        options: RemoteCommandOptions
+    ): Promise<RemoteCommand>;
     /**
      * The sandbox's state when it was looked up, for example `started` or
      * `stopped`. A client that does not report state leaves it out, and the

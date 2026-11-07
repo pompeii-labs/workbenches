@@ -904,15 +904,20 @@ The reference engine is also a set of modules a host can import. The package `ex
 | --- | --- |
 | `./manifest`, `./requirements`, `./runtimes/selection`, `./types` | Manifest parsing, requirement checks, runtime selection, and shared types |
 | `./events` | The normalized run event protocol |
-| `./models` | Model routing over a catalog snapshot, with `ModelRouter.configureOpenCode` for a chosen provider route |
+| `./models` | Model routing over a catalog snapshot, with `ModelRouter.configure` for a runner and a chosen provider route |
 | `./outcomes` | Outcome contracts and validation, the `OutcomeSink` interface, `DeclaredOutput`, and `MemoryOutcomeSink` |
 | `./outcomes/disk` | The disk outcome store, with quotas and leases, and applying changes to a workspace |
 | `./runners/opencode/runner` | `OpenCodeRunner` and `PreparedOpenCodeRunner` |
 | `./runners/opencode/skills`, `./runners/context` | `OpenCodeSkillStaging`, which stages skills and native config, and `RunnerContextStaging`, which stages context files |
 | `./runners/opencode/*` | The OpenCode adapter, session driver, server client, event translation, and invocation builder |
 | `./runners/opencode/progress` | `OpenCodeProgress`, the value a session's `progress()` returns and `restoreProgress` takes |
+| `./runners/claude-code/runner`, `./runners/claude-code/adapter`, `./runners/claude-code/config` | `ClaudeCodeRunner`, its session adapter, and `ClaudeCodeConfigStaging`, which stages its config directory |
+| `./runners/claude-code/openrouter` | `PLATFORM_OPENROUTER_ACCESS`, the `fetch` and timers `ClaudeCodeRunner` reads OpenRouter charges with |
+| `./runners/pi/runner`, `./runners/pi/adapter`, `./runners/pi/config` | `PiRunner`, its session adapter, and `PiConfigStaging` |
+| `./runners/claude-code/progress`, `./runners/pi/progress` | `ClaudeCodeProgress` and `PiProgress`, the values their sessions' `progress()` return and the `progress` start option takes |
 | `./runners/files`, `./runners/files/disk`, `./runners/files/memory` | The `RunnerFiles` interface and its disk and in-memory implementations |
 | `./runtimes`, `./runtimes/contracts` | The runtime registry and the provider contract |
+| `./runtimes/missing` | `RuntimeProcessMissingError`, raised when the command a saved handle names no longer exists |
 | `./runtimes/daytona` | The Daytona provider, its client interfaces, and `DaytonaApi`, a `fetch`-based client |
 | `./runtimes/e2b`, `./runtimes/e2b/contracts` | The E2B provider with its client interface |
 | `./runtimes/remote/disk` | `DiskTransfer`, the `RemoteTransfer` that stages through temporary files, for any remote provider |
@@ -1006,7 +1011,7 @@ The host must keep the latest value it received, whole, and must not edit, merge
 
 #### Model routing without globals
 
-`ModelRouter` and the runners take the catalog snapshot through their constructors and read nothing else. `ModelRouter.configureOpenCode` builds the OpenCode runner configuration for a chosen provider route, the same one `--connection <provider>` resolves, from the router's snapshot, the manifest's `model` block, and the names of the environment variables the host can supply. The CLI composes its registries from `ActiveModelCatalog.activate(snapshot)`, which sets a process-wide snapshot. The `./models` subpath exports that class as `ActiveModelCatalog`. `ModelCatalog` is the CLI's cached subclass and is exported from the package root only. The Docker, E2B, and Daytona providers, `ConnectionInspector`, and workbench inspection read that snapshot, so a host that uses them activates one first. The catalog cache on disk stays in the CLI.
+`ModelRouter` and the runners take the catalog snapshot through their constructors and read nothing else. `ModelRouter.configure` builds a runner's configuration for a chosen provider route, the same one `--connection <provider>` resolves, from the router's snapshot, the runner (its `name` and `connection`, which a `Runner` has), the manifest's `model` block, and the names of the environment variables the host can supply. The route is reached through the runner's own native provider map with an API key, never a sign-in. The CLI composes its registries from `ActiveModelCatalog.activate(snapshot)`, which sets a process-wide snapshot. The `./models` subpath exports that class as `ActiveModelCatalog`. `ModelCatalog` is the CLI's cached subclass and is exported from the package root only. The Docker, E2B, and Daytona providers, `ConnectionInspector`, and workbench inspection read that snapshot, so a host that uses them activates one first. The catalog cache on disk stays in the CLI.
 
 ## Project policies
 

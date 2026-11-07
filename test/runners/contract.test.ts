@@ -333,7 +333,7 @@ const expected: Record<
         credentials: undefined,
         capabilities: CLAUDE_CODE_PROVIDER_CAPABILITIES,
         builtInCapabilities: CLAUDE_CODE_PROVIDER_CAPABILITIES,
-        catalogVersion: '2.1.292',
+        catalogVersion: '2.1.318',
         candidates: [
             {
                 provider: 'openrouter',

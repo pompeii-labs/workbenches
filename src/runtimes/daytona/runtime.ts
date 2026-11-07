@@ -1,4 +1,4 @@
-import type { RunnerInvocation } from '../../types.js';
+import type { RunnerInvocation, RuntimeProcessHandle } from '../../types.js';
 import { type PreflightResult, WorkbenchPreflight } from '../../workbench/preflight.js';
 import { requirementsOf } from '../../workbench/runtimes.js';
 import type {
@@ -13,11 +13,13 @@ import { RuntimeError } from '../error.js';
 import { runLabels } from '../remote/labels.js';
 import { RemoteProcess } from '../remote/process.js';
 import { RemoteRuntime, type RemoteRuntimeOptions } from '../remote/runtime.js';
-import { type ArchiveUpload, AssetStage } from '../remote/stage.js';
+import { AssetStage } from '../remote/stage.js';
 import { needsRepositoryTools } from '../repository-tools.js';
 import { runnerExecutable } from '../runner.js';
 import { shellCommand } from '../staging/shell.js';
 import type { StagedAsset } from '../staging/transfer.js';
+import { DaytonaArchiveUpload } from './archive.js';
+import { SessionAttachment } from './attachment.js';
 import type { DaytonaClient, DaytonaClock, DaytonaSandbox } from './contracts.js';
 import { SandboxLifetime } from './lifetime.js';
 import { PreviewUrl } from './preview.js';
@@ -41,15 +43,6 @@ export interface DaytonaRuntimeOptions extends RemoteRuntimeOptions {
      * was staged, so they must be unchanged since then.
      */
     existing?: { sandboxId: string };
-}
-
-/** Puts a snapshot's archive into the sandbox. The toolbox takes whole byte arrays. */
-class DaytonaArchiveUpload implements ArchiveUpload<StagedAsset> {
-    constructor(private readonly sandbox: Pick<DaytonaSandbox, 'upload'>) {}
-
-    async upload(remotePath: string, asset: StagedAsset): Promise<void> {
-        await this.sandbox.upload(remotePath, await asset.archiveBytes());
-    }
 }
 
 /**
@@ -95,6 +88,12 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
     /** The run's preview announcements, once preflight staged the helper. */
     get previews(): RuntimePreviewFeed | undefined {
         return this.previewFeed;
+    }
+
+    attachSession(handle: RuntimeProcessHandle) {
+        return this.track(
+            new RemoteProcess(new SessionAttachment(this.requireReady(), handle), true)
+        );
     }
 
     reservedPorts(): number[] {

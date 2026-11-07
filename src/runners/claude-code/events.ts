@@ -54,6 +54,9 @@ export class ClaudeCodeEventAdapter implements RunnerEventNormalizer {
     private messageId: string | undefined;
     private outputId: string | undefined;
     private readonly cost: ClaudeCodeCost;
+    /** The model calls of the running native turn, and every one already counted. */
+    private readonly turnGenerations = new Set<string>();
+    private readonly countedGenerations = new Set<string>();
     private finalText = '';
     private turnCompleted = false;
     private reason: string | undefined;
@@ -98,6 +101,17 @@ export class ClaudeCodeEventAdapter implements RunnerEventNormalizer {
         };
     }
 
+    /**
+     * Takes the request ids of the model calls in the running native turn,
+     * subagents included, that nothing took before. Several frames of one call
+     * share an id, and each id is taken once.
+     */
+    takeGenerations(): string[] {
+        const taken = [...this.turnGenerations];
+        this.turnGenerations.clear();
+        return taken;
+    }
+
     /** What the native result said went wrong in the turn, unredacted. */
     failureDetail(): string | undefined {
         return this.failure;
@@ -109,6 +123,11 @@ export class ClaudeCodeEventAdapter implements RunnerEventNormalizer {
     ): ClaudeCodeEventResult {
         const message = record(event.message);
         const main = !string(event.parent_tool_use_id);
+        const generation = string(event.request_id);
+        if (generation && !this.countedGenerations.has(generation)) {
+            this.countedGenerations.add(generation);
+            this.turnGenerations.add(generation);
+        }
         const events: WorkbenchEventDraft[] = [];
         for (const block of blocks(message?.content)) {
             const kind = string(block.type);
@@ -189,6 +208,7 @@ export class ClaudeCodeEventAdapter implements RunnerEventNormalizer {
         reply: boolean
     ): ClaudeCodeEventResult {
         const events: WorkbenchEventDraft[] = [];
+        this.turnGenerations.clear();
         const usage = this.usage(event);
         if (usage) events.push({ type: 'usage.updated', data: usage });
         if (!reply) return { events };

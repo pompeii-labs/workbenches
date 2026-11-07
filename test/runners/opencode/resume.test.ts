@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { OpenCodeProgress } from '../../../src/runners/opencode/progress.js';
 import type { OpenCodeServerSession } from '../../../src/runners/opencode/session.js';
 import type {
     RunnerPermissionDecision,
@@ -136,6 +137,35 @@ function dropAfterHello(server: FakeOpenCodeServer) {
 }
 
 describe('OpenCode turn resume', () => {
+    test('starts from the generic saved progress option', async () => {
+        const server = new FakeOpenCodeServer();
+        // Saved as OpenCode saves it, with no runner name.
+        const progress: OpenCodeProgress = {
+            sessionId: 'ses_native_1',
+            inputMessageId: 'msg_saved',
+            text: { part_saved: 5 },
+            startedTools: ['tool_saved'],
+            completedTools: [],
+            finishedSteps: [],
+        };
+        const session = await server.adapter().start({
+            workbench,
+            workspaceDirectory: '/workspace',
+            environment: {},
+            configuration: fixtureConfiguration(workbench),
+            host: new RecordingHost(),
+            progress,
+        });
+        try {
+            expect(session.id).toBe(progress.sessionId);
+            expect(session.progress?.()).toEqual(progress);
+            expect(server.createdSessions).toBe(0);
+            expect(server.resumedSessions).toBe(1);
+        } finally {
+            await session.close();
+        }
+    });
+
     test('delivers output and usage produced while the stream was down, once and in order', async () => {
         const server = new FakeOpenCodeServer();
         const host = new RecordingHost();

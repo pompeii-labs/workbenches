@@ -4437,7 +4437,7 @@ async function fakeClaude() {
             '#!/usr/bin/env bun',
             'const args = Bun.argv.slice(2);',
             'const signedIn = process.env.CLAUDE_CODE_OAUTH_TOKEN === "fixture-subscription-token";',
-            'if (args[0] === "--version") { console.log("2.1.292 (Claude Code)"); process.exit(0); }',
+            'if (args[0] === "--version") { console.log("2.1.318 (Claude Code)"); process.exit(0); }',
             'if (args[0] === "auth") {',
             '  console.log(JSON.stringify(signedIn ? { loggedIn: true, authMethod: "oauth_token" } : { loggedIn: false }));',
             '  process.exit(signedIn ? 0 : 1);',

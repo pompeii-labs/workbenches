@@ -44,6 +44,17 @@ export interface ResolvedRunnerConfiguration {
     catalogVersion?: string;
 }
 
+/** The runner a configuration is for: its name and the native routes it reaches. */
+export interface RoutedRunner {
+    name: string;
+    connection: {
+        candidates(
+            route: ModelRoute,
+            catalog: ModelCatalogSnapshot
+        ): AuthenticatedModelRoute[];
+    };
+}
+
 export interface RouteConfigurationOptions {
     /** The manifest's `model` block. */
     model: WorkbenchModelPolicy;
@@ -160,17 +171,20 @@ export class ModelRouter {
     }
 
     /**
-     * Builds the OpenCode runner configuration for a chosen provider route, the
-     * same configuration `wb run --connection <provider>` resolves. It reads only
-     * its arguments and this router's catalog. It does not inspect the machine or
+     * Builds a runner's configuration for a chosen provider route, the same
+     * configuration `wb run --connection <provider>` resolves, reached through
+     * the runner's own native provider map with an API key. It reads only its
+     * arguments and this router's catalog. It does not inspect the machine or
      * any stored connection, so a host states which credentials it holds by
      * naming their environment variables.
      */
-    configureOpenCode(options: RouteConfigurationOptions): ResolvedRunnerConfiguration {
+    configure(
+        options: RouteConfigurationOptions & { runner: RoutedRunner }
+    ): ResolvedRunnerConfiguration {
         const workbench: RoutedWorkbench = {
             manifest: {
                 name: options.name ?? options.model.id,
-                runner: 'opencode',
+                runner: options.runner.name,
                 model: options.model,
                 env: {},
             },
@@ -201,18 +215,25 @@ export class ModelRouter {
                 `The ${route.provider} route needs one of these environment variables: ${names.join(', ')}.`
             );
         }
+        // An environment-backed route is reached with a key, never a sign-in.
+        const native = options.runner.connection
+            .candidates(route, this.catalog)
+            .find(
+                (candidate) =>
+                    !candidate.authenticationMethod ||
+                    candidate.authenticationMethod === 'api'
+            );
+        if (!native) {
+            throw new Error(
+                `${options.runner.name} cannot reach ${route.provider} with an API key.`
+            );
+        }
         return this.resolve({
             workbench,
-            authenticatedRoutes: [
-                {
-                    provider: route.provider,
-                    nativeProvider: route.provider,
-                    nativeModel: route.model,
-                },
-            ],
+            authenticatedRoutes: [native],
             preferredConnection: {
                 provider: route.provider,
-                nativeProvider: route.provider,
+                nativeProvider: native.nativeProvider,
             },
             requireAuthentication: true,
         });

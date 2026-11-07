@@ -1,101 +1,25 @@
 import type { WorkbenchEventDraft } from '../../runs/events.js';
 import { RunnerProcessExit } from '../exit.js';
 import type {
-    NormalizedRunnerInput,
     RunnerInput,
     RunnerInputDelivery,
     RunnerSession,
-    RunnerSessionAdapter,
     RunnerSessionStartOptions,
     RunnerTurnResult,
 } from '../session.js';
 import { normalizeRunnerInput } from '../session.js';
-import { CLAUDE_CODE_SESSION_DECLARATION } from './capabilities.js';
+import { StdinReplay } from '../stdin/progress.js';
+import type { PreparedClaudeCodeSession } from './adapter.js';
 import { ClaudeCodeCost } from './cost.js';
 import { ClaudeCodeEventAdapter, failureMessage, record, string } from './events.js';
-import { buildClaudeCodeInvocation, type ClaudeCodeStagedPaths } from './invocation.js';
-import {
-    type ClaudeCodeChild,
-    ClaudeCodeProcess,
-    type ClaudeCodeSpawn,
-} from './process.js';
+import { userMessage } from './input.js';
+import { ClaudeCodeInterrupts } from './interrupts.js';
+import { buildClaudeCodeInvocation } from './invocation.js';
+import { type OpenRouterAccess, OpenRouterCharges } from './openrouter.js';
+import { ClaudeCodeProcess, type ClaudeCodeSpawn } from './process.js';
+import type { ClaudeCodeProgress } from './progress.js';
 import { ClaudeCodeInputRequests } from './requests.js';
 import { ClaudeCodeSteering, ClaudeCodeTurn } from './turn.js';
-
-/** What a session needs from staging, routing, and the runtime before it starts. */
-export interface PreparedClaudeCodeSession {
-    paths: ClaudeCodeStagedPaths;
-    /** The `--settings` value: a settings file or its JSON text. */
-    settings: string;
-    /** Directories outside the workspace the tools may reach. */
-    additionalDirectories?: string[] | undefined;
-    /** The credential and route variables of the selected connection. */
-    routeEnvironment: Record<string, string>;
-    secureStorageDirectory: string;
-    scrubSubprocessEnvironment: boolean;
-    /** The host answers permissions and questions. Otherwise they are denied. */
-    answersPrompts: boolean;
-    maxTurns?: number | undefined;
-    /** Per-turn cost from the native cumulative total. Without it, a fresh metered count. */
-    cost?: ClaudeCodeCost | undefined;
-    /** How this session's child starts, such as inside a runtime. Defaults to the adapter's. */
-    spawn?: ClaudeCodeSpawn | undefined;
-}
-
-export interface ClaudeCodeSessionDependencies {
-    /** Prepares a session the adapter starts itself with `start`. */
-    prepare(options: RunnerSessionStartOptions): Promise<{
-        session: PreparedClaudeCodeSession;
-        cleanup(): Promise<void>;
-    }>;
-    spawn?: ClaudeCodeSpawn;
-    /** How long a stopping child has after SIGTERM before SIGKILL. */
-    stopTimeoutMs?: number;
-}
-
-export class ClaudeCodeSessionAdapter implements RunnerSessionAdapter {
-    readonly runner = 'claude-code';
-    readonly declaration = CLAUDE_CODE_SESSION_DECLARATION;
-    private readonly spawn: ClaudeCodeSpawn;
-    private readonly stopTimeoutMs: number;
-
-    constructor(private readonly dependencies: ClaudeCodeSessionDependencies) {
-        this.spawn = dependencies.spawn ?? defaultSpawn;
-        this.stopTimeoutMs = dependencies.stopTimeoutMs ?? 5_000;
-    }
-
-    async start(options: RunnerSessionStartOptions): Promise<RunnerSession> {
-        const prepared = await this.dependencies.prepare(options);
-        return this.open(options, prepared.session, () => prepared.cleanup());
-    }
-
-    startPrepared(
-        options: RunnerSessionStartOptions,
-        prepared: PreparedClaudeCodeSession
-    ): Promise<RunnerSession> {
-        return this.open(options, prepared, async () => {});
-    }
-
-    private async open(
-        options: RunnerSessionStartOptions,
-        prepared: PreparedClaudeCodeSession,
-        cleanup: () => Promise<void>
-    ): Promise<RunnerSession> {
-        const session = new ClaudeCodeSession(
-            options,
-            prepared,
-            { spawn: this.spawn, stopTimeoutMs: this.stopTimeoutMs },
-            cleanup
-        );
-        try {
-            session.start();
-            return session;
-        } catch (error) {
-            await session.close().catch(() => {});
-            throw error;
-        }
-    }
-}
 
 /**
  * One Claude Code session over one long-lived `claude` process. A host turn is
@@ -104,19 +28,22 @@ export class ClaudeCodeSessionAdapter implements RunnerSessionAdapter {
  * in it. A native turn no host command started, such as one Claude Code runs
  * after a background task finishes, is session activity, never a reply.
  */
-class ClaudeCodeSession implements RunnerSession {
+export class ClaudeCodeSession implements RunnerSession {
+    private readonly replay: StdinReplay;
+    private readonly saved: ClaudeCodeProgress | undefined;
     private readonly process: ClaudeCodeProcess;
     private readonly events: ClaudeCodeEventAdapter;
     private readonly cost: ClaudeCodeCost;
+    private readonly costBaseline: number;
+    private readonly charges: OpenRouterCharges | undefined;
     private readonly requests: ClaudeCodeInputRequests;
     private readonly steering = new ClaudeCodeSteering();
-    private readonly controls = new Map<
-        string,
-        { resolve: () => void; reject: (error: Error) => void }
-    >();
+    private steeringWrites: Promise<void> = Promise.resolve();
+    private readonly controls: ClaudeCodeInterrupts;
     private readonly secrets: string[];
     private nativeSessionId: string;
     private active: ClaudeCodeTurn | undefined;
+    private resumable: ClaudeCodeTurn | undefined;
     /** The commands started in the running native turn, or undefined between turns. */
     private nativeTurn: Set<string> | undefined;
     /** Main-thread tool calls of the running native turn without a result yet. */
@@ -125,12 +52,31 @@ class ClaudeCodeSession implements RunnerSession {
     private failure: Error | undefined;
 
     constructor(
-        private readonly options: RunnerSessionStartOptions,
+        options: RunnerSessionStartOptions,
         prepared: PreparedClaudeCodeSession,
-        child: { spawn: ClaudeCodeSpawn; stopTimeoutMs: number },
+        child: {
+            spawn: ClaudeCodeSpawn;
+            stopTimeoutMs: number;
+            openRouter: OpenRouterAccess;
+        },
         private readonly cleanup: () => Promise<void>
     ) {
-        const resumed = options.session?.nativeSessionId;
+        const saved = options.progress;
+        if (saved && saved.runner !== 'claude-code')
+            throw new Error('Expected Claude Code progress');
+        const progress = saved as ClaudeCodeProgress | undefined;
+        this.saved = progress;
+        this.replay = new StdinReplay(options.host, progress, (command) => {
+            this.active = new ClaudeCodeTurn(command);
+            this.events.beginTurn();
+        });
+        const resumed = progress?.sessionId ?? options.session?.nativeSessionId;
+        if (
+            progress?.sessionId &&
+            options.session?.nativeSessionId &&
+            progress.sessionId !== options.session.nativeSessionId
+        )
+            throw new Error('Claude Code progress belongs to another session');
         this.nativeSessionId = resumed ?? crypto.randomUUID();
         this.process = new ClaudeCodeProcess(
             buildClaudeCodeInvocation({
@@ -150,13 +96,37 @@ class ClaudeCodeSession implements RunnerSession {
             prepared.spawn ?? child.spawn,
             child.stopTimeoutMs
         );
-        this.cost = prepared.cost ?? ClaudeCodeCost.fresh();
+        this.cost =
+            prepared.cost ??
+            ClaudeCodeCost.fresh(prepared.openRouterKey ? 'charged' : 'metered');
+        this.costBaseline = progress?.costBaseline ?? this.cost.total();
+        if (progress) this.cost.replay(this.costBaseline);
+        // Charges arrive between lines and only once replay is over, so they
+        // reach the host directly.
+        this.charges = prepared.openRouterKey
+            ? new OpenRouterCharges(prepared.openRouterKey, child.openRouter, (event) =>
+                  options.host.emit(event)
+              )
+            : undefined;
         this.events = new ClaudeCodeEventAdapter({ cost: this.cost });
         this.requests = new ClaudeCodeInputRequests(
-            options.host,
-            (response) => this.write({ type: 'control_response', response }),
+            this.replay.host,
+            async (response) => {
+                if (this.replay.silent) return;
+                await this.write({ type: 'control_response', response });
+                this.replay.answeredRequest(response.request_id);
+            },
             prepared.answersPrompts
         );
+        this.controls = new ClaudeCodeInterrupts(
+            (value) => this.write(value),
+            (accepted) => {
+                if (!this.active) return;
+                if (accepted) this.endTurn(this.active, 'cancelled');
+                else this.active.cancelling = false;
+            }
+        );
+        if (progress) this.controls.restore(progress.pendingInterrupts);
         this.secrets = Object.values(prepared.routeEnvironment);
     }
 
@@ -164,10 +134,14 @@ class ClaudeCodeSession implements RunnerSession {
         return this.nativeSessionId;
     }
 
-    start(): void {
+    async start(): Promise<void> {
+        this.replay.start();
         void this.process
-            .start((line) => this.consumeLine(line))
+            .start((line, bytes) =>
+                this.replay.line(line, bytes, (value) => this.consumeLine(value))
+            )
             .then((exit) => {
+                this.replay.end();
                 if (this.closed) return;
                 this.fail(
                     new Error(
@@ -184,7 +158,53 @@ class ClaudeCodeSession implements RunnerSession {
                         )
                     )
                 );
+            })
+            .catch((error) => {
+                this.replay.fail(asError(error));
+                this.fail(asError(error));
             });
+        this.replay.afterReplay(() => {
+            if (this.saved) {
+                if (this.saved.activeTurn) this.resumable = this.active;
+                else this.active = undefined;
+                this.cost.commitReplay();
+                if (this.active) {
+                    this.active.cancelling = this.saved.cancelling;
+                    this.steering.restore(this.active, this.saved.steering);
+                }
+                for (const ids of this.saved.pendingCharges) this.charges?.collect(ids);
+                void this.writeSteering().catch((error) => this.fail(asError(error)));
+            }
+        });
+        this.replay.handle = (await this.process.handle()) ?? this.replay.handle;
+        if (this.saved) await this.replay.caughtUp();
+    }
+
+    progress(): ClaudeCodeProgress {
+        if (this.replay.silent && this.saved) return structuredClone(this.saved);
+        return {
+            runner: 'claude-code',
+            sessionId: this.id,
+            ...this.replay.progress(),
+            pendingCharges: this.charges?.progress() ?? [],
+            allowedRequests: this.requests.progress(),
+            steering: this.steering.progress(),
+            cancelling: Boolean(
+                this.active?.cancelling || this.controls.progress().length
+            ),
+            costBaseline: this.costBaseline,
+            pendingInterrupts: this.controls.progress(),
+        };
+    }
+
+    async resumeTurn(): Promise<RunnerTurnResult> {
+        await this.replay.caughtUp();
+        const turn = this.resumable ?? (this.active?.settled ? undefined : this.active);
+        if (!turn) throw new Error('Claude Code has no turn to resume');
+        return turn.promise.finally(() => {
+            if (this.active === turn) this.active = undefined;
+            if (this.resumable === turn) this.resumable = undefined;
+        });
     }
 
     async prompt(input: RunnerInput): Promise<RunnerTurnResult> {
@@ -193,6 +213,7 @@ class ClaudeCodeSession implements RunnerSession {
         if (this.active) throw new Error('runner session is already processing a turn');
         const normalized = normalizeRunnerInput(input);
         const turn = new ClaudeCodeTurn();
+        this.replay.startTurn(turn.command);
         this.active = turn;
         this.events.beginTurn();
         try {
@@ -227,7 +248,7 @@ class ClaudeCodeSession implements RunnerSession {
         if (!turn || turn.settled || this.closed) return;
         turn.cancelling = true;
         try {
-            await this.control({ subtype: 'interrupt', cancel_queued: true });
+            await this.controls.send({ subtype: 'interrupt', cancel_queued: true });
         } catch (error) {
             turn.cancelling = false;
             throw error;
@@ -239,11 +260,17 @@ class ClaudeCodeSession implements RunnerSession {
         if (this.closed) return;
         this.closed = true;
         if (this.active) this.endTurn(this.active, 'cancelled');
-        this.abandon(new Error('runner session is closed'));
+        this.rejectPending(new Error('runner session is closed'));
         try {
             await this.process.stop();
+            // A turn stopped before its result was still billed for its model calls.
+            const unfinished = this.events.takeGenerations();
+            if (!this.replay.silent && unfinished.length > 0)
+                this.charges?.collect(unfinished);
+            await this.charges?.finish();
             await this.cost.flush();
         } finally {
+            this.charges?.cancel();
             await this.cleanup();
         }
     }
@@ -268,7 +295,8 @@ class ClaudeCodeSession implements RunnerSession {
             if (id) await this.requests.withdraw(id).catch(() => undefined);
             return;
         }
-        if (type === 'control_response') return this.controlResponse(event);
+        if (type === 'control_response')
+            return this.controls.reply(event, (action) => this.replay.commit(action));
         if (type === 'command_lifecycle') return this.lifecycle(event);
         if (type === 'result') return this.result(event);
         if (type === 'system' && string(event.subtype) === 'init') {
@@ -283,7 +311,11 @@ class ClaudeCodeSession implements RunnerSession {
         }
         this.trackTools(event);
         await this.emit(this.events.consume(event, this.owned()).events);
-        await this.writeSteering();
+        // Written once the line is counted, so progress saved during the write
+        // never holds this line's events without its offset.
+        this.replay.commit(
+            () => void this.writeSteering().catch((error) => this.fail(asError(error)))
+        );
     }
 
     private lifecycle(event: Record<string, unknown>): void {
@@ -314,11 +346,15 @@ class ClaudeCodeSession implements RunnerSession {
     }
 
     private async result(event: Record<string, unknown>): Promise<void> {
+        const generations = this.events.takeGenerations();
         const owned = this.owned();
         await this.emit(this.events.consume(event, owned).events);
         this.nativeSessionId = string(event.session_id) ?? this.nativeSessionId;
         this.nativeTurn = undefined;
         this.toolsInFlight.clear();
+        // A cancelled turn was billed too, so its charge is read like any other.
+        if (!this.replay.silent)
+            this.replay.commit(() => this.charges?.collect(generations));
         const turn = this.active;
         if (!owned || !turn) return;
         const failure = this.events.failureDetail();
@@ -339,43 +375,34 @@ class ClaudeCodeSession implements RunnerSession {
         const id = string(event.request_id);
         const request = record(event.request);
         if (!id || !request) return;
-        void this.requests.handle(id, request).catch((error) => {
-            if (!this.closed) this.fail(asError(error));
-        });
-    }
-
-    /** Settles a request this session sent. Anything else is Claude Code echoing a reply. */
-    private controlResponse(event: Record<string, unknown>): void {
-        const response = record(event.response);
-        const id = string(response?.request_id);
-        const pending = id ? this.controls.get(id) : undefined;
-        if (!id || !pending) return;
-        this.controls.delete(id);
-        if (string(response?.subtype) === 'success') pending.resolve();
-        else pending.reject(new Error('Claude Code rejected the interrupt'));
-    }
-
-    private async control(request: Record<string, unknown>): Promise<void> {
-        const id = crypto.randomUUID();
-        const acknowledged = new Promise<void>((resolve, reject) => {
-            this.controls.set(id, { resolve, reject });
-        });
-        try {
-            await this.write({ type: 'control_request', request_id: id, request });
-        } catch (error) {
-            this.controls.delete(id);
-            throw error;
+        if (this.replay.silent && this.replay.hasAnswer(id)) {
+            if (this.saved?.allowedRequests.includes(id))
+                this.requests.restoreAllowed(id, request);
+            return;
         }
-        return acknowledged;
+        void this.requests.handle(id, request).catch((error) => {
+            if (!this.closed && !this.process.exited) this.fail(asError(error));
+        });
     }
 
-    /** Writes held steering while one of the turn's tool calls is in flight. */
-    private async writeSteering(): Promise<void> {
+    /**
+     * Writes held steering while one of the turn's tool calls is in flight, one
+     * write at a time, so steers reach Claude Code in the order they were held.
+     */
+    private writeSteering(): Promise<void> {
+        const writing = this.steeringWrites.then(() => this.flushSteering());
+        this.steeringWrites = writing.catch(() => undefined);
+        return writing;
+    }
+
+    private async flushSteering(): Promise<void> {
+        if (this.replay.silent) return;
         const turn = this.active;
         if (!turn || !this.owned() || this.toolsInFlight.size === 0) return;
         for (const steer of this.steering.held(turn)) {
-            this.steering.written(steer.command);
+            this.steering.sending(steer.command);
             await this.process.write(steer.line);
+            this.steering.written(steer.command);
         }
     }
 
@@ -402,6 +429,7 @@ class ClaudeCodeSession implements RunnerSession {
     }
 
     private endTurn(turn: ClaudeCodeTurn, outcome: string | Error): void {
+        this.replay.endTurn(turn.command);
         this.steering.turnEnded(turn);
         if (outcome instanceof Error) turn.fail(outcome);
         else turn.finish(outcome);
@@ -409,7 +437,7 @@ class ClaudeCodeSession implements RunnerSession {
 
     private async emit(drafts: WorkbenchEventDraft[]): Promise<void> {
         for (const draft of drafts) {
-            if (draft.type !== 'turn.completed') await this.options.host.emit(draft);
+            if (draft.type !== 'turn.completed') await this.replay.host.emit(draft);
         }
     }
 
@@ -420,52 +448,16 @@ class ClaudeCodeSession implements RunnerSession {
 
     private fail(error: Error): void {
         this.failure ??= error;
-        if (this.active) this.endTurn(this.active, this.failure);
-        this.abandon(this.failure);
+        this.active?.fail(this.failure);
+        this.rejectPending(this.failure, true);
     }
 
     /** Fails steering and control requests in flight and stops answering prompts. */
-    private abandon(error: Error): void {
-        this.steering.rejectAll(error);
-        for (const pending of this.controls.values()) pending.reject(error);
-        this.controls.clear();
+    private rejectPending(error: Error, retain = false): void {
+        this.steering.rejectAll(error, retain);
+        this.controls.rejectAll(error, retain);
         this.requests.close();
     }
-}
-
-/** The stream-json user message whose uuid is the host command. */
-export function userMessage(command: string, input: NormalizedRunnerInput) {
-    return {
-        type: 'user',
-        uuid: command,
-        session_id: '',
-        parent_tool_use_id: null,
-        message: {
-            role: 'user',
-            content:
-                input.images.length > 0
-                    ? [
-                          ...input.images.map((image) => ({
-                              type: 'image',
-                              source: {
-                                  type: 'base64',
-                                  media_type: image.mimeType,
-                                  data: image.data,
-                              },
-                          })),
-                          { type: 'text', text: input.text },
-                      ]
-                    : input.text,
-        },
-    };
-}
-
-/** Starts a child on this host. */
-export function defaultSpawn(
-    command: string[],
-    options: Parameters<ClaudeCodeSpawn>[1]
-): ClaudeCodeChild {
-    return Bun.spawn(command, options) as unknown as ClaudeCodeChild;
 }
 
 function asError(error: unknown): Error {

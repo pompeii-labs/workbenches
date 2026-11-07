@@ -1,5 +1,7 @@
+import type { RuntimeProcessHandle } from '../../types.js';
 import type { RuntimeCommandResult } from '../contracts.js';
 import { RuntimeError } from '../error.js';
+import { RuntimeProcessMissingError } from '../missing.js';
 import type { RemoteCommand, RemoteCommandOptions } from '../remote/process.js';
 import type { RemoteRunOptions } from '../remote/runtime.js';
 import { quote } from '../staging/shell.js';
@@ -83,12 +85,61 @@ export class DaytonaToolbox implements DaytonaSandbox {
             return await this.launch(
                 stderr ? stderr.redirect(line) : line,
                 (session, id) =>
-                    new SessionProcess(this.transport, session, id, options, stderr)
+                    new SessionProcess(
+                        this.transport,
+                        session,
+                        id,
+                        options,
+                        stderr,
+                        options.stdin
+                            ? {
+                                  runtime: 'daytona',
+                                  sandboxId: this.id,
+                                  sessionId: session.slice(
+                                      session.lastIndexOf('/') + 1
+                                  ),
+                                  commandId: id,
+                                  ...(stderr ? { stderrPath: stderr.path } : {}),
+                              }
+                            : undefined
+                    )
             );
         } catch (error) {
             if (file) await this.run(`rm -f ${quote(file)}`).catch(() => {});
             throw error;
         }
+    }
+
+    async attachSession(
+        handle: RuntimeProcessHandle,
+        options: RemoteCommandOptions
+    ): Promise<RemoteCommand> {
+        if (handle.runtime !== 'daytona' || handle.sandboxId !== this.id) {
+            throw new RuntimeProcessMissingError(handle);
+        }
+        const stderr = handle.stderrPath
+            ? StderrFile.saved(this, handle.stderrPath)
+            : undefined;
+        const session = `${this.toolbox}/process/session/${encodeURIComponent(handle.sessionId)}`;
+        const command = encodeURIComponent(handle.commandId);
+        try {
+            await this.transport.request('GET', `${session}/command/${command}`, {
+                absolute: true,
+            });
+        } catch (error) {
+            if (error instanceof DaytonaApiError && error.status === 404) {
+                throw new RuntimeProcessMissingError(handle);
+            }
+            throw error;
+        }
+        return new SessionProcess(
+            this.transport,
+            session,
+            command,
+            options,
+            stderr,
+            handle
+        );
     }
 
     async follow(

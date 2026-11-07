@@ -2,6 +2,9 @@ import { afterEach, describe, expect, test } from 'bun:test';
 
 import { ActiveModelCatalog, ModelRouter } from '../../src/models/index.js';
 import type { ModelCatalogSnapshot } from '../../src/models/snapshot.js';
+import { openCodeConnection } from '../../src/runners/opencode/connection.js';
+
+const opencode = { name: 'opencode', connection: openCodeConnection };
 
 const snapshot: ModelCatalogSnapshot = {
     version: 'embedding-fixture',
@@ -45,7 +48,8 @@ describe('routing without process-global state', () => {
     });
 
     test('builds the configuration for a chosen route from names alone', () => {
-        const configuration = new ModelRouter(snapshot).configureOpenCode({
+        const configuration = new ModelRouter(snapshot).configure({
+            runner: opencode,
             model,
             provider: 'openrouter',
             environmentNames: ['OPENROUTER_API_KEY'],
@@ -64,13 +68,15 @@ describe('routing without process-global state', () => {
     test('picks the first route whose credentials are named', () => {
         const router = new ModelRouter(snapshot);
         expect(
-            router.configureOpenCode({
+            router.configure({
+                runner: opencode,
                 model,
                 environmentNames: ['OPENROUTER_API_KEY'],
             }).provider
         ).toBe('openrouter');
         expect(
-            router.configureOpenCode({
+            router.configure({
+                runner: opencode,
                 model,
                 environmentNames: ['OPENAI_API_KEY', 'OPENROUTER_API_KEY'],
             }).provider
@@ -80,17 +86,19 @@ describe('routing without process-global state', () => {
     test('refuses a route whose credentials are not named', () => {
         const router = new ModelRouter(snapshot);
         expect(() =>
-            router.configureOpenCode({
+            router.configure({
+                runner: opencode,
                 model,
                 provider: 'openrouter',
                 environmentNames: ['OPENAI_API_KEY'],
             })
         ).toThrow('needs one of these environment variables: OPENROUTER_API_KEY');
-        expect(() => router.configureOpenCode({ model, environmentNames: [] })).toThrow(
-            'has credentials'
-        );
         expect(() =>
-            router.configureOpenCode({
+            router.configure({ runner: opencode, model, environmentNames: [] })
+        ).toThrow('has credentials');
+        expect(() =>
+            router.configure({
+                runner: opencode,
                 model,
                 provider: 'anthropic',
                 environmentNames: ['OPENAI_API_KEY'],
