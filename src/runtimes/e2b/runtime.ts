@@ -12,7 +12,7 @@ import { runLabels } from '../remote/labels.js';
 import { RemoteRuntime, type RemoteRuntimeOptions } from '../remote/runtime.js';
 import { type ArchiveUpload, AssetStage } from '../remote/stage.js';
 import { runnerExecutable } from '../runner.js';
-import { definedEnvironment, quote, shellCommand } from '../staging/shell.js';
+import { definedEnvironment, quote } from '../staging/shell.js';
 import type { E2BClient, E2BSandbox } from './contracts.js';
 import { e2bPricingSource, estimateE2BCost } from './infrastructure.js';
 import { E2BOutcomeRecovery } from './recovery.js';
@@ -130,7 +130,7 @@ export class E2BRuntime extends RemoteRuntime<E2BSandbox, DiskAssetSnapshot> {
     async interact(invocation: RunnerInvocation): Promise<number> {
         const sandbox = this.requireReady();
         const dimensions = terminalDimensions();
-        const terminal = await sandbox.startPty(shellCommand(invocation.command), {
+        const terminal = await sandbox.startPty(this.commandLine(invocation), {
             cwd: invocation.cwd,
             env: definedEnvironment(invocation.env),
             columns: dimensions.columns,

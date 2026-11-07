@@ -167,9 +167,22 @@ export abstract class RemoteRuntime<S extends RemoteSandbox, A extends StagedAss
         );
     }
 
-    /** The shell command line that launches the runner. */
+    /**
+     * The shell command line that launches the runner. The toolbox quotes
+     * environment values, so PATH is set here, where the sandbox's own PATH
+     * expands.
+     */
     protected commandLine(invocation: RunnerInvocation): string {
-        return shellCommand(invocation.command);
+        return `PATH=${this.searchPath()} ${shellCommand(invocation.command)}`;
+    }
+
+    /**
+     * The runner's PATH: the sandbox's own, then `.local/bin` in the run's
+     * home, where a tool installed without root still runs. It comes last, so
+     * it never shadows a command the image has.
+     */
+    protected searchPath(): string {
+        return '"$PATH:$HOME/.local/bin"';
     }
 
     cancel(process: SpawnedRunner): void {

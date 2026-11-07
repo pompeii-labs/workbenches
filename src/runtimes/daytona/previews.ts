@@ -93,13 +93,9 @@ export class SandboxPreviews implements RuntimePreviewFeed {
         }
     }
 
-    /**
-     * `command` with the helper directory first on PATH. The toolbox quotes
-     * environment values, so PATH is set on the command line, where the
-     * sandbox's own PATH expands.
-     */
-    command(command: string): string {
-        return `PATH=${quote(helperDirectory)}:"$PATH" ${command}`;
+    /** The shell word `path`, a PATH value, with the helper directory first. */
+    searchPath(path: string): string {
+        return `${quote(helperDirectory)}:${path}`;
     }
 
     /** True when `port` belongs to a preview this run shows. */

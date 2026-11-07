@@ -133,7 +133,7 @@ describe.skipIf(!enabled)('Daytona runtime end to end', () => {
             expect(server.code).toBe(0);
             await Bun.sleep(1_000);
             const announced = await sandbox.run(
-                previews.command('wbx preview 8080 --name demo')
+                `PATH=${previews.searchPath('"$PATH"')} wbx preview 8080 --name demo`
             );
             expect(announced.stdout).toContain(
                 'wbx: announced preview demo on port 8080'

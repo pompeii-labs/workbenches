@@ -293,6 +293,11 @@ describe('E2B runtime provider', () => {
             await process.stdin?.end?.();
             expect(await new Response(process.stdout).text()).toBe('streamed output');
             await expect(process.exited).resolves.toBe(0);
+            // The run's own bin directory comes after the image's PATH, set on
+            // the command line so the sandbox's PATH expands.
+            expect(client.sandbox.started[0]?.command).toStartWith(
+                `PATH="$PATH:$HOME/.local/bin" 'opencode' 'run'`
+            );
             expect(client.sandbox.started[0]?.command).toContain(`'it'"'"'s safe'`);
             expect(client.sandbox.started[0]?.options.env).toEqual({
                 VALUE: 'present',
@@ -306,8 +311,8 @@ describe('E2B runtime provider', () => {
                     env: { XDG_DATA_HOME: '/workbench-credentials' },
                 })
             ).resolves.toBe(0);
-            expect(client.sandbox.ptyStarted[0]?.command).toContain(
-                `'opencode' 'auth' 'login' '--provider' 'openai'`
+            expect(client.sandbox.ptyStarted[0]?.command).toBe(
+                `PATH="$PATH:$HOME/.local/bin" 'opencode' 'auth' 'login' '--provider' 'openai'`
             );
             expect(client.sandbox.ptyStarted[0]?.options).toMatchObject({
                 cwd: runtime.workspaceDirectory,
