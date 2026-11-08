@@ -170,10 +170,10 @@ export abstract class RemoteRuntime<S extends RemoteSandbox, A extends StagedAss
     /**
      * The shell command line that launches the runner. The toolbox quotes
      * environment values, so PATH is set here, where the sandbox's own PATH
-     * expands.
+     * expands. It goes through `env`, so the line also works after `exec`.
      */
     protected commandLine(invocation: RunnerInvocation): string {
-        return `PATH=${this.searchPath()} ${shellCommand(invocation.command)}`;
+        return `env PATH=${this.searchPath()} ${shellCommand(invocation.command)}`;
     }
 
     /**

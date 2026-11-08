@@ -296,7 +296,7 @@ describe('E2B runtime provider', () => {
             // The run's own bin directory comes after the image's PATH, set on
             // the command line so the sandbox's PATH expands.
             expect(client.sandbox.started[0]?.command).toStartWith(
-                `PATH="$PATH:$HOME/.local/bin" 'opencode' 'run'`
+                `env PATH="$PATH:$HOME/.local/bin" 'opencode' 'run'`
             );
             expect(client.sandbox.started[0]?.command).toContain(`'it'"'"'s safe'`);
             expect(client.sandbox.started[0]?.options.env).toEqual({
@@ -312,7 +312,7 @@ describe('E2B runtime provider', () => {
                 })
             ).resolves.toBe(0);
             expect(client.sandbox.ptyStarted[0]?.command).toBe(
-                `PATH="$PATH:$HOME/.local/bin" 'opencode' 'auth' 'login' '--provider' 'openai'`
+                `env PATH="$PATH:$HOME/.local/bin" 'opencode' 'auth' 'login' '--provider' 'openai'`
             );
             expect(client.sandbox.ptyStarted[0]?.options).toMatchObject({
                 cwd: runtime.workspaceDirectory,
