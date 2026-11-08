@@ -105,6 +105,8 @@ export interface DaytonaSnapshot {
     id: string;
     state: string;
     errorReason?: string | undefined;
+    /** When a sandbox last started from the snapshot, absent when none has. */
+    lastUsedAt?: Date | undefined;
 }
 
 /**
@@ -117,16 +119,30 @@ export interface DaytonaClient {
      * `@sha256:` is answered without a request.
      */
     imageDigest(reference: string): Promise<string>;
-    /** Starts making a snapshot. A name that already exists returns that snapshot. */
+    /**
+     * Starts making a snapshot. A name that already exists returns that
+     * snapshot. Fails with `DaytonaSnapshotLimitError` when the organization
+     * holds as many usable snapshots as Daytona allows.
+     */
     createSnapshot(options: DaytonaSnapshotOptions): Promise<DaytonaSnapshot>;
     getSnapshot(name: string): Promise<DaytonaSnapshot | undefined>;
+    /** The organization's own snapshots, least recently used first. */
+    listSnapshots(): Promise<DaytonaSnapshot[]>;
     /** Deletes a snapshot by name. A snapshot that does not exist is already gone. */
     deleteSnapshot(name: string): Promise<void>;
     /**
      * Makes an inactive snapshot usable again. One that is missing, or no longer
-     * inactive, is left as it is.
+     * inactive, is left as it is. Fails with `DaytonaSnapshotLimitError` when
+     * the organization has no room for another usable snapshot, and with
+     * `DaytonaSnapshotCooldownError` when it was deactivated too recently.
      */
     activateSnapshot(name: string): Promise<void>;
+    /**
+     * Makes a snapshot unusable until it is activated again, which frees its
+     * place under the organization's snapshot limit. Nothing is deleted. One
+     * that is missing is left as it is.
+     */
+    deactivateSnapshot(name: string): Promise<void>;
     createSandbox(options: DaytonaCreateOptions): Promise<DaytonaSandbox>;
     /** Lists sandboxes whose labels include every given label. */
     listSandboxes(labels: Record<string, string>): Promise<DaytonaSandboxSummary[]>;
