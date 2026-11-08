@@ -16,7 +16,6 @@ import { RemoteRuntime, type RemoteRuntimeOptions } from '../remote/runtime.js';
 import { AssetStage } from '../remote/stage.js';
 import { needsRepositoryTools } from '../repository-tools.js';
 import { runnerExecutable } from '../runner.js';
-import { shellCommand } from '../staging/shell.js';
 import type { StagedAsset } from '../staging/transfer.js';
 import { DaytonaArchiveUpload } from './archive.js';
 import { SessionAttachment } from './attachment.js';
@@ -306,10 +305,10 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
         }
     }
 
-    /** The runner's command line, with the preview helper first on PATH when the run has one. */
-    protected override commandLine(invocation: RunnerInvocation): string {
-        const command = shellCommand(invocation.command);
-        return this.previewFeed ? this.previewFeed.command(command) : command;
+    /** The runner's PATH, with the preview helper first when the run has one. */
+    protected override searchPath(): string {
+        const path = super.searchPath();
+        return this.previewFeed ? this.previewFeed.searchPath(path) : path;
     }
 
     /** A run with an outbox gets the preview helper, as on the local runtime. */

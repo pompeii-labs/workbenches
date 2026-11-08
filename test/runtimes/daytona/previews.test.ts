@@ -95,7 +95,7 @@ describe('Daytona previews', () => {
             const launched = client.sandbox.started.at(-1);
             // PATH is a command prefix, because the toolbox quotes environment values.
             expect(launched?.command).toStartWith(
-                `PATH='/opt/workbench/bin':"$PATH" 'opencode' 'serve'`
+                `env PATH='/opt/workbench/bin':"$PATH:$HOME/.local/bin" 'opencode' 'serve'`
             );
             expect(launched?.options.env?.PATH).toBeUndefined();
             runtime.launchSession(
@@ -107,7 +107,7 @@ describe('Daytona previews', () => {
                 { stdin: 'ignore' }
             );
             expect(client.sandbox.started.at(-1)?.command).toStartWith(
-                `PATH='/opt/workbench/bin':"$PATH" 'opencode' 'run'`
+                `env PATH='/opt/workbench/bin':"$PATH:$HOME/.local/bin" 'opencode' 'run'`
             );
             expect(client.sandbox.follows.map((follow) => follow.command)).toEqual([
                 `exec tail -n +1 -F '${control}'`,
@@ -117,7 +117,7 @@ describe('Daytona previews', () => {
         }
     });
 
-    test('a run without an outbox gets no helper, no PATH change, and no control session', async () => {
+    test('a run without an outbox gets no helper on PATH and no control session', async () => {
         const client = new FakeClient();
         const runtime = await daytonaProvider({ client }).prepare(
             request(await fixture())
@@ -127,7 +127,9 @@ describe('Daytona previews', () => {
             expect(runtime.previews).toBeUndefined();
             expect(client.sandbox.uploads.has(helper)).toBeFalse();
             service(runtime);
-            expect(client.sandbox.started.at(-1)?.command).toStartWith(`'opencode'`);
+            expect(client.sandbox.started.at(-1)?.command).toStartWith(
+                `env PATH="$PATH:$HOME/.local/bin" 'opencode'`
+            );
             await expect(runtime.previewUrl?.(5173, 60)).rejects.toThrow(
                 'The Daytona sandbox is not running with previews'
             );
