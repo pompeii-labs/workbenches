@@ -1,10 +1,15 @@
 import { createHash } from 'node:crypto';
 
-import { selectedRuntime } from '../../workbench/runtimes.js';
+import { requirementsOf, selectedRuntime } from '../../workbench/runtimes.js';
 import type { RuntimePreparation, RuntimePrepareRequest } from '../contracts.js';
 import { DockerBuildContext } from '../docker/build-context.js';
 import { needsRepositoryTools, repositoryToolsCacheKey } from '../repository-tools.js';
-import type { E2BClient, E2BTemplateSource } from './contracts.js';
+import type {
+    E2BClient,
+    E2BTemplateResources,
+    E2BTemplateSource,
+} from './contracts.js';
+import { e2bResources } from './resources.js';
 
 export interface PreparedE2BTemplate {
     preparation: RuntimePreparation & {
@@ -23,12 +28,14 @@ export class E2BTemplateManager {
         const image = selectedRuntime(request.workbench).image;
         if (!image)
             throw new Error('E2B runtime requires an image or local image build');
+        const resources = sized(requirementsOf(request.workbench.manifest));
         if (typeof image === 'string') {
             return this.prepareSource(
                 request,
                 {
                     image,
                     ...(needsRepositoryTools(request) ? { repositoryTools: true } : {}),
+                    ...(resources ? { resources } : {}),
                 },
                 image,
                 []
@@ -43,6 +50,7 @@ export class E2BTemplateManager {
                     dockerfile: staged.dockerfile,
                     context: staged.context,
                     ...(needsRepositoryTools(request) ? { repositoryTools: true } : {}),
+                    ...(resources ? { resources } : {}),
                 },
                 `local:${staged.digest}`,
                 staged.excludedPaths,
@@ -65,7 +73,7 @@ export class E2BTemplateManager {
         excludedPaths: string[],
         cacheKey?: string
     ): Promise<PreparedE2BTemplate> {
-        const name = templateName(request, reference);
+        const name = templateName(request, reference, source.resources);
         const prepared = await this.client.prepareTemplate(source, name);
         return {
             preparation: {
@@ -81,7 +89,24 @@ export class E2BTemplateManager {
     }
 }
 
-function templateName(request: RuntimePrepareRequest, reference: string): string {
+/** The declared template size, or undefined when the Workbench declares none. */
+function sized(
+    requirements: ReturnType<typeof requirementsOf>
+): E2BTemplateResources | undefined {
+    const resources = e2bResources(requirements);
+    return Object.keys(resources).length > 0 ? resources : undefined;
+}
+
+/**
+ * A template's name is a digest of everything that shapes it. A Workbench that
+ * declares no size keeps the name it had before sizes were applied, so its
+ * cached template is still found.
+ */
+function templateName(
+    request: RuntimePrepareRequest,
+    reference: string,
+    resources: E2BTemplateResources | undefined
+): string {
     const slug = request.workbench.manifest.name
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
@@ -95,6 +120,7 @@ function templateName(request: RuntimePrepareRequest, reference: string): string
         ...(needsRepositoryTools(request)
             ? { repositoryTools: repositoryToolsCacheKey }
             : {}),
+        ...(resources ? { resources } : {}),
     });
     const digest = createHash('sha256').update(identity).digest('hex').slice(0, 20);
     return `workbench-${slug || 'runtime'}-${digest}`;

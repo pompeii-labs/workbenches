@@ -50,7 +50,14 @@ export class E2BSdkClient implements E2BClient {
         const configured = source.repositoryTools
             ? template.runCmd(installRepositoryTools, { user: 'root' })
             : template;
-        const built = await this.#client.Template.build(configured, name);
+        const built = await this.#client.Template.build(configured, name, {
+            ...(source.resources?.cpuCount === undefined
+                ? {}
+                : { cpuCount: source.resources.cpuCount }),
+            ...(source.resources?.memoryMB === undefined
+                ? {}
+                : { memoryMB: source.resources.memoryMB }),
+        });
         return {
             name,
             immutableReference: built.templateId,
