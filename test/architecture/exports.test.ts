@@ -155,8 +155,6 @@ describe('package exports', () => {
     });
 
     test('gives every source subpath the declarations built from it', () => {
-        // A host's tsc reads the declarations and never type-checks engine
-        // source under its own settings. Bun ignores `types` and runs the source.
         const mismatched: string[] = [];
         for (const [subpath, entry] of Object.entries(packageManifest.exports)) {
             if (typeof entry === 'string') {

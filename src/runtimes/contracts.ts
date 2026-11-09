@@ -91,12 +91,7 @@ interface RuntimePrepareFields {
     authorizations?: { hostDocker: boolean };
     /** The caller accepted a local GPU requirement GPU discovery could not confirm. */
     allowUncheckedGpu?: boolean;
-    /**
-     * The run's identity, which a provider labels what it creates with. The id
-     * is `wb_` and 20 to 64 lowercase letters and digits; the scope is 24
-     * lowercase hexadecimal characters. `prepare` refuses a malformed one
-     * before building anything. Absent, a remote provider makes its own.
-     */
+    /** Labels what the provider creates. Formats in `RunIdentity`; absent, a remote provider makes one. */
     run?: RunIdentity;
     outcome?: { directory: string; home?: string };
     repository?: { name: string; revision: string; delivery: 'none' | 'pr' };

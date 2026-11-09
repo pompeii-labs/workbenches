@@ -89,7 +89,6 @@ export class E2BTemplateManager {
     }
 }
 
-/** The declared template size, or undefined when the Workbench declares none. */
 function sized(
     requirements: ReturnType<typeof requirementsOf>
 ): E2BTemplateResources | undefined {
@@ -97,11 +96,6 @@ function sized(
     return Object.keys(resources).length > 0 ? resources : undefined;
 }
 
-/**
- * A template's name is a digest of everything that shapes it. A Workbench that
- * declares no size keeps the name it had before sizes were applied, so its
- * cached template is still found.
- */
 function templateName(
     request: RuntimePrepareRequest,
     reference: string,

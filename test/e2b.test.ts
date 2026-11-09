@@ -153,7 +153,6 @@ describe('E2B runtime provider', () => {
             resources: { cpuCount: 4, memoryMB: 8_192 },
         });
         expect(sources[3]?.resources).toEqual({ cpuCount: 2, memoryMB: 8_192 });
-        // An unsized Workbench keeps the template name it had before sizes applied.
         expect(names[0]).toBe('workbench-e2b-fixture-dbc15f34a33f8d2af7f6');
         expect(names[1]).toBe(names[2]);
         expect(new Set(names).size).toBe(3);
@@ -652,7 +651,6 @@ describe('E2B runtime provider', () => {
             });
         try {
             await runtime.preflight();
-            // The registry's wrapper reports the sandbox id too.
             expect(runtime.sandboxId).toBe('sandbox-fixture');
             expect(runtime.environment.WORKBENCH_OUTPUT_DIR).toBe('/outbox');
             const store = new OutcomeStore(home);

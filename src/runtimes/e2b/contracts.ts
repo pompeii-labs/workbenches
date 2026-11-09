@@ -12,11 +12,7 @@ export interface E2BTemplateSource {
     dockerfile?: string;
     context?: string;
     repositoryTools?: boolean;
-    /**
-     * The Workbench's declared `cpu` and `memory_gb`. E2B sizes every sandbox
-     * from its template, so a client applies them at build. They are part of
-     * the template name, so a resized Workbench never reuses a smaller template.
-     */
+    /** The declared `cpu` and `memory_gb`, applied when the template is built. */
     resources?: E2BTemplateResources;
 }
 

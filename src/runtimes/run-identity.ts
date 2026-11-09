@@ -1,8 +1,4 @@
-/**
- * The identity a host gives a run in `RuntimePrepareRequest.run`. Providers
- * label what they create with it, so cleanup can find a run's sandboxes and
- * containers again. Labels are restricted, so both parts have fixed formats.
- */
+/** A host's run identity. Providers label what they create with it. */
 export interface RunIdentity {
     /** `wb_` and 20 to 64 lowercase letters and digits. */
     id: string;
@@ -13,21 +9,15 @@ export interface RunIdentity {
 const runIdPattern = /^wb_[a-z0-9]{20,64}$/;
 const scopePattern = /^[a-f0-9]{24}$/;
 
-/** Whether `id` is a valid run ID. */
 export function validRunId(id: string): boolean {
     return runIdPattern.test(id);
 }
 
-/** Whether `scope` is a valid run scope. */
 export function validRunScope(scope: string): boolean {
     return scopePattern.test(scope);
 }
 
-/**
- * Throws when a host-supplied run identity is malformed. A provider calls it
- * first in `prepare`, before anything is built or created, so a bad identity
- * costs nothing.
- */
+/** Throws when a run identity is malformed. Providers call it first in `prepare`. */
 export function checkRunIdentity(run: RunIdentity | undefined): void {
     if (!run) return;
     if (!validRunId(run.id)) {

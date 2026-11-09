@@ -83,12 +83,7 @@ describe('type boundary', () => {
     }, 120_000);
 });
 
-/**
- * A host that compiles with tsc reads the declarations the package ships, never
- * the engine's source, so engine source is not type-checked under the host's
- * settings. This builds them as `prepack` does and checks a host program with
- * no Bun types against them, with no source beside them to fall back on.
- */
+/** A tsc host checks against the shipped declarations, with no Bun types and no source. */
 describe('published declarations', () => {
     let directory: string | undefined;
 
