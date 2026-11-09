@@ -78,7 +78,9 @@ describe('E2B runtime provider', () => {
                 immutableReference: 'template-fixture',
                 action: 'built',
             });
+            expect(runtime.sandboxId).toBeUndefined();
             await runtime.preflight();
+            expect(runtime.sandboxId).toBe('sandbox-fixture');
             expect(client.templateSources).toEqual([
                 { image: 'ghcr.io/example/workbench:1.0.0' },
             ]);
@@ -628,6 +630,8 @@ describe('E2B runtime provider', () => {
             });
         try {
             await runtime.preflight();
+            // The registry's wrapper reports the sandbox id too.
+            expect(runtime.sandboxId).toBe('sandbox-fixture');
             expect(runtime.environment.WORKBENCH_OUTPUT_DIR).toBe('/outbox');
             const store = new OutcomeStore(home);
             const before = client.sandbox.runs.length;

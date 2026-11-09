@@ -56,6 +56,15 @@ export class E2BRuntime extends RemoteRuntime<E2BSandbox, DiskAssetSnapshot> {
         this.preparation = options.preparation;
     }
 
+    /**
+     * The E2B sandbox id, from the moment the sandbox is created during
+     * preflight, so a host can record it and kill the sandbox itself, for
+     * example after its own process restarts.
+     */
+    get sandboxId(): string | undefined {
+        return this.sandbox?.id;
+    }
+
     async preflight(): Promise<PreflightResult> {
         this.assertAvailable('preflight');
         const sandbox = await this.ensureSandbox();
