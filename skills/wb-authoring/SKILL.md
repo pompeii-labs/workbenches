@@ -73,7 +73,7 @@ Anatomy and an example are in [references/rubrics.md](references/rubrics.md).
 
 ### 7. Scope, stop, and spend
 
-Classify the task (new work, upgrade, narrow edit) and give each class its own bar. Existing code sets the conventions; house defaults apply to new work only. Give explicit stop conditions: a pass budget ("two proof passes"), and "do not polish past what the task asked for". Tell the model to work lean, read a file once, and prefer contact sheets or summaries over opening every artifact. The person pays for every step.
+Classify the task (new work, upgrade, narrow edit) and give each class its own bar. Existing code sets the conventions; house defaults apply to new work only. A package that points at a repository's own docs (`web/STYLE.md`, a design guide) must treat those paths as defaults, not requirements: repositories drift, and the same package runs against repositories laid out differently. Tell the model to read them when present, find the repository's own conventions when they are missing, and never stop or fail because a named path is absent. Give explicit stop conditions: a pass budget ("two proof passes"), and "do not polish past what the task asked for". Tell the model to work lean, read a file once, and prefer contact sheets or summaries over opening every artifact. The person pays for every step.
 
 ### 8. Fit the runtime, then verify mechanically
 
@@ -96,6 +96,7 @@ Register the package once with `wb add ./.workbenches/<name> --as <alias>`. A lo
 - A package that validates and smokes cleanly and contains only generic prose.
 - Benchmark-shaped rules: "ship the smallest thing", "skip the check if it errors". The gate is mandatory.
 - Rules written around one known test instead of the class of work.
+- A missing repository path (a style guide, a source directory) that stops or fails the run instead of sending the model to find the repository's own conventions.
 - Vendored skills that reference absent tools, workers, or user questions.
 - Two entry points that compete, patched over with precedence rules.
 - A model choice presented as best without trial evidence for this work.
