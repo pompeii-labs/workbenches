@@ -83,6 +83,12 @@ export { DiskTransfer } from './remote/disk/transfer.js';
 export type { RemoteCommand, RemoteCommandOptions } from './remote/process.js';
 export type { RemoteRunOptions, RemoteSandbox } from './remote/runtime.js';
 export {
+    checkRunIdentity,
+    type RunIdentity,
+    validRunId,
+    validRunScope,
+} from './run-identity.js';
+export {
     RuntimeSmoke,
     type RuntimeSmokeOptions,
     type WorkbenchSmokeResult,

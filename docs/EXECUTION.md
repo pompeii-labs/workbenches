@@ -101,6 +101,7 @@ interface RuntimePrepareFields {
         workspace?: string;
     }>;
     outcome?: { directory: string; home?: string };
+    run?: { id: string; scope: string };
 }
 
 interface RuntimeRunnerContract {
@@ -151,6 +152,8 @@ interface PreparedRuntime {
 ```
 
 `prepare` provisions or selects the environment, makes the workspace, Workbench package, instructions, skills, named workspaces, and runner assets available, binds the environment, and returns their runtime-visible locations. The primary workspace is read-write; immutable package assets are read-only, and each named workspace has its manifest-declared access. Generated runner state can be a separate writable ephemeral asset. Local execution uses host paths unchanged. Isolated providers mount or copy only the declared assets and return remapped paths.
+
+`run` is the identity a provider labels its containers and sandboxes with, so cleanup can find a run's resources again. A host that drives providers directly can supply its own: `id` is `wb_` followed by 20 to 64 lowercase letters and digits (`^wb_[a-z0-9]{20,64}$`), and `scope` is 24 lowercase hexadecimal characters (`^[a-f0-9]{24}$`), such as the first 24 characters of a SHA-256 digest of whatever the host groups runs by. Providers refuse a malformed identity at the start of `prepare`, before any image or template is built, and `checkRunIdentity` (exported from `runtimes`) applies the same check. Without one, the remote providers make an identity scoped to the workspace directory. The reference CLI supplies the run's own ID, scoped to its data directory.
 
 An image build (`purpose: "build"`) never launches the runner, so its request carries no runner contract and no credential storage. Every other request carries `runner`, the only facts a provider knows about the runner it launches: whether the runner holds its session open over piped standard input, and the environment that points it at a mounted credential store. A provider never branches on a runner's name.
 

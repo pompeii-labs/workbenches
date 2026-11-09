@@ -243,6 +243,32 @@ describe('Docker runtime provider', () => {
         ).rejects.toThrow('Docker daemon is unavailable: daemon stopped');
     });
 
+    test('refuses a malformed run identity before any Docker command', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
+        const commands: string[][] = [];
+        const provider = new DockerRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: () => '/usr/bin/docker',
+            command: async (command) => {
+                commands.push(command);
+                return result(0);
+            },
+        });
+        await expect(
+            provider.prepare({
+                ...request(fixture),
+                run: { id: 'wb_Upper-Case', scope: 'b'.repeat(24) },
+            })
+        ).rejects.toThrow('Invalid Workbench run ID: wb_Upper-Case');
+        await expect(
+            provider.prepare({
+                ...request(fixture),
+                run: { id: `wb_${'a'.repeat(20)}`, scope: 'workspace-1' },
+            })
+        ).rejects.toThrow('Invalid Workbench run scope: workspace-1');
+        expect(commands).toEqual([]);
+    });
+
     test('requires Docker Workbenches to declare an image', async () => {
         const fixture = await createFixture({});
         await expect(

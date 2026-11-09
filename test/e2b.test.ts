@@ -98,6 +98,28 @@ describe('E2B runtime provider', () => {
         }
     });
 
+    test('refuses a malformed run identity before building a template', async () => {
+        const resolved = await fixture();
+        const client = new FakeClient();
+        const provider = new E2BRuntimeProvider({ ...disk, client });
+        await expect(
+            provider.prepare({
+                ...request(resolved),
+                run: { id: 'wb_1234', scope: 'b'.repeat(24) },
+            })
+        ).rejects.toThrow(
+            'Invalid Workbench run ID: wb_1234. A run ID is wb_ followed by 20 to 64 lowercase letters and digits.'
+        );
+        await expect(
+            provider.prepare({
+                ...request(resolved),
+                run: { id: `wb_${'a'.repeat(20)}`, scope: 'B'.repeat(24) },
+            })
+        ).rejects.toThrow('Invalid Workbench run scope');
+        expect(client.templateNames).toEqual([]);
+        expect(client.createOptions).toEqual([]);
+    });
+
     test('builds the template at the declared size and keys the cache on it', async () => {
         const resolved = await fixture();
         const sized = (

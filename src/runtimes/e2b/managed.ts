@@ -1,3 +1,4 @@
+import { validRunId, validRunScope } from '../run-identity.js';
 import { RuntimeSecretStore } from '../secrets.js';
 import type {
     E2BClient,
@@ -31,7 +32,7 @@ export class E2BManagedSandboxes {
 
     async list(): Promise<ManagedE2BSandbox[]> {
         return (await this.client.listManaged(this.scope)).filter((sandbox) =>
-            /^wb_[a-z0-9]{20,64}$/.test(sandbox.runId)
+            validRunId(sandbox.runId)
         );
     }
 
@@ -41,7 +42,7 @@ export class E2BManagedSandboxes {
 }
 
 function validateScope(scope: string): void {
-    if (!/^[a-f0-9]{24}$/.test(scope)) {
+    if (!validRunScope(scope)) {
         throw new Error(`Invalid managed Workbench scope: ${scope}`);
     }
 }

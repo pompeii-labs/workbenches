@@ -1,3 +1,4 @@
+import { validRunId, validRunScope } from '../run-identity.js';
 import { DockerClient } from './client.js';
 import type { DockerClientDependencies } from './contracts.js';
 
@@ -80,7 +81,7 @@ export class DockerManagedContainers {
                     !runId ||
                     !/^[a-f0-9]{12,64}$/.test(id) ||
                     !/^workbench-[a-f0-9]{20}$/.test(name) ||
-                    !/^wb_[a-z0-9]{20,64}$/.test(runId)
+                    !validRunId(runId)
                 ) {
                     return [];
                 }
@@ -107,13 +108,13 @@ export class DockerManagedContainers {
     }
 
     private static validateRun(id: string): void {
-        if (!/^wb_[a-z0-9]{20,64}$/.test(id)) {
+        if (!validRunId(id)) {
             throw new Error(`Invalid managed Workbench run ID: ${id}`);
         }
     }
 
     private static validateScope(scope: string): void {
-        if (!/^[a-f0-9]{24}$/.test(scope)) {
+        if (!validRunScope(scope)) {
             throw new Error(`Invalid managed Workbench scope: ${scope}`);
         }
     }

@@ -9,6 +9,7 @@ import type {
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
 import { readCredentialRoot } from '../hostvariables.js';
+import { checkRunIdentity } from '../run-identity.js';
 import { DockerClient } from './client.js';
 import type { DockerRuntimeDependencies } from './contracts.js';
 import {
@@ -50,6 +51,7 @@ export class DockerRuntimeProvider implements RuntimeProvider {
             );
         }
         try {
+            checkRunIdentity(request.run);
             this.requirements.check(request.workbench);
         } catch (error) {
             throw RuntimeError.from(this.name, 'prepare', error);

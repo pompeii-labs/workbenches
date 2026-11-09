@@ -6,6 +6,7 @@ import type {
     RuntimeProvider,
 } from '../contracts.js';
 import { RuntimeError } from '../error.js';
+import { checkRunIdentity } from '../run-identity.js';
 import type { TransferRules } from '../staging/rules.js';
 import type { AssetSource } from '../staging/source.js';
 import { PathPlan } from './paths.js';
@@ -31,6 +32,7 @@ export abstract class RemoteProvider implements RuntimeProvider {
     /** Checks the request and plans where its assets go in the sandbox. */
     protected async bind(request: RuntimePrepareRequest): Promise<PathPlan> {
         try {
+            checkRunIdentity(request.run);
             this.requirements.check(request.workbench);
         } catch (error) {
             throw RuntimeError.from(this.name, 'prepare', error);

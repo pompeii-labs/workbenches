@@ -1,3 +1,5 @@
+import { validRunId, validRunScope } from '../run-identity.js';
+
 /** Labels every remote sandbox carries so a run's sandboxes can be found again. */
 export const managedMetadata = 'dev.workbenches.managed';
 export const runMetadata = 'dev.workbenches.run';
@@ -8,10 +10,10 @@ export function runLabels(
     run: { id: string; scope: string },
     provider: string
 ): Record<string, string> {
-    if (!/^wb_[a-z0-9]{20,64}$/.test(run.id)) {
+    if (!validRunId(run.id)) {
         throw new Error(`Invalid Workbench run ID for ${provider}: ${run.id}`);
     }
-    if (!/^[a-f0-9]{24}$/.test(run.scope)) {
+    if (!validRunScope(run.scope)) {
         throw new Error(`Invalid Workbench ${provider} scope: ${run.scope}`);
     }
     return {
