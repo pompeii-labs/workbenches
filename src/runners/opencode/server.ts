@@ -131,10 +131,7 @@ export class OpenCodeServer {
                 onFailure(error);
             }
         };
-        // A remote runtime rejects the exit when it loses the sandbox, for
-        // example when the host kills it under a live session. That ends the
-        // server as surely as an exit, so it fails the session the same way and
-        // never becomes an unhandled rejection.
+        // A lost sandbox rejects the exit; fail the session the same way.
         void child.exited.then(
             (code) =>
                 ended(

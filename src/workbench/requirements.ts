@@ -227,12 +227,11 @@ export class RequirementsPreflight {
             fail(`GPU requirements are not supported on the ${runtime.name} runtime`);
         }
         if (runtime.name === 'e2b') {
-            // The template, and so every sandbox made from it, is built at this size.
             const resources = e2bResources(requirements);
-            if (resources.cpuCount !== undefined) {
+            if (resources?.cpuCount !== undefined) {
                 report.applied.push(`cpu allocation ${resources.cpuCount}`);
             }
-            if (resources.memoryMB !== undefined) {
+            if (resources?.memoryMB !== undefined) {
                 report.applied.push(`memory allocation ${resources.memoryMB} MiB`);
             }
             this.pending(check, ['arch', 'disk']);

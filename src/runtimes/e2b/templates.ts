@@ -28,7 +28,7 @@ export class E2BTemplateManager {
         const image = selectedRuntime(request.workbench).image;
         if (!image)
             throw new Error('E2B runtime requires an image or local image build');
-        const resources = sized(requirementsOf(request.workbench.manifest));
+        const resources = e2bResources(requirementsOf(request.workbench.manifest));
         if (typeof image === 'string') {
             return this.prepareSource(
                 request,
@@ -89,19 +89,6 @@ export class E2BTemplateManager {
     }
 }
 
-/** The declared template size, or undefined when the Workbench declares none. */
-function sized(
-    requirements: ReturnType<typeof requirementsOf>
-): E2BTemplateResources | undefined {
-    const resources = e2bResources(requirements);
-    return Object.keys(resources).length > 0 ? resources : undefined;
-}
-
-/**
- * A template's name is a digest of everything that shapes it. A Workbench that
- * declares no size keeps the name it had before sizes were applied, so its
- * cached template is still found.
- */
 function templateName(
     request: RuntimePrepareRequest,
     reference: string,
