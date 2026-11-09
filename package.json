@@ -21,6 +21,7 @@
     ],
     "files": [
         "src",
+        "dist/types",
         "schemas",
         "package.json",
         "README.md",
@@ -34,55 +35,221 @@
         "wb": "./src/cli.ts"
     },
     "exports": {
-        ".": "./src/index.ts",
-        "./types": "./src/types.ts",
-        "./manifest": "./src/workbench/manifest.ts",
-        "./requirements": "./src/workbench/requirements.ts",
-        "./runtimes/selection": "./src/workbench/runtimes.ts",
-        "./events": "./src/runs/events.ts",
-        "./models": "./src/models/index.ts",
-        "./outcomes": "./src/outcomes/core/index.ts",
-        "./outcomes/disk": "./src/outcomes/index.ts",
-        "./runners/files": "./src/runners/types.ts",
-        "./runners/files/disk": "./src/runners/files/disk.ts",
-        "./runners/files/memory": "./src/runners/files/memory.ts",
-        "./runners/session": "./src/runners/session.ts",
-        "./runners/claude-code/runner": "./src/runners/claude-code/runner.ts",
-        "./runners/claude-code/adapter": "./src/runners/claude-code/adapter.ts",
-        "./runners/claude-code/config": "./src/runners/claude-code/config.ts",
-        "./runners/claude-code/openrouter": "./src/runners/claude-code/openrouter.ts",
-        "./runners/claude-code/progress": "./src/runners/claude-code/progress.ts",
-        "./runners/pi/runner": "./src/runners/pi/runner.ts",
-        "./runners/pi/adapter": "./src/runners/pi/adapter.ts",
-        "./runners/pi/config": "./src/runners/pi/config.ts",
-        "./runners/pi/progress": "./src/runners/pi/progress.ts",
-        "./runners/opencode/adapter": "./src/runners/opencode/adapter.ts",
-        "./runners/opencode/runner": "./src/runners/opencode/runner.ts",
-        "./runners/opencode/session": "./src/runners/opencode/session.ts",
-        "./runners/opencode/server": "./src/runners/opencode/server.ts",
-        "./runners/opencode/progress": "./src/runners/opencode/progress.ts",
-        "./runners/opencode/events": "./src/runners/opencode/events.ts",
-        "./runners/opencode/invocation": "./src/runners/opencode/invocation.ts",
-        "./runners/opencode/skills": "./src/runners/opencode/skills.ts",
-        "./runners/context": "./src/runners/context/stage.ts",
-        "./runtimes": "./src/runtimes/index.ts",
-        "./runtimes/contracts": "./src/runtimes/contracts.ts",
-        "./runtimes/missing": "./src/runtimes/missing.ts",
-        "./runtimes/daytona": "./src/runtimes/daytona/index.ts",
-        "./runtimes/e2b": "./src/runtimes/e2b/index.ts",
-        "./runtimes/e2b/contracts": "./src/runtimes/e2b/contracts.ts",
-        "./runtimes/remote/disk": "./src/runtimes/remote/disk/transfer.ts",
-        "./runtimes/assets": "./src/runtimes/staging/source.ts",
-        "./runtimes/assets/disk": "./src/runtimes/staging/disk.ts",
-        "./runtimes/staging": "./src/runtimes/staging/index.ts",
+        ".": {
+            "source": "./src/index.ts",
+            "types": "./dist/types/index.d.ts",
+            "default": "./src/index.ts"
+        },
+        "./types": {
+            "source": "./src/types.ts",
+            "types": "./dist/types/types.d.ts",
+            "default": "./src/types.ts"
+        },
+        "./manifest": {
+            "source": "./src/workbench/manifest.ts",
+            "types": "./dist/types/workbench/manifest.d.ts",
+            "default": "./src/workbench/manifest.ts"
+        },
+        "./requirements": {
+            "source": "./src/workbench/requirements.ts",
+            "types": "./dist/types/workbench/requirements.d.ts",
+            "default": "./src/workbench/requirements.ts"
+        },
+        "./runtimes/selection": {
+            "source": "./src/workbench/runtimes.ts",
+            "types": "./dist/types/workbench/runtimes.d.ts",
+            "default": "./src/workbench/runtimes.ts"
+        },
+        "./events": {
+            "source": "./src/runs/events.ts",
+            "types": "./dist/types/runs/events.d.ts",
+            "default": "./src/runs/events.ts"
+        },
+        "./models": {
+            "source": "./src/models/index.ts",
+            "types": "./dist/types/models/index.d.ts",
+            "default": "./src/models/index.ts"
+        },
+        "./outcomes": {
+            "source": "./src/outcomes/core/index.ts",
+            "types": "./dist/types/outcomes/core/index.d.ts",
+            "default": "./src/outcomes/core/index.ts"
+        },
+        "./outcomes/disk": {
+            "source": "./src/outcomes/index.ts",
+            "types": "./dist/types/outcomes/index.d.ts",
+            "default": "./src/outcomes/index.ts"
+        },
+        "./runners/files": {
+            "source": "./src/runners/types.ts",
+            "types": "./dist/types/runners/types.d.ts",
+            "default": "./src/runners/types.ts"
+        },
+        "./runners/files/disk": {
+            "source": "./src/runners/files/disk.ts",
+            "types": "./dist/types/runners/files/disk.d.ts",
+            "default": "./src/runners/files/disk.ts"
+        },
+        "./runners/files/memory": {
+            "source": "./src/runners/files/memory.ts",
+            "types": "./dist/types/runners/files/memory.d.ts",
+            "default": "./src/runners/files/memory.ts"
+        },
+        "./runners/session": {
+            "source": "./src/runners/session.ts",
+            "types": "./dist/types/runners/session.d.ts",
+            "default": "./src/runners/session.ts"
+        },
+        "./runners/claude-code/runner": {
+            "source": "./src/runners/claude-code/runner.ts",
+            "types": "./dist/types/runners/claude-code/runner.d.ts",
+            "default": "./src/runners/claude-code/runner.ts"
+        },
+        "./runners/claude-code/adapter": {
+            "source": "./src/runners/claude-code/adapter.ts",
+            "types": "./dist/types/runners/claude-code/adapter.d.ts",
+            "default": "./src/runners/claude-code/adapter.ts"
+        },
+        "./runners/claude-code/config": {
+            "source": "./src/runners/claude-code/config.ts",
+            "types": "./dist/types/runners/claude-code/config.d.ts",
+            "default": "./src/runners/claude-code/config.ts"
+        },
+        "./runners/claude-code/openrouter": {
+            "source": "./src/runners/claude-code/openrouter.ts",
+            "types": "./dist/types/runners/claude-code/openrouter.d.ts",
+            "default": "./src/runners/claude-code/openrouter.ts"
+        },
+        "./runners/claude-code/progress": {
+            "source": "./src/runners/claude-code/progress.ts",
+            "types": "./dist/types/runners/claude-code/progress.d.ts",
+            "default": "./src/runners/claude-code/progress.ts"
+        },
+        "./runners/pi/runner": {
+            "source": "./src/runners/pi/runner.ts",
+            "types": "./dist/types/runners/pi/runner.d.ts",
+            "default": "./src/runners/pi/runner.ts"
+        },
+        "./runners/pi/adapter": {
+            "source": "./src/runners/pi/adapter.ts",
+            "types": "./dist/types/runners/pi/adapter.d.ts",
+            "default": "./src/runners/pi/adapter.ts"
+        },
+        "./runners/pi/config": {
+            "source": "./src/runners/pi/config.ts",
+            "types": "./dist/types/runners/pi/config.d.ts",
+            "default": "./src/runners/pi/config.ts"
+        },
+        "./runners/pi/progress": {
+            "source": "./src/runners/pi/progress.ts",
+            "types": "./dist/types/runners/pi/progress.d.ts",
+            "default": "./src/runners/pi/progress.ts"
+        },
+        "./runners/opencode/adapter": {
+            "source": "./src/runners/opencode/adapter.ts",
+            "types": "./dist/types/runners/opencode/adapter.d.ts",
+            "default": "./src/runners/opencode/adapter.ts"
+        },
+        "./runners/opencode/runner": {
+            "source": "./src/runners/opencode/runner.ts",
+            "types": "./dist/types/runners/opencode/runner.d.ts",
+            "default": "./src/runners/opencode/runner.ts"
+        },
+        "./runners/opencode/session": {
+            "source": "./src/runners/opencode/session.ts",
+            "types": "./dist/types/runners/opencode/session.d.ts",
+            "default": "./src/runners/opencode/session.ts"
+        },
+        "./runners/opencode/server": {
+            "source": "./src/runners/opencode/server.ts",
+            "types": "./dist/types/runners/opencode/server.d.ts",
+            "default": "./src/runners/opencode/server.ts"
+        },
+        "./runners/opencode/progress": {
+            "source": "./src/runners/opencode/progress.ts",
+            "types": "./dist/types/runners/opencode/progress.d.ts",
+            "default": "./src/runners/opencode/progress.ts"
+        },
+        "./runners/opencode/events": {
+            "source": "./src/runners/opencode/events.ts",
+            "types": "./dist/types/runners/opencode/events.d.ts",
+            "default": "./src/runners/opencode/events.ts"
+        },
+        "./runners/opencode/invocation": {
+            "source": "./src/runners/opencode/invocation.ts",
+            "types": "./dist/types/runners/opencode/invocation.d.ts",
+            "default": "./src/runners/opencode/invocation.ts"
+        },
+        "./runners/opencode/skills": {
+            "source": "./src/runners/opencode/skills.ts",
+            "types": "./dist/types/runners/opencode/skills.d.ts",
+            "default": "./src/runners/opencode/skills.ts"
+        },
+        "./runners/context": {
+            "source": "./src/runners/context/stage.ts",
+            "types": "./dist/types/runners/context/stage.d.ts",
+            "default": "./src/runners/context/stage.ts"
+        },
+        "./runtimes": {
+            "source": "./src/runtimes/index.ts",
+            "types": "./dist/types/runtimes/index.d.ts",
+            "default": "./src/runtimes/index.ts"
+        },
+        "./runtimes/contracts": {
+            "source": "./src/runtimes/contracts.ts",
+            "types": "./dist/types/runtimes/contracts.d.ts",
+            "default": "./src/runtimes/contracts.ts"
+        },
+        "./runtimes/missing": {
+            "source": "./src/runtimes/missing.ts",
+            "types": "./dist/types/runtimes/missing.d.ts",
+            "default": "./src/runtimes/missing.ts"
+        },
+        "./runtimes/daytona": {
+            "source": "./src/runtimes/daytona/index.ts",
+            "types": "./dist/types/runtimes/daytona/index.d.ts",
+            "default": "./src/runtimes/daytona/index.ts"
+        },
+        "./runtimes/e2b": {
+            "source": "./src/runtimes/e2b/index.ts",
+            "types": "./dist/types/runtimes/e2b/index.d.ts",
+            "default": "./src/runtimes/e2b/index.ts"
+        },
+        "./runtimes/e2b/contracts": {
+            "source": "./src/runtimes/e2b/contracts.ts",
+            "types": "./dist/types/runtimes/e2b/contracts.d.ts",
+            "default": "./src/runtimes/e2b/contracts.ts"
+        },
+        "./runtimes/remote/disk": {
+            "source": "./src/runtimes/remote/disk/transfer.ts",
+            "types": "./dist/types/runtimes/remote/disk/transfer.d.ts",
+            "default": "./src/runtimes/remote/disk/transfer.ts"
+        },
+        "./runtimes/assets": {
+            "source": "./src/runtimes/staging/source.ts",
+            "types": "./dist/types/runtimes/staging/source.d.ts",
+            "default": "./src/runtimes/staging/source.ts"
+        },
+        "./runtimes/assets/disk": {
+            "source": "./src/runtimes/staging/disk.ts",
+            "types": "./dist/types/runtimes/staging/disk.d.ts",
+            "default": "./src/runtimes/staging/disk.ts"
+        },
+        "./runtimes/staging": {
+            "source": "./src/runtimes/staging/index.ts",
+            "types": "./dist/types/runtimes/staging/index.d.ts",
+            "default": "./src/runtimes/staging/index.ts"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {
         "build": "bun scripts/build.ts",
+        "build:types": "tsc -p tsconfig.build.json",
         "check": "bun run typecheck && bun run lint && bun run test",
         "commitlint": "commitlint",
         "format": "biome check --write .",
         "lint": "biome check .",
+        "prepack": "bun run build:types",
         "prepare": "husky",
         "release:package": "bun scripts/package-release.ts",
         "release:verify": "bun scripts/verify-release.ts",

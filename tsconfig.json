@@ -3,6 +3,7 @@
         "target": "ES2023",
         "module": "NodeNext",
         "moduleResolution": "NodeNext",
+        "customConditions": ["source"],
         "lib": ["ES2023"],
         "types": ["bun"],
         "strict": true,

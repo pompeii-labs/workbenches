@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { WorkbenchEvent } from '@pompeii-labs/workbench/events';
@@ -50,6 +49,8 @@ import {
     TransferRules,
 } from '@pompeii-labs/workbench/runtimes/staging';
 import type { ResolvedWorkbench } from '@pompeii-labs/workbench/types';
+
+import { packageManifest, runtimeExports } from './package-exports.js';
 
 const root = join(import.meta.dir, '..', '..');
 
@@ -140,11 +141,8 @@ describe('package exports', () => {
     });
 
     test('points every subpath at a file that exists', async () => {
-        const manifest = JSON.parse(
-            await readFile(join(root, 'package.json'), 'utf8')
-        ) as { exports: Record<string, string> };
         const missing: string[] = [];
-        for (const [subpath, target] of Object.entries(manifest.exports)) {
+        for (const [subpath, target] of Object.entries(runtimeExports)) {
             if (!(await Bun.file(join(root, target)).exists())) {
                 missing.push(`${subpath} -> ${target}`);
             }
@@ -152,10 +150,28 @@ describe('package exports', () => {
         expect(missing).toEqual([]);
     });
 
-    test('keeps the root export on the public entry point', async () => {
-        const manifest = JSON.parse(
-            await readFile(join(root, 'package.json'), 'utf8')
-        ) as { exports: Record<string, string> };
-        expect(manifest.exports['.']).toBe('./src/index.ts');
+    test('keeps the root export on the public entry point', () => {
+        expect(runtimeExports['.']).toBe('./src/index.ts');
+    });
+
+    test('gives every source subpath the declarations built from it', () => {
+        // A host's tsc reads the declarations and never type-checks engine
+        // source under its own settings. Bun ignores `types` and runs the source.
+        const mismatched: string[] = [];
+        for (const [subpath, entry] of Object.entries(packageManifest.exports)) {
+            if (typeof entry === 'string') {
+                if (entry.endsWith('.ts')) mismatched.push(`${subpath} has no types`);
+                continue;
+            }
+            const expected = entry.default
+                .replace(/^\.\/src\//, './dist/types/')
+                .replace(/\.ts$/, '.d.ts');
+            if (entry.types !== expected)
+                mismatched.push(`${subpath} -> ${entry.types}`);
+            if (entry.source !== entry.default) mismatched.push(`${subpath} source`);
+            if (Object.keys(entry)[0] !== 'source') mismatched.push(`${subpath} order`);
+        }
+        expect(mismatched).toEqual([]);
+        expect(packageManifest.files).toContain('dist/types');
     });
 });

@@ -42,7 +42,13 @@ workbench-linux-x64.tar.gz
 checksums.txt
 ```
 
-Each archive contains `workbench`, `LICENSE`, and `NOTICE`. The workflow runs the compiled binary on its build host before uploading it, publishes SHA-256 checksums, and creates GitHub artifact attestations for provenance.
+Each archive contains `workbench`, `LICENSE`, and `NOTICE`.
+
+The release also carries the engine as a package archive for hosts that embed it, `pompeii-labs-workbench-<version>.tgz`, made by `bun pm pack` after `bun run build:types`. It holds the source Bun runs and the TypeScript declarations a host's `tsc` reads, and is listed in `checksums.txt`. A host depends on it by URL:
+
+```json
+"@pompeii-labs/workbench": "https://github.com/pompeii-labs/workbenches/releases/download/v1.0.0/pompeii-labs-workbench-1.0.0.tgz"
+``` The workflow runs the compiled binary on its build host before uploading it, publishes SHA-256 checksums, and creates GitHub artifact attestations for provenance.
 
 macOS binaries are ad-hoc signed by Bun but are not yet signed or notarized with an Apple Developer identity. The project must not claim Apple notarization until that separate release credential and workflow exist.
 

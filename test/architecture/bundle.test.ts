@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { builtinModules } from 'node:module';
 import { join } from 'node:path';
 
+import { runtimeExports } from './package-exports.js';
+
 const root = join(import.meta.dir, '..', '..');
 
 /**
@@ -51,10 +53,7 @@ const forbidden = [
 /** Built-in modules a host must provide. */
 const allowed = ['node:path', 'node:util', 'node:crypto', 'node:buffer', 'node:events'];
 
-const manifest = (await Bun.file(join(root, 'package.json')).json()) as {
-    exports: Record<string, string>;
-};
-const subpaths = Object.entries(manifest.exports).filter(([, entry]) =>
+const subpaths = Object.entries(runtimeExports).filter(([, entry]) =>
     entry.endsWith('.ts')
 );
 const portable = subpaths.filter(([subpath]) => !diskBacked.includes(subpath));
@@ -112,7 +111,7 @@ describe('bundle boundary', () => {
 
     for (const subpath of diskBacked) {
         test(`${subpath} is disk-backed and reaches a forbidden module`, async () => {
-            const entry = manifest.exports[subpath];
+            const entry = runtimeExports[subpath];
             if (!entry) throw new Error(`${subpath} is not exported`);
             const used = builtins(await bundle(entry));
             expect(used.filter((name) => forbidden.includes(name))).not.toEqual([]);
@@ -121,7 +120,7 @@ describe('bundle boundary', () => {
 
     test('every classified subpath is exported by the package', () => {
         for (const subpath of [...diskBacked, ...typeOnly]) {
-            expect(manifest.exports[subpath], subpath).toBeString();
+            expect(runtimeExports[subpath], subpath).toBeString();
         }
         for (const subpath of typeOnly) expect(diskBacked).not.toContain(subpath);
     });
