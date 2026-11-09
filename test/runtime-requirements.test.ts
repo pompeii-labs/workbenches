@@ -285,17 +285,24 @@ describe('docker and e2b requirements', () => {
         expect(report.unchecked).toEqual([]);
     });
 
-    test('e2b records arch, cpu, memory, and disk as unchecked', () => {
+    test('e2b applies cpu and memory and records arch and disk as unchecked', () => {
         const report = check(
             withRuntimes({ arch: ['x64'], cpu: 4, memory_gb: 8, disk_gb: 10 }),
             'e2b'
         );
+        expect(report.applied).toEqual([
+            'cpu allocation 4',
+            'memory allocation 8192 MiB',
+        ]);
         expect(report.unchecked).toEqual([
             'arch is not checked on the e2b runtime',
-            'cpu is not checked on the e2b runtime',
-            'memory_gb is not checked on the e2b runtime',
             'disk_gb is not checked on the e2b runtime',
         ]);
+    });
+
+    test('e2b rounds fractional memory up to an even number of MiB', () => {
+        const report = check(withRuntimes({ memory_gb: 1.0001 }), 'e2b');
+        expect(report.applied).toEqual(['memory allocation 1026 MiB']);
     });
 
     test('e2b refuses a gpu requirement even when unchecked gpu is accepted', () => {
