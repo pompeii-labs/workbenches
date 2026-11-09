@@ -12,6 +12,8 @@ import { DaytonaToolbox } from './toolbox.js';
 import {
     DaytonaApiError,
     type DaytonaApiOptions,
+    DaytonaSnapshotCooldownError,
+    DaytonaSnapshotLimitError,
     DaytonaTransport,
     type SandboxDto,
 } from './transport.js';
@@ -77,7 +79,34 @@ export class DaytonaApi implements DaytonaClient {
                 const existing = await this.getSnapshot(options.name);
                 if (existing) return existing;
             }
-            throw error;
+            throw refused(error);
+        }
+    }
+
+    /**
+     * `GET /snapshots`, sorted by last use, page by page. Daytona also lists
+     * its general snapshots, which belong to no organization and are left out.
+     */
+    async listSnapshots(): Promise<DaytonaSnapshot[]> {
+        const snapshots: DaytonaSnapshot[] = [];
+        for (let page = 1; ; page++) {
+            const reply = await this.transport.json<{
+                items?: unknown[];
+                totalPages?: number;
+            }>('GET', '/snapshots', {
+                query: {
+                    page: String(page),
+                    limit: '200',
+                    sort: 'lastUsedAt',
+                    order: 'asc',
+                },
+            });
+            for (const item of reply.items ?? []) {
+                if (Reflect.get(Object(item), 'general') !== true) {
+                    snapshots.push(snapshot(item));
+                }
+            }
+            if (page >= (reply.totalPages ?? 1)) return snapshots;
         }
     }
 
@@ -109,7 +138,9 @@ export class DaytonaApi implements DaytonaClient {
 
     /**
      * `POST /snapshots/{id}/activate`. Daytona answers 400 for a snapshot that
-     * is not inactive, which another run may have just activated.
+     * is not inactive, which another run may have just activated, and also
+     * when the organization is at its snapshot limit or the snapshot was
+     * deactivated too recently.
      */
     async activateSnapshot(name: string): Promise<void> {
         const existing = await this.getSnapshot(name);
@@ -120,12 +151,29 @@ export class DaytonaApi implements DaytonaClient {
                 `/snapshots/${encodeURIComponent(existing.id)}/activate`
             );
         } catch (error) {
+            const refusal = refused(error);
+            if (refusal !== error) throw refusal;
             if (
                 error instanceof DaytonaApiError &&
                 (error.status === 400 || error.status === 404)
             ) {
                 return;
             }
+            throw error;
+        }
+    }
+
+    /** `POST /snapshots/{id}/deactivate`. */
+    async deactivateSnapshot(name: string): Promise<void> {
+        const existing = await this.getSnapshot(name);
+        if (!existing) return;
+        try {
+            await this.transport.request(
+                'POST',
+                `/snapshots/${encodeURIComponent(existing.id)}/deactivate`
+            );
+        } catch (error) {
+            if (error instanceof DaytonaApiError && error.status === 404) return;
             throw error;
         }
     }
@@ -321,6 +369,21 @@ function interval(minutes: number, minimum: number): string {
     return String(minutes);
 }
 
+/**
+ * `error` as a `DaytonaSnapshotLimitError` or `DaytonaSnapshotCooldownError`
+ * when it is one of the refusals Daytona reports as a 400 with that reason.
+ */
+function refused(error: unknown): unknown {
+    if (!(error instanceof DaytonaApiError) || error.status !== 400) return error;
+    if (error.message.includes('Snapshot quota exceeded')) {
+        return new DaytonaSnapshotLimitError(error.message);
+    }
+    if (error.message.includes('Snapshot deactivation is still in progress')) {
+        return new DaytonaSnapshotCooldownError(error.message);
+    }
+    return error;
+}
+
 /** A snapshot from a Daytona reply, narrowed to the fields the engine reads. */
 function snapshot(value: unknown): DaytonaSnapshot {
     const field = (name: string): unknown =>
@@ -331,13 +394,16 @@ function snapshot(value: unknown): DaytonaSnapshot {
     const name = field('name');
     const state = field('state');
     const errorReason = field('errorReason');
+    const lastUsedAt = field('lastUsedAt');
     if (typeof id !== 'string' || typeof name !== 'string') {
         throw new DaytonaApiError('Daytona returned a snapshot without an id or name');
     }
+    const used = typeof lastUsedAt === 'string' ? new Date(lastUsedAt) : undefined;
     return {
         id,
         name,
         state: typeof state === 'string' ? state : 'unknown',
         ...(typeof errorReason === 'string' && errorReason ? { errorReason } : {}),
+        ...(used && !Number.isNaN(used.getTime()) ? { lastUsedAt: used } : {}),
     };
 }

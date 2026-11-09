@@ -16,6 +16,10 @@ import type {
 } from '../../../src/runtimes/daytona/contracts.js';
 import type { LogOutput } from '../../../src/runtimes/daytona/follow.js';
 import { DaytonaRuntimeProvider } from '../../../src/runtimes/daytona/provider.js';
+import {
+    DaytonaSnapshotCooldownError,
+    DaytonaSnapshotLimitError,
+} from '../../../src/runtimes/daytona/transport.js';
 import { identityCommand } from '../../../src/runtimes/remote/directories.js';
 import { DiskTransfer } from '../../../src/runtimes/remote/disk/transfer.js';
 import type {
@@ -131,10 +135,33 @@ export class FakeClient implements DaytonaClient {
         return reference.split('@')[1] ?? fakeDigest;
     }
 
+    /**
+     * How many usable snapshots Daytona allows. A create or an activation past
+     * it fails as Daytona's does.
+     */
+    snapshotLimit = Number.POSITIVE_INFINITY;
+
+    private usable(): number {
+        return [...this.snapshots.values()].filter(
+            (snapshot) =>
+                !['inactive', 'error', 'build_failed'].includes(snapshot.state)
+        ).length;
+    }
+
+    private limitReached(): DaytonaSnapshotLimitError | undefined {
+        return this.usable() >= this.snapshotLimit
+            ? new DaytonaSnapshotLimitError(
+                  `Daytona API POST /api/snapshots failed with 400: {"message":"Snapshot quota exceeded. Maximum allowed: ${this.snapshotLimit}"}`
+              )
+            : undefined;
+    }
+
     async createSnapshot(options: DaytonaSnapshotOptions): Promise<DaytonaSnapshot> {
         this.snapshotOptions.push(options);
         const existing = this.snapshots.get(options.name);
         if (existing) return { ...existing };
+        const refusal = this.limitReached();
+        if (refusal) throw refusal;
         const snapshot = {
             name: options.name,
             id: `snapshot-${++this.createdSnapshots}`,
@@ -158,8 +185,34 @@ export class FakeClient implements DaytonaClient {
 
     readonly activatedSnapshots: string[] = [];
 
+    /** Snapshots Daytona deactivated too recently to activate again. */
+    readonly coolingSnapshots = new Set<string>();
+
     async activateSnapshot(name: string): Promise<void> {
         this.activatedSnapshots.push(name);
+        if (this.coolingSnapshots.has(name)) {
+            throw new DaytonaSnapshotCooldownError(
+                'Daytona API POST /api/snapshots/snapshot-old/activate failed with 400: {"message":"Snapshot deactivation is still in progress. Please try again in a few minutes."}'
+            );
+        }
+        const refusal = this.limitReached();
+        if (refusal) throw refusal;
+    }
+
+    async listSnapshots(): Promise<DaytonaSnapshot[]> {
+        const used = (snapshot: DaytonaSnapshot) =>
+            snapshot.lastUsedAt?.getTime() ?? Number.POSITIVE_INFINITY;
+        return [...this.snapshots.values()]
+            .sort((a, b) => used(a) - used(b))
+            .map((snapshot) => ({ ...snapshot }));
+    }
+
+    readonly deactivatedSnapshots: string[] = [];
+
+    async deactivateSnapshot(name: string): Promise<void> {
+        this.deactivatedSnapshots.push(name);
+        const snapshot = this.snapshots.get(name);
+        if (snapshot) snapshot.state = 'inactive';
     }
     readonly deleted: string[] = [];
     /** Every delete attempt fails with this until `deleteFailures` have failed. */

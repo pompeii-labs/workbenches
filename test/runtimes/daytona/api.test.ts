@@ -3,6 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import { DaytonaApi } from '../../../src/runtimes/daytona/api.js';
 import {
     DaytonaApiError,
+    DaytonaSnapshotCooldownError,
+    DaytonaSnapshotLimitError,
     defaultDaytonaApiUrl,
 } from '../../../src/runtimes/daytona/transport.js';
 import { client, json, sandboxHandler } from './http.js';
@@ -324,6 +326,109 @@ describe('DaytonaApi', () => {
                 'DELETE /api/snapshots/snap-1',
                 'GET /api/snapshots/wb-2',
             ]);
+        });
+
+        test('lists its own snapshots by last use, page by page, without general ones', async () => {
+            const { api, requests } = client((request) =>
+                request.url.searchParams.get('page') === '1'
+                    ? json({
+                          items: [
+                              {
+                                  id: 'snap-1',
+                                  name: 'wb-1',
+                                  state: 'active',
+                                  lastUsedAt: '2026-11-01T10:00:00.000Z',
+                              },
+                              {
+                                  id: 'snap-g',
+                                  name: 'daytona-small',
+                                  state: 'active',
+                                  general: true,
+                              },
+                          ],
+                          totalPages: 2,
+                      })
+                    : json({
+                          items: [
+                              {
+                                  id: 'snap-2',
+                                  name: 'wb-2',
+                                  state: 'inactive',
+                                  lastUsedAt: null,
+                              },
+                          ],
+                          totalPages: 2,
+                      })
+            );
+            expect(await api.listSnapshots()).toEqual([
+                {
+                    id: 'snap-1',
+                    name: 'wb-1',
+                    state: 'active',
+                    lastUsedAt: new Date('2026-11-01T10:00:00.000Z'),
+                },
+                { id: 'snap-2', name: 'wb-2', state: 'inactive' },
+            ]);
+            expect(
+                requests.map((r) => `${r.method} ${r.url.pathname}${r.url.search}`)
+            ).toEqual([
+                'GET /api/snapshots?page=1&limit=200&sort=lastUsedAt&order=asc',
+                'GET /api/snapshots?page=2&limit=200&sort=lastUsedAt&order=asc',
+            ]);
+        });
+
+        test('deactivates a snapshot by its id, and a missing one is left as it is', async () => {
+            const { api, requests } = client((request) =>
+                request.url.pathname === '/api/snapshots/wb-2'
+                    ? json({ message: 'not found' }, 404)
+                    : request.method === 'POST'
+                      ? new Response(null, { status: 204 })
+                      : json({ id: 'snap-1', name: 'wb-1', state: 'active' })
+            );
+            await api.deactivateSnapshot('wb-1');
+            await api.deactivateSnapshot('wb-2');
+            expect(requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual([
+                'GET /api/snapshots/wb-1',
+                'POST /api/snapshots/snap-1/deactivate',
+                'GET /api/snapshots/wb-2',
+            ]);
+        });
+
+        test('reports a full snapshot quota on create and on activation', async () => {
+            const quota = () =>
+                json({ message: 'Snapshot quota exceeded. Maximum allowed: 30' }, 400);
+            const { api } = client((request) =>
+                request.method === 'POST'
+                    ? quota()
+                    : json({ id: 'snap-1', name: 'wb-1', state: 'inactive' })
+            );
+            await expect(
+                api.createSnapshot({
+                    name: 'wb-1',
+                    image: 'example/image@sha256:1',
+                    resources: {},
+                })
+            ).rejects.toBeInstanceOf(DaytonaSnapshotLimitError);
+            await expect(api.activateSnapshot('wb-1')).rejects.toBeInstanceOf(
+                DaytonaSnapshotLimitError
+            );
+        });
+
+        test('reports activation refused because the snapshot was just deactivated', async () => {
+            const { api } = client((request) =>
+                request.method === 'POST'
+                    ? json(
+                          {
+                              message:
+                                  'Snapshot deactivation is still in progress. Please try again in a few minutes.',
+                          },
+                          400
+                      )
+                    : json({ id: 'snap-1', name: 'wb-1', state: 'inactive' })
+            );
+            await expect(api.activateSnapshot('wb-1')).rejects.toBeInstanceOf(
+                DaytonaSnapshotCooldownError
+            );
         });
 
         test('activates a snapshot by id and leaves one that is not inactive', async () => {

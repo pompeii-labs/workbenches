@@ -25,5 +25,7 @@ export { daytonaSnapshotName } from './snapshots.js';
 export {
     DaytonaApiError,
     type DaytonaApiOptions,
+    DaytonaSnapshotCooldownError,
+    DaytonaSnapshotLimitError,
     defaultDaytonaApiUrl,
 } from './transport.js';

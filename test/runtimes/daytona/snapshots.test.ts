@@ -164,6 +164,23 @@ describe('SandboxSnapshot', () => {
         expect(client.snapshotOptions).toEqual([]);
     });
 
+    test('fails at once on a snapshot Daytona deactivated too recently to activate', async () => {
+        const client = new FakeClient();
+        existing(client, { state: 'inactive' });
+        client.coolingSnapshots.add(name);
+        const { clock, ready } = prepare(client);
+        await expect(ready).rejects.toMatchObject({
+            name: 'RuntimeError',
+            runtime: 'daytona',
+            message: expect.stringContaining(
+                `Daytona snapshot ${name} of image ${image} was deactivated a few minutes ago, and Daytona will not activate it again yet. Run again in a few minutes`
+            ),
+        });
+        expect(clock.delays).toEqual([]);
+        expect(client.deletedSnapshots).toEqual([]);
+        expect(client.snapshotOptions).toEqual([]);
+    });
+
     test('refuses a digest that is not a sha256 digest', async () => {
         const client = new FakeClient();
         await expect(
@@ -175,6 +192,71 @@ describe('SandboxSnapshot', () => {
             'Daytona image ghcr.io/example/workbench@md5:abc resolved to an invalid digest'
         );
         expect(client.snapshotOptions).toEqual([]);
+    });
+});
+
+describe('SandboxSnapshot at the snapshot limit', () => {
+    const day = 24 * 60 * 60_000;
+    const now = new AdvancingClock().time.getTime();
+
+    /** Fills the organization to its limit with active snapshots last used `ago` milliseconds ago. */
+    function full(client: FakeClient, snapshots: Array<[string, number]>): void {
+        for (const [snapshot, ago] of snapshots) {
+            client.snapshots.set(snapshot, {
+                name: snapshot,
+                id: `id-${snapshot}`,
+                state: 'active',
+                lastUsedAt: new Date(now - ago),
+            });
+        }
+        client.snapshotLimit = snapshots.length;
+    }
+
+    const older = `wb-${'a'.repeat(32)}`;
+    const newer = `wb-${'b'.repeat(32)}`;
+
+    test("deactivates the engine's least recently used idle snapshot, then creates the new one", async () => {
+        const client = new FakeClient();
+        full(client, [
+            ['gpu-testing-v2', 9 * day],
+            [newer, 2 * day],
+            [older, 3 * day],
+        ]);
+        expect(await prepare(client).ready).toBe(name);
+        expect(client.deactivatedSnapshots).toEqual([older]);
+        expect(client.snapshots.get('gpu-testing-v2')?.state).toBe('active');
+        expect(client.snapshotOptions.map((options) => options.name)).toEqual([
+            name,
+            name,
+        ]);
+        expect(client.deletedSnapshots).toEqual([]);
+    });
+
+    test('makes room to activate an inactive snapshot', async () => {
+        const client = new FakeClient();
+        full(client, [[older, 2 * day]]);
+        existing(client, { state: 'inactive' });
+        client.snapshotProgress = [{}, { state: 'active' }];
+        expect(await prepare(client).ready).toBe(name);
+        expect(client.deactivatedSnapshots).toEqual([older]);
+        expect(client.activatedSnapshots).toEqual([name, name]);
+    });
+
+    test('never deactivates a snapshot used in the last day, and deletes nothing', async () => {
+        const client = new FakeClient();
+        full(client, [
+            [older, day - 60_000],
+            ['gpu-testing-v2', 9 * day],
+        ]);
+        await expect(prepare(client).ready).rejects.toMatchObject({
+            name: 'RuntimeError',
+            runtime: 'daytona',
+            message: expect.stringContaining(
+                `Daytona's snapshot limit is reached and every Workbench snapshot was used in the last day, so none was deactivated to make room for ${name}`
+            ),
+        });
+        expect(client.deactivatedSnapshots).toEqual([]);
+        expect(client.deletedSnapshots).toEqual([]);
     });
 });
 

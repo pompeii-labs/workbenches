@@ -9,6 +9,10 @@ import type {
 } from './contracts.js';
 import { pinnedImage } from './digests.js';
 import { daytonaResources } from './resources.js';
+import {
+    DaytonaSnapshotCooldownError,
+    DaytonaSnapshotLimitError,
+} from './transport.js';
 
 /**
  * How long a snapshot may take to become active. A cold pull of a large image
@@ -17,6 +21,14 @@ import { daytonaResources } from './resources.js';
  */
 const snapshotTimeoutMs = 30 * 60_000;
 const pollIntervalMs = 3_000;
+/**
+ * How long a snapshot must go unused before it may be deactivated to make
+ * room. Daytona refuses to activate a snapshot for a while after it is
+ * deactivated, so one in recent use is never chosen.
+ */
+const idleBeforeDeactivationMs = 24 * 60 * 60_000;
+/** The names `daytonaSnapshotName` gives, so only the engine's snapshots are deactivated. */
+const engineSnapshot = /^wb-[a-f0-9]{32}$/;
 const pending = new Set(['pending', 'pulling', 'building', 'snapshotting', 'removing']);
 const failed = new Set(['error', 'build_failed']);
 
@@ -44,6 +56,13 @@ export function daytonaSnapshotName(
  * snapshot is deleted and made again once. A snapshot in progress is never
  * deleted, even when the wait runs out, because finishing it serves the next
  * run; a run that finds another run's snapshot in progress waits on it.
+ *
+ * Daytona caps how many usable snapshots an organization holds. At the cap,
+ * the engine's least recently used snapshot that has gone a day unused is
+ * deactivated to make room, and is activated again by the next run that
+ * needs it. Snapshots are never deleted to make room. A run that needs a
+ * snapshot Daytona deactivated minutes ago fails at once, because Daytona
+ * will not activate it again yet.
  */
 export class SandboxSnapshot {
     constructor(
@@ -69,11 +88,13 @@ export class SandboxSnapshot {
         for (;;) {
             const snapshot: DaytonaSnapshot =
                 (await this.client.getSnapshot(name)) ??
-                (await this.client.createSnapshot({
-                    name,
-                    image: pinnedImage(image, digest),
-                    resources,
-                }));
+                (await this.withRoom(name, () =>
+                    this.client.createSnapshot({
+                        name,
+                        image: pinnedImage(image, digest),
+                        resources,
+                    })
+                ));
             const removing = snapshot.id === retired;
             if (snapshot.state === 'active' && !removing) return name;
             if (failed.has(snapshot.state) && !removing) {
@@ -91,7 +112,7 @@ export class SandboxSnapshot {
             if (snapshot.state === 'inactive' && !removing) {
                 if (!activated) {
                     activated = true;
-                    await this.client.activateSnapshot(name);
+                    await this.activate(name, image);
                     continue;
                 }
             } else if (!removing && !pending.has(snapshot.state)) {
@@ -105,6 +126,57 @@ export class SandboxSnapshot {
                 );
             }
             await this.clock.sleep(pollIntervalMs);
+        }
+    }
+
+    /**
+     * Asks Daytona to activate `name`. Daytona refuses for a few minutes after
+     * a snapshot is deactivated, and the run fails at once rather than waiting
+     * that out.
+     */
+    private async activate(name: string, image: string): Promise<void> {
+        try {
+            await this.withRoom(name, () => this.client.activateSnapshot(name));
+        } catch (error) {
+            if (!(error instanceof DaytonaSnapshotCooldownError)) throw error;
+            throw this.error(
+                `Daytona snapshot ${name} of image ${image} was deactivated a few minutes ago, and Daytona will not activate it again yet. Run again in a few minutes: ${error.message}`
+            );
+        }
+    }
+
+    /**
+     * Runs `attempt`, and when Daytona refuses it for the snapshot limit,
+     * deactivates one idle engine snapshot other than `name` and runs it once more.
+     */
+    private async withRoom<T>(name: string, attempt: () => Promise<T>): Promise<T> {
+        try {
+            return await attempt();
+        } catch (error) {
+            if (!(error instanceof DaytonaSnapshotLimitError)) throw error;
+            const cutoff = this.clock.now().getTime() - idleBeforeDeactivationMs;
+            const idle = (await this.client.listSnapshots()).find(
+                (snapshot) =>
+                    snapshot.name !== name &&
+                    engineSnapshot.test(snapshot.name) &&
+                    snapshot.state === 'active' &&
+                    snapshot.lastUsedAt !== undefined &&
+                    snapshot.lastUsedAt.getTime() < cutoff
+            );
+            if (!idle) {
+                throw this.error(
+                    `Daytona's snapshot limit is reached and every Workbench snapshot was used in the last day, so none was deactivated to make room for ${name}: ${error.message}`
+                );
+            }
+            await this.client.deactivateSnapshot(idle.name);
+            try {
+                return await attempt();
+            } catch (retry) {
+                if (!(retry instanceof DaytonaSnapshotLimitError)) throw retry;
+                throw this.error(
+                    `Daytona's snapshot limit is still reached after deactivating ${idle.name} to make room for ${name}: ${retry.message}`
+                );
+            }
         }
     }
 

@@ -40,6 +40,28 @@ export class DaytonaApiError extends Error {
 }
 
 /**
+ * Daytona refused a snapshot because the organization already holds as many
+ * usable snapshots as its quota allows.
+ */
+export class DaytonaSnapshotLimitError extends DaytonaApiError {
+    constructor(message: string) {
+        super(message, 400);
+        this.name = 'DaytonaSnapshotLimitError';
+    }
+}
+
+/**
+ * Daytona refused to activate a snapshot because it was deactivated a few
+ * minutes ago, which it reports as deactivation still in progress.
+ */
+export class DaytonaSnapshotCooldownError extends DaytonaApiError {
+    constructor(message: string) {
+        super(message, 400);
+        this.name = 'DaytonaSnapshotCooldownError';
+    }
+}
+
+/**
  * The WebSocket constructor Bun and Node provide, which takes request headers
  * as its second argument. The DOM declaration describes only subprotocols
  * there, so the platform constructor is narrowed to this form once.
