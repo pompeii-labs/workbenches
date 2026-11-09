@@ -68,8 +68,9 @@ describe('OpenCodeServer', () => {
 });
 
 describe('OpenCodeServer exit', () => {
-    async function failureAfterExit(code: number): Promise<string> {
+    async function failureAfterExit(code: number | Error): Promise<string> {
         let exit = (_code: number) => {};
+        let lose = (_error: Error) => {};
         let closeOutput = () => {};
         const failures: string[] = [];
         const server = new OpenCodeServer({
@@ -79,8 +80,9 @@ describe('OpenCodeServer exit', () => {
             fetch: strictFetch([]),
             launch: () => ({
                 process: {
-                    exited: new Promise<number>((resolve) => {
+                    exited: new Promise<number>((resolve, reject) => {
                         exit = resolve;
+                        lose = reject;
                     }),
                     stdout: new ReadableStream<Uint8Array>({
                         start(controller) {
@@ -108,7 +110,8 @@ describe('OpenCodeServer exit', () => {
             () => ({ command: 'opencode', args: [], env: {} }) as never,
             (error) => failures.push(error.message)
         );
-        exit(code);
+        if (typeof code === 'number') exit(code);
+        else lose(code);
         closeOutput();
         await Bun.sleep(5);
         await server.close();
@@ -123,6 +126,23 @@ describe('OpenCodeServer exit', () => {
 
     test('keeps the plain message for another exit code', async () => {
         expect(await failureAfterExit(2)).toBe('OpenCode server exited with code 2');
+    });
+
+    test('fails the session, not the process, when the sandbox is lost', async () => {
+        const unhandled: unknown[] = [];
+        const record = (reason: unknown) => unhandled.push(reason);
+        process.on('unhandledRejection', record);
+        try {
+            const lost = new Error('Sandbox is not running');
+            lost.name = 'SandboxNotRunningError';
+            expect(await failureAfterExit(lost)).toBe(
+                'OpenCode server was lost: Sandbox is not running'
+            );
+            await Bun.sleep(5);
+            expect(unhandled).toEqual([]);
+        } finally {
+            process.off('unhandledRejection', record);
+        }
     });
 });
 
