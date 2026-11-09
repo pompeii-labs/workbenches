@@ -1,3 +1,4 @@
+import { e2bResources } from '../runtimes/e2b/resources.js';
 import type {
     ResolvedWorkbench,
     SelectedRuntime,
@@ -224,6 +225,17 @@ export class RequirementsPreflight {
         }
         if (requirements.gpu && runtime.name !== 'docker') {
             fail(`GPU requirements are not supported on the ${runtime.name} runtime`);
+        }
+        if (runtime.name === 'e2b') {
+            const resources = e2bResources(requirements);
+            if (resources?.cpuCount !== undefined) {
+                report.applied.push(`cpu allocation ${resources.cpuCount}`);
+            }
+            if (resources?.memoryMB !== undefined) {
+                report.applied.push(`memory allocation ${resources.memoryMB} MiB`);
+            }
+            this.pending(check, ['arch', 'disk']);
+            return;
         }
         if (runtime.name !== 'docker') {
             this.pending(check, ['arch', 'cpu', 'memory', 'disk']);

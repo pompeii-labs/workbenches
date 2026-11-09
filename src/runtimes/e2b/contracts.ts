@@ -1,11 +1,19 @@
 import type { RuntimeCommandResult } from '../contracts.js';
 import type { AssetSource } from '../staging/source.js';
 
+/** The sandbox size a template is built with. Absent fields keep E2B's default. */
+export interface E2BTemplateResources {
+    cpuCount?: number;
+    memoryMB?: number;
+}
+
 export interface E2BTemplateSource {
     image?: string;
     dockerfile?: string;
     context?: string;
     repositoryTools?: boolean;
+    /** The declared size, applied at build and part of the template name. */
+    resources?: E2BTemplateResources;
 }
 
 export interface E2BPreparedTemplate {

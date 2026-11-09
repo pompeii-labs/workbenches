@@ -30,7 +30,7 @@ describe('creator Workbench', () => {
 
         expect(workbench.manifest).toEqual({
             spec: 1,
-            version: '0.2.4',
+            version: '0.2.5',
             name: 'workbench-creator',
             description:
                 'Design, author, review, and test repository-owned Workbenches.',
@@ -49,7 +49,7 @@ describe('creator Workbench', () => {
 
     test('keeps the candidate reference snapshot pinned to its version', async () => {
         expect(await digest(join(referencesDirectory, 'spec.md'))).toBe(
-            '24ac219ca32b8d8cbf77d96ffc0c4e7c790eef24d2665f0f2d085440b42dbab4'
+            '011575240a2e6524999d7ca4d0753d8e6b7e61e07c8ce3db42422061a3028f8f'
         );
         expect(await digest(join(referencesDirectory, 'workbench.schema.json'))).toBe(
             'e11f0e669cbf77220e472c79fe0fd5e153601d86b44c89bd2abc52bbc067c44f'

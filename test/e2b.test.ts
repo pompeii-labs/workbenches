@@ -96,6 +96,44 @@ describe('E2B runtime provider', () => {
         }
     });
 
+    test('builds the template at the declared size and keys the cache on it', async () => {
+        const resolved = await fixture();
+        const sized = (
+            requirements: ResolvedWorkbench['manifest']['requirements']
+        ) => ({
+            ...resolved,
+            manifest: {
+                ...resolved.manifest,
+                ...(requirements ? { requirements } : {}),
+            },
+        });
+        const names: string[] = [];
+        const sources: E2BTemplateSource[] = [];
+        for (const workbench of [
+            sized(undefined),
+            sized({ gpu: false, cpu: 4, memory_gb: 8 }),
+            sized({ gpu: false, cpu: 4, memory_gb: 8 }),
+            sized({ gpu: false, cpu: 2, memory_gb: 8 }),
+        ]) {
+            const client = new FakeClient();
+            const runtime = await new E2BRuntimeProvider({ ...disk, client }).prepare(
+                request(workbench)
+            );
+            await runtime.cleanup();
+            names.push(client.templateNames[0] ?? '');
+            sources.push(client.templateSources[0] ?? {});
+        }
+        expect(sources[0]).toEqual({ image: 'ghcr.io/example/workbench:1.0.0' });
+        expect(sources[1]).toEqual({
+            image: 'ghcr.io/example/workbench:1.0.0',
+            resources: { cpuCount: 4, memoryMB: 8_192 },
+        });
+        expect(sources[3]?.resources).toEqual({ cpuCount: 2, memoryMB: 8_192 });
+        expect(names[0]).toBe('workbench-e2b-fixture-dbc15f34a33f8d2af7f6');
+        expect(names[1]).toBe(names[2]);
+        expect(new Set(names).size).toBe(3);
+    });
+
     test('adds engine-managed Git tools for repository runs without changing the Workbench image', async () => {
         const resolved = await fixture();
         const client = new FakeClient();

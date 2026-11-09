@@ -20,6 +20,7 @@ import type {
     E2BSandboxInfo,
     E2BTemplateSource,
 } from './contracts.js';
+import { e2bExitCode } from './exit.js';
 
 export class E2BSdkClient implements E2BClient {
     readonly #client: E2B;
@@ -50,7 +51,14 @@ export class E2BSdkClient implements E2BClient {
         const configured = source.repositoryTools
             ? template.runCmd(installRepositoryTools, { user: 'root' })
             : template;
-        const built = await this.#client.Template.build(configured, name);
+        const built = await this.#client.Template.build(configured, name, {
+            ...(source.resources?.cpuCount === undefined
+                ? {}
+                : { cpuCount: source.resources.cpuCount }),
+            ...(source.resources?.memoryMB === undefined
+                ? {}
+                : { memoryMB: source.resources.memoryMB }),
+        });
         return {
             name,
             immutableReference: built.templateId,
@@ -274,13 +282,17 @@ class SdkPty implements E2BPty {
     }
 }
 
-function commandResult(result: Pick<CommandResult, 'exitCode' | 'stdout' | 'stderr'>): {
+function commandResult(
+    result: Pick<CommandResult, 'exitCode' | 'stdout' | 'stderr'> & {
+        error?: string | undefined;
+    }
+): {
     code: number;
     stdout: string;
     stderr: string;
 } {
     return {
-        code: result.exitCode,
+        code: e2bExitCode(result.exitCode, result.error),
         stdout: result.stdout,
         stderr: result.stderr,
     };

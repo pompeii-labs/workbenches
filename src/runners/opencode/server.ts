@@ -124,16 +124,27 @@ export class OpenCodeServer {
                 ready.reject(new Error('OpenCode server did not become ready in time')),
             this.options.startupTimeoutMs
         );
-        void child.exited.then((code) => {
-            const error = new Error(
-                new RunnerProcessExit('OpenCode server').message(code)
-            );
+        const ended = (error: Error) => {
             if (!this.closed && !this.url) {
                 ready.reject(error);
             } else if (!this.closed) {
                 onFailure(error);
             }
-        });
+        };
+        // A lost sandbox rejects the exit; fail the session the same way.
+        void child.exited.then(
+            (code) =>
+                ended(
+                    new Error(new RunnerProcessExit('OpenCode server').message(code))
+                ),
+            (error: unknown) =>
+                ended(
+                    new Error(
+                        `OpenCode server was lost: ${error instanceof Error ? error.message : String(error)}`,
+                        { cause: error }
+                    )
+                )
+        );
         try {
             this.url = await launched.resolveUrl(await ready.promise);
             const info = await this.send(new URL('/api/info', this.url), {
