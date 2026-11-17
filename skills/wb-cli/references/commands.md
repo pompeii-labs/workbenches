@@ -7,7 +7,7 @@ Run `wb <command> --help` for the authoritative flags of your installed version.
 | Command | What it does |
 | --- | --- |
 | `wb list [SOURCE]` | With no source, saved aliases. With a local path, GitHub URL, or `owner/repo`, the packages under its `.workbenches/`. |
-| `wb add <SOURCE> [--as ALIAS] [--name PKG] [--ref REF] [-f]` | Save a registry `org/name`, a GitHub URL, or a local path. Remote packages are frozen snapshots; local paths stay live: every new run reads the current files, so edits need no re-add. `-f` replaces a saved package that changed. |
+| `wb add <SOURCE> [--as ALIAS] [--name PKG] [--ref REF] [-f]` | Save a registry `org/name` (latest release) or `org/name@version` (that exact version, prereleases included, kept by `wb upgrade`), a GitHub URL, or a local path. Remote packages are frozen snapshots; local paths stay live: every new run reads the current files, so edits need no re-add. `-f` replaces a saved package that changed. |
 | `wb view <WORKBENCH> [--json]` | Resolved configuration, provenance, model routes and readiness, runtimes, requirements. |
 | `wb remove <ALIAS>` | Forget an alias. |
 | `wb upgrade [ALIAS]` | Refresh saved remote snapshots from their sources. |
@@ -59,9 +59,11 @@ Sources: `.#name` and `/path#name` select one package in a repo, `org/name` is t
 | `wb org list`, `wb org use <SLUG>` | Held organizations; set the default. |
 | `wb logout [--org SLUG]` | Revoke and forget a key. |
 | `wb push [SOURCE] [--org] [--as NAME]` | Store a new immutable internal version. |
-| `wb publish <SOURCE> [--org] [--version]` | Submit for public review. A local source is submitted directly, with no internal version stored first. |
+| `wb publish <org/name> [--version <v>] [--org <slug>]` | Submit the newest stored release for public review; `--version` names it exactly and fails if a newer one exists. Push first; publish never uploads. |
 | `wb unpublish <org/name>` | Make a public Workbench internal again. |
-| `wb image push <IMAGE> --as NAME [--org] [--tag TAG] [--client docker]` | Publish a local OCI image to `images.workbenches.dev/<org>/<name>:<tag>`. |
+| `wb withdraw <org/name> [--org <slug>]` | Withdraw this Workbench's open review submission (`pending` or `changes_requested`). Fails when none is open. `--org` must match `org/name`. |
+| `wb delete <org/name[@version]> [--yes] [--org <slug>]` | Without `--yes`, describe irreversible deletion and make no HTTP requests. With it, delete the whole Workbench, every version, and its images, or list versions and delete only the named version's id. A version's image is deleted unless a later version uses it. The registry refuses version deletion for unfinished runs, the current public version, or the only version; unfinished runs block whole-Workbench deletion. HTTP 409 messages pass through unchanged. `--org` must match the reference, including for previews. |
+| `wb image push <IMAGE> <org/name@version> [--org <slug>] [--client docker]` | Resolve the exact stored version first, then export and push its image once to `images.workbenches.dev/org/name:<version tag>`, reusing blobs and uploading bounded chunks. Push the version with `wb push` first. Tags replace every character outside `[A-Za-z0-9._-]` with `_`. A version may reference its own or an earlier version's tag in the same Workbench repository. Registry refusals pass through unchanged. `--org` must match; the removed image flags fail before any request and show the new form. |
 | `wb image login [--org] [--client docker]` | Log a Docker-compatible client into the registry. |
 
 ## Connections and settings

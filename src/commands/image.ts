@@ -1,6 +1,7 @@
 import { defineCommand } from 'citty';
 import {
     RegistryAccountStore,
+    RegistryClient,
     type RegistryImageProgress,
     RegistryImagePublisher,
 } from '../registry/index.js';
@@ -37,7 +38,7 @@ export const loginCommand = defineCommand({
 export const pushCommand = defineCommand({
     meta: {
         name: 'push',
-        description: 'Publish a local image to an organization repository.',
+        description: 'Push a local image once for a stored Workbench version.',
     },
     args: {
         image: {
@@ -45,16 +46,13 @@ export const pushCommand = defineCommand({
             description: 'Local image reference',
             required: true,
         },
-        org: orgArgument,
-        as: {
-            type: 'string',
-            description: 'Registry image name',
-            required: true,
+        workbench: {
+            type: 'positional',
+            description: 'Registry org/name@version, stored first with wb push',
         },
-        tag: {
-            type: 'string',
-            description: 'Registry image tag',
-            default: 'latest',
+        org: {
+            ...orgArgument,
+            description: 'Organization slug; must match org/name@version',
         },
         client: {
             type: 'string',
@@ -64,15 +62,28 @@ export const pushCommand = defineCommand({
     },
     async run({ args }) {
         rejectPublisherFlag(args);
+        if ('as' in args || 'tag' in args) {
+            throw new Error(
+                '--as and --tag were replaced. Use wb image push <local image> <org/name@version>'
+            );
+        }
+        const reference = RegistryClient.parseVersionReference(args.workbench ?? '');
+        if (!reference) {
+            throw new Error('Use wb image push <local image> <org/name@version>');
+        }
+        if (args.org && args.org !== reference.publisher) {
+            throw new Error(
+                `--org ${args.org} does not match ${reference.publisher}/${reference.workbench}`
+            );
+        }
         const output = new CliPresenter();
-        const account = await new RegistryAccountStore().require(args.org);
+        const account = await new RegistryAccountStore().require(reference.publisher);
         const target = await new RegistryImagePublisher({
             account,
             progress: new ImageProgressRenderer(output).render,
         }).push({
             image: args.image,
-            name: args.as,
-            tag: args.tag,
+            reference,
             client: args.client,
         });
         output.record({

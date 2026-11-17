@@ -5,9 +5,13 @@ import { join, resolve } from 'node:path';
 import { AuthoringOperation } from '../src/authoring/index.js';
 import { SavedWorkbenchCatalog, WorkbenchPackage } from '../src/catalog/index.js';
 import { CliPresenter } from '../src/commands/presenter.js';
-import { presentPushed } from '../src/commands/push.js';
+import { pushedRecord } from '../src/commands/push.js';
 import { Connection } from '../src/database/connection.js';
-import { RegistryAccountStore, RegistryClient } from '../src/registry/index.js';
+import {
+    RegistryAccountStore,
+    RegistryClient,
+    RegistryPublisher,
+} from '../src/registry/index.js';
 import { RunnerRegistry } from '../src/runners/index.js';
 import { RunStore } from '../src/runs/index.js';
 import { Workbench, WorkbenchResolver } from '../src/workbench/index.js';
@@ -600,12 +604,6 @@ describe('push, publish, and unpublish', () => {
             const stale = await cli(home, ['push', '.#core', ...api], root);
             expect(stale.code).toBe(1);
             expect(stale.stderr).toContain(registry.versionConflict);
-
-            registry.versionConflict =
-                'repo-engineer is public. Publish new versions with wb publish';
-            const isPublic = await cli(home, ['push', '.#core', ...api], root);
-            expect(isPublic.code).toBe(1);
-            expect(isPublic.stderr).toContain(registry.versionConflict);
         } finally {
             registry.server.stop(true);
         }
@@ -618,15 +616,143 @@ describe('push, publish, and unpublish', () => {
             color: false,
             stdout: (value) => lines.push(value),
         });
-        presentPushed(output, {
-            reference: { publisher: 'acme', workbench: 'ios-expert' },
+        output.record(
+            pushedRecord({
+                reference: { publisher: 'acme', workbench: 'ios-expert' },
+                workbenchId: 'wb-id',
+                visibility: 'private',
+                versionId: 'version-id',
+                version: '1.2.0',
+                digest: `sha256:${'a'.repeat(64)}`,
+            })
+        );
+        expect(lines.join('')).toContain('Pushed acme/ios-expert@1.2.0 (internal)');
+        expect(lines.join('')).not.toContain('cloud image build');
+        expect(lines.join('')).not.toContain('public version');
+    });
+
+    test('push reports a cloud image build and its log page in human and machine output', () => {
+        const url = 'https://workbenches.dev/dashboard/acme/builds/build-id';
+        const plain = {
+            reference: { publisher: 'acme', workbench: 'expert' },
             workbenchId: 'wb-id',
-            visibility: 'private',
+            visibility: 'public' as const,
             versionId: 'version-id',
             version: '1.2.0',
             digest: `sha256:${'a'.repeat(64)}`,
-        });
-        expect(lines.join('')).toContain('Pushed acme/ios-expert@1.2.0 (internal)');
+        };
+        const pushed = {
+            ...plain,
+            imageBuild: { id: 'build-id', state: 'queued', url },
+        };
+        const lines: string[] = [];
+        new CliPresenter({
+            interactive: true,
+            color: false,
+            stdout: (value) => lines.push(value),
+        }).record(pushedRecord(pushed));
+        expect(lines.join('')).toContain('Pushed acme/expert@1.2.0 (internal)');
+        expect(lines.join('')).toContain('Cloud image build build-id: queued.');
+        expect(lines.join('')).toContain(`Build log: ${url}`);
+        expect(lines.join('')).toContain('published once it is ready');
+        expect(lines.join('')).toContain(
+            'The public version changes only when this one is approved: wb publish acme/expert'
+        );
+        lines.length = 0;
+        new CliPresenter({
+            interactive: false,
+            stdout: (value) => lines.push(value),
+        }).record(pushedRecord(pushed));
+        // Scripts and agents get the build after the original four fields.
+        expect(lines.join('')).toBe(
+            `push\tacme/expert\t1.2.0\t${pushed.digest}\tbuild-id\tqueued\t${url}\n`
+        );
+        lines.length = 0;
+        new CliPresenter({
+            interactive: false,
+            stdout: (value) => lines.push(value),
+        }).record(pushedRecord(plain));
+        expect(lines.join('')).toBe(`push\tacme/expert\t1.2.0\t${pushed.digest}\n`);
+        lines.length = 0;
+        new CliPresenter({
+            interactive: true,
+            color: false,
+            stdout: (value) => lines.push(value),
+        }).record(
+            pushedRecord({ ...pushed, imageBuild: { id: 'build-id', state: 'ready' } })
+        );
+        expect(lines.join('')).toContain('Cloud image build build-id: ready.');
+        expect(lines.join('')).not.toContain('published once it is ready');
+        expect(lines.join('')).not.toContain('Build log');
+    });
+
+    test('push preserves the image build reported on a version of a public Workbench', async () => {
+        const { home, path } = await fixture('repo-engineer');
+        const registry = await lifecycleRegistry(path);
+        try {
+            await hold(home, registry.server.url.origin, ['example']);
+            const accounts = new RegistryAccountStore({
+                home,
+                client: new RegistryClient({
+                    home,
+                    apiUrl: registry.server.url.origin,
+                }),
+            });
+            const publisher = new RegistryPublisher(accounts);
+            const account = await publisher.account('example');
+            const workbench = await Workbench.load(path, runners);
+            registry.visibility = 'public';
+            const url = 'https://workbenches.dev/dashboard/example/builds/build-id';
+            for (const build of [
+                undefined,
+                { id: 'build-id', state: 'queued' },
+                { id: 'build-id', state: 'queued', dashboard_url: url },
+            ]) {
+                registry.imageBuild = build;
+                const pushed = await publisher.push(account, workbench);
+                expect(pushed.visibility).toBe('public');
+                expect(pushed.imageBuild).toEqual(
+                    build && {
+                        id: build.id,
+                        state: build.state,
+                        ...('dashboard_url' in build ? { url } : {}),
+                    }
+                );
+                const lines: string[] = [];
+                new CliPresenter({
+                    interactive: true,
+                    color: false,
+                    stdout: (value) => lines.push(value),
+                }).record(pushedRecord(pushed));
+                expect(lines.join('').includes('Cloud image build build-id')).toBe(
+                    build !== undefined
+                );
+                expect(lines.join('').includes(`Build log: ${url}`)).toBe(
+                    build !== undefined && 'dashboard_url' in build
+                );
+            }
+            // A build the CLI could not name or link is refused, not shown.
+            for (const malformed of [
+                { id: '', state: 'queued' },
+                { id: 'build-id', state: '' },
+                { id: 'build-id', state: 'queued', dashboard_url: 42 },
+                { id: 'build-id', state: 'queued', dashboard_url: 'not a url' },
+                { id: 'build\tshift', state: 'queued' },
+                { id: 'build-id', state: 'queued\nextra' },
+                {
+                    id: 'build-id',
+                    state: 'queued',
+                    dashboard_url: 'javascript:alert(1)',
+                },
+            ]) {
+                registry.imageBuild = malformed as typeof registry.imageBuild;
+                await expect(publisher.push(account, workbench)).rejects.toThrow(
+                    'malformed image build record'
+                );
+            }
+        } finally {
+            registry.server.stop(true);
+        }
     });
 
     test('publish by reference submits the latest stored version id', async () => {
@@ -648,10 +774,12 @@ describe('push, publish, and unpublish', () => {
             expect(result.stdout).not.toContain('push\t');
             expect(registry.requests.map((request) => request.path)).toEqual([
                 '/v1/resolutions',
+                '/v1/workbenches/wb-id/versions',
+                '/v1/resolutions',
                 '/v1/submissions',
             ]);
-            expect(registry.requests[1]?.body).toEqual({ version_id: 'version-id' });
-            expect(registry.requests[1]?.authorization).toBe('Bearer wb_example');
+            expect(registry.requests[3]?.body).toEqual({ version_id: 'version-id' });
+            expect(registry.requests[3]?.authorization).toBe('Bearer wb_example');
 
             const latest = await cli(
                 home,
@@ -666,7 +794,7 @@ describe('push, publish, and unpublish', () => {
                 root
             );
             expect(older.code).toBe(1);
-            expect(older.stderr).toContain('Only the latest version can be published');
+            expect(older.stderr).toContain('not stored');
 
             const mismatched = await cli(
                 home,
@@ -688,53 +816,25 @@ describe('push, publish, and unpublish', () => {
         }
     });
 
-    test('publish with a local source submits the package directly', async () => {
+    test('publish refuses local sources and saved aliases before any request', async () => {
         const { root, home, path } = await fixture('repo-engineer');
         const registry = await lifecycleRegistry(path);
         try {
             await hold(home, registry.server.url.origin, ['first', 'second']);
             const api = ['--api-url', registry.server.url.origin];
 
-            const result = await cli(
-                home,
-                ['publish', '.#core', '--org', 'second', ...api],
-                root
-            );
-            expect(result.code).toBe(0);
-            expect(result.stdout.trim()).toContain(
-                'submitted\tsecond/repo-engineer\t0.1.0'
-            );
-            // No push first: a public workbench refuses pushes, so its new
-            // versions can only arrive as a package submission.
-            expect(registry.requests.map((request) => request.path)).toEqual([
-                '/v1/submissions',
-            ]);
-            const body = registry.requests[0]?.body as {
-                organization_id: string;
-                slug: string;
-                package: { format: number; files: unknown[] };
-                version_id?: string;
-            };
-            expect(body.organization_id).toBe('second-id');
-            expect(body.slug).toBe('repo-engineer');
-            expect(body.package.format).toBe(1);
-            expect(body.package.files.length).toBeGreaterThan(0);
-            expect(body.version_id).toBeUndefined();
-            expect(registry.requests[0]?.authorization).toBe('Bearer wb_second');
-
-            const versioned = await cli(
-                home,
-                ['publish', '.#core', '--version', '0.1.0', ...api],
-                root
-            );
-            expect(versioned.code).toBe(1);
-            expect(versioned.stderr).toContain('--version applies to a registry');
-            expect(registry.requests).toHaveLength(1);
-
-            registry.versionConflict = 'Version 0.1.0 must be greater';
-            const stale = await cli(home, ['publish', '.#core', ...api], root);
-            expect(stale.code).toBe(1);
-            expect(stale.stderr).toContain('Version 0.1.0 must be greater');
+            for (const source of ['.#core', path, 'saved-expert']) {
+                const result = await cli(
+                    home,
+                    ['publish', source, '--org', 'second', ...api],
+                    root
+                );
+                expect(result.code).toBe(1);
+                expect(result.stderr).toContain(
+                    'wb publish takes a registry org/name. Push the package with wb push first, then publish it.'
+                );
+            }
+            expect(registry.requests).toHaveLength(0);
         } finally {
             registry.server.stop(true);
         }
@@ -795,6 +895,8 @@ async function lifecycleRegistry(packagePath: string) {
     const state = {
         digest,
         versionConflict: undefined as string | undefined,
+        visibility: 'private' as 'private' | 'public',
+        imageBuild: undefined as { id: string; state: string } | undefined,
         requests: [] as Array<{
             method: string;
             path: string;
@@ -809,7 +911,10 @@ async function lifecycleRegistry(packagePath: string) {
         async fetch(request) {
             const pathname = new URL(request.url).pathname;
             if (pathname === '/v1/events') return Response.json({ ok: true });
-            const body = request.method === 'DELETE' ? null : await request.json();
+            const body =
+                request.method === 'DELETE' || request.method === 'GET'
+                    ? null
+                    : await request.json();
             state.requests.push({
                 method: request.method,
                 path: pathname,
@@ -831,12 +936,34 @@ async function lifecycleRegistry(packagePath: string) {
                             id: 'wb-id',
                             slug: (body as { slug: string }).slug,
                             organization_slug: organization.replace('-id', ''),
-                            visibility: 'private',
+                            visibility: state.visibility,
                         },
-                        version: { id: 'version-id', version: '0.1.0', digest },
+                        version: {
+                            id: 'version-id',
+                            version: '0.1.0',
+                            digest,
+                            ...(state.imageBuild
+                                ? { image_build: state.imageBuild }
+                                : {}),
+                        },
                     },
                     { status: 201 }
                 );
+            }
+            if (pathname === '/v1/workbenches/wb-id/versions') {
+                return Response.json({
+                    versions: [
+                        {
+                            id: 'version-id',
+                            version: '0.1.0',
+                            prerelease: false,
+                            withdrawn: false,
+                            published_at: null,
+                            provenance: null,
+                            images: [],
+                        },
+                    ],
+                });
             }
             if (pathname === '/v1/resolutions') {
                 return Response.json({

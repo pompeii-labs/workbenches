@@ -65,8 +65,7 @@ describe('Workbench image commands', () => {
             await runDefinedCommand(loginCommand, { client: fixture.client });
             await runDefinedCommand(pushCommand, {
                 image: 'local-image:latest',
-                as: 'creator',
-                tag: '0.2.0',
+                workbench: 'pompeii-labs/creator@0.2.0',
                 client: fixture.client,
             });
             const writes = output.mock.calls.map(([value]) => String(value));
@@ -107,8 +106,7 @@ describe('Workbench image commands', () => {
                 'image',
                 'push',
                 'local-image:latest',
-                '--as',
-                'creator',
+                'pompeii-labs/creator@0.2.0',
                 '--client',
                 fixture.client,
             ];
@@ -124,7 +122,7 @@ describe('Workbench image commands', () => {
             );
             expect(unheld.code).toBe(1);
             expect(unheld.stderr).toContain(
-                'Not signed in to organization other. Held: pompeii-labs'
+                '--org other does not match pompeii-labs/creator'
             );
             expect(fixture.manifests).toHaveLength(0);
         } finally {
@@ -188,10 +186,7 @@ describe('Workbench image commands', () => {
                     'image',
                     'push',
                     'local-image:latest',
-                    '--as',
-                    'creator',
-                    '--tag',
-                    '0.2.0',
+                    'pompeii-labs/creator@0.2.0',
                     '--client',
                     fixture.client,
                 ],
@@ -232,10 +227,7 @@ describe('Workbench image commands', () => {
                     'image',
                     'push',
                     'local-image:latest',
-                    '--as',
-                    'creator',
-                    '--tag',
-                    '0.2.1',
+                    'pompeii-labs/creator@0.2.1',
                     '--client',
                     fixture.client,
                 ],
@@ -261,10 +253,7 @@ describe('Workbench image commands', () => {
                     'image',
                     'push',
                     'local-image:latest',
-                    '--as',
-                    'creator',
-                    '--tag',
-                    '0.2.0',
+                    'pompeii-labs/creator@0.2.0',
                     '--client',
                     fixture.client,
                 ],
@@ -321,6 +310,25 @@ async function imageFixture(options: { losePatchResponseOnce?: boolean } = {}) {
         port: 0,
         async fetch(request) {
             const url = new URL(request.url);
+            if (url.pathname === '/v1/resolutions') {
+                const body: unknown = await request.json();
+                if (typeof body !== 'object' || body === null || !('version' in body)) {
+                    return Response.json({}, { status: 400 });
+                }
+                return Response.json({
+                    workbench_id: 'workbench-id',
+                    visibility: 'private',
+                    source_path: 'workbench.yml',
+                    repository: null,
+                    latest_version: {
+                        id: 'version-id',
+                        version: body.version,
+                        digest: 'a'.repeat(64),
+                        source_commit: 'b'.repeat(40),
+                        artifact_url: null,
+                    },
+                });
+            }
             if (url.pathname === '/v2/auth') {
                 if (request.headers.get('authorization') !== `Bearer ${token}`) {
                     return Response.json({ errors: [] }, { status: 401 });

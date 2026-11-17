@@ -1,13 +1,9 @@
 import { defineCommand } from 'citty';
 
-import {
-    RegistryPublisher,
-    type RegistryPushedVersion,
-    registryVisibilityLabel,
-} from '../registry/index.js';
+import { RegistryPublisher, type RegistryPushedVersion } from '../registry/index.js';
 import { WorkbenchResolver } from '../workbench/index.js';
 import { orgArgument, rejectPublisherFlag } from './org-option.js';
-import { CliPresenter } from './presenter.js';
+import { CliPresenter, type CliRecord } from './presenter.js';
 
 export const pushCommand = defineCommand({
     meta: {
@@ -32,21 +28,51 @@ export const pushCommand = defineCommand({
         const { workbench } = await new WorkbenchResolver().resolve(args.source ?? '.');
         const publisher = new RegistryPublisher();
         const account = await publisher.account(args.org);
-        presentPushed(
-            output,
-            await publisher.push(account, workbench, {
-                ...(args.as ? { slug: args.as } : {}),
-                progress: (message) => output.progress(message),
-            })
-        );
+        const pushed = await publisher.push(account, workbench, {
+            ...(args.as ? { slug: args.as } : {}),
+            progress: (message) => output.progress(message),
+        });
+        output.record(pushedRecord(pushed));
     },
 });
 
-export function presentPushed(output: CliPresenter, pushed: RegistryPushedVersion) {
+/** What `wb push` prints for a stored version, for people and for scripts. */
+export function pushedRecord(pushed: RegistryPushedVersion): CliRecord {
     const reference = `${pushed.reference.publisher}/${pushed.reference.workbench}`;
-    output.record({
-        machine: ['push', reference, pushed.version, pushed.digest],
-        title: `Pushed ${reference}@${pushed.version} (${registryVisibilityLabel(pushed.visibility)})`,
-        details: [pushed.digest],
-    });
+    return {
+        // Build fields follow the original four, so existing readers keep working.
+        machine: [
+            'push',
+            reference,
+            pushed.version,
+            pushed.digest,
+            ...(pushed.imageBuild
+                ? [
+                      pushed.imageBuild.id,
+                      pushed.imageBuild.state,
+                      ...(pushed.imageBuild.url ? [pushed.imageBuild.url] : []),
+                  ]
+                : []),
+        ],
+        // Every push is internal; outside the organization a public Workbench keeps its approved version.
+        title: `Pushed ${reference}@${pushed.version} (internal)`,
+        details: [
+            pushed.digest,
+            ...(pushed.imageBuild
+                ? [
+                      pushed.imageBuild.state === 'ready'
+                          ? `Cloud image build ${pushed.imageBuild.id}: ready.`
+                          : `Cloud image build ${pushed.imageBuild.id}: ${pushed.imageBuild.state}. This version can be published once it is ready.`,
+                      ...(pushed.imageBuild.url
+                          ? [`Build log: ${pushed.imageBuild.url}`]
+                          : []),
+                  ]
+                : []),
+            ...(pushed.visibility === 'public'
+                ? [
+                      `The public version changes only when this one is approved: wb publish ${reference}`,
+                  ]
+                : []),
+        ],
+    };
 }

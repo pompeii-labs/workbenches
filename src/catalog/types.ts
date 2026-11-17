@@ -13,6 +13,8 @@ export interface CatalogRegistryReference {
     version_id: string;
     /** Absent on snapshots saved before private workbenches; treated as public. */
     visibility?: 'public' | 'private';
+    /** Set when saved at an exact version; upgrades keep that version. */
+    version?: string;
 }
 
 export interface CatalogEntry {

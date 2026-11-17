@@ -212,7 +212,11 @@ export class OciRegistryClient {
             OciRegistryClient.isRecord(first) && typeof first.message === 'string'
                 ? first.message
                 : `HTTP ${response.status}`;
-        return new Error(`Could not ${action}: ${detail}`);
+        return new Error(
+            detail === `HTTP ${response.status}`
+                ? `Could not ${action}: ${detail}`
+                : detail
+        );
     }
 
     private static async *chunks(

@@ -14,8 +14,8 @@ import { runLabels } from '../remote/labels.js';
 import { RemoteProcess } from '../remote/process.js';
 import { RemoteRuntime, type RemoteRuntimeOptions } from '../remote/runtime.js';
 import { AssetStage } from '../remote/stage.js';
-import { needsRepositoryTools } from '../repository-tools.js';
 import { runnerExecutable } from '../runner.js';
+import { SandboxTools } from '../sandboxtools.js';
 import type { StagedAsset } from '../staging/transfer.js';
 import { DaytonaArchiveUpload } from './archive.js';
 import { SessionAttachment } from './attachment.js';
@@ -144,7 +144,10 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
     launchService(
         buildInvocation: (binding: RuntimeServiceBinding) => RunnerInvocation
     ): RuntimeService {
-        const invocation = buildInvocation({ hostname: '0.0.0.0', port: servicePort });
+        const invocation = buildInvocation({
+            hostname: '0.0.0.0',
+            port: servicePort,
+        });
         const process = this.options.existing
             ? this.attachOrLaunch(invocation)
             : this.launch(invocation);
@@ -377,12 +380,9 @@ export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
             this.sandbox = sandbox;
             this.sandboxStartedAt = this.options.now().getTime();
             this.snapshots = snapshots;
-            if (needsRepositoryTools(this.options.request)) {
-                await new SandboxSetup(
-                    sandbox,
-                    this.options.image
-                ).provisionRepositoryTools();
-            }
+            await new SandboxSetup(sandbox, this.options.image).provisionTools(
+                SandboxTools.for(this.options.request)
+            );
             const baselines = await new AssetStage(
                 sandbox,
                 new DaytonaArchiveUpload(sandbox),

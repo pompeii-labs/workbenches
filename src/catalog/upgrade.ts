@@ -36,9 +36,11 @@ export class SavedWorkbenchUpgrade {
             home: this.home,
             ...(this.#fetch ? { fetch: this.#fetch } : {}),
         });
+        // A snapshot saved at an exact version stays at that version.
         const reference = {
             publisher: savedRegistry.publisher,
             workbench: savedRegistry.workbench,
+            ...(savedRegistry.version ? { version: savedRegistry.version } : {}),
         };
         const registry = await client.resolve(reference);
         if (!registry) {
@@ -65,6 +67,7 @@ export class SavedWorkbenchUpgrade {
                 workbench: registry.reference.workbench,
                 version_id: registry.versionId,
                 visibility: registry.visibility,
+                ...(savedRegistry.version ? { version: savedRegistry.version } : {}),
             },
         });
     }
