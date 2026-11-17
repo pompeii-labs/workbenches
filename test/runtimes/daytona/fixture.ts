@@ -27,10 +27,7 @@ import type {
     RemoteCommandOptions,
 } from '../../../src/runtimes/remote/process.js';
 import type { RemoteRunOptions } from '../../../src/runtimes/remote/runtime.js';
-import {
-    installRepositoryTools,
-    probeRepositoryTools,
-} from '../../../src/runtimes/repository-tools.js';
+import { SandboxTools } from '../../../src/runtimes/sandboxtools.js';
 import { RuntimeSecretStore } from '../../../src/runtimes/secrets.js';
 import { DiskAssetSource } from '../../../src/runtimes/staging/disk.js';
 import { TransferRules } from '../../../src/runtimes/staging/rules.js';
@@ -311,8 +308,11 @@ export class FakeSandbox implements DaytonaSandbox {
     /** Ports something listens on, beyond the runner's server. */
     readonly listeningPorts = new Set<number>();
     /** Commands followed over the log stream, with the output they report to. */
-    readonly follows: Array<{ command: string; output: LogOutput; stopped: boolean }> =
-        [];
+    readonly follows: Array<{
+        command: string;
+        output: LogOutput;
+        stopped: boolean;
+    }> = [];
     /** Every signed preview URL minted and expired, in order. */
     readonly signed: Array<{ port: number; ttlSeconds: number }> = [];
     readonly expired: Array<{ port: number; token: string }> = [];
@@ -324,16 +324,20 @@ export class FakeSandbox implements DaytonaSandbox {
             this.nextRun = undefined;
             return result;
         }
-        if (command === probeRepositoryTools) {
-            const missing = ['git', 'gh'].filter((name) =>
-                this.missingCommands.has(name)
-            );
-            return missing.length > 0 ? result(1, `${missing.join(' ')}\n`) : result(0);
-        }
-        if (command === installRepositoryTools) {
-            if (this.installResult) return this.installResult;
-            this.missingCommands.delete('git');
-            this.missingCommands.delete('gh');
+        for (const tools of [new SandboxTools(true), new SandboxTools(false)]) {
+            if (command === tools.probeCommand()) {
+                const missing = tools.names.filter((name) =>
+                    this.missingCommands.has(name)
+                );
+                return missing.length > 0
+                    ? result(1, `${missing.join(' ')}\n`)
+                    : result(0);
+            }
+            if (command === tools.installCommand()) {
+                if (this.installResult) return this.installResult;
+                for (const name of tools.names) this.missingCommands.delete(name);
+                return result(0);
+            }
         }
         if (command === identityCommand) return result(0, '1000:1000');
         if (options.user === 'root' && command.includes('mkdir -p')) {

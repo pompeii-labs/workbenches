@@ -1,6 +1,6 @@
 import type { ResolvedWorkbench } from '../../types.js';
 import { RuntimeError } from '../error.js';
-import { installRepositoryTools, probeRepositoryTools } from '../repository-tools.js';
+import type { SandboxTools } from '../sandboxtools.js';
 import { quote } from '../staging/shell.js';
 import type { DaytonaSandbox } from './contracts.js';
 
@@ -29,20 +29,20 @@ export class SandboxSetup {
         private readonly image: string
     ) {}
 
-    /** Installs `git` and `gh` when the image lacks them, as root or through sudo. */
-    async provisionRepositoryTools(): Promise<void> {
-        const probe = await this.sandbox.run(probeRepositoryTools);
+    /** Installs the `tools` the image lacks, as root or through sudo. */
+    async provisionTools(tools: SandboxTools): Promise<void> {
+        const probe = await this.sandbox.run(tools.probeCommand());
         if (probe.code === 0) return;
-        const missing = probe.stdout.trim() || 'git, gh';
-        const install = await this.sandbox.run(installRepositoryTools, {
+        const missing = probe.stdout.trim() || tools.label();
+        const install = await this.sandbox.run(tools.installCommand(), {
             user: 'root',
         });
         if (install.code === 0) return;
         const detail = install.stdout.trim() || install.stderr.trim();
         throw this.failure(
             detail.includes('root access is required')
-                ? `The ${label} sandbox image is missing ${missing} and cannot install it without root: the image must ship git and gh or allow root`
-                : `Failed to provision Git tools in the ${label} sandbox: ${detail}`
+                ? `The ${label} sandbox image is missing ${missing} and cannot install it without root: the image must ship ${tools.label()} or allow root`
+                : `Failed to install ${missing} in the ${label} sandbox: ${detail}`
         );
     }
 

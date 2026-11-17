@@ -5,11 +5,7 @@ import { join } from 'node:path';
 
 import { selectedRuntime } from '../../workbench/runtimes.js';
 import type { RuntimePrepareRequest } from '../contracts.js';
-import {
-    installRepositoryTools,
-    needsRepositoryTools,
-    repositoryToolsCacheKey,
-} from '../repository-tools.js';
+import { SandboxTools } from '../sandboxtools.js';
 import { DockerBuildContext } from './build-context.js';
 import type { DockerClient } from './client.js';
 import type { DockerPreparation } from './contracts.js';
@@ -29,9 +25,13 @@ export class DockerImageManager {
             typeof image === 'string'
                 ? await this.pull(image)
                 : await this.build(request);
-        if (!needsRepositoryTools(request)) return original;
+        const tools = SandboxTools.for(request);
+        if (!tools.repository) return original;
         try {
-            const prepared = await this.withRepositoryTools(original.preparation);
+            const prepared = await this.withRepositoryTools(
+                original.preparation,
+                tools
+            );
             return { preparation: prepared, cleanup: original.cleanup };
         } catch (error) {
             await original.cleanup();
@@ -40,14 +40,15 @@ export class DockerImageManager {
     }
 
     private async withRepositoryTools(
-        original: DockerPreparation
+        original: DockerPreparation,
+        tools: SandboxTools
     ): Promise<DockerPreparation> {
         const base = original.immutableReference;
         // BuildKit does not accept a bare local sha256 image ID in FROM. Local
         // builds already have a content-addressed Workbench tag we can use.
         const buildBase = base.startsWith('sha256:') ? original.reference : base;
         const digest = createHash('sha256')
-            .update(JSON.stringify({ base, repositoryToolsCacheKey }))
+            .update(JSON.stringify({ base, repositoryToolsCacheKey: tools.cacheKey() }))
             .digest('hex');
         const tag = `workbench-repository-tools:${digest.slice(0, 24)}`;
         const cached = await this.client.inspectImage(tag);
@@ -69,7 +70,7 @@ export class DockerImageManager {
         try {
             const dockerfile = join(context, 'Dockerfile');
             await Promise.all([
-                writeFile(join(context, 'install.sh'), `${installRepositoryTools}\n`),
+                writeFile(join(context, 'install.sh'), `${tools.installCommand()}\n`),
                 writeFile(
                     dockerfile,
                     [

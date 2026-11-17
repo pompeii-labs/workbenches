@@ -6,7 +6,7 @@ import {
     type Sandbox as E2BSdkSandbox,
 } from 'e2b';
 import { managedMetadata, runMetadata, scopeMetadata } from '../remote/labels.js';
-import { installRepositoryTools } from '../repository-tools.js';
+import { SandboxTools } from '../sandboxtools.js';
 import type {
     E2BClient,
     E2BCommand,
@@ -47,9 +47,10 @@ export class E2BSdkClient implements E2BClient {
                     .fromDockerfile(source.dockerfile)
               : undefined;
         if (!template) throw new Error('E2B template source is incomplete');
-        const configured = source.repositoryTools
-            ? template.runCmd(installRepositoryTools, { user: 'root' })
-            : template;
+        const configured = template.runCmd(
+            new SandboxTools(source.repositoryTools === true).installCommand(),
+            { user: 'root' }
+        );
         const built = await this.#client.Template.build(configured, name);
         return {
             name,
@@ -106,7 +107,9 @@ export class E2BSdkClient implements E2BClient {
 
     async connectSandbox(id: string, timeoutMilliseconds: number): Promise<E2BSandbox> {
         return new SdkSandbox(
-            await this.#client.Sandbox.connect(id, { timeoutMs: timeoutMilliseconds })
+            await this.#client.Sandbox.connect(id, {
+                timeoutMs: timeoutMilliseconds,
+            })
         );
     }
 }

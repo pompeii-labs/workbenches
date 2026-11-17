@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { selectedRuntime } from '../../workbench/runtimes.js';
 import type { RuntimePreparation, RuntimePrepareRequest } from '../contracts.js';
 import { DockerBuildContext } from '../docker/build-context.js';
-import { needsRepositoryTools, repositoryToolsCacheKey } from '../repository-tools.js';
+import { SandboxTools } from '../sandboxtools.js';
 import type { E2BClient, E2BTemplateSource } from './contracts.js';
 
 export interface PreparedE2BTemplate {
@@ -23,12 +23,13 @@ export class E2BTemplateManager {
         const image = selectedRuntime(request.workbench).image;
         if (!image)
             throw new Error('E2B runtime requires an image or local image build');
+        const repositoryTools = SandboxTools.for(request).repository;
         if (typeof image === 'string') {
             return this.prepareSource(
                 request,
                 {
                     image,
-                    ...(needsRepositoryTools(request) ? { repositoryTools: true } : {}),
+                    ...(repositoryTools ? { repositoryTools: true } : {}),
                 },
                 image,
                 []
@@ -42,7 +43,7 @@ export class E2BTemplateManager {
                 {
                     dockerfile: staged.dockerfile,
                     context: staged.context,
-                    ...(needsRepositoryTools(request) ? { repositoryTools: true } : {}),
+                    ...(repositoryTools ? { repositoryTools: true } : {}),
                 },
                 `local:${staged.digest}`,
                 staged.excludedPaths,
@@ -92,9 +93,7 @@ function templateName(request: RuntimePrepareRequest, reference: string): string
         name: request.workbench.manifest.name,
         version: request.workbench.manifest.version,
         reference,
-        ...(needsRepositoryTools(request)
-            ? { repositoryTools: repositoryToolsCacheKey }
-            : {}),
+        tools: SandboxTools.for(request).cacheKey(),
     });
     const digest = createHash('sha256').update(identity).digest('hex').slice(0, 20);
     return `workbench-${slug || 'runtime'}-${digest}`;
