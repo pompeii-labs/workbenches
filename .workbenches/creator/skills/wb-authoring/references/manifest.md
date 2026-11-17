@@ -38,7 +38,8 @@ To publish a locally built image to the Workbench registry:
 ```sh
 wb login
 docker build -t <local-image> <context>
-wb image push <local-image> --org <org> --as <image-name> --tag <version>
+wb push .#<name> --org <org>
+wb image push <local-image> <org>/<name>@<version>
 ```
 
 The resulting reference:
@@ -46,13 +47,13 @@ The resulting reference:
 ```yaml
 runtimes:
   docker:
-    image: images.workbenches.dev/<org>/<image-name>:<version>
+    image: images.workbenches.dev/<org>/<name>:<version-tag>
   daytona:
     class: linux
-    image: images.workbenches.dev/<org>/<image-name>:<version>
+    image: images.workbenches.dev/<org>/<name>:<version-tag>
 ```
 
-Use a versioned tag, never `latest`, and never overwrite a tag a released package references. Use `wb image login --org <org>` when a standard OCI client needs registry credentials. The wb-publishing skill covers the whole flow.
+Declare the image before storing the version, then push the version before its image. The version tag replaces every character outside `[A-Za-z0-9._-]` with `_` (`1.0.0+build.7` becomes `1.0.0_build.7`). A stored version accepts an image once. A version may reference only its own Workbench's registry repository, with its own tag or an earlier version's tag. `--org`, when given, must match the reference. Use `wb image login --org <org>` when a standard OCI client needs registry credentials. The wb-publishing skill covers the whole flow.
 
 ## What each check proves
 

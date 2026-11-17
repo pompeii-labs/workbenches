@@ -22,7 +22,8 @@ export const addCommand = defineCommand({
     args: {
         source: {
             type: 'positional',
-            description: 'Registry publisher/name, HTTPS GitHub URL, or local path',
+            description:
+                'Registry publisher/name or publisher/name@version, HTTPS GitHub URL, or local path',
             required: true,
         },
         name: {
@@ -48,9 +49,12 @@ export const addCommand = defineCommand({
         if (args.source.includes('#'))
             throw new Error('Use --name <package> instead of a #name source fragment.');
 
-        // Bare publisher/name is exclusively a registry identity, even if a
-        // similarly named relative directory happens to exist.
-        const registryReference = RegistryClient.parseReference(args.source);
+        // Bare publisher/name, with or without @version, is exclusively a
+        // registry identity, even if a similarly named relative directory
+        // happens to exist.
+        const registryReference =
+            RegistryClient.parseReference(args.source) ??
+            RegistryClient.parseVersionReference(args.source);
         if (registryReference) {
             if (args.name || args.ref)
                 throw new Error(
@@ -71,6 +75,9 @@ export const addCommand = defineCommand({
                 workbench: registry.reference.workbench,
                 version_id: registry.versionId,
                 visibility: registry.visibility,
+                ...(registryReference.version
+                    ? { version: registryReference.version }
+                    : {}),
             };
             const alias = args.as ?? workbench.manifest.name;
             const connection = Connection.open(home);
@@ -80,6 +87,8 @@ export const addCommand = defineCommand({
                     catalog,
                     alias,
                     digest: WorkbenchPackage.digest(workbench.files),
+                    pinned: (entry) =>
+                        entry.registry?.version === catalogRegistry.version,
                     force: args.force,
                     save: () =>
                         writer.addRemote({
@@ -166,7 +175,7 @@ export const addCommand = defineCommand({
         const local = await source.local(args.source);
         if (!local)
             throw new Error(
-                'Use a registry publisher/name, full HTTPS GitHub URL, or an explicit local path.'
+                'Use a registry publisher/name or publisher/name@version, full HTTPS GitHub URL, or an explicit local path.'
             );
         let selector = args.name;
         if (!selector) {
@@ -234,14 +243,20 @@ async function saveCandidate(options: {
     catalog: SavedWorkbenchCatalog;
     alias: string;
     digest: string;
+    /** Whether a saved entry already has the version pin this add asks for. */
+    pinned?: (entry: CatalogEntry) => boolean;
     force: boolean | undefined;
     save: () => Promise<CatalogEntry>;
     upgrade: () => Promise<{ entry: CatalogEntry }>;
 }): Promise<{ entry: CatalogEntry; status: 'saved' | 'current' | 'updated' }> {
     const existing = await options.catalog.find(options.alias);
     if (!existing) return { entry: await options.save(), status: 'saved' };
-    if (existing.digest === options.digest)
-        return { entry: existing, status: 'current' };
+    if (existing.digest === options.digest) {
+        if (options.pinned?.(existing) ?? true)
+            return { entry: existing, status: 'current' };
+        // The same bytes, pinned or unpinned as asked, need no --force.
+        return { entry: (await options.upgrade()).entry, status: 'updated' };
+    }
     if (!options.force)
         throw new Error(
             `Saved Workbench ${options.alias} has changed. Rerun with --force to replace it.`

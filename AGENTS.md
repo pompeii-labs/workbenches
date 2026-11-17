@@ -64,7 +64,7 @@ wb list
 wb view project-core
 ```
 
-Bare `publisher/name` resolves only through the registry, never GitHub. Git sources require a full HTTPS GitHub URL. `--name` selects a package and `--ref` selects a Git revision. Alias collisions require an explicit different `--as`; identical adds are idempotent. Local paths register their absolute package directory. A new run sees local edits, while every session owns frozen package bytes for resume. Existing frozen local registrations stay frozen until re-add.
+Bare `publisher/name` resolves only through the registry, never GitHub, to the latest release. `publisher/name@version` saves that exact version, such as a prerelease to try before it is released, and `wb upgrade` keeps it there. Git sources require a full HTTPS GitHub URL. `--name` selects a package and `--ref` selects a Git revision. Alias collisions require an explicit different `--as`; identical adds are idempotent. Local paths register their absolute package directory. A new run sees local edits, while every session owns frozen package bytes for resume. Existing frozen local registrations stay frozen until re-add.
 
 Remove an alias when it is no longer needed:
 
@@ -222,10 +222,8 @@ For a Docker Workbench, either keep a portable Dockerfile inside the package or 
 ```sh
 wb login
 docker build -t project-core-local .
-wb image push project-core-local \
-  --org example \
-  --as project-core \
-  --tag 0.4.0
+wb push .#project-core --org example
+wb image push project-core-local example/project-core@0.4.0
 ```
 
 The corresponding manifest declaration is:
@@ -237,7 +235,9 @@ runtimes:
     image: images.workbenches.dev/example/project-core:0.4.0
 ```
 
-Use `wb image login [--org <slug>] [--client <executable>]` when a standard OCI client needs explicit registry credentials. `--client` names the OCI client (default `docker`). Direct client pushes are subject to the registry edge's per-request body limit, so use `wb image push` for images with large layers. Prefer a versioned tag and do not silently replace the image behind a published Workbench version.
+Declare the image in the package before `wb push`, then push the version before its image. Each Workbench owns `images.workbenches.dev/org/name`; replace every version character outside `[A-Za-z0-9._-]` with `_` for its tag (`1.0.0+build.7` becomes `1.0.0_build.7`). A stored version's image can be pushed once. A version may reference only its own Workbench's registry repository, using its own tag or an earlier version's tag. Registry refusals are printed unchanged. `wb image push` uses the organization in `org/name@version`; `--org`, when given, must match it.
+
+Use `wb image login [--org <slug>] [--client <executable>]` when a standard OCI client needs explicit registry credentials. `--client` names the OCI client (default `docker`). Direct client pushes are subject to the registry edge's per-request body limit, so use `wb image push` for images with large layers.
 
 ## Publish to the registry
 
@@ -249,11 +249,20 @@ wb whoami                  # default organization and key expiry
 wb org list                # connected organizations
 wb org use example         # change the default organization
 wb push .#core             # store example/core@<version>, internal
-wb publish example/core    # submit the latest stored version for public review
+wb image push core-local example/core@0.4.0 # push the stored version's image once
+wb publish example/core    # submit the newest stored release for public review
 wb unpublish example/core  # make a public workbench internal again
+wb withdraw example/core   # withdraw its open review submission
+wb delete example/core     # preview irreversible deletion of every version
+wb delete example/core@0.4.0 --yes # delete one version and its unused image
+wb delete example/core --yes # delete the Workbench, every version, and its images
 ```
 
-`wb push` stores an immutable internal version, visible only to the organization's members and keys; each push needs a higher manifest version. `wb publish` submits the latest stored version, or a local package directly, for public review and is the only act that can make a workbench public. A public workbench takes new versions only through `wb publish`; the registry refuses `wb push` to it. `wb unpublish` makes it internal again. Pass `--org <slug>` to use a connected organization other than the default.
+`wb push` stores an immutable internal version, visible only to the organization's members and keys, even when the workbench is already public; each push needs a higher manifest version. `wb publish org/name` submits the newest stored release for public review and is the only act that can make a version public. Push first: publish never uploads a package. `--version` names that release exactly and fails if a newer one exists. The registry refuses older releases, prereleases, withdrawn versions, and versions whose image is not ready yet. The organization runs a new release by name as soon as it is pushed; everyone else keeps a public workbench's approved version until a newer one is approved. `wb unpublish` makes it internal again. `wb push` uses the default organization unless `--org <slug>` names another; `wb publish` and `wb unpublish` use the organization in `org/name`.
+
+`wb withdraw org/name` withdraws that Workbench's `pending` or `changes_requested` review submission. It fails with a clear message when none is open. It uses the organization in `org/name`; `--org`, when given, must match it.
+
+`wb delete org/name` and `wb delete org/name@version` make no HTTP requests without `--yes` and only describe the irreversible deletion. With `--yes`, `org/name` deletes the Workbench, every version, and its registry images. `org/name@version` lists stored versions to find the exact id, then deletes only that version; its image is deleted unless a later version uses it. The registry refuses version deletion while a run of it is unfinished, when it is the current public version, or when it is the only version. Whole-Workbench deletion is refused while any run of it is unfinished. The CLI prints 409 messages unchanged. The organization comes from the reference; `--org`, when given, must match it, including for previews.
 
 For substantial authoring, editing, or improvement work, use the official creator through the same headless `create` command:
 

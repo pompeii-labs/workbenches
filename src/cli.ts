@@ -18,6 +18,7 @@ import { buildCommand } from './commands/build.js';
 import { cleanCommand } from './commands/clean.js';
 import { connectCommand } from './commands/connect.js';
 import { createCommand } from './commands/create.js';
+import { deleteCommand } from './commands/delete.js';
 import { imageCommand } from './commands/image.js';
 import { initCommand } from './commands/init.js';
 import { killCommand } from './commands/kill.js';
@@ -46,6 +47,7 @@ import { validateCommand } from './commands/validate.js';
 import { viewCommand } from './commands/view.js';
 import { waitCommand } from './commands/wait.js';
 import { whoamiCommand } from './commands/whoami.js';
+import { withdrawCommand } from './commands/withdraw.js';
 import { workerCommand } from './commands/worker.js';
 import { AuthenticationRequiredError } from './connections/error.js';
 import { Connection } from './database/connection.js';
@@ -83,6 +85,8 @@ export const workbenchCommand = defineCommand({
         push: pushCommand,
         publish: publishCommand,
         unpublish: unpublishCommand,
+        withdraw: withdrawCommand,
+        delete: deleteCommand,
         ps: psCommand,
         project: projectCommand,
         status: statusCommand,

@@ -181,6 +181,120 @@ describe('saved Workbench upgrades', () => {
         await expect(stat(saved.packagePath)).rejects.toThrow();
     });
 
+    test('keeps a snapshot saved at an exact version on that version', async () => {
+        const home = await temporaryDirectory('workbench-upgrade-pinned-');
+        const { catalog, writer } = services(home);
+        const initial = remotePackage('0.2.0-alpha.1', 'a'.repeat(40));
+        await writer.addRemote({
+            alias: 'registry-pre',
+            workbench: initial.workbench,
+            registry: {
+                url: 'https://registry.example',
+                publisher: 'example',
+                workbench: 'core',
+                version_id: 'version-pre',
+                version: '0.2.0-alpha.1',
+            },
+        });
+        const digest = WorkbenchPackage.digest(initial.workbench.files);
+        const asked: unknown[] = [];
+        const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+            const url = String(input);
+            if (url === 'https://registry.example/v1/resolutions') {
+                asked.push(JSON.parse(String(init?.body)));
+                return Response.json({
+                    source_path: 'workbench.yml',
+                    repository: null,
+                    latest_version: {
+                        id: 'version-pre',
+                        version: '0.2.0-alpha.1',
+                        digest: digest.slice('sha256:'.length),
+                        source_commit: initial.workbench.revision,
+                        artifact_url:
+                            'https://registry.example/v1/artifacts/version-pre',
+                    },
+                });
+            }
+            if (url === 'https://registry.example/v1/artifacts/version-pre') {
+                return Response.json({
+                    format: 1,
+                    files: initial.workbench.files.map((file) => ({
+                        path: file.path,
+                        content: Buffer.from(file.bytes).toString('base64'),
+                        executable: file.executable,
+                    })),
+                });
+            }
+            return new Response('not found', { status: 404 });
+        };
+
+        const result = await new SavedWorkbenchUpgrade(home, catalog, writer, {
+            fetch: fetcher,
+        }).upgrade('registry-pre');
+
+        expect(asked).toEqual([
+            { publisher: 'example', workbench: 'core', version: '0.2.0-alpha.1' },
+        ]);
+        expect(result.changed).toBeFalse();
+        expect(result.entry.version).toBe('0.2.0-alpha.1');
+        expect(result.entry.registry?.version).toBe('0.2.0-alpha.1');
+
+        // A registry that answers with another version is refused, not saved.
+        const wrong = async (input: string | URL | Request, init?: RequestInit) => {
+            const answer = await fetcher(input, init);
+            if (String(input) !== 'https://registry.example/v1/resolutions')
+                return answer;
+            const body = (await answer.json()) as {
+                latest_version: { version: string };
+            };
+            body.latest_version.version = '2.0.0';
+            return Response.json(body);
+        };
+        await expect(
+            new SavedWorkbenchUpgrade(home, catalog, writer, {
+                fetch: wrong,
+            }).upgrade('registry-pre')
+        ).rejects.toThrow('when 0.2.0-alpha.1 was asked for');
+        expect((await catalog.find('registry-pre'))?.registry?.version).toBe(
+            '0.2.0-alpha.1'
+        );
+    });
+
+    test('pins and unpins the same saved bytes to their exact version', async () => {
+        const home = await temporaryDirectory('workbench-upgrade-repin-');
+        const { catalog, writer } = services(home);
+        const saved = remotePackage('1.2.0', 'b'.repeat(40));
+        const registry = {
+            url: 'https://registry.example',
+            publisher: 'example',
+            workbench: 'core',
+            version_id: 'version-120',
+        };
+        await writer.addRemote({
+            alias: 'registry-core',
+            workbench: saved.workbench,
+            registry,
+        });
+        const again = (version?: string) =>
+            writer.upgrade('registry-core', {
+                source: saved.workbench.source,
+                selector: saved.workbench.selector,
+                manifest: saved.workbench.manifest,
+                files: saved.workbench.files,
+                registry: { ...registry, ...(version ? { version } : {}) },
+            });
+
+        const pinned = await again('1.2.0');
+        expect(pinned.changed).toBeTrue();
+        expect((await catalog.find('registry-core'))?.registry?.version).toBe('1.2.0');
+        const unpinned = await again();
+        expect(unpinned.changed).toBeTrue();
+        expect(
+            (await catalog.find('registry-core'))?.registry?.version
+        ).toBeUndefined();
+        expect((await again()).changed).toBeFalse();
+    });
+
     test('refreshes a GitHub-backed snapshot from the default branch', async () => {
         const home = await temporaryDirectory('workbench-upgrade-github-');
         const { catalog, writer } = services(home);

@@ -6,6 +6,7 @@ import { workbenchHome } from '../storage.js';
 import { WORKBENCH_USER_AGENT } from '../user-agent.js';
 import { WorkbenchManifestParser } from '../workbench/manifest.js';
 import { RegistryKeyring } from './keyring.js';
+import { RegistryStoredVersions, semverPattern } from './versions.js';
 
 const defaultRegistryUrl = 'https://api.workbenches.dev';
 
@@ -19,6 +20,7 @@ export function registryVisibilityLabel(visibility: RegistryVisibility): string 
 export interface RegistryReference {
     publisher: string;
     workbench: string;
+    version?: string;
 }
 
 export interface RegistryPackage {
@@ -95,7 +97,7 @@ export class RegistryClient {
      */
     async missing(reference: RegistryReference): Promise<Error> {
         return new Error(
-            `Registry Workbench does not exist: ${reference.publisher}/${reference.workbench}${await this.signInHint(reference.publisher)}`
+            `Registry Workbench ${reference.version ? 'version ' : ''}does not exist: ${reference.publisher}/${reference.workbench}${reference.version ? `@${reference.version}` : ''}${await this.signInHint(reference.publisher)}`
         );
     }
 
@@ -124,6 +126,17 @@ export class RegistryClient {
         );
         if (!match?.[1] || !match[2]) return undefined;
         return { publisher: match[1], workbench: match[2] };
+    }
+
+    static parseVersionReference(
+        value: string
+    ): (RegistryReference & { version: string }) | undefined {
+        const separator = value.indexOf('@');
+        if (separator < 0) return undefined;
+        const reference = RegistryClient.parseReference(value.slice(0, separator));
+        const version = value.slice(separator + 1);
+        if (!reference || !semverPattern.test(version)) return undefined;
+        return { ...reference, version };
     }
 
     get imageHost(): string {
@@ -180,9 +193,25 @@ export class RegistryClient {
         return value as T;
     }
 
-    async resolve(reference: RegistryReference): Promise<RegistryPackage | undefined> {
+    async versions(
+        workbenchId: string,
+        token: string
+    ): Promise<RegistryStoredVersions> {
+        return RegistryStoredVersions.parse(
+            await this.request<unknown>(
+                `/v1/workbenches/${encodeURIComponent(workbenchId)}/versions`,
+                { token }
+            )
+        );
+    }
+
+    async resolve(
+        reference: RegistryReference,
+        organizationToken?: string
+    ): Promise<RegistryPackage | undefined> {
         const url = new URL(`${this.apiUrl}/v1/resolutions`);
-        const token = await this.keyring.select(reference.publisher);
+        const token =
+            organizationToken ?? (await this.keyring.select(reference.publisher));
         let response: Response;
         try {
             response = await this.fetcher(url, {
@@ -212,6 +241,14 @@ export class RegistryClient {
         if (!parsed) {
             throw new Error(
                 'The Workbench registry returned a malformed package record'
+            );
+        }
+        if (
+            reference.version !== undefined &&
+            parsed.latest_version.version !== reference.version
+        ) {
+            throw new Error(
+                `The Workbench registry returned ${reference.publisher}/${reference.workbench}@${parsed.latest_version.version} when ${reference.version} was asked for`
             );
         }
         const selector = RegistryClient.sourceSelector(

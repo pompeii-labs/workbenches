@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { RegistryAccount } from '../account-store.js';
-import { RegistryClient } from '../client.js';
+import { RegistryClient, type RegistryReference } from '../client.js';
 import { OciArchive } from './archive.js';
 import { OciRegistryClient } from './client.js';
 import { registryImageReference } from './reference.js';
@@ -61,13 +61,26 @@ export class RegistryImagePublisher {
     }
 
     async push(options: RegistryImagePushOptions): Promise<string> {
-        const publisher = this.options.account.slug;
-        const target = registryImageReference(
-            publisher,
-            options.name,
-            options.tag,
-            this.registry
+        const { publisher, workbench, version } = options.reference;
+        if (publisher !== this.options.account.slug) {
+            throw new Error(
+                `Image organization ${publisher} does not match ${this.options.account.slug}`
+            );
+        }
+        const tag = version.replace(/[^A-Za-z0-9._-]/g, '_');
+        const target = registryImageReference(publisher, workbench, tag, this.registry);
+        const stored = await this.registry.resolve(
+            options.reference,
+            this.options.account.token
         );
+        if (!stored) {
+            throw new Error(
+                `Version ${publisher}/${workbench}@${version} is not stored. Push the package with wb push first.`
+            );
+        }
+        if (stored.version !== version) {
+            throw new Error('The registry did not resolve the selected version.');
+        }
         const directory = await mkdtemp(join(tmpdir(), 'workbench-image-push-'));
         const archive = new OciArchive(join(directory, 'image.tar'));
         try {
@@ -79,7 +92,7 @@ export class RegistryImagePublisher {
                 archive.path,
                 options.image,
             ]);
-            await this.publish(archive, publisher, options.name, options.tag);
+            await this.publish(archive, publisher, workbench, tag);
             return target;
         } finally {
             await rm(directory, { recursive: true, force: true });
@@ -183,7 +196,6 @@ export class RegistryImagePublisher {
 
 export interface RegistryImagePushOptions {
     image: string;
-    name: string;
-    tag: string;
+    reference: RegistryReference & { version: string };
     client: string;
 }

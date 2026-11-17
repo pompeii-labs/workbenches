@@ -183,7 +183,7 @@ wb add https://github.com/owner/repository --name core --ref main
 wb add ./.workbenches/core --as project-local
 ```
 
-Remote inspection uses the GitHub API and does not clone or create a temporary checkout. `add` saves remote package snapshots or registers a live absolute local package directory. Bare `publisher/name` means registry only, never GitHub. Use `--name` for a source package selector, `--ref` for a Git revision, and `--as` for an explicit alias. The default alias is the manifest name. Identical additions are idempotent; collisions never overwrite and changed remotes require `upgrade`.
+Remote inspection uses the GitHub API and does not clone or create a temporary checkout. `add` saves remote package snapshots or registers a live absolute local package directory. Bare `publisher/name` means registry only, never GitHub, and saves the latest release. `publisher/name@version` saves that exact version, prereleases included, and `upgrade` keeps it at that version. Use `--name` for a source package selector, `--ref` for a Git revision, and `--as` for an explicit alias. The default alias is the manifest name. Identical additions are idempotent; collisions never overwrite and changed remotes require `upgrade`.
 
 Saved packages can be inspected and managed without returning to their source:
 
@@ -416,18 +416,16 @@ wb smoke project-core
 wb run project-core --task "Review this migration"
 ```
 
-Publish a locally built image to the Workbench OCI registry after signing in. Images are published under the connected organization, the default one unless `--org <slug>` is given:
+Declare the image reference in the package, store the version with `wb push`, then push its locally built image. The organization comes from `org/name@version`; `--org <slug>`, when given, must match it:
 
 ```sh
 wb login --org example
 docker build -t project-core-local .
-wb image push project-core-local \
-  --org example \
-  --as project-core \
-  --tag 0.4.0
+wb push .#project-core --org example
+wb image push project-core-local example/project-core@0.4.0
 ```
 
-`image push` exports the local image, skips blobs already present in the registry, uploads missing blobs in bounded chunks, and publishes the original OCI manifest under `images.workbenches.dev/example/project-core:0.4.0`. The source image can have any valid local name. Progress is written to stderr. On success a terminal shows `Pushed image · <ref>`, and piped output is `pushed<TAB><ref>`. Use `--client` to select an OCI-compatible client that supports the Docker `image save` interface.
+`wb image push <local image> <org/name@version> [--org <slug>] [--client <executable>]` resolves that exact version with the organization's key before exporting or uploading. A missing version fails with a pointer to `wb push` first. It exports the local image, skips blobs already present in the registry, uploads missing blobs in bounded chunks, and publishes the original OCI manifest under `images.workbenches.dev/example/project-core:0.4.0`. Each Workbench owns its repository; the tag replaces every version character outside `[A-Za-z0-9._-]` with `_` (`1.0.0+build.7` becomes `1.0.0_build.7`). A stored version's tag accepts an image once; registry refusals are printed unchanged. A version may name a registry image only in its own Workbench's repository, using its own tag or an earlier version's tag. The old image `--as` and `--tag` flags fail before any request and show the new form. The source image can have any valid local name. Progress is written to stderr. On success a terminal shows `Pushed image · <ref>`, and piped output is `pushed<TAB><ref>`. This is the exact reference to name in the manifest. Use `--client` to select an OCI-compatible client that supports the Docker `image save` interface (default `docker`).
 
 Standard OCI clients can authenticate explicitly too. `wb image login` takes `--org <slug>` to choose the connected organization and `--client <executable>` to choose the OCI client (default `docker`):
 
@@ -440,7 +438,7 @@ docker push images.workbenches.dev/example/project-core:0.4.0
 
 Direct client pushes are subject to the registry edge's per-request body limit. Use `wb image push` for images with large layers because it controls the upload chunk size. Standard Docker pulls work for images published through either path.
 
-The Workbench can then declare the published image:
+The Workbench declares the image before storing its version:
 
 ```yaml
 runtimes:
@@ -676,7 +674,7 @@ wb whoami                # default organization, user, scopes, key expiry
 wb logout --org example  # revoke that key and forget it
 ```
 
-`--org` on `login` must match the organization approved in the browser, or nothing is stored. `wb push`, `wb publish`, `wb unpublish`, and `wb image push` use the default organization, or the one named with `--org <slug>`. `wb logout` without a flag signs out of the default; removing the last key deletes the credential file. `--publisher` was removed and now fails with a pointer to `--org`. A credential file from an older CLI is ignored: run `wb login` once.
+`--org` on `login` must match the organization approved in the browser, or nothing is stored. `wb push` uses the default organization, or the one named with `--org <slug>`. `wb image push` uses the organization in `org/name@version`. `wb publish` and `wb unpublish` use the organization in `org/name`; `--org`, when given, must match it for all three commands. `wb logout` without a flag signs out of the default; removing the last key deletes the credential file. `--publisher` was removed and now fails with a pointer to `--org`. A credential file from an older CLI is ignored: run `wb login` once.
 
 ### Workers
 
@@ -772,21 +770,30 @@ A member's most recent connection for a runner is their default on that worker, 
 
 A run uses only the connections of the member who started it. Without one for its runner, or with one whose provider the Workbench's model routes leave out (a ChatGPT sign-in for a Workbench routed only through OpenRouter, say), it uses the provider keys workbenches.dev sends with the run, as a hosted run does. With one the routes allow that is not signed in, it fails and says to connect again. A run started with an organization API key has no member and uses only those keys. A run that asks for a connection the routes leave out fails with `<workbench> does not allow connection <provider>` and the providers it is routed through. With neither, the run fails before any model call with the preflight reason and `Run wb connect --worker mini claude-code.` The account's own runner sign-ins and credential variables never reach a run.
 
-### Internal workbenches, push, publish, unpublish
+### Internal workbenches, push, publish, unpublish, withdraw, delete
 
 Every organization workbench is internal by default: members and organization keys see it, nobody else does. Anyone else receives a plain 404. Publishing is the single explicit act that makes a stored version public, and it always goes through review.
 
 ```sh
 wb push [source] [--org <slug>] [--as <name>]
-wb publish <org/name | source> [--org <slug>] [--version <semver>]
+wb publish <org/name> [--version <v>] [--org <slug>]
 wb unpublish <org/name> [--org <slug>]
+wb withdraw <org/name> [--org <slug>]
+wb delete <org/name> [--yes] [--org <slug>]
+wb delete <org/name@version> [--yes] [--org <slug>]
 ```
 
-`wb push` uploads the package as a new immutable version. `source` is a local package reference (`.#name`, `/path#name`, default `.`) or a saved alias. The workbench is created as internal when missing. `--as` sets the registry name instead of the manifest name. Each push needs a manifest version greater than the latest stored one, and a public workbench takes new versions only through `wb publish`; the registry rejects both cases with a conflict and the CLI prints its message unchanged. Output is `Pushed acme/ios-expert@1.2.0 (internal)`; the machine record is `push`, `org/slug`, `version`, `digest`.
+`wb push` uploads the package as a new immutable internal version, also for a workbench that is already public. `source` is a local package reference (`.#name`, `/path#name`, default `.`) or a saved alias. The workbench is created as internal when missing. `--as` sets the registry name instead of the manifest name. Each push needs a manifest version greater than the latest stored one; the registry rejects anything else with a conflict and the CLI prints its message unchanged. Output is `Pushed acme/ios-expert@1.2.0 (internal)`; the machine record is `push`, `org/slug`, `version`, `digest`, followed by the build id, its state, and its log page when the version has a cloud image build. When the version has a cloud image build, new or reused, the human output names the build and its state and, when the registry provides one, the build page that streams its log. The version can be published once the build is ready. A push to a public workbench also notes that the public version changes only through `wb publish`.
 
-`wb publish` submits a stored version for public review. With `org/name` it resolves the workbench with the organization's key and submits its latest stored version. `--version` is accepted only when it names that latest version, because the registry exposes no version lookup yet. With a local source it submits the package directly for review, without storing an internal version first; this is how a public workbench takes a new version, because the registry refuses `wb push` to a public workbench. It prints the submission id, status, and dashboard URL. A pending submission is not public.
+`wb publish` submits a stored release of `org/name` for public review: the newest release by semver that is not withdrawn. `--version` names that release exactly, so a newer release pushed meanwhile is never skipped. It never uploads a package; a local path or saved alias fails before any request, telling you to push first. Prereleases, withdrawn versions, and versions that are not stored fail with an error, the registry refuses a release older than the newest one, and the registry also refuses a version whose image is not ready. It prints the submission id, status, and dashboard URL. A pending submission is not public. The organization runs a new release by name as soon as it is pushed; everyone else keeps a public workbench's approved version until a newer one is approved.
 
 `wb unpublish` resolves `org/name` and flips a public workbench back to internal immediately. `--org`, when given, must match the organization in the reference. `--private` was removed: internal is the default, and publish never means internal.
+
+`wb withdraw` lists the named organization's review submissions and deletes the open one for that Workbench only. Both `pending` and `changes_requested` are open. When none is open it exits 1 with `No open review submission for org/name`. It uses the organization in `org/name`; `--org`, when given, must match. Success prints the Workbench and submission id; piped output is `withdrawn`, `org/name`, `submission-id` separated by tabs. It does not unpublish an approved version.
+
+`wb delete org/name` and `wb delete org/name@version` without `--yes` make no HTTP requests and need no login. They describe what would be permanently deleted, that this cannot be undone, and that `--yes` is required. With `--yes`, the CLI resolves the Workbench using its organization's key. Whole-Workbench deletion sends `DELETE /v1/workbenches/:id`, deleting every version and its registry images. Both preview and success say `Its registry images are deleted too.` Success's piped record is `deleted`, `org/name`, `every version` separated by tabs, followed by that notice.
+
+For `org/name@version --yes`, the CLI lists `GET /v1/workbenches/:id/versions`, finds the exact version's id, and sends `DELETE /v1/versions/:id`. A missing version or malformed listing fails before deletion. Both preview and success say `The version's image is deleted unless a later version uses it.` The piped success record is `deleted<TAB>org/name@version`, followed by that notice. The registry refuses version deletion while a run of it is unfinished, when it is the current public version, or when it is the only version. Whole-Workbench deletion is refused while any run of it is unfinished. HTTP 409 messages are printed unchanged and the command exits 1. The organization comes from the reference; `--org`, when given, must match it, including for previews.
 
 Registry reads attach a held key automatically. For `publisher/name`, the key of the organization whose slug matches `publisher` is used; otherwise the default organization's key; otherwise the request is anonymous. There is no CLI search command. Expired keys are never sent, and keys go only to the registry, never to GitHub. A 404 for a publisher you hold no key for suggests `wb login --org <publisher>`. Saved snapshots record their visibility, shown as `internal` by `wb list --saved` (a trailing column in machine output) and `wb view`; `origin.visibility` in `wb view --json` keeps the wire value `private`. `wb upgrade` reuses the same key rule.
 

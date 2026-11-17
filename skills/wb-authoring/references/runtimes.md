@@ -112,7 +112,7 @@ Start from a base that already carries heavy dependencies when the work needs th
 ## Building and publishing images
 
 - `image: {build: ./Dockerfile}` lets `docker` consumers build from the package. `wb build <alias>` builds and caches it ahead of time.
-- The reference engine needs a published image for `daytona`, or a Dockerfile build that workbenches.dev runs when the version is pushed. On `e2b` it can build from the package's Dockerfile, but a published image avoids a template build on each new tag, and `docker` consumers benefit from one instead of building locally. Publish it with the wb-publishing skill (`wb image push`) and reference it with a versioned tag, never `latest`. Never overwrite a tag a released version references.
+- The reference engine needs a published image for `daytona`. A `daytona` Dockerfile is built by workbenches.dev when the version is pushed, and that image serves workbenches.dev cloud runs only; `wb run` on `daytona` still refuses it. On `e2b` it can build from the package's Dockerfile, but a published image avoids a template build on each new tag, and `docker` consumers benefit from one instead of building locally. Declare the image, store the version with `wb push`, then upload with `wb image push <local-image> <org/name@version>`. The tag replaces every version character outside `[A-Za-z0-9._-]` with `_` and accepts an image once. A version may reuse an earlier version's tag only in the same Workbench's registry repository. See the wb-publishing skill.
 - Smoke every declared runtime. Smoke on `e2b` and `daytona` creates a billable sandbox.
 
 ## Workspaces and git

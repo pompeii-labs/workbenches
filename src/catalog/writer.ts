@@ -121,7 +121,10 @@ export class CatalogWriter {
                           ? { ref: previous.ref }
                           : {}),
                 });
-                if (materialized.digest !== previous.digest)
+                if (
+                    materialized.digest !== previous.digest ||
+                    materialized.registry?.version !== previous.registry?.version
+                )
                     await this.catalog.write(
                         entries.map((candidate) =>
                             candidate.alias === alias ? materialized : candidate
@@ -131,7 +134,13 @@ export class CatalogWriter {
             }
         );
         if (entry.digest === previous.digest) {
-            return { previous, entry: previous, changed: false };
+            // The same bytes can still be pinned to their version, or unpinned.
+            const repinned = entry.registry?.version !== previous.registry?.version;
+            return {
+                previous,
+                entry: repinned ? entry : previous,
+                changed: repinned,
+            };
         }
         await this.releaseSnapshot(previous.digest);
         return { previous, entry, changed: true };

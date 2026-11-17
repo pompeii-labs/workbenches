@@ -409,6 +409,15 @@ describe('Workbench registry keys', () => {
         expect(
             (await held.client.missing({ publisher: 'acme', workbench: 'x' })).message
         ).toBe('Registry Workbench does not exist: acme/x');
+        expect(
+            (
+                await held.client.missing({
+                    publisher: 'acme',
+                    workbench: 'x',
+                    version: '1.0.0-alpha.1',
+                })
+            ).message
+        ).toBe('Registry Workbench version does not exist: acme/x@1.0.0-alpha.1');
     });
 });
 

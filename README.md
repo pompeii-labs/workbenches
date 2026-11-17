@@ -138,12 +138,23 @@ Every organization workbench is internal until you publish it. `wb push` stores 
 
 ```sh
 wb push .#core                 # stores acme/core@<version>, internal
+wb image push core-local acme/core@1.2.0 # push the stored version's image once
 wb add acme/core               # teammates: save the internal workbench
-wb publish acme/core           # submit the latest version for public review
+wb publish acme/core           # submit the newest stored release for public review
 wb unpublish acme/core         # make a public workbench internal again
+wb withdraw acme/core          # withdraw its open review submission
+wb delete acme/core            # preview irreversible deletion of every version
+wb delete acme/core@1.2.0 --yes # delete one version and its unused image
+wb delete acme/core --yes      # delete the Workbench, every version, and its images
 ```
 
-Each push needs a higher manifest version than the last. Publishing is the one act that makes a stored version public, and it always goes through review. `wb publish .#core` pushes and submits in one step. Saved internal workbenches show as `internal` in `wb list --saved` and `wb view`.
+Each push needs a higher manifest version than the last and stays internal, even for a public workbench. `wb publish org/name` submits the newest stored release for review; `--version` names it exactly and fails if a newer release exists. Publishing is the one act that makes a version public, and it always goes through review. Saved internal workbenches show as `internal` in `wb list --saved` and `wb view`.
+
+For a local runtime image, declare `images.workbenches.dev/acme/core:1.2.0` in the manifest, push version `1.2.0` with `wb push`, then run `wb image push core-local acme/core@1.2.0`. The CLI resolves that exact stored version before exporting or uploading, reuses existing blobs, uploads missing blobs in bounded chunks, and prints the manifest's image reference. Each version's tag can receive an image once. Tags replace every version character outside `[A-Za-z0-9._-]` with `_`, so `1.0.0+build.7` becomes `1.0.0_build.7`. A version may name only its own Workbench's registry repository, with its own tag or an earlier version's tag. Registry refusals pass through unchanged. The organization comes from `org/name@version`; `--org`, when given, must match. The old image `--as` and `--tag` flags fail before any request with the new command form.
+
+`wb withdraw org/name` withdraws an open review submission (`pending` or `changes_requested`), or fails with a clear message when none is open. It uses the organization in `org/name`; `--org`, when given, must match.
+
+`wb delete org/name` and `wb delete org/name@version` preview irreversible deletion without making HTTP requests. Add `--yes` to delete either the whole Workbench with every version and its registry images, or just the named version. A version's image is deleted unless a later version uses it. Version deletion is refused for unfinished runs, the current public version, or the only version. Whole-Workbench deletion is refused while any run of it is unfinished. Registry 409 messages are printed unchanged. `--org`, when given, must match the reference, including for previews.
 
 ### Self-hosted workers for workbenches.dev
 
