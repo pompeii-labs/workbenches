@@ -154,12 +154,8 @@ describe('engine architecture', () => {
                     const literals = node.arguments.map((argument) =>
                         ts.isStringLiteralLike(argument) ? argument.text : undefined
                     );
-                    for (const [index, text] of literals.entries()) {
-                        // Authoring keeps its own, unrelated `runs` index.
-                        if (
-                            (text === 'sessions' || text === 'runs') &&
-                            literals[index - 1] !== 'authoring'
-                        )
+                    for (const text of literals) {
+                        if (text === 'sessions' || text === 'runs')
                             violations.push(`${path}: ${text}`);
                     }
                 }

@@ -39,10 +39,10 @@ wb push .#my-expert --org acme
 `push` stores a new immutable internal version as `acme/<name>` (use `--as <name>` to store it under a different registry name), even when the Workbench is already public. Internal versions are visible only to the organization's members and keys. If the version has a cloud image build, the output names it and links the page that streams its log. Teammates install it after their own `wb login --org acme`:
 
 ```sh
-wb add acme/my-expert --as my-expert
+wb save acme/my-expert --as my-expert
 ```
 
-`acme/my-expert` is the latest release. Push a prerelease such as `0.3.0-alpha.1` to let teammates try a change first with `wb add acme/my-expert@0.3.0-alpha.1 --as my-expert-next`; the latest release stays what everyone else gets.
+`acme/my-expert` is the latest release. Push a prerelease such as `0.3.0-alpha.1` to let teammates try a change first with `wb save acme/my-expert@0.3.0-alpha.1 --as my-expert-next`; the latest release stays what everyone else gets.
 
 ## Publish publicly
 
@@ -56,7 +56,7 @@ Publishing submits a version you already pushed; it never uploads a package. Onl
 Anyone can then install it without signing in:
 
 ```sh
-wb add acme/my-expert --as my-expert
+wb save acme/my-expert --as my-expert
 ```
 
 Saved packages are frozen snapshots. Consumers get new versions with `wb upgrade my-expert`.
@@ -106,7 +106,7 @@ Any public GitHub repository with packages under `.workbenches/<name>/` is alrea
 
 ```sh
 wb list owner/repo
-wb add https://github.com/owner/repo --name <name> --ref main --as <alias>
+wb save https://github.com/owner/repo --name <name> --ref main --as <alias>
 ```
 
 Use the registry when you want versions, internal sharing, review, and a stable `org/name`.

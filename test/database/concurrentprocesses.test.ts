@@ -7,7 +7,6 @@ import { Connection } from '../../src/database/connection.js';
 import { ProcessProbe } from '../../src/processes/probe.js';
 import { RunControl } from '../../src/runs/control.js';
 import { RunStore, type StoredRun } from '../../src/runs/store.js';
-import { StudioWake } from '../../src/studio/wake.js';
 
 const process_ = join(import.meta.dir, 'process.ts');
 const directories: string[] = [];
@@ -50,12 +49,7 @@ describe('concurrent processes', () => {
     test('append events to one run without loss or duplicate sequences', async () => {
         const home = await temporaryHome();
         const connection = openConnection(home);
-        const store = new RunStore(
-            connection,
-            home,
-            new ProcessProbe(),
-            new StudioWake(home)
-        );
+        const store = new RunStore(connection, home, new ProcessProbe());
         const run = await fixtureRun(store);
 
         const writers = [1, 2, 3, 4].map((writer) =>
@@ -94,7 +88,7 @@ describe('concurrent processes', () => {
         const home = await temporaryHome();
         const connection = openConnection(home);
         const run = await fixtureRun(
-            new RunStore(connection, home, new ProcessProbe(), new StudioWake(home))
+            new RunStore(connection, home, new ProcessProbe())
         );
         const receivers = [1, 2, 3].map(() =>
             Bun.spawn([process.execPath, process_, 'receive', home, run.id], {

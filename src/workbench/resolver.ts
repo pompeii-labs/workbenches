@@ -54,7 +54,7 @@ export class WorkbenchResolver {
 
         if (options.savedOnly) {
             throw new Error(
-                `Workbench is not saved: ${value}. Add it first with wb add <source>, then run its saved alias.`
+                `Workbench is not saved: ${value}. Save it first with wb save <source>, then run its saved alias.`
             );
         }
 
@@ -67,7 +67,7 @@ export class WorkbenchResolver {
                 reference.selector ? `#${reference.selector}` : ''
             }`;
             throw new Error(
-                `Remote Workbenches must be saved before running. Run: wb add ${remoteReference}`
+                `Remote Workbenches must be saved before running. Run: wb save ${remoteReference}`
             );
         }
 

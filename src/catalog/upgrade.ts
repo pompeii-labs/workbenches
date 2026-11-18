@@ -75,7 +75,7 @@ export class SavedWorkbenchUpgrade {
     private async upgradeSource(entry: CatalogEntry): Promise<CatalogUpgradeResult> {
         if (entry.localPath || entry.source.startsWith('/')) {
             throw new Error(
-                `Local Workbenches are not upgraded. Edit the source directly, or re-add a frozen local entry with wb add ${entry.source} --name ${entry.selector} --as ${entry.alias}.`
+                `Local Workbenches are not upgraded. Edit the source directly, or save a frozen local entry again with wb save ${entry.source} --name ${entry.selector} --as ${entry.alias}.`
             );
         }
 

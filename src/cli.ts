@@ -11,13 +11,11 @@ import {
 import pc from 'picocolors';
 import packageMetadata from '../package.json' with { type: 'json' };
 
-import { addCommand } from './commands/add.js';
 import { answerCommand } from './commands/answer.js';
 import { attachCommand } from './commands/attach.js';
 import { buildCommand } from './commands/build.js';
 import { cleanCommand } from './commands/clean.js';
 import { connectCommand } from './commands/connect.js';
-import { createCommand } from './commands/create.js';
 import { deleteCommand } from './commands/delete.js';
 import { imageCommand } from './commands/image.js';
 import { initCommand } from './commands/init.js';
@@ -25,22 +23,20 @@ import { killCommand } from './commands/kill.js';
 import { listCommand } from './commands/list.js';
 import { loginCommand } from './commands/login.js';
 import { logoutCommand } from './commands/logout.js';
-import { mcpCommand } from './commands/mcp.js';
 import { orgCommand } from './commands/org.js';
 import { outcomeCommand } from './commands/outcome.js';
 import { exitOnBrokenPipe } from './commands/pipe.js';
-import { projectCommand } from './commands/project.js';
 import { psCommand } from './commands/ps.js';
 import { publishCommand } from './commands/publish.js';
 import { pushCommand } from './commands/push.js';
-import { removeCommand } from './commands/remove.js';
 import { resumeCommand } from './commands/resume.js';
 import { runCommand } from './commands/run.js';
+import { saveCommand } from './commands/save.js';
 import { sendCommand } from './commands/send.js';
 import { smokeCommand } from './commands/smoke.js';
 import { statusCommand } from './commands/status.js';
-import { studioCommand } from './commands/studio.js';
 import { unpublishCommand } from './commands/unpublish.js';
+import { unsaveCommand } from './commands/unsave.js';
 import { updateCommand } from './commands/update.js';
 import { upgradeCommand } from './commands/upgrade.js';
 import { validateCommand } from './commands/validate.js';
@@ -54,7 +50,6 @@ import { Connection } from './database/connection.js';
 import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
 import { workbenchHome } from './storage.js';
-import { StudioProcess } from './studio/index.js';
 import { Services } from './workbench/services.js';
 import { WorkerProcess } from './workers/process.js';
 
@@ -68,7 +63,6 @@ export const workbenchCommand = defineCommand({
     },
     subCommands: {
         init: initCommand,
-        create: createCommand,
         image: imageCommand,
         list: listCommand,
         view: viewCommand,
@@ -78,7 +72,6 @@ export const workbenchCommand = defineCommand({
         upgrade: upgradeCommand,
         login: loginCommand,
         logout: logoutCommand,
-        mcp: mcpCommand,
         org: orgCommand,
         outcome: outcomeCommand,
         whoami: whoamiCommand,
@@ -88,14 +81,12 @@ export const workbenchCommand = defineCommand({
         withdraw: withdrawCommand,
         delete: deleteCommand,
         ps: psCommand,
-        project: projectCommand,
         status: statusCommand,
-        studio: studioCommand,
         build: buildCommand,
         clean: cleanCommand,
         connect: connectCommand,
-        add: addCommand,
-        remove: removeCommand,
+        save: saveCommand,
+        unsave: unsaveCommand,
         resume: resumeCommand,
         run: runCommand,
         attach: attachCommand,
@@ -110,20 +101,6 @@ export const workbenchCommand = defineCommand({
 if (import.meta.main) {
     exitOnBrokenPipe(process.stdout);
     exitOnBrokenPipe(process.stderr);
-    if (process.argv[2] === '__authoring') {
-        const home = process.argv[3];
-        const id = process.argv[4];
-        if (!home || !id) process.exit(2);
-        await new ModelCatalog({ home }).loadCached();
-        const connection = Connection.open(home);
-        let code: number;
-        try {
-            code = await new Services(home, connection).jobs.execute(id);
-        } finally {
-            connection.close();
-        }
-        process.exit(code);
-    }
     if (process.argv[2] === '__worker') {
         const home = process.argv[3];
         const id = process.argv[4];
@@ -144,23 +121,6 @@ if (import.meta.main) {
         if (!home) process.exit(2);
         RegistryClient.configureApiUrl(extractApiUrl(process.argv.slice(4)).apiUrl);
         process.exit(await new WorkerProcess(home).run());
-    }
-    if (process.argv[2] === '__studio') {
-        const home = process.argv[3];
-        if (!home) process.exit(2);
-        RegistryClient.configureApiUrl(extractApiUrl(process.argv.slice(4)).apiUrl);
-        const connection = Connection.open(home);
-        let code: number;
-        try {
-            const services = new Services(home, connection);
-            code = await new StudioProcess(
-                services.studio.state,
-                services.studio
-            ).run();
-        } finally {
-            connection.close();
-        }
-        process.exit(code);
     }
     const defaultConsoleError = console.error;
     const colors = pc.createColors(
@@ -265,16 +225,9 @@ function commandUsage(usage: string): string {
 }
 
 function usesModelCatalog(args: string[]): boolean {
-    return new Set([
-        'build',
-        'create',
-        'init',
-        'resume',
-        'run',
-        'send',
-        'smoke',
-        'view',
-    ]).has(args[0] ?? '');
+    return new Set(['build', 'init', 'resume', 'run', 'send', 'smoke', 'view']).has(
+        args[0] ?? ''
+    );
 }
 
 export function extractApiUrl(args: string[]): {

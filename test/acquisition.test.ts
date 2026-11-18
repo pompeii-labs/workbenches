@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { AuthoringOperation } from '../src/authoring/index.js';
 import { SavedWorkbenchCatalog, WorkbenchPackage } from '../src/catalog/index.js';
 import { CliPresenter } from '../src/commands/presenter.js';
 import { pushedRecord } from '../src/commands/push.js';
@@ -36,67 +35,6 @@ afterEach(async () => {
 });
 
 describe('saved-source contract', () => {
-    test('verified authoring preserves a live alias and reports collisions without failing the package', async () => {
-        const { root, home, path } = await fixture();
-        const { catalog, writer } = services(home);
-        await catalog.addLocal({
-            alias: 'custom-expert',
-            workbench: await Workbench.load(path, runners),
-        });
-        const creator = {
-            version: '0.1.4',
-            digest: `sha256:${'b'.repeat(64)}`,
-            registry_version_id: 'fixture-version',
-            cached: true,
-        };
-        const operation = await AuthoringOperation.prepare(
-            home,
-            {
-                id: 'author_alias',
-                kind: 'improve',
-                repository: root,
-                targetSelector: 'core',
-                creator,
-            },
-            async () => {}
-        );
-        const manifestPath = join(path, 'workbench.yml');
-        await writeFile(
-            manifestPath,
-            (await readFile(manifestPath, 'utf8')).replace('0.1.0', '0.1.1')
-        );
-        expect(await operation.finish()).toMatchObject({ status: 'completed' });
-        expect(await catalog.list()).toMatchObject([
-            { alias: 'custom-expert', localPath: path, version: '0.1.1' },
-        ]);
-        const other = await fixture();
-        await catalog.addLocal({
-            alias: 'expert',
-            workbench: await Workbench.load(other.path, runners),
-        });
-        await writer.remove('custom-expert');
-        const collision = await AuthoringOperation.prepare(
-            home,
-            {
-                id: 'author_collision',
-                kind: 'improve',
-                repository: root,
-                targetSelector: 'core',
-                creator,
-            },
-            async () => {}
-        );
-        await writeFile(
-            manifestPath,
-            (await readFile(manifestPath, 'utf8')).replace('0.1.1', '0.1.2')
-        );
-        const result = await collision.finish();
-        expect(result.status).toBe('completed');
-        expect(result.warnings?.[0]).toContain(path);
-        expect(result.warnings?.[0]).toContain('--as <alias>');
-        expect((await catalog.find('expert'))?.localPath).toBe(other.path);
-    });
-
     test('legacy frozen sessions retain their exact original catalog package after alias removal', async () => {
         const { root, home, path } = await fixture();
         const { catalog, writer, sessions, resolver } = services(home);
@@ -135,11 +73,11 @@ describe('saved-source contract', () => {
         await expect(resolver.resolve(id)).rejects.toThrow();
     });
 
-    test('local add is live, idempotent, absolute, and never deletes the source', async () => {
+    test('local save is live, idempotent, absolute, and never deletes the source', async () => {
         const { root, home, path } = await fixture();
         const first = await cli(
             home,
-            ['add', './.workbenches/core', '--as', 'expert'],
+            ['save', './.workbenches/core', '--as', 'expert'],
             root
         );
         expect(first.code).toBe(0);
@@ -149,7 +87,7 @@ describe('saved-source contract', () => {
             packagePath: path,
         });
         expect(
-            (await cli(home, ['add', './.workbenches/core', '--as', 'expert'], root))
+            (await cli(home, ['save', './.workbenches/core', '--as', 'expert'], root))
                 .code
         ).toBe(0);
         await writeFile(join(path, 'instructions.md'), 'Edited instructions');
@@ -162,7 +100,7 @@ describe('saved-source contract', () => {
             'Edited instructions'
         );
         expect(resolved.workspaceDirectory).toBe(root);
-        expect((await cli(home, ['remove', 'expert'], root)).code).toBe(0);
+        expect((await cli(home, ['unsave', 'expert'], root)).code).toBe(0);
         expect(await readFile(join(path, 'instructions.md'), 'utf8')).toBe(
             'Edited instructions'
         );
@@ -171,16 +109,18 @@ describe('saved-source contract', () => {
     test('local collisions require --as and multi-package input lists --name choices', async () => {
         const { root, home, path } = await fixture();
         const second = await packageAt(root, 'other', 'expert');
-        const ambiguous = await cli(home, ['add', '.'], root);
+        const ambiguous = await cli(home, ['save', '.'], root);
         expect(ambiguous.code).toBe(1);
         expect(ambiguous.stderr).toContain('--name');
         expect(ambiguous.stderr).toContain('core, other');
-        expect((await cli(home, ['add', '.', '--name', 'core'], root)).code).toBe(0);
+        expect((await cli(home, ['save', '.', '--name', 'core'], root)).code).toBe(0);
         expect((await new SavedWorkbenchCatalog(home).find('expert'))?.localPath).toBe(
             path
         );
-        expect((await cli(home, ['add', second, '--as', 'second'], root)).code).toBe(0);
-        expect((await cli(home, ['add', '.#core'], root)).stderr).toContain(
+        expect((await cli(home, ['save', second, '--as', 'second'], root)).code).toBe(
+            0
+        );
+        expect((await cli(home, ['save', '.#core'], root)).stderr).toContain(
             'Use --name'
         );
     });
@@ -206,7 +146,7 @@ describe('saved-source contract', () => {
         try {
             const missing = await cli(
                 home,
-                ['add', 'missing/package', '--api-url', server.url.origin],
+                ['save', 'missing/package', '--api-url', server.url.origin],
                 root
             );
             expect(missing.code).toBe(1);
@@ -406,7 +346,7 @@ describe('saved-source contract', () => {
 });
 
 describe('private organization workbenches', () => {
-    test('add saves an internal workbench with the matching key and records visibility', async () => {
+    test('save registers an internal workbench with the matching key and records visibility', async () => {
         const { root, home, path } = await fixture('repo-engineer');
         const registry = await privateRegistry(path);
         try {
@@ -415,7 +355,7 @@ describe('private organization workbenches', () => {
 
             const added = await cli(
                 home,
-                ['add', 'example/repo-engineer', ...api],
+                ['save', 'example/repo-engineer', ...api],
                 root
             );
             expect(added.code).toBe(0);
@@ -451,14 +391,14 @@ describe('private organization workbenches', () => {
         }
     });
 
-    test('add without the organization key fails with a sign-in hint', async () => {
+    test('save without the organization key fails with a sign-in hint', async () => {
         const { root, home, path } = await fixture('repo-engineer');
         const registry = await privateRegistry(path);
         try {
             const api = ['--api-url', registry.server.url.origin];
             const anonymous = await cli(
                 home,
-                ['add', 'example/repo-engineer', ...api],
+                ['save', 'example/repo-engineer', ...api],
                 root
             );
             expect(anonymous.code).toBe(1);
@@ -467,7 +407,7 @@ describe('private organization workbenches', () => {
             await hold(home, registry.server.url.origin, ['other']);
             const other = await cli(
                 home,
-                ['add', 'example/repo-engineer', ...api],
+                ['save', 'example/repo-engineer', ...api],
                 root
             );
             expect(other.code).toBe(1);

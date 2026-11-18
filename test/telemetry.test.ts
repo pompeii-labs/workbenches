@@ -133,9 +133,9 @@ describe('anonymous registry counters', () => {
 });
 
 describe('sources that are never reported', () => {
-    test('only the registry branch of add can report', async () => {
+    test('only the registry branch of save can report', async () => {
         const source = await Bun.file(
-            join(import.meta.dir, '../src/commands/add.ts')
+            join(import.meta.dir, '../src/commands/save.ts')
         ).text();
         const reports = source.split('.report(').length - 1;
         const github = source.indexOf('/^https:\\/\\//.test(args.source)');

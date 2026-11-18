@@ -14,9 +14,9 @@ import { WorkbenchSource } from '../workbench/index.js';
 import { Services } from '../workbench/services.js';
 import { CliPresenter } from './presenter.js';
 
-export const addCommand = defineCommand({
+export const saveCommand = defineCommand({
     meta: {
-        name: 'add',
+        name: 'save',
         description: 'Save a remote package or register a live local Workbench.',
     },
     args: {
@@ -226,7 +226,7 @@ async function choose(
             `Choose a package with --name. Available: ${options.map((option) => option.value).join(', ')}`
         );
     const selection = await select({
-        message: 'Choose a Workbench to add',
+        message: 'Choose a Workbench to save',
         options: options.map((option) => ({
             ...option,
             label:
@@ -235,7 +235,7 @@ async function choose(
                     : `${option.label} (${option.value})`,
         })),
     });
-    if (isCancel(selection)) throw new Error('Add cancelled.');
+    if (isCancel(selection)) throw new Error('Save cancelled.');
     return selection;
 }
 
@@ -243,7 +243,7 @@ async function saveCandidate(options: {
     catalog: SavedWorkbenchCatalog;
     alias: string;
     digest: string;
-    /** Whether a saved entry already has the version pin this add asks for. */
+    /** Whether a saved entry already has the version pin this save asks for. */
     pinned?: (entry: CatalogEntry) => boolean;
     force: boolean | undefined;
     save: () => Promise<CatalogEntry>;

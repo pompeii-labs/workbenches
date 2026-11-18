@@ -30,18 +30,18 @@ export class SessionRecordStore {
         return (
             this.database.run(
                 `INSERT OR IGNORE INTO sessions (
-                    id, name, project_id, workbench, workbench_version, runner, model,
+                    id, name, workbench, workbench_version, runner, model,
                     runtime, reference, workbench_path, source_workbench_path,
                     workbench_digest, workspace, repository, workspaces, registry,
                     allow_unchecked_gpu, native_path, native_session_id, latest_run_id,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 ...columns
             ).changes > 0
         );
     }
 
-    /** One session with its project's display name as `project`. */
+    /** One session. */
     row(id: string): Row | undefined {
         return this.database.one(`${sessionSelect} WHERE sessions.id = ?`, id);
     }
@@ -83,5 +83,4 @@ export class SessionRecordStore {
     }
 }
 
-const sessionSelect = `SELECT sessions.*, projects.name AS project
-FROM sessions LEFT JOIN projects ON projects.id = sessions.project_id`;
+const sessionSelect = 'SELECT * FROM sessions';

@@ -7,7 +7,6 @@ import { Connection } from '../../src/database/connection.js';
 import { OutcomeStore, type RunOutcome } from '../../src/outcomes/index.js';
 import { ProcessProbe } from '../../src/processes/probe.js';
 import { RunStore } from '../../src/runs/index.js';
-import { StudioWake } from '../../src/studio/wake.js';
 
 const projectDirectory = resolve(import.meta.dir, '..', '..');
 const cliPath = join(projectDirectory, 'src', 'cli.ts');
@@ -17,7 +16,7 @@ const connections: Connection[] = [];
 function runStore(home: string) {
     const connection = Connection.open(home);
     connections.push(connection);
-    return new RunStore(connection, home, new ProcessProbe(), new StudioWake(home));
+    return new RunStore(connection, home, new ProcessProbe());
 }
 
 afterEach(async () => {

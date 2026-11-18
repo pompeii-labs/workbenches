@@ -29,7 +29,7 @@ export const listCommand = defineCommand({
         if (!args.source || args.saved) {
             const entries = await new SavedWorkbenchCatalog(workbenchHome()).list();
             if (entries.length === 0) {
-                output.empty('No saved Workbenches. Add one with wb add <source>.');
+                output.empty('No saved Workbenches. Save one with wb save <source>.');
                 return;
             }
             for (const entry of entries) {

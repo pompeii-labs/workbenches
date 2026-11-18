@@ -113,7 +113,6 @@
     },
     "dependencies": {
         "@clack/prompts": "^1.5.1",
-        "@modelcontextprotocol/sdk": "^1.32.1",
         "citty": "^0.2.2",
         "e2b": "2.62.1",
         "marked": "^18.0.7",

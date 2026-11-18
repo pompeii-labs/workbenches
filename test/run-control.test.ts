@@ -8,7 +8,6 @@ import { ProcessProbe } from '../src/processes/probe.js';
 import { RunControl } from '../src/runs/control.js';
 import { StoredRunHandle } from '../src/runs/handle.js';
 import { RunStore, type StoredRun } from '../src/runs/store.js';
-import { StudioWake } from '../src/studio/wake.js';
 
 const temporaryDirectories: string[] = [];
 const connections: Connection[] = [];
@@ -241,7 +240,7 @@ async function environment(): Promise<{
     return {
         home,
         connection,
-        runs: new RunStore(connection, home, new ProcessProbe(), new StudioWake(home)),
+        runs: new RunStore(connection, home, new ProcessProbe()),
     };
 }
 

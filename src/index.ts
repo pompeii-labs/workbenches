@@ -1,4 +1,3 @@
-export type { AuthoringLaunch } from './authoring/index.js';
 export {
     type CatalogEntry,
     type CatalogRegistryReference,

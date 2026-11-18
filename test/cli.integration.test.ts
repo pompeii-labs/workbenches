@@ -12,23 +12,15 @@ import {
     symlink,
     writeFile,
 } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { OfficialWorkbenchResolver } from '../src/authoring/official.js';
-import { WorkbenchPackage } from '../src/catalog/package.js';
 import { AuthenticationRequiredError } from '../src/connections/error.js';
 import { Connection } from '../src/database/connection.js';
 import { RowReader } from '../src/database/rows.js';
 import { OutcomeStore } from '../src/outcomes/store.js';
-import { RegistryAccountStore } from '../src/registry/account-store.js';
-import { RegistryClient } from '../src/registry/client.js';
 import { RunControl } from '../src/runs/control.js';
 import { RunEvents } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/index.js';
-import type { WorkbenchManifest } from '../src/types.js';
 import { Services } from '../src/workbench/services.js';
 import { seedModelCatalogFixture } from './model-catalog-fixture.js';
 
@@ -69,7 +61,7 @@ afterEach(async () => {
 describe('CLI integration', () => {
     setDefaultTimeout(20_000);
 
-    test('live add edits feed new CLI runs while a resumed session keeps its package after removal and deletion', async () => {
+    test('live save edits feed new CLI runs while a resumed session keeps its package after removal and deletion', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('cli-pinned-home-');
         const bin = await fakeBin();
@@ -86,7 +78,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'pinned-expert'],
+                    ['save', fixture.packageDirectory, '--as', 'pinned-expert'],
                     environment,
                     fixture.root
                 )
@@ -100,20 +92,9 @@ describe('CLI integration', () => {
         expect(taskless.stderr).toContain('wb run requires a task');
         expect(taskless.stderr).not.toContain('Workbench is not saved');
         expect(
-            (await executeCli(['project', 'create', 'Demo'], environment)).code
-        ).toBe(0);
-        expect(
             (
                 await executeCli(
-                    [
-                        'run',
-                        'pinned-expert',
-                        '--task',
-                        'first',
-                        '--project',
-                        'Demo',
-                        '--final',
-                    ],
+                    ['run', 'pinned-expert', '--task', 'first', '--final'],
                     environment,
                     fixture.root
                 )
@@ -124,7 +105,6 @@ describe('CLI integration', () => {
         );
         const first = (await open(home).sessions.list())[0];
         if (!first) throw new Error('Missing original session');
-        expect(first.project).toBe('Demo');
         expect(first.source_workbench_path).toBe(fixture.packageDirectory);
         await writeFile(
             join(fixture.packageDirectory, 'instructions.md'),
@@ -147,7 +127,7 @@ describe('CLI integration', () => {
                 .stderr
         ).toContain('Local Workbenches are not upgraded');
         expect(
-            (await executeCli(['remove', 'pinned-expert'], environment, fixture.root))
+            (await executeCli(['unsave', 'pinned-expert'], environment, fixture.root))
                 .code
         ).toBe(0);
         await rm(fixture.packageDirectory, { recursive: true });
@@ -163,7 +143,6 @@ describe('CLI integration', () => {
         expect((await open(home).sessions.read(first.id)).workbench_path).toBe(
             first.workbench_path
         );
-        expect((await open(home).sessions.read(first.id)).project).toBe('Demo');
         const sessions: unknown[] = (
             await executeCli(['ps', '--all', '--json'], environment)
         ).stdout
@@ -173,393 +152,15 @@ describe('CLI integration', () => {
         const recorded = sessions.find(
             (session) => isRecord(session) && session.session_id === first.id
         );
-        expect(isRecord(recorded) ? recorded.project : undefined).toBe('Demo');
         expect(isRecord(recorded) ? 'task' in recorded : true).toBeFalse();
-        const beforeStudioSend = (await open(home).sessions.read(first.id))
-            .latest_run_id;
-        const studioPort = await freeTestPort();
-        open(home).studio.state.write({
-            server_pid: 0,
-            api_port: studioPort,
-            ui_port: 9_292,
-            container_id: 'test-container',
-            token: 'test-token',
-            image: 'test-studio',
-            created_at: new Date().toISOString(),
-        });
-        const previousPath = process.env.PATH;
-        const previousRecord = process.env.WB_TEST_RECORD;
-        process.env.PATH = environment.PATH;
-        process.env.WB_TEST_RECORD = record;
-        const studio = Bun.spawn([process.execPath, cliPath, '__studio', home], {
-            cwd: fixture.root,
-            env: {
-                ...process.env,
-                WORKBENCH_HOME: home,
-                PATH: environment.PATH,
-                WB_TEST_RECORD: record,
-                OPENROUTER_API_KEY: 'fixture-openrouter-key',
-            },
-            stdin: 'ignore',
-            stdout: 'ignore',
-            stderr: 'pipe',
-        });
-        try {
-            await waitForStudio(studioPort);
-            const response = await fetch(
-                `http://127.0.0.1:${studioPort}/v1/runs/${beforeStudioSend}/commands`,
-                {
-                    method: 'POST',
-                    headers: {
-                        Host: `127.0.0.1:${studioPort}`,
-                        Authorization: 'Bearer test-token',
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        kind: 'send',
-                        payload: { text: 'continue through studio' },
-                        idempotency_key: 'studio-continuation',
-                    }),
-                }
-            );
-            expect(response.status).toBe(202);
-            expect(await response.json()).toMatchObject({
-                command: { status: 'accepted' },
-            });
-            expect((await open(home).sessions.read(first.id)).latest_run_id).not.toBe(
-                beforeStudioSend
-            );
-        } finally {
-            studio.kill('SIGTERM');
-            await studio.exited;
-            process.env.PATH = previousPath;
-            if (previousRecord === undefined) delete process.env.WB_TEST_RECORD;
-            else process.env.WB_TEST_RECORD = previousRecord;
-        }
     });
 
-    test('serves every MCP tool over stdio and reports unknown projects', async () => {
-        const fixture = await createFixture({
-            description: 'Navigate the test harbor.',
-        });
-        const home = await temporaryDirectory('workbench-mcp-');
-        const bin = await fakeBin();
-        const record = join(fixture.root, 'mcp-runner');
-        await seedModelCatalogFixture(home);
-        const environment = {
-            WORKBENCH_HOME: home,
-            PATH: `${bin}:${process.env.PATH ?? ''}`,
-            OPENAI_API_KEY: 'fixture-openai-key',
-            WB_TEST_RECORD: record,
-            NO_COLOR: '1',
-        };
-        expect(
-            (
-                await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'mcp-fixture'],
-                    environment,
-                    fixture.root
-                )
-            ).code
-        ).toBe(0);
-        const client = await mcpClient('wb-test', fixture.root, environment);
-        try {
-            expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
-                'search',
-                'view',
-                'run',
-                'wait',
-                'send',
-                'answer',
-                'cancel',
-                'runs',
-                'sessions',
-                'push',
-                'projects',
-                'create_project',
-                'tasks',
-            ]);
-            expect(client.getInstructions()).toContain(
-                'Work the loop: `run`, then `wait`, then `send` or `answer`'
-            );
-
-            const searched = await client.callTool({
-                name: 'search',
-                arguments: { query: 'test harbor', limit: 5 },
-            });
-            expect(searched.structuredContent).toMatchObject({
-                results: [
-                    {
-                        source: 'local',
-                        workbench: 'mcp-fixture',
-                        name: 'fixture-core',
-                        description: 'Navigate the test harbor.',
-                    },
-                ],
-            });
-            const viewed = await client.callTool({
-                name: 'view',
-                arguments: { workbench: 'mcp-fixture' },
-            });
-            expect(viewed.structuredContent).toMatchObject({
-                name: 'fixture-core',
-                version: '0.1.0',
-            });
-            const push = await client.callTool({
-                name: 'push',
-                arguments: { path: fixture.packageDirectory },
-            });
-            expect(push.isError).toBeTrue();
-            expect(toolText(push)).toBe('Sign in first with wb login');
-
-            const created = await client.callTool({
-                name: 'create_project',
-                arguments: { name: 'Pixel Pirate' },
-            });
-            expect(created.structuredContent).toMatchObject({
-                project: { name: 'Pixel Pirate', slug: 'pixel-pirate' },
-            });
-            const projects = await client.callTool({ name: 'projects', arguments: {} });
-            expect(projects.structuredContent).toMatchObject({
-                projects: [{ name: 'Pixel Pirate' }],
-            });
-            const emptyTasks = await client.callTool({ name: 'tasks', arguments: {} });
-            expect(emptyTasks.structuredContent).toEqual({ tasks: [] });
-
-            const unknown = await client.callTool({
-                name: 'run',
-                arguments: {
-                    workbench: 'mcp-fixture',
-                    task: 'inspect the harbor',
-                    project: 'Pixel Pirates',
-                    dir: fixture.root,
-                },
-            });
-            expect(unknown.isError).toBeTrue();
-            expect(toolText(unknown)).toBe(
-                'No project "Pixel Pirates". Did you mean "Pixel Pirate"?\n' +
-                    'Create it with: wb project create "Pixel Pirates"'
-            );
-            expect(await stat(`${record}.args`).catch(() => undefined)).toBeUndefined();
-
-            const launched = await client.callTool({
-                name: 'run',
-                arguments: {
-                    workbench: 'mcp-fixture',
-                    task: 'inspect the harbor',
-                    project: 'pixel-pirate',
-                    dir: fixture.root,
-                },
-            });
-            expect(launched.isError).not.toBeTrue();
-            const launchedSession = textField(structured(launched), 'session_id');
-            expect(launched.structuredContent).toMatchObject({
-                session_id: expect.stringMatching(/^wb_/),
-                run_id: expect.stringMatching(/^wb_/),
-                wait_command: expect.stringContaining('wb wait wb_'),
-                send_command: expect.stringContaining('wb send wb_'),
-            });
-            const session = await open(home).sessions.read(launchedSession);
-            expect(session.project).toBe('Pixel Pirate');
-            const tasks = await client.callTool({
-                name: 'tasks',
-                arguments: { project: 'Pixel Pirate' },
-            });
-            expect(tasks.structuredContent).toMatchObject({
-                tasks: [{ project: 'Pixel Pirate', title: 'inspect the harbor' }],
-            });
-        } finally {
-            await client.close();
-        }
-    });
-
-    test('supervises permission, continuation, history, and cancellation through MCP', async () => {
-        const fixture = await createFixture();
-        const home = await temporaryDirectory('workbench-mcp-supervision-');
-        const bin = await fakeBin([], { permission: true });
-        await seedModelCatalogFixture(home);
-        const environment = {
-            WORKBENCH_HOME: home,
-            PATH: `${bin}:${process.env.PATH ?? ''}`,
-            OPENAI_API_KEY: 'fixture-openai-key',
-            NO_COLOR: '1',
-        };
-        expect(
-            (
-                await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'mcp-supervision'],
-                    environment,
-                    fixture.root
-                )
-            ).code
-        ).toBe(0);
-        const client = await mcpClient(
-            'wb-supervision-test',
-            fixture.root,
-            environment
-        );
-        try {
-            await client.callTool({
-                name: 'create_project',
-                arguments: { name: 'MCP Project' },
-            });
-            const launched = structured(
-                await client.callTool({
-                    name: 'run',
-                    arguments: {
-                        workbench: 'mcp-supervision',
-                        task: 'request permission',
-                        project: 'MCP Project',
-                        dir: fixture.root,
-                    },
-                })
-            );
-            const sessionId = textField(launched, 'session_id');
-            const runId = textField(launched, 'run_id');
-            const waiting = structured(
-                await client.callTool({
-                    name: 'wait',
-                    arguments: { run_id: runId, timeout_seconds: 5 },
-                })
-            );
-            expect(waiting).toMatchObject({
-                state: 'needs_input',
-                pending_requests: [
-                    {
-                        id: 'permission-fixture',
-                        kind: 'permission',
-                        text: 'Allow bash for echo fixture?',
-                        options: ['allow_once', 'reject'],
-                    },
-                ],
-            });
-            const answered = structured(
-                await client.callTool({
-                    name: 'answer',
-                    arguments: {
-                        session_id: sessionId,
-                        request_id: 'permission-fixture',
-                        response: 'allow',
-                    },
-                })
-            );
-            const completed = await waitMcpTerminal(
-                client,
-                textField(answered, 'run_id'),
-                numberField(answered, 'after_sequence')
-            );
-            expect(completed).toMatchObject({
-                state: 'completed',
-                final: 'fixture response',
-            });
-            expect(
-                structured(
-                    await client.callTool({
-                        name: 'wait',
-                        arguments: {
-                            run_id: runId,
-                            after: numberField(completed, 'next'),
-                            timeout_seconds: 120,
-                        },
-                    })
-                ).state
-            ).toBe('completed');
-
-            const sent = structured(
-                await client.callTool({
-                    name: 'send',
-                    arguments: {
-                        session_id: sessionId,
-                        text: 'continue locally',
-                        mode: 'send',
-                    },
-                })
-            );
-            const continued = await waitMcpTerminal(
-                client,
-                textField(sent, 'run_id'),
-                numberField(sent, 'after_sequence')
-            );
-            expect(continued).toMatchObject({
-                state: 'completed',
-                final: 'fixture response',
-            });
-
-            const runs = structured(
-                await client.callTool({
-                    name: 'runs',
-                    arguments: { project: 'MCP Project', status: 'completed' },
-                })
-            );
-            expect(runs.runs).toEqual(
-                expect.arrayContaining([
-                    expect.objectContaining({
-                        session_id: sessionId,
-                        project: 'MCP Project',
-                        status: 'completed',
-                    }),
-                ])
-            );
-            const sessions = structured(
-                await client.callTool({
-                    name: 'sessions',
-                    arguments: { project: 'MCP Project' },
-                })
-            );
-            expect(sessions.sessions).toEqual([
-                expect.objectContaining({
-                    session_id: sessionId,
-                    project: 'MCP Project',
-                    state: 'completed',
-                    needs_input: false,
-                    pending_requests: [],
-                    latest_run: expect.objectContaining({
-                        id: textField(sent, 'run_id'),
-                    }),
-                }),
-            ]);
-        } finally {
-            await client.close();
-        }
-
-        const blockingBin = await fakeBin([], { block: true });
-        const blockingClient = await mcpClient('wb-cancel-test', fixture.root, {
-            ...environment,
-            PATH: `${blockingBin}:${process.env.PATH ?? ''}`,
-        });
-        try {
-            const launched = structured(
-                await blockingClient.callTool({
-                    name: 'run',
-                    arguments: {
-                        workbench: 'mcp-supervision',
-                        task: 'block until cancelled',
-                        dir: fixture.root,
-                    },
-                })
-            );
-            const cancelled = structured(
-                await blockingClient.callTool({
-                    name: 'cancel',
-                    arguments: { session_id: textField(launched, 'session_id') },
-                })
-            );
-            expect(cancelled).toMatchObject({
-                session_id: textField(launched, 'session_id'),
-                run_id: textField(launched, 'run_id'),
-                state: 'cancelled',
-            });
-        } finally {
-            await blockingClient.close();
-        }
-    });
-
-    test('CLI and MCP share detached runtime selection, including explicit errors', async () => {
+    test('CLI selects the declared runtime for detached runs', async () => {
         const fixture = await createFixture({
             runtime: 'docker',
             image: 'ghcr.io/example/lux:0.1.0',
         });
-        const home = await temporaryDirectory('workbench-mcp-docker-');
+        const home = await temporaryDirectory('workbench-runtime-docker-');
         const docker = await fakeDocker();
         await seedModelCatalogFixture(home);
         const environment = {
@@ -572,7 +173,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'docker-fixture'],
+                    ['save', fixture.packageDirectory, '--as', 'docker-fixture'],
                     environment,
                     fixture.root
                 )
@@ -585,57 +186,16 @@ describe('CLI integration', () => {
         );
         expect(cliRun.code).toBe(0);
 
-        const client = await mcpClient('wb-docker-test', fixture.root, environment);
-        try {
-            const unavailable = await client.callTool({
-                name: 'run',
-                arguments: {
-                    workbench: 'docker-fixture',
-                    task: 'wrong runtime',
-                    runtime: 'local',
-                    dir: fixture.root,
-                },
-            });
-            expect(unavailable.isError).toBeTrue();
-            expect(toolText(unavailable)).toBe(
-                'Workbench fixture-core does not declare runtime: local. Declared runtimes: docker'
-            );
-
-            const launched = await client.callTool({
-                name: 'run',
-                arguments: {
-                    workbench: 'docker-fixture',
-                    task: 'from mcp default',
-                    dir: fixture.root,
-                },
-            });
-            expect(launched.isError).not.toBeTrue();
-            const selected = await client.callTool({
-                name: 'run',
-                arguments: {
-                    workbench: 'docker-fixture',
-                    task: 'from mcp explicit',
-                    runtime: 'docker',
-                    dir: fixture.root,
-                },
-            });
-            expect(selected.isError).not.toBeTrue();
-        } finally {
-            await client.close();
-        }
-
         expect((await open(home).runs.list()).map((run) => run.runtime)).toEqual([
-            'docker',
-            'docker',
             'docker',
         ]);
         const commands = await readFile(docker.record, 'utf8');
         expect(
             commands.match(/dev\.workbenches\.managed=true/g)?.length ?? 0
-        ).toBeGreaterThanOrEqual(3);
+        ).toBeGreaterThanOrEqual(1);
     });
 
-    test('detached CLI and MCP runs refuse while an earlier version worker is alive', async () => {
+    test('detached CLI runs refuse while an earlier version worker is alive', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-legacy-refusal-');
         const bin = await fakeBin();
@@ -651,7 +211,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'legacy-fixture'],
+                    ['save', fixture.packageDirectory, '--as', 'legacy-fixture'],
                     environment,
                     fixture.root
                 )
@@ -676,292 +236,12 @@ describe('CLI integration', () => {
             expect(detached.stderr).toContain(
                 `earlier version of Workbench is still active (${run}`
             );
-            const client = await mcpClient('wb-legacy-test', fixture.root, environment);
-            try {
-                const refused = await client.callTool({
-                    name: 'run',
-                    arguments: {
-                        workbench: 'legacy-fixture',
-                        task: 'new work',
-                        dir: fixture.root,
-                    },
-                });
-                expect(refused.isError).toBeTrue();
-                expect(toolText(refused)).toContain(
-                    `earlier version of Workbench is still active (${run}`
-                );
-            } finally {
-                await client.close();
-            }
             expect(await stat(`${record}.args`).catch(() => undefined)).toBeUndefined();
             expect(await open(home).runs.list()).toEqual([]);
         } finally {
             worker.kill();
             await worker.exited;
         }
-    });
-
-    test('resolves project slugs and rejects unknown projects before dispatch', async () => {
-        const fixture = await createFixture();
-        const home = await temporaryDirectory('workbench-strict-project-');
-        const bin = await fakeBin();
-        const record = join(fixture.root, 'strict-project-runner');
-        const environment = {
-            WORKBENCH_HOME: home,
-            PATH: `${bin}:${process.env.PATH ?? ''}`,
-            OPENAI_API_KEY: 'fixture-openai-key',
-            WB_TEST_RECORD: record,
-        };
-        await seedModelCatalogFixture(home);
-        expect(
-            (
-                await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'project-fixture'],
-                    environment,
-                    fixture.root
-                )
-            ).code
-        ).toBe(0);
-        expect(
-            (
-                await executeCli(
-                    ['project', 'create', 'Pixel Pirate'],
-                    environment,
-                    fixture.root
-                )
-            ).code
-        ).toBe(0);
-
-        const unknown = await executeCli(
-            [
-                'run',
-                'project-fixture',
-                '--task',
-                'wrong project',
-                '--project',
-                'Pixel Pirates',
-                '--final',
-            ],
-            environment,
-            fixture.root
-        );
-        expect(unknown.code).toBe(1);
-        expect(unknown.stderr).toContain(
-            'No project "Pixel Pirates". Did you mean "Pixel Pirate"?'
-        );
-        expect(unknown.stderr).toContain(
-            'Create it with: wb project create "Pixel Pirates"'
-        );
-        expect(await stat(`${record}.args`).catch(() => undefined)).toBeUndefined();
-
-        const requests: string[] = [];
-        const api = Bun.serve({
-            hostname: '127.0.0.1',
-            port: 0,
-            fetch: (request) => {
-                requests.push(new URL(request.url).pathname);
-                return Response.json(
-                    { error: { message: 'Not found' } },
-                    { status: 404 }
-                );
-            },
-        });
-        servers.push(api);
-        const apiUrl = `http://127.0.0.1:${api.port}`;
-        const client = new RegistryClient({ home, apiUrl });
-        await new RegistryAccountStore({ home, client }).save(
-            {
-                organizationId: '00000000-0000-4000-8000-000000000001',
-                slug: 'acme',
-                name: 'Acme',
-                personal: false,
-                token: 'placeholder-project-key',
-                keyId: '00000000-0000-4000-8000-000000000002',
-                scopes: ['projects:read'],
-                expiresAt: '2099-01-01T00:00:00.000Z',
-            },
-            { makeDefault: true }
-        );
-
-        const valid = await executeCli(
-            [
-                'run',
-                'project-fixture',
-                '--task',
-                'right project',
-                '--project',
-                'pixel-pirate',
-                '--final',
-                '--api-url',
-                apiUrl,
-            ],
-            environment,
-            fixture.root
-        );
-        expect(valid.code).toBe(0);
-        expect(requests).toEqual([]);
-        const session = (await open(home).sessions.list())[0];
-        expect(session?.project).toBe('Pixel Pirate');
-    });
-    test('creates, edits, runs, and improves a Workbench entirely headlessly', async () => {
-        const root = await temporaryDirectory('headless-authoring-');
-        const home = await temporaryDirectory('headless-authoring-home-');
-        await seedCreator(home, root);
-        const bin = await fakeBin([], { authoring: 'valid' });
-        const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
-            WORKBENCH_HOME: home,
-        };
-        const api = ['--api-url', 'http://127.0.0.1:1'];
-        const created = await executeCli(
-            [
-                'create',
-                'core',
-                '--task',
-                'Build a repository audit expert',
-                '--json',
-                ...api,
-            ],
-            environment,
-            root
-        );
-        expect(created.code).toBe(0);
-        const result = JSON.parse(created.stdout);
-        expect(result).toMatchObject({
-            state: 'completed',
-            authoring: {
-                status: 'completed',
-                result: {
-                    kind: 'create',
-                    packages: [
-                        {
-                            selector: 'core',
-                            path: join(await realpath(root), '.workbenches', 'core'),
-                        },
-                    ],
-                },
-            },
-        });
-        expect(result.authoring.result.changed_files).toContain(
-            '.workbenches/core/workbench.yml'
-        );
-        const brief = join(root, 'edit.txt');
-        await writeFile(brief, 'Require concise evidence-backed reports');
-        const edited = await executeCli(
-            ['create', 'core', '--task-file', brief, '--detach', '--json', ...api],
-            environment,
-            root
-        );
-        expect(edited.code).toBe(0);
-        const launch = JSON.parse(edited.stdout);
-        const verified = await executeCli(
-            ['wait', launch.session_id, '--timeout', '10', '--json'],
-            environment,
-            root
-        );
-        expect(verified.code).toBe(0);
-        expect(JSON.parse(verified.stdout)).toMatchObject({
-            authoring: { status: 'completed', result: { kind: 'edit' } },
-        });
-        const execution = await executeCli(
-            ['run', 'audit-core', '--task', 'Audit the fixture', '--detach', '--json'],
-            environment,
-            root
-        );
-        expect(execution.code).toBe(0);
-        const expert = JSON.parse(execution.stdout);
-        expect(
-            (
-                await executeCli(
-                    ['wait', expert.session_id, '--json', '--timeout', '10'],
-                    environment,
-                    root
-                )
-            ).code
-        ).toBe(0);
-        const improved = await executeCli(
-            [
-                'create',
-                '--from',
-                expert.session_id,
-                '--feedback',
-                'Add a short summary before the evidence',
-                '--json',
-                ...api,
-            ],
-            environment,
-            root
-        );
-        expect(improved.code).toBe(0);
-        const improvement = JSON.parse(improved.stdout);
-        expect(improvement).toMatchObject({
-            authoring: { status: 'completed', result: { kind: 'improve' } },
-        });
-        expect(
-            await readFile(improvement.authoring.result.evidence_path, 'utf8')
-        ).toContain('Add a short summary');
-        expect(
-            await readFile(
-                join(home, 'authoring', launch.operation_id, 'verification.json'),
-                'utf8'
-            ).catch(() => undefined)
-        ).toBeUndefined();
-    });
-
-    test('headless authoring fails verification for an invalid candidate', async () => {
-        const root = await temporaryDirectory('headless-invalid-');
-        const home = await temporaryDirectory('headless-invalid-home-');
-        await seedCreator(home, root);
-        const bin = await fakeBin([], { authoring: 'invalid' });
-        const result = await executeCli(
-            [
-                'create',
-                'core',
-                '--task',
-                'Build the expert',
-                '--json',
-                '--api-url',
-                'http://127.0.0.1:1',
-            ],
-            { PATH: `${bin}:${process.env.PATH}`, WORKBENCH_HOME: home },
-            root
-        );
-        expect(result.code).toBe(1);
-        expect(JSON.parse(result.stdout)).toMatchObject({
-            state: 'failed',
-            run_state: 'completed',
-            authoring: { status: 'failed' },
-        });
-        expect(JSON.parse(result.stdout).error).toContain('invalid');
-    });
-
-    test('headless authoring ignores unrelated workspace changes', async () => {
-        const root = await temporaryDirectory('headless-scoped-');
-        const home = await temporaryDirectory('headless-scoped-home-');
-        await seedCreator(home, root);
-        const bin = await fakeBin([], { authoring: 'outside' });
-        const result = await executeCli(
-            [
-                'create',
-                'core',
-                '--task',
-                'Build the expert',
-                '--json',
-                '--api-url',
-                'http://127.0.0.1:1',
-            ],
-            { PATH: `${bin}:${process.env.PATH}`, WORKBENCH_HOME: home },
-            root
-        );
-        expect(result.code).toBe(0);
-        expect(JSON.parse(result.stdout)).toMatchObject({
-            state: 'completed',
-            authoring: { status: 'completed' },
-        });
-        expect(await readFile(join(root, 'unrequested.txt'), 'utf8')).toBe('outside');
-        expect(JSON.parse(result.stdout).authoring.result.changed_files).not.toContain(
-            'unrequested.txt'
-        );
     });
 
     test('supervises detached native turns with receipts, rejection, queue, and fresh continuation', async () => {
@@ -1303,7 +583,6 @@ describe('CLI integration', () => {
         });
         const ps = await executeCli(['ps', '--json'], environment);
         expect(JSON.parse(ps.stdout)).toMatchObject({
-            project: null,
             needs_input: true,
             state: 'needs_input',
         });
@@ -1420,29 +699,52 @@ describe('CLI integration', () => {
             'Discover, save, verify, and run open Workbenches'
         );
         expect(result.stdout).toContain('run');
-        expect(result.stdout).toContain('create');
+        expect(result.stdout).toContain('save');
+        expect(result.stdout).toContain('unsave');
+        for (const name of ['mcp', 'studio', 'project', 'create', 'add', 'remove']) {
+            expect(result.stdout).not.toMatch(new RegExp(`^  ${name}\\s`, 'm'));
+        }
         expect(result.stdout).not.toContain('\n  edit ');
         expect(result.stdout).not.toContain('\n  improve ');
         expect(result.stdout).toContain('update');
         expect(result.stdout).toContain('upgrade');
 
-        const create = await executeCli(['create', '--help']);
-        expect(create.code).toBe(0);
-        expect(create.stdout).toContain('--env-file=<path>');
-        expect(create.stdout).toContain('--env=<NAME=value>');
-        expect(create.stdout).toContain('--workspace=<NAME=path>');
-        expect(create.stdout).toContain('--allow-host-docker');
-
-        const add = await executeCli(['add', '--help']);
-        expect(add.code).toBe(0);
+        const save = await executeCli(['save', '--help']);
+        expect(save.code).toBe(0);
+        expect(save.stdout).toContain('--as=<as>');
+        expect(save.stdout).toContain('--force');
+        const unsave = await executeCli(['unsave', '--help']);
+        expect(unsave.code).toBe(0);
 
         const run = await executeCli(['run', '--help']);
         expect(run.code).toBe(0);
         expect(run.stdout).toContain('--connection=<connection>');
+        expect(run.stdout).toContain('--env-file=<path>');
+        expect(run.stdout).toContain('--env=<NAME=value>');
+        expect(run.stdout).toContain('--workspace=<NAME=path>');
+        expect(run.stdout).toContain('--allow-host-docker');
+        expect(run.stdout).not.toContain('--project');
 
         const resume = await executeCli(['resume', '--help']);
         expect(resume.code).toBe(0);
         expect(resume.stdout).toContain('--connection=<connection>');
+    });
+
+    test('rejects retired commands and the removed project option', async () => {
+        const home = await temporaryDirectory('cli-retired-');
+        for (const name of ['mcp', 'studio', 'project', 'create', 'add', 'remove']) {
+            const result = await executeCli([name], { WORKBENCH_HOME: home });
+            expect(result.code).toBe(1);
+            expect(result.stderr).toContain('Unknown command');
+            expect(result.stderr).toContain(name);
+        }
+        const result = await executeCli(
+            ['run', 'core', '--project', 'Demo', '--task', 'Review'],
+            { WORKBENCH_HOME: home }
+        );
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain('--project');
+        expect(await open(home).runs.list()).toEqual([]);
     });
 
     test('requests a runtime directly instead of requiring a saved Workbench', async () => {
@@ -2288,7 +1590,7 @@ describe('CLI integration', () => {
         expect(final.stdout).toBe('fixture response\n');
     });
 
-    test('shows help for a bare invocation and rejects taskless runs and authoring', async () => {
+    test('shows help for a bare invocation and rejects taskless runs', async () => {
         const fixture = await createFixture();
         const result = await executeSavedCli(['run', fixture.packageDirectory]);
 
@@ -2304,14 +1606,6 @@ describe('CLI integration', () => {
         );
         expect(bare.stdout).toContain('COMMANDS');
         expect(bare.stderr).toBe('');
-
-        const home = await temporaryDirectory('workbench-create-non-tty-');
-        const create = await executeCli(['create', 'core'], { WORKBENCH_HOME: home });
-        expect(create.code).toBe(1);
-        expect(create.stderr).toContain(
-            'wb create requires an authoring brief. Pass --task, --task-file, or --stdin, or use --from to improve a previous session.'
-        );
-        expect(await stat(join(home, 'authoring')).catch(() => null)).toBeNull();
     });
 
     test('tells a resumable session how to continue when resume has no input', async () => {
@@ -2982,7 +2276,7 @@ describe('CLI integration', () => {
         expect(smoked.stdout).toContain('fixture-tool');
 
         const added = await executeCli(
-            ['add', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
+            ['save', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
             environment
         );
         expect(added.code).toBe(0);
@@ -2993,13 +2287,13 @@ describe('CLI integration', () => {
         expect(await stat(join(home, 'preferences.json')).catch(() => null)).toBeNull();
 
         const currentAdd = await executeCli(
-            ['add', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
+            ['save', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
             environment
         );
         expect(currentAdd.code).toBe(0);
 
         const conflictingName = await executeCli(
-            ['add', `${fixture.root}#core`, '--name', 'core'],
+            ['save', `${fixture.root}#core`, '--name', 'core'],
             environment
         );
         expect(conflictingName.code).toBe(1);
@@ -3062,7 +2356,7 @@ describe('CLI integration', () => {
             '/.workbench-context/system.md'
         );
 
-        const removed = await executeCli(['remove', 'fixture-saved'], environment);
+        const removed = await executeCli(['unsave', 'fixture-saved'], environment);
         expect(removed.code).toBe(0);
         expect(removed.stdout).toContain('removed\tfixture-saved');
         expect((await executeCli(['list'], environment)).stdout).toBe('');
@@ -3086,7 +2380,7 @@ describe('CLI integration', () => {
         expect(listed.stdout).toContain('core\tfixture-core@0.1.0');
 
         const added = await executeCli(
-            ['add', fixture.root, '--name', 'core', '--as', 'fixture-pi'],
+            ['save', fixture.root, '--name', 'core', '--as', 'fixture-pi'],
             environment
         );
         expect(added.code).toBe(0);
@@ -3391,7 +2685,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'multi'],
+                    ['save', fixture.packageDirectory, '--as', 'multi'],
                     environment
                 )
             ).code
@@ -3435,7 +2729,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'gpu'],
+                    ['save', fixture.packageDirectory, '--as', 'gpu'],
                     environment
                 )
             ).code
@@ -3475,7 +2769,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'gpu'],
+                    ['save', fixture.packageDirectory, '--as', 'gpu'],
                     environment
                 )
             ).code
@@ -3504,7 +2798,7 @@ describe('CLI integration', () => {
         ]);
         expect(result.code).toBe(1);
         expect(result.stderr).toContain('Workbench is not saved');
-        expect(result.stderr).toContain('wb add <source>');
+        expect(result.stderr).toContain('wb save <source>');
         expect(result.stderr).not.toContain('at async');
         expect(result.stderr).not.toContain('/$bunfs/');
     });
@@ -3780,31 +3074,6 @@ describe('CLI exit 3 for missing credentials', () => {
         });
     });
 
-    test('create exits 3 when the creator has no connected route', async () => {
-        const root = await temporaryDirectory('create-needs-auth-');
-        const home = await temporaryDirectory('create-needs-auth-home-');
-        await seedCreator(home, root);
-        const bin = await fakeBin([], { authoring: 'valid' });
-        const created = await executeCli(
-            [
-                'create',
-                'core',
-                '--task',
-                'Build a repository audit expert',
-                '--json',
-                '--api-url',
-                'http://127.0.0.1:1',
-            ],
-            withoutProviderKeys({
-                PATH: `${bin}:${process.env.PATH}`,
-                WORKBENCH_HOME: home,
-            }),
-            root
-        );
-        expect(created.code).toBe(3);
-        expect(created.stderr).toContain('No authenticated route is available');
-    });
-
     test('attach maps stored failures to stable exit codes', async () => {
         const home = await temporaryDirectory('attach-exit-codes-');
         const store = open(home).runs;
@@ -3927,7 +3196,7 @@ async function executeSavedCli(
     const home =
         environment.WORKBENCH_HOME ?? (await temporaryDirectory('workbench-cli-home-'));
     const env = { ...environment, WORKBENCH_HOME: home };
-    const added = await executeCli(['add', source, '--as', 'fixture-run'], env, cwd);
+    const added = await executeCli(['save', source, '--as', 'fixture-run'], env, cwd);
     expect(added.code).toBe(0);
     return executeCli(['run', 'fixture-run', ...arguments_.slice(2)], env, cwd);
 }
@@ -3943,60 +3212,9 @@ async function launchSavedCli(
     const home =
         environment.WORKBENCH_HOME ?? (await temporaryDirectory('workbench-cli-home-'));
     const env = { ...environment, WORKBENCH_HOME: home };
-    const added = await executeCli(['add', source, '--as', 'fixture-run'], env, cwd);
+    const added = await executeCli(['save', source, '--as', 'fixture-run'], env, cwd);
     expect(added.code).toBe(0);
     return launchCli(['run', 'fixture-run', ...arguments_.slice(2)], env, cwd, stdin);
-}
-
-async function seedCreator(home: string, workspace: string): Promise<void> {
-    const manifestSource = Bun.YAML.stringify({
-        spec: 0,
-        version: '0.1.4',
-        name: 'workbench-creator',
-        runner: 'opencode',
-        model: { id: 'openai/gpt-5.4-mini' },
-        instructions: './instructions.md',
-        skills: [],
-        tools: ['wb'],
-        mcps: [],
-        env: {},
-        runtime: 'local',
-    });
-    const remote = {
-        selector: 'creator',
-        manifest: Bun.YAML.parse(manifestSource) as WorkbenchManifest,
-        source: 'https://github.com/pompeii-labs/workbenches',
-        revision: 'a'.repeat(40),
-        files: [
-            {
-                path: 'instructions.md',
-                bytes: new TextEncoder().encode('Author the requested package.'),
-                executable: false,
-            },
-            {
-                path: 'workbench.yml',
-                bytes: new TextEncoder().encode(manifestSource),
-                executable: false,
-            },
-        ],
-    };
-    const official = new OfficialWorkbenchResolver(home, {
-        registry: {
-            resolve: async () => ({
-                reference: { publisher: 'pompeii', workbench: 'creator' },
-                registryUrl: 'http://127.0.0.1:1',
-                visibility: 'public',
-                versionId: 'fixture-version',
-                version: '0.1.4',
-                digest: WorkbenchPackage.digest(remote.files),
-                source: remote.source,
-                selector: remote.selector,
-                revision: remote.revision,
-            }),
-            fetchWorkbench: async () => remote,
-        },
-    });
-    await official.creator(workspace);
 }
 
 async function launchCli(
@@ -4056,107 +3274,8 @@ async function waitForRunEventCount(
     throw new Error(`Timed out waiting for ${count} ${type} events`);
 }
 
-async function waitForStudio(port: number): Promise<void> {
-    const started = Date.now();
-    while (Date.now() - started < 5_000) {
-        const response = await fetch(`http://127.0.0.1:${port}/v1/status`, {
-            headers: {
-                Host: `127.0.0.1:${port}`,
-                Authorization: 'Bearer test-token',
-            },
-        }).catch(() => undefined);
-        if (response?.ok) return;
-        await Bun.sleep(25);
-    }
-    throw new Error('Timed out waiting for Studio');
-}
-
-async function freeTestPort(): Promise<number> {
-    return new Promise((resolvePort, reject) => {
-        const server = createServer();
-        server.once('error', reject);
-        server.listen(0, '127.0.0.1', () => {
-            const address = server.address();
-            const port = typeof address === 'object' && address ? address.port : 0;
-            server.close((error) => (error ? reject(error) : resolvePort(port)));
-        });
-    });
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
     return RowReader.isRecord(value);
-}
-
-/** An MCP client connected to `wb mcp` in a child process. */
-async function mcpClient(
-    name: string,
-    cwd: string,
-    env: Record<string, string>
-): Promise<Client> {
-    const client = new Client({ name, version: '1.0.0' });
-    await client.connect(
-        new StdioClientTransport({
-            command: process.execPath,
-            args: [cliPath, 'mcp'],
-            cwd,
-            env,
-            stderr: 'pipe',
-        })
-    );
-    return client;
-}
-
-function toolText(result: unknown): string | undefined {
-    if (!isRecord(result) || !Array.isArray(result.content)) return undefined;
-    const content = result.content.find(
-        (item) => isRecord(item) && item.type === 'text'
-    );
-    return isRecord(content) && typeof content.text === 'string'
-        ? content.text
-        : undefined;
-}
-
-function structured(result: unknown): Record<string, unknown> {
-    if (!isRecord(result)) throw new Error('Missing MCP tool result');
-    const value = result.structuredContent;
-    if (!isRecord(value)) throw new Error('Missing MCP structured content');
-    return value;
-}
-
-function textField(value: Record<string, unknown>, name: string): string {
-    const field = value[name];
-    if (typeof field !== 'string') throw new Error(`Missing MCP field: ${name}`);
-    return field;
-}
-
-function numberField(value: Record<string, unknown>, name: string): number {
-    const field = value[name];
-    if (typeof field !== 'number') throw new Error(`Missing MCP field: ${name}`);
-    return field;
-}
-
-async function waitMcpTerminal(
-    client: Client,
-    runId: string,
-    after = 0
-): Promise<Record<string, unknown>> {
-    let cursor = after;
-    for (let attempt = 0; attempt < 5; attempt++) {
-        const result = structured(
-            await client.callTool({
-                name: 'wait',
-                arguments: {
-                    run_id: runId,
-                    after: cursor,
-                    timeout_seconds: 5,
-                },
-            })
-        );
-        if (['completed', 'failed', 'cancelled'].includes(textField(result, 'state')))
-            return result;
-        cursor = numberField(result, 'next');
-    }
-    throw new Error(`MCP run did not finish: ${runId}`);
 }
 
 async function temporaryDirectory(prefix: string) {
@@ -4508,7 +3627,6 @@ async function fakeBin(
         permission?: boolean;
         releaseFile?: string;
         response?: string;
-        authoring?: 'valid' | 'invalid' | 'outside';
     } = {}
 ) {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-bin-'));
@@ -4528,7 +3646,6 @@ async function fakeBin(
             `const block = ${options.block ? 'true' : 'false'};`,
             `const permission = ${options.permission ? 'true' : 'false'};`,
             `const releaseFile = ${JSON.stringify(options.releaseFile ?? null)};`,
-            `const authoring = ${JSON.stringify(options.authoring ?? null)};`,
             'const record = process.env.WB_TEST_RECORD;',
             'if (record) {',
             '  const fields: Record<string, string | undefined> = {',
@@ -4596,20 +3713,6 @@ async function fakeBin(
             '    if (url.pathname.endsWith("/prompt_async")) {',
             '      const input = await request.json() as { messageID: string; parts: Array<{ type: string; text?: string; synthetic?: boolean }> };',
             '      const text = input.parts.find((part) => part.type === "text" && !part.synthetic)?.text ?? "";',
-            '      if (authoring && /^(Create a production-ready Workbench|Review and edit the source Workbench|Improve the source Workbench)/.test(text)) {',
-            '        const fs = await import("node:fs/promises");',
-            '        const path = await import("node:path");',
-            '        const directory = path.join(process.cwd(), ".workbenches", "core");',
-            '        await fs.mkdir(directory, { recursive: true });',
-            '        const file = path.join(directory, "workbench.yml");',
-            '        const previous = await fs.readFile(file, "utf8").catch(() => "");',
-            '        const manifest = previous ? Bun.YAML.parse(previous) : { spec: 0, version: "0.0.0", name: "audit-core", runner: "opencode", model: { id: "openai/gpt-5.4-mini" }, instructions: "./instructions.md", skills: [], tools: [], mcps: [], env: {}, runtime: "local" };',
-            '        manifest.version = "0.1." + (Number(manifest.version.split(".")[2] ?? 0) + 1);',
-            '        if (authoring === "invalid") manifest.model = "invalid";',
-            '        await fs.writeFile(file, Bun.YAML.stringify(manifest));',
-            '        await fs.writeFile(path.join(directory, "instructions.md"), "Produce concise evidence-backed reports. Version " + manifest.version);',
-            '        if (authoring === "outside") await fs.writeFile(path.join(process.cwd(), "unrequested.txt"), "outside");',
-            '      }',
             '      if (record) await Bun.write(record + ".args", text + "\\n");',
             '      pendingInput = input;',
             '      emit("session.status", { status: { type: "busy" } });',

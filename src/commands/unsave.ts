@@ -6,8 +6,8 @@ import { workbenchHome } from '../storage.js';
 import { Services } from '../workbench/services.js';
 import { CliPresenter } from './presenter.js';
 
-export const removeCommand = defineCommand({
-    meta: { name: 'remove', description: 'Remove a saved Workbench alias.' },
+export const unsaveCommand = defineCommand({
+    meta: { name: 'unsave', description: 'Remove a saved Workbench alias.' },
     args: {
         alias: {
             type: 'positional',

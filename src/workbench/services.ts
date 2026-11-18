@@ -1,5 +1,3 @@
-import { ImprovementEvidence } from '../authoring/evidence.js';
-import { AuthoringJob } from '../authoring/job.js';
 import { SnapshotGuard } from '../catalog/guard.js';
 import { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import { CatalogSnapshots } from '../catalog/snapshots.js';
@@ -8,12 +6,9 @@ import { RepositoryCheckoutStore } from '../database/checkouts.js';
 import type { Connection } from '../database/connection.js';
 import { LeaseStore } from '../database/leases.js';
 import { NoticeStore } from '../database/notices.js';
-import { ProjectRecordStore } from '../database/projects.js';
 import { LegacyLayout } from '../legacy/layout.js';
 import { LegacyNotice } from '../legacy/notice.js';
-import { HostCommands } from '../processes/commands.js';
 import { ProcessProbe } from '../processes/probe.js';
-import { ProjectStore } from '../projects/store.js';
 import { RegistryAccountStore } from '../registry/account-store.js';
 import { RegistryClient } from '../registry/client.js';
 import { RepositoryDeliveryStore } from '../repositories/receipts.js';
@@ -28,8 +23,6 @@ import { SessionLifecycle } from '../sessions/lifecycle.js';
 import { SessionResolver } from '../sessions/resolver.js';
 import { SessionStore } from '../sessions/store.js';
 import { SessionSupervision } from '../sessions/supervision.js';
-import { StudioServices } from '../studio/services.js';
-import { StudioWake } from '../studio/wake.js';
 
 /**
  * Every store and service of one Workbench home, wired once over the
@@ -38,10 +31,8 @@ import { StudioWake } from '../studio/wake.js';
  */
 export class Services {
     readonly probe = new ProcessProbe();
-    readonly wake: StudioWake;
     readonly registry: RegistryClient;
     readonly accounts: RegistryAccountStore;
-    readonly projects: ProjectStore;
     readonly runs: RunStore;
     readonly sessions: SessionStore;
     readonly checkouts: RepositoryCheckoutStore;
@@ -56,18 +47,13 @@ export class Services {
     readonly continuation: RunContinuation;
     readonly supervision: RunSupervision;
     readonly sessionSupervision: SessionSupervision;
-    readonly jobs: AuthoringJob;
-    readonly evidence: ImprovementEvidence;
     readonly control: SessionControl;
     readonly worker: RunWorker;
-    readonly studio: StudioServices;
 
     constructor(home: string, connection: Connection) {
-        this.wake = new StudioWake(home);
         this.registry = new RegistryClient({ home });
         this.accounts = new RegistryAccountStore({ home, client: this.registry });
-        this.projects = new ProjectStore(new ProjectRecordStore(connection));
-        this.runs = new RunStore(connection, home, this.probe, this.wake);
+        this.runs = new RunStore(connection, home, this.probe);
         this.sessions = new SessionStore(connection, home, this.probe);
         this.checkouts = new RepositoryCheckoutStore(connection);
         this.receipts = new RepositoryDeliveryStore(connection);
@@ -93,7 +79,6 @@ export class Services {
             guard,
             this.writer,
             this.checkouts,
-            this.projects,
             this.registry
         );
         this.launcher = new DetachedRunLauncher(home, this.dispatcher);
@@ -103,12 +88,9 @@ export class Services {
             this.sessions
         );
         this.supervision = new RunSupervision(this.runs, this.receipts);
-        this.jobs = new AuthoringJob(home, connection, this.runs, this.dispatcher);
-        this.evidence = new ImprovementEvidence(home, this.runs);
         this.sessionSupervision = new SessionSupervision(
             this.runs,
             this.sessions,
-            this.jobs,
             this.supervision
         );
         this.control = new SessionControl(
@@ -125,13 +107,6 @@ export class Services {
             this.runs,
             this.sessions,
             this.checkouts
-        );
-        this.studio = new StudioServices(
-            home,
-            this,
-            process.platform,
-            new HostCommands(),
-            Date.now
         );
     }
 }

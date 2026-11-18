@@ -40,7 +40,7 @@ export class SavedWorkbenchCatalog {
             options.alias ?? sameDirectory?.alias ?? options.workbench.manifest.name;
         this.validateAlias(alias);
         const previous = entries.find((entry) => entry.alias === alias);
-        // Explicit re-add is the migration boundary for frozen v1 local entries.
+        // Saving again is the migration boundary for frozen v1 local entries.
         const legacyLocal =
             previous &&
             !previous.registry &&
