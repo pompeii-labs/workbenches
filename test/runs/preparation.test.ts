@@ -391,39 +391,40 @@ describe('shared execution preparation', () => {
         }
     });
 
-    for (const [runner, kept] of [
-        ['opencode', true],
-        ['pi', true],
-        ['claude-code', false],
-    ] as const) {
-        test(`${runner} on e2b ${kept ? 'syncs' : 'has no'} runner credential store`, async () => {
-            const fixture = await createFixture({ runtime: 'e2b', runner });
-            try {
-                // The store is bound before runtime preparation, whatever routing decides later.
-                await fixture.preparation.prepare().catch(() => undefined);
-                const request = fixture.provider.request;
-                if (!request) throw new Error('Missing runtime request');
-                const store = join(fixture.home, 'runtime-credentials', 'e2b', runner);
-                expect(request.credentials?.directory).toBe(kept ? store : undefined);
-                expect(Boolean(await stat(store).catch(() => undefined))).toBe(kept);
-                if (!kept) {
+    for (const runtime of ['e2b', 'daytona']) {
+        for (const runner of ['opencode', 'pi', 'claude-code']) {
+            test(`${runner} on ${runtime} syncs its runner credential store`, async () => {
+                const fixture = await createFixture({ runtime, runner });
+                try {
+                    // The store is bound before runtime preparation, whatever routing decides later.
+                    await fixture.preparation.prepare().catch(() => undefined);
+                    const request = fixture.provider.request;
+                    if (!request) throw new Error('Missing runtime request');
+                    const store = join(
+                        fixture.home,
+                        'runtime-credentials',
+                        runtime,
+                        runner
+                    );
+                    expect(request.credentials?.directory).toBe(store);
                     expect(
-                        await stat(join(fixture.home, 'runtime-credentials')).catch(
-                            () => undefined
-                        )
-                    ).toBeUndefined();
+                        Boolean(await stat(store).catch(() => undefined))
+                    ).toBeTrue();
                     expect(
-                        new PathPlan(request, rules).bindings.some(
+                        new PathPlan(
+                            request,
+                            new TransferRules(runtime === 'e2b' ? 'E2B' : 'Daytona')
+                        ).bindings.some(
                             (binding) =>
                                 binding.kind === 'credentials' ||
                                 binding.runtimePath === '/workbench-credentials'
                         )
-                    ).toBeFalse();
+                    ).toBeTrue();
+                } finally {
+                    await fixture.preparation.cleanup();
                 }
-            } finally {
-                await fixture.preparation.cleanup();
-            }
-        });
+            });
+        }
     }
 
     test('retains a failed preparation runtime for partial collection before cleanup', async () => {

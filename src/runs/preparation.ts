@@ -36,7 +36,7 @@ import type {
 import type { RuntimeRegistry } from '../runtimes/registry.js';
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
 import type { PreflightResult } from '../workbench/preflight.js';
-import { selectedRuntime } from '../workbench/runtimes.js';
+import { isRemoteRuntime, selectedRuntime } from '../workbench/runtimes.js';
 import type { RunEvents } from './events.js';
 import { publishRunOutcome } from './outcomes.js';
 import { RunStore } from './store.js';
@@ -311,7 +311,7 @@ export class ExecutionPreparation {
                   }
                 : {}),
             // Only a runner with a credential file has a store to sync.
-            ...(runtimeName === 'e2b' && home && contract.credentialEnvironment
+            ...(isRemoteRuntime(runtimeName) && home && contract.credentialEnvironment
                 ? {
                       credentials: await new RunnerCredentialStore(home).prepare(
                           runtimeName,

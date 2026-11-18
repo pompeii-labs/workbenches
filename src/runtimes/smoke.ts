@@ -8,7 +8,11 @@ import { RunnerRegistry } from '../runners/registry.js';
 import { RunStore } from '../runs/store.js';
 import type { ResolvedWorkbench, WorkbenchWorkspaceBinding } from '../types.js';
 import type { PreflightResult } from '../workbench/preflight.js';
-import { selectedRuntime, withRuntime } from '../workbench/runtimes.js';
+import {
+    isRemoteRuntime,
+    selectedRuntime,
+    withRuntime,
+} from '../workbench/runtimes.js';
 import { WorkbenchWorkspaces } from '../workbench/workspaces.js';
 import type { PreparedRuntime } from './contracts.js';
 import { RuntimeRegistry } from './registry.js';
@@ -85,7 +89,7 @@ export class RuntimeSmoke {
                     hostDocker: this.options.allowHostDocker ?? false,
                 },
                 allowUncheckedGpu: this.options.allowUncheckedGpu ?? false,
-                ...(selected.name === 'e2b' &&
+                ...(isRemoteRuntime(selected.name) &&
                 this.options.home &&
                 contract.credentialEnvironment
                     ? {

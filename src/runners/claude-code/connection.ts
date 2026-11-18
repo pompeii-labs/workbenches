@@ -14,9 +14,9 @@ export const CLAUDE_CODE_PROVIDER_CAPABILITIES: Record<
 
 /**
  * Claude Code reads the catalog's capabilities for its verified release, or
- * else its built-in map. Provider keys come from the environment and the
- * binary owns its login, so Workbench keeps no Claude Code credentials and
- * never extracts one: a subscription is signed in with `claude auth login`.
+ * else its built-in map. Provider keys come from the saved store or the environment.
+ * The binary owns its subscription login, which Workbench never extracts:
+ * a subscription is signed in with `claude auth login`.
  * `claude auth status` reports that login, read only for its method.
  */
 export const claudeCodeConnection: RunnerConnection = {
@@ -53,7 +53,7 @@ export const claudeCodeConnection: RunnerConnection = {
     },
     methods(runtime, provider) {
         // Outside the host, Workbench holds no Claude login, so Anthropic is a
-        // key or a subscription token. Both come from the environment.
+        // saved key or a subscription token from the environment.
         if (provider !== 'anthropic' || runtime === 'local') return undefined;
         const key = {
             id: 'api-key',

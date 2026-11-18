@@ -321,7 +321,7 @@ The E2B control key remains on the host. Harness credentials are staged only for
 
 ### Daytona
 
-The reference engine creates a fresh Daytona sandbox from a named snapshot of the entry's published `image` for each execution (`runtimes.daytona` requires `class`; `image` is optional in the schema, but the reference engine cannot prepare an entry without a published `image`, and there is no fallback to another runtime's image), using the same staging rules and pending outcomes as E2B. The engine does not build Workbench-local Dockerfiles on Daytona yet, although Daytona itself can build from a Dockerfile. The engine supports the `linux` class and multi-turn sessions; the CLI does not provide native runner authentication or sandbox recovery. The Daytona key stays on the host, and model credentials come from your environment.
+The reference engine creates a fresh Daytona sandbox from a named snapshot of the entry's published `image` for each execution (`runtimes.daytona` requires `class`; `image` is optional in the schema, but the reference engine cannot prepare an entry without a published `image`, and there is no fallback to another runtime's image), using the same staging rules and pending outcomes as E2B. The engine does not build Workbench-local Dockerfiles on Daytona yet, although Daytona itself can build from a Dockerfile. The engine supports the `linux` class and multi-turn sessions; the CLI does not provide interactive native sign-in or sandbox recovery. The Daytona key stays on the host, and model credentials come from the runner store saved by `wb connect`, inherited provider variables, or `--env-file`.
 
 ## Command overview
 

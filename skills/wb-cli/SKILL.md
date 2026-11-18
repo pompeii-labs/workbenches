@@ -62,7 +62,7 @@ A manifest names a model (`lab/model`) and optionally ordered provider `routes`.
 1. `--connection <provider>` on `run` or `resume`, if authenticated.
 2. The default saved by `wb connect` for this runner and runtime, if authenticated.
 3. The first route in manifest order with a key in the environment.
-4. The runner's own sign-in on `local`, and on `docker` and `e2b` the store `wb connect` fills for runners that keep one. The engine keeps no runner credential store on Daytona: env only.
+4. The runner's own sign-in on `local`, and on `docker`, `e2b`, and `daytona` the runner-scoped store `wb connect` fills. OpenCode, Pi, and Claude Code support saved API keys, kept separate from subscription sign-ins.
 
 Keys come from the environment of the `wb` process, plus `--env-file FILE` and `--env NAME=value`. Each provider has fixed variable names, for example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY` or `GOOGLE_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, and `AI_GATEWAY_API_KEY` (Vercel). After a route is chosen, other providers' keys are stripped from the run. `wb view <alias>` shows each route and which one is ready.
 

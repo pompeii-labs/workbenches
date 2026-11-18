@@ -51,7 +51,6 @@ export interface DaytonaRuntimeOptions extends RemoteRuntimeOptions {
  */
 export class DaytonaRuntime extends RemoteRuntime<DaytonaSandbox, StagedAsset> {
     readonly name = 'daytona';
-    readonly nativeAuthentication = 'unavailable' as const;
     readonly preparation: RuntimePreparation;
     protected declare readonly options: DaytonaRuntimeOptions;
     private preview: PreviewUrl | undefined;

@@ -330,7 +330,12 @@ const expected: Record<
         executable: 'claude',
         runnerConfig: 'file',
         standardInput: true,
-        credentials: undefined,
+        credentials: {
+            file: 'claude-code/settings.json',
+            apiKeyEntryType: 'api_key',
+            storeFirst: false,
+            environment: { WORKBENCH_CREDENTIALS_DIR: '/credentials' },
+        },
         capabilities: CLAUDE_CODE_PROVIDER_CAPABILITIES,
         builtInCapabilities: CLAUDE_CODE_PROVIDER_CAPABILITIES,
         catalogVersion: '2.1.318',

@@ -81,7 +81,7 @@ export abstract class RemoteRuntime<S extends RemoteSandbox, A extends StagedAss
     implements PreparedRuntime
 {
     abstract readonly name: string;
-    abstract readonly nativeAuthentication: 'persistent' | 'unavailable';
+    readonly nativeAuthentication: 'persistent' | 'unavailable';
     abstract readonly preparation: RuntimePreparation;
     readonly workbench: ResolvedWorkbench;
     readonly workspaceDirectory: string;
@@ -100,6 +100,9 @@ export abstract class RemoteRuntime<S extends RemoteSandbox, A extends StagedAss
     private finalInfrastructure: RuntimeInfrastructureMetadata | undefined;
 
     protected constructor(protected readonly options: RemoteRuntimeOptions) {
+        this.nativeAuthentication = options.request.credentials
+            ? 'persistent'
+            : 'unavailable';
         this.workspaceDirectory = options.paths.pathFor(
             options.request.workspaceDirectory
         );

@@ -9,10 +9,10 @@ export interface NativeCredentialEntry {
 }
 
 /**
- * A runner's documented credential file inside a Workbench credential store: a
- * JSON object keyed by native provider, at the path the runner declares. Entry
- * values are secrets and are never printed. Workbench never reads the user's
- * own runner files.
+ * A runner's credential file inside a Workbench credential store, at the path
+ * the runner declares: a JSON object keyed by native provider, or an `env`
+ * object of provider variables. Entry values are secrets and are never
+ * printed. Workbench never reads the user's own runner files.
  */
 export class NativeCredentialFile {
     private constructor(
@@ -21,7 +21,8 @@ export class NativeCredentialFile {
         readonly path: string,
         private readonly apiKeyEntryType: string,
         /** A stored entry decides readiness alone, ahead of provider variables. */
-        readonly storeFirst: boolean
+        readonly storeFirst: boolean,
+        private readonly providerVariables?: Readonly<Record<string, string>>
     ) {}
 
     static for(
@@ -34,7 +35,8 @@ export class NativeCredentialFile {
             runner,
             credentials.file,
             credentials.apiKeyEntryType,
-            credentials.storeFirst
+            credentials.storeFirst,
+            credentials.providerVariables
         );
     }
 
@@ -65,7 +67,13 @@ export class NativeCredentialFile {
         files: RuntimeCredentialFiles,
         provider: string
     ): Promise<NativeCredentialEntry | undefined> {
-        const value = (await this.document(files))[provider];
+        const document = await this.document(files);
+        if (this.providerVariables) {
+            const name = this.providerVariables[provider];
+            const key = name && isRecord(document.env) ? document.env[name] : undefined;
+            return typeof key === 'string' && key.trim() ? this.apiKey(key) : undefined;
+        }
+        const value = document[provider];
         if (!isRecord(value)) return undefined;
         return {
             type: typeof value.type === 'string' ? value.type : undefined,
@@ -80,17 +88,50 @@ export class NativeCredentialFile {
         entry: NativeCredentialEntry
     ): Promise<void> {
         const document = await this.document(files);
-        document[provider] = entry.value;
+        if (this.providerVariables) {
+            const name = this.variable(provider);
+            if (!this.serves(entry, 'api') || typeof entry.value.key !== 'string') {
+                throw new Error('Settings credential stores accept only API keys');
+            }
+            document.env = { ...this.environment(document), [name]: entry.value.key };
+        } else document[provider] = entry.value;
         await files.write(this.path, `${JSON.stringify(document, null, 2)}\n`);
     }
 
     /** Removes `provider`, keeping every other entry. False when it was absent. */
     async remove(files: RuntimeCredentialFiles, provider: string): Promise<boolean> {
         const document = await this.document(files);
+        if (this.providerVariables) {
+            const name = this.variable(provider);
+            const environment = this.environment(document);
+            if (!Object.hasOwn(environment, name)) return false;
+            delete environment[name];
+            document.env = environment;
+            await files.write(this.path, `${JSON.stringify(document, null, 2)}\n`);
+            return true;
+        }
         if (!Object.hasOwn(document, provider)) return false;
         delete document[provider];
         await files.write(this.path, `${JSON.stringify(document, null, 2)}\n`);
         return true;
+    }
+
+    private variable(provider: string): string {
+        const name = this.providerVariables?.[provider];
+        if (!name)
+            throw new Error(
+                `Unsupported ${this.runner} credential provider: ${provider}`
+            );
+        return name;
+    }
+
+    private environment(document: Record<string, unknown>): Record<string, unknown> {
+        if (document.env === undefined) return {};
+        if (!isRecord(document.env))
+            throw new Error(
+                'Settings env must be a JSON object; it was left unchanged'
+            );
+        return { ...document.env };
     }
 
     private async document(

@@ -275,7 +275,9 @@ async function inspectNative(
     const { connection } = harness;
     const environmentProviders = providersFromEnvironment(
         routes,
-        options.runtime.environment,
+        options.runner.connectionEnvironment
+            ? await options.runner.connectionEnvironment(options.runtime)
+            : options.runtime.environment,
         router
     );
     const packagedProviders =

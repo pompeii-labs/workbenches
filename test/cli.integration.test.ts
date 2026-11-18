@@ -1670,49 +1670,57 @@ describe('CLI integration', () => {
         );
     });
 
-    test('reports Daytona as environment-only and refuses to store a key for it', async () => {
-        const home = await temporaryDirectory('workbench-connect-daytona-');
-        const environment = {
-            ...(await fakeUserHome()),
-            WORKBENCH_HOME: home,
-            PATH: '/usr/bin:/bin',
-            DAYTONA_API_KEY: '',
-        };
-        const target = [
-            'connect',
-            '--runtime',
-            'daytona',
-            '--harness',
-            'opencode',
-            '--provider',
-            'openrouter',
-        ];
+    for (const harness of ['opencode', 'pi', 'claude-code']) {
+        test(`saves, verifies and removes a Daytona model key for ${harness} without a sandbox`, async () => {
+            const home = await temporaryDirectory('workbench-connect-daytona-');
+            const environment = {
+                ...(await fakeUserHome()),
+                WORKBENCH_HOME: home,
+                PATH: '/usr/bin:/bin',
+                DAYTONA_API_KEY: '',
+                OPENROUTER_API_KEY: '',
+            };
+            const target = [
+                'connect',
+                '--runtime',
+                'daytona',
+                '--harness',
+                harness,
+                '--provider',
+                'openrouter',
+            ];
 
-        const missing = await executeCli(target, {
-            ...environment,
-            OPENROUTER_API_KEY: '',
+            const missing = await executeCli(target, {
+                ...environment,
+                OPENROUTER_API_KEY: '',
+            });
+            expect(missing.code).toBe(AuthenticationRequiredError.exitCode);
+            expect(missing.stderr).toContain('No OpenRouter credential is saved');
+            expect(missing.stderr).toContain('--stdin');
+            const ready = await executeCli(target, {
+                ...environment,
+                OPENROUTER_API_KEY: 'fixture-openrouter-key',
+            });
+            expect(ready.code).toBe(0);
+            expect(ready.stdout).toBe(`ready\tdaytona\t${harness}\topenrouter\n`);
+            const piped = await connectCli(
+                [...target, '--stdin'],
+                environment,
+                'fixture\n'
+            );
+            expect(piped.code).toBe(0);
+            expect(piped.stdout).toBe(`saved\tdaytona\t${harness}\topenrouter\n`);
+            const verified = await executeCli(target, environment);
+            expect(verified.code).toBe(0);
+            expect(verified.stdout).toBe(`saved\tdaytona\t${harness}\topenrouter\n`);
+            const removed = await executeCli([...target, '--remove'], environment);
+            expect(removed.code).toBe(0);
+            expect(removed.stdout).toBe(`removed\tdaytona\t${harness}\topenrouter\n`);
+            expect((await executeCli(target, environment)).code).toBe(
+                AuthenticationRequiredError.exitCode
+            );
         });
-        expect(missing.code).toBe(AuthenticationRequiredError.exitCode);
-        expect(missing.stderr).toContain(
-            'Workbench keeps no runner credential store on Daytona, so OpenCode there reads OpenRouter keys only from the environment. Set OPENROUTER_API_KEY where wb runs. For one run, --env-file also works.'
-        );
-        const ready = await executeCli(target, {
-            ...environment,
-            OPENROUTER_API_KEY: 'fixture-openrouter-key',
-        });
-        expect(ready.code).toBe(0);
-        expect(ready.stdout).toBe('ready\tdaytona\topencode\topenrouter\n');
-        const piped = await connectCli(
-            [...target, '--stdin'],
-            environment,
-            'fixture\n'
-        );
-        expect(piped.code).toBe(1);
-        expect(piped.stderr).toContain(
-            'Workbench keeps no runner credential store on Daytona; provider keys reach it only from the environment'
-        );
-        expect(await readdir(home)).not.toContain('runtime-credentials');
-    });
+    }
 
     test('verifies local readiness from the environment or names the missing login', async () => {
         const home = await temporaryDirectory('workbench-connect-local-');
