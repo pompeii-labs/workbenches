@@ -100,7 +100,7 @@ describe('saved-source contract', () => {
             'Edited instructions'
         );
         expect(resolved.workspaceDirectory).toBe(root);
-        expect((await cli(home, ['remove', 'expert'], root)).code).toBe(0);
+        expect((await cli(home, ['unsave', 'expert'], root)).code).toBe(0);
         expect(await readFile(join(path, 'instructions.md'), 'utf8')).toBe(
             'Edited instructions'
         );
@@ -117,7 +117,9 @@ describe('saved-source contract', () => {
         expect((await new SavedWorkbenchCatalog(home).find('expert'))?.localPath).toBe(
             path
         );
-        expect((await cli(home, ['save', second, '--as', 'second'], root)).code).toBe(0);
+        expect((await cli(home, ['save', second, '--as', 'second'], root)).code).toBe(
+            0
+        );
         expect((await cli(home, ['save', '.#core'], root)).stderr).toContain(
             'Use --name'
         );

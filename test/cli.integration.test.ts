@@ -127,7 +127,7 @@ describe('CLI integration', () => {
                 .stderr
         ).toContain('Local Workbenches are not upgraded');
         expect(
-            (await executeCli(['remove', 'pinned-expert'], environment, fixture.root))
+            (await executeCli(['unsave', 'pinned-expert'], environment, fixture.root))
                 .code
         ).toBe(0);
         await rm(fixture.packageDirectory, { recursive: true });
@@ -699,29 +699,52 @@ describe('CLI integration', () => {
             'Discover, save, verify, and run open Workbenches'
         );
         expect(result.stdout).toContain('run');
-        expect(result.stdout).toContain('create');
+        expect(result.stdout).toContain('save');
+        expect(result.stdout).toContain('unsave');
+        for (const name of ['mcp', 'studio', 'project', 'create', 'add', 'remove']) {
+            expect(result.stdout).not.toMatch(new RegExp(`^  ${name}\\s`, 'm'));
+        }
         expect(result.stdout).not.toContain('\n  edit ');
         expect(result.stdout).not.toContain('\n  improve ');
         expect(result.stdout).toContain('update');
         expect(result.stdout).toContain('upgrade');
 
-        const create = await executeCli(['create', '--help']);
-        expect(create.code).toBe(0);
-        expect(create.stdout).toContain('--env-file=<path>');
-        expect(create.stdout).toContain('--env=<NAME=value>');
-        expect(create.stdout).toContain('--workspace=<NAME=path>');
-        expect(create.stdout).toContain('--allow-host-docker');
-
-        const add = await executeCli(['save', '--help']);
-        expect(add.code).toBe(0);
+        const save = await executeCli(['save', '--help']);
+        expect(save.code).toBe(0);
+        expect(save.stdout).toContain('--as=<as>');
+        expect(save.stdout).toContain('--force');
+        const unsave = await executeCli(['unsave', '--help']);
+        expect(unsave.code).toBe(0);
 
         const run = await executeCli(['run', '--help']);
         expect(run.code).toBe(0);
         expect(run.stdout).toContain('--connection=<connection>');
+        expect(run.stdout).toContain('--env-file=<path>');
+        expect(run.stdout).toContain('--env=<NAME=value>');
+        expect(run.stdout).toContain('--workspace=<NAME=path>');
+        expect(run.stdout).toContain('--allow-host-docker');
+        expect(run.stdout).not.toContain('--project');
 
         const resume = await executeCli(['resume', '--help']);
         expect(resume.code).toBe(0);
         expect(resume.stdout).toContain('--connection=<connection>');
+    });
+
+    test('rejects retired commands and the removed project option', async () => {
+        const home = await temporaryDirectory('cli-retired-');
+        for (const name of ['mcp', 'studio', 'project', 'create', 'add', 'remove']) {
+            const result = await executeCli([name], { WORKBENCH_HOME: home });
+            expect(result.code).toBe(1);
+            expect(result.stderr).toContain('Unknown command');
+            expect(result.stderr).toContain(name);
+        }
+        const result = await executeCli(
+            ['run', 'core', '--project', 'Demo', '--task', 'Review'],
+            { WORKBENCH_HOME: home }
+        );
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain('--project');
+        expect(await open(home).runs.list()).toEqual([]);
     });
 
     test('requests a runtime directly instead of requiring a saved Workbench', async () => {
@@ -2333,7 +2356,7 @@ describe('CLI integration', () => {
             '/.workbench-context/system.md'
         );
 
-        const removed = await executeCli(['remove', 'fixture-saved'], environment);
+        const removed = await executeCli(['unsave', 'fixture-saved'], environment);
         expect(removed.code).toBe(0);
         expect(removed.stdout).toContain('removed\tfixture-saved');
         expect((await executeCli(['list'], environment)).stdout).toBe('');
