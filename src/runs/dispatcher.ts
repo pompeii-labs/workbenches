@@ -8,7 +8,6 @@ import type { RepositoryCheckoutStore } from '../database/checkouts.js';
 import type { Connection } from '../database/connection.js';
 import type { LegacyLayout } from '../legacy/layout.js';
 import { modelLabel } from '../models/index.js';
-import type { ProjectStore } from '../projects/store.js';
 import type { RegistryClient } from '../registry/client.js';
 import { RepositoryGitHub, RepositoryWorkspace } from '../repositories/index.js';
 import { RunnerRegistry } from '../runners/index.js';
@@ -39,8 +38,6 @@ export interface PrepareRunOptions {
     reference?: string;
     session?: StoredSession;
     connection?: string;
-    /** An existing project name or slug for a new session. */
-    project?: string;
     /** The host environment repository access is resolved from. Defaults to this process's. */
     environment?: Record<string, string | undefined>;
 }
@@ -72,7 +69,6 @@ export class RunDispatcher {
             RepositoryCheckoutStore,
             'find' | 'record' | 'forget'
         >,
-        private readonly projects: Pick<ProjectStore, 'resolve'>,
         private readonly registry: Pick<RegistryClient, 'apiUrl'>
     ) {}
 
@@ -99,9 +95,6 @@ export class RunDispatcher {
         const digest = WorkbenchPackage.digest(files);
         const suggestedName = options.task
             ? this.identity.fromPrompt(options.task)
-            : undefined;
-        const project = options.project
-            ? this.projects.resolve(options.project)
             : undefined;
         if (options.session) this.assertCompatible(options, options.session, digest);
         const repository =
@@ -135,7 +128,6 @@ export class RunDispatcher {
             this.sessions.create({
                 id,
                 ...(suggestedName ? { name: suggestedName } : {}),
-                ...(project ? { project } : {}),
                 workbench: workbench.manifest.name,
                 workbench_version: workbench.manifest.version,
                 runner: workbench.manifest.runner,

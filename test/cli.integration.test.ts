@@ -12,7 +12,6 @@ import {
     symlink,
     writeFile,
 } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { OfficialWorkbenchResolver } from '../src/authoring/official.js';
@@ -21,8 +20,6 @@ import { AuthenticationRequiredError } from '../src/connections/error.js';
 import { Connection } from '../src/database/connection.js';
 import { RowReader } from '../src/database/rows.js';
 import { OutcomeStore } from '../src/outcomes/store.js';
-import { RegistryAccountStore } from '../src/registry/account-store.js';
-import { RegistryClient } from '../src/registry/client.js';
 import { RunControl } from '../src/runs/control.js';
 import { RunEvents } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/index.js';
@@ -98,20 +95,9 @@ describe('CLI integration', () => {
         expect(taskless.stderr).toContain('wb run requires a task');
         expect(taskless.stderr).not.toContain('Workbench is not saved');
         expect(
-            (await executeCli(['project', 'create', 'Demo'], environment)).code
-        ).toBe(0);
-        expect(
             (
                 await executeCli(
-                    [
-                        'run',
-                        'pinned-expert',
-                        '--task',
-                        'first',
-                        '--project',
-                        'Demo',
-                        '--final',
-                    ],
+                    ['run', 'pinned-expert', '--task', 'first', '--final'],
                     environment,
                     fixture.root
                 )
@@ -122,7 +108,6 @@ describe('CLI integration', () => {
         );
         const first = (await open(home).sessions.list())[0];
         if (!first) throw new Error('Missing original session');
-        expect(first.project).toBe('Demo');
         expect(first.source_workbench_path).toBe(fixture.packageDirectory);
         await writeFile(
             join(fixture.packageDirectory, 'instructions.md'),
@@ -161,7 +146,6 @@ describe('CLI integration', () => {
         expect((await open(home).sessions.read(first.id)).workbench_path).toBe(
             first.workbench_path
         );
-        expect((await open(home).sessions.read(first.id)).project).toBe('Demo');
         const sessions: unknown[] = (
             await executeCli(['ps', '--all', '--json'], environment)
         ).stdout
@@ -171,69 +155,7 @@ describe('CLI integration', () => {
         const recorded = sessions.find(
             (session) => isRecord(session) && session.session_id === first.id
         );
-        expect(isRecord(recorded) ? recorded.project : undefined).toBe('Demo');
         expect(isRecord(recorded) ? 'task' in recorded : true).toBeFalse();
-        const beforeStudioSend = (await open(home).sessions.read(first.id))
-            .latest_run_id;
-        const studioPort = await freeTestPort();
-        open(home).studio.state.write({
-            server_pid: 0,
-            api_port: studioPort,
-            ui_port: 9_292,
-            container_id: 'test-container',
-            token: 'test-token',
-            image: 'test-studio',
-            created_at: new Date().toISOString(),
-        });
-        const previousPath = process.env.PATH;
-        const previousRecord = process.env.WB_TEST_RECORD;
-        process.env.PATH = environment.PATH;
-        process.env.WB_TEST_RECORD = record;
-        const studio = Bun.spawn([process.execPath, cliPath, '__studio', home], {
-            cwd: fixture.root,
-            env: {
-                ...process.env,
-                WORKBENCH_HOME: home,
-                PATH: environment.PATH,
-                WB_TEST_RECORD: record,
-                OPENROUTER_API_KEY: 'fixture-openrouter-key',
-            },
-            stdin: 'ignore',
-            stdout: 'ignore',
-            stderr: 'pipe',
-        });
-        try {
-            await waitForStudio(studioPort);
-            const response = await fetch(
-                `http://127.0.0.1:${studioPort}/v1/runs/${beforeStudioSend}/commands`,
-                {
-                    method: 'POST',
-                    headers: {
-                        Host: `127.0.0.1:${studioPort}`,
-                        Authorization: 'Bearer test-token',
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        kind: 'send',
-                        payload: { text: 'continue through studio' },
-                        idempotency_key: 'studio-continuation',
-                    }),
-                }
-            );
-            expect(response.status).toBe(202);
-            expect(await response.json()).toMatchObject({
-                command: { status: 'accepted' },
-            });
-            expect((await open(home).sessions.read(first.id)).latest_run_id).not.toBe(
-                beforeStudioSend
-            );
-        } finally {
-            studio.kill('SIGTERM');
-            await studio.exited;
-            process.env.PATH = previousPath;
-            if (previousRecord === undefined) delete process.env.WB_TEST_RECORD;
-            else process.env.WB_TEST_RECORD = previousRecord;
-        }
     });
 
     test('CLI selects the declared runtime for detached runs', async () => {
@@ -323,109 +245,6 @@ describe('CLI integration', () => {
             worker.kill();
             await worker.exited;
         }
-    });
-
-    test('resolves project slugs and rejects unknown projects before dispatch', async () => {
-        const fixture = await createFixture();
-        const home = await temporaryDirectory('workbench-strict-project-');
-        const bin = await fakeBin();
-        const record = join(fixture.root, 'strict-project-runner');
-        const environment = {
-            WORKBENCH_HOME: home,
-            PATH: `${bin}:${process.env.PATH ?? ''}`,
-            OPENAI_API_KEY: 'fixture-openai-key',
-            WB_TEST_RECORD: record,
-        };
-        await seedModelCatalogFixture(home);
-        expect(
-            (
-                await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'project-fixture'],
-                    environment,
-                    fixture.root
-                )
-            ).code
-        ).toBe(0);
-        expect(
-            (
-                await executeCli(
-                    ['project', 'create', 'Pixel Pirate'],
-                    environment,
-                    fixture.root
-                )
-            ).code
-        ).toBe(0);
-
-        const unknown = await executeCli(
-            [
-                'run',
-                'project-fixture',
-                '--task',
-                'wrong project',
-                '--project',
-                'Pixel Pirates',
-                '--final',
-            ],
-            environment,
-            fixture.root
-        );
-        expect(unknown.code).toBe(1);
-        expect(unknown.stderr).toContain(
-            'No project "Pixel Pirates". Did you mean "Pixel Pirate"?'
-        );
-        expect(unknown.stderr).toContain(
-            'Create it with: wb project create "Pixel Pirates"'
-        );
-        expect(await stat(`${record}.args`).catch(() => undefined)).toBeUndefined();
-
-        const requests: string[] = [];
-        const api = Bun.serve({
-            hostname: '127.0.0.1',
-            port: 0,
-            fetch: (request) => {
-                requests.push(new URL(request.url).pathname);
-                return Response.json(
-                    { error: { message: 'Not found' } },
-                    { status: 404 }
-                );
-            },
-        });
-        servers.push(api);
-        const apiUrl = `http://127.0.0.1:${api.port}`;
-        const client = new RegistryClient({ home, apiUrl });
-        await new RegistryAccountStore({ home, client }).save(
-            {
-                organizationId: '00000000-0000-4000-8000-000000000001',
-                slug: 'acme',
-                name: 'Acme',
-                personal: false,
-                token: 'placeholder-project-key',
-                keyId: '00000000-0000-4000-8000-000000000002',
-                scopes: ['projects:read'],
-                expiresAt: '2099-01-01T00:00:00.000Z',
-            },
-            { makeDefault: true }
-        );
-
-        const valid = await executeCli(
-            [
-                'run',
-                'project-fixture',
-                '--task',
-                'right project',
-                '--project',
-                'pixel-pirate',
-                '--final',
-                '--api-url',
-                apiUrl,
-            ],
-            environment,
-            fixture.root
-        );
-        expect(valid.code).toBe(0);
-        expect(requests).toEqual([]);
-        const session = (await open(home).sessions.list())[0];
-        expect(session?.project).toBe('Pixel Pirate');
     });
     test('creates, edits, runs, and improves a Workbench entirely headlessly', async () => {
         const root = await temporaryDirectory('headless-authoring-');
@@ -927,7 +746,6 @@ describe('CLI integration', () => {
         });
         const ps = await executeCli(['ps', '--json'], environment);
         expect(JSON.parse(ps.stdout)).toMatchObject({
-            project: null,
             needs_input: true,
             state: 'needs_input',
         });
@@ -3678,33 +3496,6 @@ async function waitForRunEventCount(
         await Bun.sleep(25);
     }
     throw new Error(`Timed out waiting for ${count} ${type} events`);
-}
-
-async function waitForStudio(port: number): Promise<void> {
-    const started = Date.now();
-    while (Date.now() - started < 5_000) {
-        const response = await fetch(`http://127.0.0.1:${port}/v1/status`, {
-            headers: {
-                Host: `127.0.0.1:${port}`,
-                Authorization: 'Bearer test-token',
-            },
-        }).catch(() => undefined);
-        if (response?.ok) return;
-        await Bun.sleep(25);
-    }
-    throw new Error('Timed out waiting for Studio');
-}
-
-async function freeTestPort(): Promise<number> {
-    return new Promise((resolvePort, reject) => {
-        const server = createServer();
-        server.once('error', reject);
-        server.listen(0, '127.0.0.1', () => {
-            const address = server.address();
-            const port = typeof address === 'object' && address ? address.port : 0;
-            server.close((error) => (error ? reject(error) : resolvePort(port)));
-        });
-    });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

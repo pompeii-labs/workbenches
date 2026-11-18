@@ -9,6 +9,8 @@ import { Connection } from '../../src/database/connection.js';
 import { MigrationError } from '../../src/database/error.js';
 import { type Migration, migrations } from '../../src/database/migrations/index.js';
 import { Migrator } from '../../src/database/migrator.js';
+import { ProcessProbe } from '../../src/processes/probe.js';
+import { SessionStore } from '../../src/sessions/store.js';
 
 const directories: string[] = [];
 const connections: Connection[] = [];
@@ -34,6 +36,51 @@ const second: Migration = {
 };
 
 describe('migration history', () => {
+    test('keeps sessions readable when upgrading a project database from schema 3', async () => {
+        const home = await temporaryHome();
+        const path = join(home, 'wb.db');
+        const previous = new Connection(path, new Migrator(migrations.slice(0, 3)));
+        const id = 'wb_01234567890123456789';
+        try {
+            previous.run(
+                "INSERT INTO projects (id, name, slug, created_at) VALUES (1, 'Demo', 'demo', '2026-01-01T00:00:00Z')"
+            );
+            previous.run(
+                `INSERT INTO sessions (
+                id, name, project_id, workbench, workbench_version, runner, model,
+                runtime, reference, workbench_path, workspace, workspaces,
+                native_path, latest_run_id, created_at, updated_at
+            ) VALUES (?, 'Review', 1, 'core', '1.0.0', 'opencode', 'openai/gpt-5',
+                'local', 'core', '/package', '/workspace', '[]', '/native', ?,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+                id,
+                id
+            );
+        } finally {
+            previous.close();
+        }
+        const upgraded = Connection.open(home);
+        connections.push(upgraded);
+        const session = await new SessionStore(upgraded, home, new ProcessProbe()).read(
+            id
+        );
+        expect(session).toMatchObject({
+            id,
+            name: 'Review',
+            workbench: 'core',
+            latest_run_id: id,
+        });
+        expect(
+            upgraded.all(
+                "SELECT name FROM sqlite_master WHERE name IN ('projects', 'sessions_project_id')"
+            )
+        ).toEqual([]);
+        expect(
+            upgraded.all('PRAGMA table_info(sessions)').map((row) => row.name)
+        ).not.toContain('project_id');
+        expect(upgraded.all('PRAGMA foreign_key_check')).toEqual([]);
+    });
+
     test('records the whole history in __migrations on a fresh database', async () => {
         const home = await temporaryHome();
         const database = open(home, migrations);

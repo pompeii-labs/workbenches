@@ -9,7 +9,6 @@ import { renderStatusLine } from '../src/rendering/status-line.js';
 import type { WorkbenchEvent, WorkbenchEventType } from '../src/runs/index.js';
 import { RunStore } from '../src/runs/index.js';
 import { type RunStatus, RunStatusReader } from '../src/runs/status.js';
-import { StudioWake } from '../src/studio/wake.js';
 
 const temporaryDirectories: string[] = [];
 const connections: Connection[] = [];
@@ -257,7 +256,7 @@ async function environment() {
     const connection = Connection.open(home);
     connections.push(connection);
     const probe = new ProcessProbe();
-    const store = new RunStore(connection, home, probe, new StudioWake(home));
+    const store = new RunStore(connection, home, probe);
     return { connection, store, reader: new RunStatusReader(store, connection, probe) };
 }
 

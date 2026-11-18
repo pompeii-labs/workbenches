@@ -26,7 +26,6 @@ export interface StartDetachedRunOptions {
     allowHostDocker: boolean;
     allowUncheckedGpu: boolean;
     connection?: string;
-    project?: string;
     /** The host environment the run inherits instead of this process's own. */
     environment?: Record<string, string | undefined>;
 }
@@ -102,7 +101,6 @@ export class DetachedRunLauncher {
                 allowHostDocker: options.allowHostDocker,
                 ...(options.allowUncheckedGpu ? { allowUncheckedGpu: true } : {}),
                 ...(options.connection ? { connection: options.connection } : {}),
-                ...(options.project ? { project: options.project } : {}),
                 ...(options.environment ? { environment: options.environment } : {}),
             });
             await this.dispatcher.dispatch({

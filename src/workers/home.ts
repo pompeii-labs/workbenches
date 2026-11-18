@@ -73,8 +73,8 @@ export interface WorkerMemberConnection {
 }
 
 /**
- * The worker's own engine home, separate from the account's personal runs,
- * projects, and Studio. It holds the worker key, settings, the daemon's state
+ * The worker's own engine home, separate from the account's personal runs.
+ * It holds the worker key, settings, the daemon's state
  * and lifecycle log, and one directory per member, which is the home of
  * their local runs and holds their runner sign-ins. Every file is written
  * owner-only.

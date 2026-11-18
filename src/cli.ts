@@ -28,7 +28,6 @@ import { logoutCommand } from './commands/logout.js';
 import { orgCommand } from './commands/org.js';
 import { outcomeCommand } from './commands/outcome.js';
 import { exitOnBrokenPipe } from './commands/pipe.js';
-import { projectCommand } from './commands/project.js';
 import { psCommand } from './commands/ps.js';
 import { publishCommand } from './commands/publish.js';
 import { pushCommand } from './commands/push.js';
@@ -38,7 +37,6 @@ import { runCommand } from './commands/run.js';
 import { sendCommand } from './commands/send.js';
 import { smokeCommand } from './commands/smoke.js';
 import { statusCommand } from './commands/status.js';
-import { studioCommand } from './commands/studio.js';
 import { unpublishCommand } from './commands/unpublish.js';
 import { updateCommand } from './commands/update.js';
 import { upgradeCommand } from './commands/upgrade.js';
@@ -53,7 +51,6 @@ import { Connection } from './database/connection.js';
 import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
 import { workbenchHome } from './storage.js';
-import { StudioProcess } from './studio/index.js';
 import { Services } from './workbench/services.js';
 import { WorkerProcess } from './workers/process.js';
 
@@ -86,9 +83,7 @@ export const workbenchCommand = defineCommand({
         withdraw: withdrawCommand,
         delete: deleteCommand,
         ps: psCommand,
-        project: projectCommand,
         status: statusCommand,
-        studio: studioCommand,
         build: buildCommand,
         clean: cleanCommand,
         connect: connectCommand,
@@ -142,23 +137,6 @@ if (import.meta.main) {
         if (!home) process.exit(2);
         RegistryClient.configureApiUrl(extractApiUrl(process.argv.slice(4)).apiUrl);
         process.exit(await new WorkerProcess(home).run());
-    }
-    if (process.argv[2] === '__studio') {
-        const home = process.argv[3];
-        if (!home) process.exit(2);
-        RegistryClient.configureApiUrl(extractApiUrl(process.argv.slice(4)).apiUrl);
-        const connection = Connection.open(home);
-        let code: number;
-        try {
-            const services = new Services(home, connection);
-            code = await new StudioProcess(
-                services.studio.state,
-                services.studio
-            ).run();
-        } finally {
-            connection.close();
-        }
-        process.exit(code);
     }
     const defaultConsoleError = console.error;
     const colors = pc.createColors(

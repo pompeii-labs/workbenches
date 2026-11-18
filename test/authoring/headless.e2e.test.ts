@@ -12,7 +12,6 @@ import { RunStore } from '../../src/runs/store.js';
 import type { SessionInputResult } from '../../src/sessions/control.js';
 import type { SessionSnapshot } from '../../src/sessions/supervision.js';
 import { workbenchHome } from '../../src/storage.js';
-import { StudioWake } from '../../src/studio/wake.js';
 import { Workbench } from '../../src/workbench/workbench.js';
 
 const runners = RunnerRegistry.standard();
@@ -143,12 +142,7 @@ test.skipIf(process.env.WORKBENCH_AUTHORING_E2E !== '1')(
             throw new Error('Authoring exceeded its supervision budget');
         };
         const connection = Connection.open(home);
-        const store = new RunStore(
-            connection,
-            home,
-            new ProcessProbe(),
-            new StudioWake(home)
-        );
+        const store = new RunStore(connection, home, new ProcessProbe());
         try {
             const created = await invoke<SessionInputResult>([
                 'create',

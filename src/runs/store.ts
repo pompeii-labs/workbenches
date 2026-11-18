@@ -56,11 +56,6 @@ export interface StoredRun {
     task?: string;
 }
 
-/** Told the id of every run whose record or events this store changes. */
-export interface RunChangeListener {
-    notify(runId: string): void;
-}
-
 const terminalStatuses = new Set<StoredRunStatus>(['completed', 'failed', 'cancelled']);
 const terminalEventTypes = new Set<WorkbenchEvent['type']>([
     'run.completed',
@@ -87,8 +82,7 @@ export class RunStore {
             'run' | 'one' | 'all' | 'transaction' | 'changeToken' | 'delay'
         >,
         private readonly home: string,
-        private readonly probe: Pick<ProcessProbe, 'alive'>,
-        private readonly changes: RunChangeListener
+        private readonly probe: Pick<ProcessProbe, 'alive'>
     ) {
         this.#events = new RunEventStore(database);
         this.#records = new RunRecordStore(database);
@@ -191,7 +185,6 @@ export class RunStore {
             this.#records.replace(this.columns(next));
             return next;
         });
-        this.changes.notify(id);
         return next;
     }
 
@@ -203,7 +196,6 @@ export class RunStore {
     async appendEvent(id: string, event: WorkbenchEvent): Promise<void> {
         RunStore.validateId(id);
         this.#events.append(id, event);
-        this.changes.notify(id);
     }
 
     async readEvents(id: string): Promise<WorkbenchEvent[]> {
