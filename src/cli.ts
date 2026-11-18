@@ -17,7 +17,6 @@ import { attachCommand } from './commands/attach.js';
 import { buildCommand } from './commands/build.js';
 import { cleanCommand } from './commands/clean.js';
 import { connectCommand } from './commands/connect.js';
-import { createCommand } from './commands/create.js';
 import { deleteCommand } from './commands/delete.js';
 import { imageCommand } from './commands/image.js';
 import { initCommand } from './commands/init.js';
@@ -64,7 +63,6 @@ export const workbenchCommand = defineCommand({
     },
     subCommands: {
         init: initCommand,
-        create: createCommand,
         image: imageCommand,
         list: listCommand,
         view: viewCommand,
@@ -103,20 +101,6 @@ export const workbenchCommand = defineCommand({
 if (import.meta.main) {
     exitOnBrokenPipe(process.stdout);
     exitOnBrokenPipe(process.stderr);
-    if (process.argv[2] === '__authoring') {
-        const home = process.argv[3];
-        const id = process.argv[4];
-        if (!home || !id) process.exit(2);
-        await new ModelCatalog({ home }).loadCached();
-        const connection = Connection.open(home);
-        let code: number;
-        try {
-            code = await new Services(home, connection).jobs.execute(id);
-        } finally {
-            connection.close();
-        }
-        process.exit(code);
-    }
     if (process.argv[2] === '__worker') {
         const home = process.argv[3];
         const id = process.argv[4];
@@ -241,16 +225,9 @@ function commandUsage(usage: string): string {
 }
 
 function usesModelCatalog(args: string[]): boolean {
-    return new Set([
-        'build',
-        'create',
-        'init',
-        'resume',
-        'run',
-        'send',
-        'smoke',
-        'view',
-    ]).has(args[0] ?? '');
+    return new Set(['build', 'init', 'resume', 'run', 'send', 'smoke', 'view']).has(
+        args[0] ?? ''
+    );
 }
 
 export function extractApiUrl(args: string[]): {

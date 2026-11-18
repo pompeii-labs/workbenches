@@ -14,8 +14,6 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { OfficialWorkbenchResolver } from '../src/authoring/official.js';
-import { WorkbenchPackage } from '../src/catalog/package.js';
 import { AuthenticationRequiredError } from '../src/connections/error.js';
 import { Connection } from '../src/database/connection.js';
 import { RowReader } from '../src/database/rows.js';
@@ -23,7 +21,6 @@ import { OutcomeStore } from '../src/outcomes/store.js';
 import { RunControl } from '../src/runs/control.js';
 import { RunEvents } from '../src/runs/events.js';
 import { RunStore } from '../src/runs/index.js';
-import type { WorkbenchManifest } from '../src/types.js';
 import { Services } from '../src/workbench/services.js';
 import { seedModelCatalogFixture } from './model-catalog-fixture.js';
 
@@ -245,166 +242,6 @@ describe('CLI integration', () => {
             worker.kill();
             await worker.exited;
         }
-    });
-    test('creates, edits, runs, and improves a Workbench entirely headlessly', async () => {
-        const root = await temporaryDirectory('headless-authoring-');
-        const home = await temporaryDirectory('headless-authoring-home-');
-        await seedCreator(home, root);
-        const bin = await fakeBin([], { authoring: 'valid' });
-        const environment = {
-            PATH: `${bin}:${process.env.PATH}`,
-            WORKBENCH_HOME: home,
-        };
-        const api = ['--api-url', 'http://127.0.0.1:1'];
-        const created = await executeCli(
-            [
-                'create',
-                'core',
-                '--task',
-                'Build a repository audit expert',
-                '--json',
-                ...api,
-            ],
-            environment,
-            root
-        );
-        expect(created.code).toBe(0);
-        const result = JSON.parse(created.stdout);
-        expect(result).toMatchObject({
-            state: 'completed',
-            authoring: {
-                status: 'completed',
-                result: {
-                    kind: 'create',
-                    packages: [
-                        {
-                            selector: 'core',
-                            path: join(await realpath(root), '.workbenches', 'core'),
-                        },
-                    ],
-                },
-            },
-        });
-        expect(result.authoring.result.changed_files).toContain(
-            '.workbenches/core/workbench.yml'
-        );
-        const brief = join(root, 'edit.txt');
-        await writeFile(brief, 'Require concise evidence-backed reports');
-        const edited = await executeCli(
-            ['create', 'core', '--task-file', brief, '--detach', '--json', ...api],
-            environment,
-            root
-        );
-        expect(edited.code).toBe(0);
-        const launch = JSON.parse(edited.stdout);
-        const verified = await executeCli(
-            ['wait', launch.session_id, '--timeout', '10', '--json'],
-            environment,
-            root
-        );
-        expect(verified.code).toBe(0);
-        expect(JSON.parse(verified.stdout)).toMatchObject({
-            authoring: { status: 'completed', result: { kind: 'edit' } },
-        });
-        const execution = await executeCli(
-            ['run', 'audit-core', '--task', 'Audit the fixture', '--detach', '--json'],
-            environment,
-            root
-        );
-        expect(execution.code).toBe(0);
-        const expert = JSON.parse(execution.stdout);
-        expect(
-            (
-                await executeCli(
-                    ['wait', expert.session_id, '--json', '--timeout', '10'],
-                    environment,
-                    root
-                )
-            ).code
-        ).toBe(0);
-        const improved = await executeCli(
-            [
-                'create',
-                '--from',
-                expert.session_id,
-                '--feedback',
-                'Add a short summary before the evidence',
-                '--json',
-                ...api,
-            ],
-            environment,
-            root
-        );
-        expect(improved.code).toBe(0);
-        const improvement = JSON.parse(improved.stdout);
-        expect(improvement).toMatchObject({
-            authoring: { status: 'completed', result: { kind: 'improve' } },
-        });
-        expect(
-            await readFile(improvement.authoring.result.evidence_path, 'utf8')
-        ).toContain('Add a short summary');
-        expect(
-            await readFile(
-                join(home, 'authoring', launch.operation_id, 'verification.json'),
-                'utf8'
-            ).catch(() => undefined)
-        ).toBeUndefined();
-    });
-
-    test('headless authoring fails verification for an invalid candidate', async () => {
-        const root = await temporaryDirectory('headless-invalid-');
-        const home = await temporaryDirectory('headless-invalid-home-');
-        await seedCreator(home, root);
-        const bin = await fakeBin([], { authoring: 'invalid' });
-        const result = await executeCli(
-            [
-                'create',
-                'core',
-                '--task',
-                'Build the expert',
-                '--json',
-                '--api-url',
-                'http://127.0.0.1:1',
-            ],
-            { PATH: `${bin}:${process.env.PATH}`, WORKBENCH_HOME: home },
-            root
-        );
-        expect(result.code).toBe(1);
-        expect(JSON.parse(result.stdout)).toMatchObject({
-            state: 'failed',
-            run_state: 'completed',
-            authoring: { status: 'failed' },
-        });
-        expect(JSON.parse(result.stdout).error).toContain('invalid');
-    });
-
-    test('headless authoring ignores unrelated workspace changes', async () => {
-        const root = await temporaryDirectory('headless-scoped-');
-        const home = await temporaryDirectory('headless-scoped-home-');
-        await seedCreator(home, root);
-        const bin = await fakeBin([], { authoring: 'outside' });
-        const result = await executeCli(
-            [
-                'create',
-                'core',
-                '--task',
-                'Build the expert',
-                '--json',
-                '--api-url',
-                'http://127.0.0.1:1',
-            ],
-            { PATH: `${bin}:${process.env.PATH}`, WORKBENCH_HOME: home },
-            root
-        );
-        expect(result.code).toBe(0);
-        expect(JSON.parse(result.stdout)).toMatchObject({
-            state: 'completed',
-            authoring: { status: 'completed' },
-        });
-        expect(await readFile(join(root, 'unrequested.txt'), 'utf8')).toBe('outside');
-        expect(JSON.parse(result.stdout).authoring.result.changed_files).not.toContain(
-            'unrequested.txt'
-        );
     });
 
     test('supervises detached native turns with receipts, rejection, queue, and fresh continuation', async () => {
@@ -1730,7 +1567,7 @@ describe('CLI integration', () => {
         expect(final.stdout).toBe('fixture response\n');
     });
 
-    test('shows help for a bare invocation and rejects taskless runs and authoring', async () => {
+    test('shows help for a bare invocation and rejects taskless runs', async () => {
         const fixture = await createFixture();
         const result = await executeSavedCli(['run', fixture.packageDirectory]);
 
@@ -1746,14 +1583,6 @@ describe('CLI integration', () => {
         );
         expect(bare.stdout).toContain('COMMANDS');
         expect(bare.stderr).toBe('');
-
-        const home = await temporaryDirectory('workbench-create-non-tty-');
-        const create = await executeCli(['create', 'core'], { WORKBENCH_HOME: home });
-        expect(create.code).toBe(1);
-        expect(create.stderr).toContain(
-            'wb create requires an authoring brief. Pass --task, --task-file, or --stdin, or use --from to improve a previous session.'
-        );
-        expect(await stat(join(home, 'authoring')).catch(() => null)).toBeNull();
     });
 
     test('tells a resumable session how to continue when resume has no input', async () => {
@@ -3222,31 +3051,6 @@ describe('CLI exit 3 for missing credentials', () => {
         });
     });
 
-    test('create exits 3 when the creator has no connected route', async () => {
-        const root = await temporaryDirectory('create-needs-auth-');
-        const home = await temporaryDirectory('create-needs-auth-home-');
-        await seedCreator(home, root);
-        const bin = await fakeBin([], { authoring: 'valid' });
-        const created = await executeCli(
-            [
-                'create',
-                'core',
-                '--task',
-                'Build a repository audit expert',
-                '--json',
-                '--api-url',
-                'http://127.0.0.1:1',
-            ],
-            withoutProviderKeys({
-                PATH: `${bin}:${process.env.PATH}`,
-                WORKBENCH_HOME: home,
-            }),
-            root
-        );
-        expect(created.code).toBe(3);
-        expect(created.stderr).toContain('No authenticated route is available');
-    });
-
     test('attach maps stored failures to stable exit codes', async () => {
         const home = await temporaryDirectory('attach-exit-codes-');
         const store = open(home).runs;
@@ -3388,57 +3192,6 @@ async function launchSavedCli(
     const added = await executeCli(['add', source, '--as', 'fixture-run'], env, cwd);
     expect(added.code).toBe(0);
     return launchCli(['run', 'fixture-run', ...arguments_.slice(2)], env, cwd, stdin);
-}
-
-async function seedCreator(home: string, workspace: string): Promise<void> {
-    const manifestSource = Bun.YAML.stringify({
-        spec: 0,
-        version: '0.1.4',
-        name: 'workbench-creator',
-        runner: 'opencode',
-        model: { id: 'openai/gpt-5.4-mini' },
-        instructions: './instructions.md',
-        skills: [],
-        tools: ['wb'],
-        mcps: [],
-        env: {},
-        runtime: 'local',
-    });
-    const remote = {
-        selector: 'creator',
-        manifest: Bun.YAML.parse(manifestSource) as WorkbenchManifest,
-        source: 'https://github.com/pompeii-labs/workbenches',
-        revision: 'a'.repeat(40),
-        files: [
-            {
-                path: 'instructions.md',
-                bytes: new TextEncoder().encode('Author the requested package.'),
-                executable: false,
-            },
-            {
-                path: 'workbench.yml',
-                bytes: new TextEncoder().encode(manifestSource),
-                executable: false,
-            },
-        ],
-    };
-    const official = new OfficialWorkbenchResolver(home, {
-        registry: {
-            resolve: async () => ({
-                reference: { publisher: 'pompeii', workbench: 'creator' },
-                registryUrl: 'http://127.0.0.1:1',
-                visibility: 'public',
-                versionId: 'fixture-version',
-                version: '0.1.4',
-                digest: WorkbenchPackage.digest(remote.files),
-                source: remote.source,
-                selector: remote.selector,
-                revision: remote.revision,
-            }),
-            fetchWorkbench: async () => remote,
-        },
-    });
-    await official.creator(workspace);
 }
 
 async function launchCli(
@@ -3851,7 +3604,6 @@ async function fakeBin(
         permission?: boolean;
         releaseFile?: string;
         response?: string;
-        authoring?: 'valid' | 'invalid' | 'outside';
     } = {}
 ) {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-bin-'));
@@ -3871,7 +3623,6 @@ async function fakeBin(
             `const block = ${options.block ? 'true' : 'false'};`,
             `const permission = ${options.permission ? 'true' : 'false'};`,
             `const releaseFile = ${JSON.stringify(options.releaseFile ?? null)};`,
-            `const authoring = ${JSON.stringify(options.authoring ?? null)};`,
             'const record = process.env.WB_TEST_RECORD;',
             'if (record) {',
             '  const fields: Record<string, string | undefined> = {',
@@ -3939,20 +3690,6 @@ async function fakeBin(
             '    if (url.pathname.endsWith("/prompt_async")) {',
             '      const input = await request.json() as { messageID: string; parts: Array<{ type: string; text?: string; synthetic?: boolean }> };',
             '      const text = input.parts.find((part) => part.type === "text" && !part.synthetic)?.text ?? "";',
-            '      if (authoring && /^(Create a production-ready Workbench|Review and edit the source Workbench|Improve the source Workbench)/.test(text)) {',
-            '        const fs = await import("node:fs/promises");',
-            '        const path = await import("node:path");',
-            '        const directory = path.join(process.cwd(), ".workbenches", "core");',
-            '        await fs.mkdir(directory, { recursive: true });',
-            '        const file = path.join(directory, "workbench.yml");',
-            '        const previous = await fs.readFile(file, "utf8").catch(() => "");',
-            '        const manifest = previous ? Bun.YAML.parse(previous) : { spec: 0, version: "0.0.0", name: "audit-core", runner: "opencode", model: { id: "openai/gpt-5.4-mini" }, instructions: "./instructions.md", skills: [], tools: [], mcps: [], env: {}, runtime: "local" };',
-            '        manifest.version = "0.1." + (Number(manifest.version.split(".")[2] ?? 0) + 1);',
-            '        if (authoring === "invalid") manifest.model = "invalid";',
-            '        await fs.writeFile(file, Bun.YAML.stringify(manifest));',
-            '        await fs.writeFile(path.join(directory, "instructions.md"), "Produce concise evidence-backed reports. Version " + manifest.version);',
-            '        if (authoring === "outside") await fs.writeFile(path.join(process.cwd(), "unrequested.txt"), "outside");',
-            '      }',
             '      if (record) await Bun.write(record + ".args", text + "\\n");',
             '      pendingInput = input;',
             '      emit("session.status", { status: { type: "busy" } });',

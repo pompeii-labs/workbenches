@@ -1,5 +1,3 @@
-import { ImprovementEvidence } from '../authoring/evidence.js';
-import { AuthoringJob } from '../authoring/job.js';
 import { SnapshotGuard } from '../catalog/guard.js';
 import { SavedWorkbenchCatalog } from '../catalog/saved.js';
 import { CatalogSnapshots } from '../catalog/snapshots.js';
@@ -49,8 +47,6 @@ export class Services {
     readonly continuation: RunContinuation;
     readonly supervision: RunSupervision;
     readonly sessionSupervision: SessionSupervision;
-    readonly jobs: AuthoringJob;
-    readonly evidence: ImprovementEvidence;
     readonly control: SessionControl;
     readonly worker: RunWorker;
 
@@ -92,12 +88,9 @@ export class Services {
             this.sessions
         );
         this.supervision = new RunSupervision(this.runs, this.receipts);
-        this.jobs = new AuthoringJob(home, connection, this.runs, this.dispatcher);
-        this.evidence = new ImprovementEvidence(home, this.runs);
         this.sessionSupervision = new SessionSupervision(
             this.runs,
             this.sessions,
-            this.jobs,
             this.supervision
         );
         this.control = new SessionControl(

@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { AuthoringOperation } from '../src/authoring/index.js';
 import { SavedWorkbenchCatalog, WorkbenchPackage } from '../src/catalog/index.js';
 import { CliPresenter } from '../src/commands/presenter.js';
 import { pushedRecord } from '../src/commands/push.js';
@@ -36,67 +35,6 @@ afterEach(async () => {
 });
 
 describe('saved-source contract', () => {
-    test('verified authoring preserves a live alias and reports collisions without failing the package', async () => {
-        const { root, home, path } = await fixture();
-        const { catalog, writer } = services(home);
-        await catalog.addLocal({
-            alias: 'custom-expert',
-            workbench: await Workbench.load(path, runners),
-        });
-        const creator = {
-            version: '0.1.4',
-            digest: `sha256:${'b'.repeat(64)}`,
-            registry_version_id: 'fixture-version',
-            cached: true,
-        };
-        const operation = await AuthoringOperation.prepare(
-            home,
-            {
-                id: 'author_alias',
-                kind: 'improve',
-                repository: root,
-                targetSelector: 'core',
-                creator,
-            },
-            async () => {}
-        );
-        const manifestPath = join(path, 'workbench.yml');
-        await writeFile(
-            manifestPath,
-            (await readFile(manifestPath, 'utf8')).replace('0.1.0', '0.1.1')
-        );
-        expect(await operation.finish()).toMatchObject({ status: 'completed' });
-        expect(await catalog.list()).toMatchObject([
-            { alias: 'custom-expert', localPath: path, version: '0.1.1' },
-        ]);
-        const other = await fixture();
-        await catalog.addLocal({
-            alias: 'expert',
-            workbench: await Workbench.load(other.path, runners),
-        });
-        await writer.remove('custom-expert');
-        const collision = await AuthoringOperation.prepare(
-            home,
-            {
-                id: 'author_collision',
-                kind: 'improve',
-                repository: root,
-                targetSelector: 'core',
-                creator,
-            },
-            async () => {}
-        );
-        await writeFile(
-            manifestPath,
-            (await readFile(manifestPath, 'utf8')).replace('0.1.1', '0.1.2')
-        );
-        const result = await collision.finish();
-        expect(result.status).toBe('completed');
-        expect(result.warnings?.[0]).toContain(path);
-        expect(result.warnings?.[0]).toContain('--as <alias>');
-        expect((await catalog.find('expert'))?.localPath).toBe(other.path);
-    });
-
     test('legacy frozen sessions retain their exact original catalog package after alias removal', async () => {
         const { root, home, path } = await fixture();
         const { catalog, writer, sessions, resolver } = services(home);
