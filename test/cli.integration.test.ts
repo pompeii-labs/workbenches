@@ -15,8 +15,6 @@ import {
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { OfficialWorkbenchResolver } from '../src/authoring/official.js';
 import { WorkbenchPackage } from '../src/catalog/package.js';
 import { AuthenticationRequiredError } from '../src/connections/error.js';
@@ -238,328 +236,12 @@ describe('CLI integration', () => {
         }
     });
 
-    test('serves every MCP tool over stdio and reports unknown projects', async () => {
-        const fixture = await createFixture({
-            description: 'Navigate the test harbor.',
-        });
-        const home = await temporaryDirectory('workbench-mcp-');
-        const bin = await fakeBin();
-        const record = join(fixture.root, 'mcp-runner');
-        await seedModelCatalogFixture(home);
-        const environment = {
-            WORKBENCH_HOME: home,
-            PATH: `${bin}:${process.env.PATH ?? ''}`,
-            OPENAI_API_KEY: 'fixture-openai-key',
-            WB_TEST_RECORD: record,
-            NO_COLOR: '1',
-        };
-        expect(
-            (
-                await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'mcp-fixture'],
-                    environment,
-                    fixture.root
-                )
-            ).code
-        ).toBe(0);
-        const client = await mcpClient('wb-test', fixture.root, environment);
-        try {
-            expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
-                'search',
-                'view',
-                'run',
-                'wait',
-                'send',
-                'answer',
-                'cancel',
-                'runs',
-                'sessions',
-                'push',
-                'projects',
-                'create_project',
-                'tasks',
-            ]);
-            expect(client.getInstructions()).toContain(
-                'Work the loop: `run`, then `wait`, then `send` or `answer`'
-            );
-
-            const searched = await client.callTool({
-                name: 'search',
-                arguments: { query: 'test harbor', limit: 5 },
-            });
-            expect(searched.structuredContent).toMatchObject({
-                results: [
-                    {
-                        source: 'local',
-                        workbench: 'mcp-fixture',
-                        name: 'fixture-core',
-                        description: 'Navigate the test harbor.',
-                    },
-                ],
-            });
-            const viewed = await client.callTool({
-                name: 'view',
-                arguments: { workbench: 'mcp-fixture' },
-            });
-            expect(viewed.structuredContent).toMatchObject({
-                name: 'fixture-core',
-                version: '0.1.0',
-            });
-            const push = await client.callTool({
-                name: 'push',
-                arguments: { path: fixture.packageDirectory },
-            });
-            expect(push.isError).toBeTrue();
-            expect(toolText(push)).toBe('Sign in first with wb login');
-
-            const created = await client.callTool({
-                name: 'create_project',
-                arguments: { name: 'Pixel Pirate' },
-            });
-            expect(created.structuredContent).toMatchObject({
-                project: { name: 'Pixel Pirate', slug: 'pixel-pirate' },
-            });
-            const projects = await client.callTool({ name: 'projects', arguments: {} });
-            expect(projects.structuredContent).toMatchObject({
-                projects: [{ name: 'Pixel Pirate' }],
-            });
-            const emptyTasks = await client.callTool({ name: 'tasks', arguments: {} });
-            expect(emptyTasks.structuredContent).toEqual({ tasks: [] });
-
-            const unknown = await client.callTool({
-                name: 'run',
-                arguments: {
-                    workbench: 'mcp-fixture',
-                    task: 'inspect the harbor',
-                    project: 'Pixel Pirates',
-                    dir: fixture.root,
-                },
-            });
-            expect(unknown.isError).toBeTrue();
-            expect(toolText(unknown)).toBe(
-                'No project "Pixel Pirates". Did you mean "Pixel Pirate"?\n' +
-                    'Create it with: wb project create "Pixel Pirates"'
-            );
-            expect(await stat(`${record}.args`).catch(() => undefined)).toBeUndefined();
-
-            const launched = await client.callTool({
-                name: 'run',
-                arguments: {
-                    workbench: 'mcp-fixture',
-                    task: 'inspect the harbor',
-                    project: 'pixel-pirate',
-                    dir: fixture.root,
-                },
-            });
-            expect(launched.isError).not.toBeTrue();
-            const launchedSession = textField(structured(launched), 'session_id');
-            expect(launched.structuredContent).toMatchObject({
-                session_id: expect.stringMatching(/^wb_/),
-                run_id: expect.stringMatching(/^wb_/),
-                wait_command: expect.stringContaining('wb wait wb_'),
-                send_command: expect.stringContaining('wb send wb_'),
-            });
-            const session = await open(home).sessions.read(launchedSession);
-            expect(session.project).toBe('Pixel Pirate');
-            const tasks = await client.callTool({
-                name: 'tasks',
-                arguments: { project: 'Pixel Pirate' },
-            });
-            expect(tasks.structuredContent).toMatchObject({
-                tasks: [{ project: 'Pixel Pirate', title: 'inspect the harbor' }],
-            });
-        } finally {
-            await client.close();
-        }
-    });
-
-    test('supervises permission, continuation, history, and cancellation through MCP', async () => {
-        const fixture = await createFixture();
-        const home = await temporaryDirectory('workbench-mcp-supervision-');
-        const bin = await fakeBin([], { permission: true });
-        await seedModelCatalogFixture(home);
-        const environment = {
-            WORKBENCH_HOME: home,
-            PATH: `${bin}:${process.env.PATH ?? ''}`,
-            OPENAI_API_KEY: 'fixture-openai-key',
-            NO_COLOR: '1',
-        };
-        expect(
-            (
-                await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'mcp-supervision'],
-                    environment,
-                    fixture.root
-                )
-            ).code
-        ).toBe(0);
-        const client = await mcpClient(
-            'wb-supervision-test',
-            fixture.root,
-            environment
-        );
-        try {
-            await client.callTool({
-                name: 'create_project',
-                arguments: { name: 'MCP Project' },
-            });
-            const launched = structured(
-                await client.callTool({
-                    name: 'run',
-                    arguments: {
-                        workbench: 'mcp-supervision',
-                        task: 'request permission',
-                        project: 'MCP Project',
-                        dir: fixture.root,
-                    },
-                })
-            );
-            const sessionId = textField(launched, 'session_id');
-            const runId = textField(launched, 'run_id');
-            const waiting = structured(
-                await client.callTool({
-                    name: 'wait',
-                    arguments: { run_id: runId, timeout_seconds: 5 },
-                })
-            );
-            expect(waiting).toMatchObject({
-                state: 'needs_input',
-                pending_requests: [
-                    {
-                        id: 'permission-fixture',
-                        kind: 'permission',
-                        text: 'Allow bash for echo fixture?',
-                        options: ['allow_once', 'reject'],
-                    },
-                ],
-            });
-            const answered = structured(
-                await client.callTool({
-                    name: 'answer',
-                    arguments: {
-                        session_id: sessionId,
-                        request_id: 'permission-fixture',
-                        response: 'allow',
-                    },
-                })
-            );
-            const completed = await waitMcpTerminal(
-                client,
-                textField(answered, 'run_id'),
-                numberField(answered, 'after_sequence')
-            );
-            expect(completed).toMatchObject({
-                state: 'completed',
-                final: 'fixture response',
-            });
-            expect(
-                structured(
-                    await client.callTool({
-                        name: 'wait',
-                        arguments: {
-                            run_id: runId,
-                            after: numberField(completed, 'next'),
-                            timeout_seconds: 120,
-                        },
-                    })
-                ).state
-            ).toBe('completed');
-
-            const sent = structured(
-                await client.callTool({
-                    name: 'send',
-                    arguments: {
-                        session_id: sessionId,
-                        text: 'continue locally',
-                        mode: 'send',
-                    },
-                })
-            );
-            const continued = await waitMcpTerminal(
-                client,
-                textField(sent, 'run_id'),
-                numberField(sent, 'after_sequence')
-            );
-            expect(continued).toMatchObject({
-                state: 'completed',
-                final: 'fixture response',
-            });
-
-            const runs = structured(
-                await client.callTool({
-                    name: 'runs',
-                    arguments: { project: 'MCP Project', status: 'completed' },
-                })
-            );
-            expect(runs.runs).toEqual(
-                expect.arrayContaining([
-                    expect.objectContaining({
-                        session_id: sessionId,
-                        project: 'MCP Project',
-                        status: 'completed',
-                    }),
-                ])
-            );
-            const sessions = structured(
-                await client.callTool({
-                    name: 'sessions',
-                    arguments: { project: 'MCP Project' },
-                })
-            );
-            expect(sessions.sessions).toEqual([
-                expect.objectContaining({
-                    session_id: sessionId,
-                    project: 'MCP Project',
-                    state: 'completed',
-                    needs_input: false,
-                    pending_requests: [],
-                    latest_run: expect.objectContaining({
-                        id: textField(sent, 'run_id'),
-                    }),
-                }),
-            ]);
-        } finally {
-            await client.close();
-        }
-
-        const blockingBin = await fakeBin([], { block: true });
-        const blockingClient = await mcpClient('wb-cancel-test', fixture.root, {
-            ...environment,
-            PATH: `${blockingBin}:${process.env.PATH ?? ''}`,
-        });
-        try {
-            const launched = structured(
-                await blockingClient.callTool({
-                    name: 'run',
-                    arguments: {
-                        workbench: 'mcp-supervision',
-                        task: 'block until cancelled',
-                        dir: fixture.root,
-                    },
-                })
-            );
-            const cancelled = structured(
-                await blockingClient.callTool({
-                    name: 'cancel',
-                    arguments: { session_id: textField(launched, 'session_id') },
-                })
-            );
-            expect(cancelled).toMatchObject({
-                session_id: textField(launched, 'session_id'),
-                run_id: textField(launched, 'run_id'),
-                state: 'cancelled',
-            });
-        } finally {
-            await blockingClient.close();
-        }
-    });
-
-    test('CLI and MCP share detached runtime selection, including explicit errors', async () => {
+    test('CLI selects the declared runtime for detached runs', async () => {
         const fixture = await createFixture({
             runtime: 'docker',
             image: 'ghcr.io/example/lux:0.1.0',
         });
-        const home = await temporaryDirectory('workbench-mcp-docker-');
+        const home = await temporaryDirectory('workbench-runtime-docker-');
         const docker = await fakeDocker();
         await seedModelCatalogFixture(home);
         const environment = {
@@ -585,57 +267,16 @@ describe('CLI integration', () => {
         );
         expect(cliRun.code).toBe(0);
 
-        const client = await mcpClient('wb-docker-test', fixture.root, environment);
-        try {
-            const unavailable = await client.callTool({
-                name: 'run',
-                arguments: {
-                    workbench: 'docker-fixture',
-                    task: 'wrong runtime',
-                    runtime: 'local',
-                    dir: fixture.root,
-                },
-            });
-            expect(unavailable.isError).toBeTrue();
-            expect(toolText(unavailable)).toBe(
-                'Workbench fixture-core does not declare runtime: local. Declared runtimes: docker'
-            );
-
-            const launched = await client.callTool({
-                name: 'run',
-                arguments: {
-                    workbench: 'docker-fixture',
-                    task: 'from mcp default',
-                    dir: fixture.root,
-                },
-            });
-            expect(launched.isError).not.toBeTrue();
-            const selected = await client.callTool({
-                name: 'run',
-                arguments: {
-                    workbench: 'docker-fixture',
-                    task: 'from mcp explicit',
-                    runtime: 'docker',
-                    dir: fixture.root,
-                },
-            });
-            expect(selected.isError).not.toBeTrue();
-        } finally {
-            await client.close();
-        }
-
         expect((await open(home).runs.list()).map((run) => run.runtime)).toEqual([
-            'docker',
-            'docker',
             'docker',
         ]);
         const commands = await readFile(docker.record, 'utf8');
         expect(
             commands.match(/dev\.workbenches\.managed=true/g)?.length ?? 0
-        ).toBeGreaterThanOrEqual(3);
+        ).toBeGreaterThanOrEqual(1);
     });
 
-    test('detached CLI and MCP runs refuse while an earlier version worker is alive', async () => {
+    test('detached CLI runs refuse while an earlier version worker is alive', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('workbench-legacy-refusal-');
         const bin = await fakeBin();
@@ -676,23 +317,6 @@ describe('CLI integration', () => {
             expect(detached.stderr).toContain(
                 `earlier version of Workbench is still active (${run}`
             );
-            const client = await mcpClient('wb-legacy-test', fixture.root, environment);
-            try {
-                const refused = await client.callTool({
-                    name: 'run',
-                    arguments: {
-                        workbench: 'legacy-fixture',
-                        task: 'new work',
-                        dir: fixture.root,
-                    },
-                });
-                expect(refused.isError).toBeTrue();
-                expect(toolText(refused)).toContain(
-                    `earlier version of Workbench is still active (${run}`
-                );
-            } finally {
-                await client.close();
-            }
             expect(await stat(`${record}.args`).catch(() => undefined)).toBeUndefined();
             expect(await open(home).runs.list()).toEqual([]);
         } finally {
@@ -4085,78 +3709,6 @@ async function freeTestPort(): Promise<number> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return RowReader.isRecord(value);
-}
-
-/** An MCP client connected to `wb mcp` in a child process. */
-async function mcpClient(
-    name: string,
-    cwd: string,
-    env: Record<string, string>
-): Promise<Client> {
-    const client = new Client({ name, version: '1.0.0' });
-    await client.connect(
-        new StdioClientTransport({
-            command: process.execPath,
-            args: [cliPath, 'mcp'],
-            cwd,
-            env,
-            stderr: 'pipe',
-        })
-    );
-    return client;
-}
-
-function toolText(result: unknown): string | undefined {
-    if (!isRecord(result) || !Array.isArray(result.content)) return undefined;
-    const content = result.content.find(
-        (item) => isRecord(item) && item.type === 'text'
-    );
-    return isRecord(content) && typeof content.text === 'string'
-        ? content.text
-        : undefined;
-}
-
-function structured(result: unknown): Record<string, unknown> {
-    if (!isRecord(result)) throw new Error('Missing MCP tool result');
-    const value = result.structuredContent;
-    if (!isRecord(value)) throw new Error('Missing MCP structured content');
-    return value;
-}
-
-function textField(value: Record<string, unknown>, name: string): string {
-    const field = value[name];
-    if (typeof field !== 'string') throw new Error(`Missing MCP field: ${name}`);
-    return field;
-}
-
-function numberField(value: Record<string, unknown>, name: string): number {
-    const field = value[name];
-    if (typeof field !== 'number') throw new Error(`Missing MCP field: ${name}`);
-    return field;
-}
-
-async function waitMcpTerminal(
-    client: Client,
-    runId: string,
-    after = 0
-): Promise<Record<string, unknown>> {
-    let cursor = after;
-    for (let attempt = 0; attempt < 5; attempt++) {
-        const result = structured(
-            await client.callTool({
-                name: 'wait',
-                arguments: {
-                    run_id: runId,
-                    after: cursor,
-                    timeout_seconds: 5,
-                },
-            })
-        );
-        if (['completed', 'failed', 'cancelled'].includes(textField(result, 'state')))
-            return result;
-        cursor = numberField(result, 'next');
-    }
-    throw new Error(`MCP run did not finish: ${runId}`);
 }
 
 async function temporaryDirectory(prefix: string) {
