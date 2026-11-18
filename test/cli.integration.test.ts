@@ -61,7 +61,7 @@ afterEach(async () => {
 describe('CLI integration', () => {
     setDefaultTimeout(20_000);
 
-    test('live add edits feed new CLI runs while a resumed session keeps its package after removal and deletion', async () => {
+    test('live save edits feed new CLI runs while a resumed session keeps its package after removal and deletion', async () => {
         const fixture = await createFixture();
         const home = await temporaryDirectory('cli-pinned-home-');
         const bin = await fakeBin();
@@ -78,7 +78,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'pinned-expert'],
+                    ['save', fixture.packageDirectory, '--as', 'pinned-expert'],
                     environment,
                     fixture.root
                 )
@@ -173,7 +173,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'docker-fixture'],
+                    ['save', fixture.packageDirectory, '--as', 'docker-fixture'],
                     environment,
                     fixture.root
                 )
@@ -211,7 +211,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'legacy-fixture'],
+                    ['save', fixture.packageDirectory, '--as', 'legacy-fixture'],
                     environment,
                     fixture.root
                 )
@@ -712,7 +712,7 @@ describe('CLI integration', () => {
         expect(create.stdout).toContain('--workspace=<NAME=path>');
         expect(create.stdout).toContain('--allow-host-docker');
 
-        const add = await executeCli(['add', '--help']);
+        const add = await executeCli(['save', '--help']);
         expect(add.code).toBe(0);
 
         const run = await executeCli(['run', '--help']);
@@ -2253,7 +2253,7 @@ describe('CLI integration', () => {
         expect(smoked.stdout).toContain('fixture-tool');
 
         const added = await executeCli(
-            ['add', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
+            ['save', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
             environment
         );
         expect(added.code).toBe(0);
@@ -2264,13 +2264,13 @@ describe('CLI integration', () => {
         expect(await stat(join(home, 'preferences.json')).catch(() => null)).toBeNull();
 
         const currentAdd = await executeCli(
-            ['add', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
+            ['save', fixture.root, '--name', 'core', '--as', 'fixture-saved'],
             environment
         );
         expect(currentAdd.code).toBe(0);
 
         const conflictingName = await executeCli(
-            ['add', `${fixture.root}#core`, '--name', 'core'],
+            ['save', `${fixture.root}#core`, '--name', 'core'],
             environment
         );
         expect(conflictingName.code).toBe(1);
@@ -2357,7 +2357,7 @@ describe('CLI integration', () => {
         expect(listed.stdout).toContain('core\tfixture-core@0.1.0');
 
         const added = await executeCli(
-            ['add', fixture.root, '--name', 'core', '--as', 'fixture-pi'],
+            ['save', fixture.root, '--name', 'core', '--as', 'fixture-pi'],
             environment
         );
         expect(added.code).toBe(0);
@@ -2662,7 +2662,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'multi'],
+                    ['save', fixture.packageDirectory, '--as', 'multi'],
                     environment
                 )
             ).code
@@ -2706,7 +2706,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'gpu'],
+                    ['save', fixture.packageDirectory, '--as', 'gpu'],
                     environment
                 )
             ).code
@@ -2746,7 +2746,7 @@ describe('CLI integration', () => {
         expect(
             (
                 await executeCli(
-                    ['add', fixture.packageDirectory, '--as', 'gpu'],
+                    ['save', fixture.packageDirectory, '--as', 'gpu'],
                     environment
                 )
             ).code
@@ -2775,7 +2775,7 @@ describe('CLI integration', () => {
         ]);
         expect(result.code).toBe(1);
         expect(result.stderr).toContain('Workbench is not saved');
-        expect(result.stderr).toContain('wb add <source>');
+        expect(result.stderr).toContain('wb save <source>');
         expect(result.stderr).not.toContain('at async');
         expect(result.stderr).not.toContain('/$bunfs/');
     });
@@ -3173,7 +3173,7 @@ async function executeSavedCli(
     const home =
         environment.WORKBENCH_HOME ?? (await temporaryDirectory('workbench-cli-home-'));
     const env = { ...environment, WORKBENCH_HOME: home };
-    const added = await executeCli(['add', source, '--as', 'fixture-run'], env, cwd);
+    const added = await executeCli(['save', source, '--as', 'fixture-run'], env, cwd);
     expect(added.code).toBe(0);
     return executeCli(['run', 'fixture-run', ...arguments_.slice(2)], env, cwd);
 }
@@ -3189,7 +3189,7 @@ async function launchSavedCli(
     const home =
         environment.WORKBENCH_HOME ?? (await temporaryDirectory('workbench-cli-home-'));
     const env = { ...environment, WORKBENCH_HOME: home };
-    const added = await executeCli(['add', source, '--as', 'fixture-run'], env, cwd);
+    const added = await executeCli(['save', source, '--as', 'fixture-run'], env, cwd);
     expect(added.code).toBe(0);
     return launchCli(['run', 'fixture-run', ...arguments_.slice(2)], env, cwd, stdin);
 }

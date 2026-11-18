@@ -73,11 +73,11 @@ describe('saved-source contract', () => {
         await expect(resolver.resolve(id)).rejects.toThrow();
     });
 
-    test('local add is live, idempotent, absolute, and never deletes the source', async () => {
+    test('local save is live, idempotent, absolute, and never deletes the source', async () => {
         const { root, home, path } = await fixture();
         const first = await cli(
             home,
-            ['add', './.workbenches/core', '--as', 'expert'],
+            ['save', './.workbenches/core', '--as', 'expert'],
             root
         );
         expect(first.code).toBe(0);
@@ -87,7 +87,7 @@ describe('saved-source contract', () => {
             packagePath: path,
         });
         expect(
-            (await cli(home, ['add', './.workbenches/core', '--as', 'expert'], root))
+            (await cli(home, ['save', './.workbenches/core', '--as', 'expert'], root))
                 .code
         ).toBe(0);
         await writeFile(join(path, 'instructions.md'), 'Edited instructions');
@@ -109,16 +109,16 @@ describe('saved-source contract', () => {
     test('local collisions require --as and multi-package input lists --name choices', async () => {
         const { root, home, path } = await fixture();
         const second = await packageAt(root, 'other', 'expert');
-        const ambiguous = await cli(home, ['add', '.'], root);
+        const ambiguous = await cli(home, ['save', '.'], root);
         expect(ambiguous.code).toBe(1);
         expect(ambiguous.stderr).toContain('--name');
         expect(ambiguous.stderr).toContain('core, other');
-        expect((await cli(home, ['add', '.', '--name', 'core'], root)).code).toBe(0);
+        expect((await cli(home, ['save', '.', '--name', 'core'], root)).code).toBe(0);
         expect((await new SavedWorkbenchCatalog(home).find('expert'))?.localPath).toBe(
             path
         );
-        expect((await cli(home, ['add', second, '--as', 'second'], root)).code).toBe(0);
-        expect((await cli(home, ['add', '.#core'], root)).stderr).toContain(
+        expect((await cli(home, ['save', second, '--as', 'second'], root)).code).toBe(0);
+        expect((await cli(home, ['save', '.#core'], root)).stderr).toContain(
             'Use --name'
         );
     });
@@ -144,7 +144,7 @@ describe('saved-source contract', () => {
         try {
             const missing = await cli(
                 home,
-                ['add', 'missing/package', '--api-url', server.url.origin],
+                ['save', 'missing/package', '--api-url', server.url.origin],
                 root
             );
             expect(missing.code).toBe(1);
@@ -353,7 +353,7 @@ describe('private organization workbenches', () => {
 
             const added = await cli(
                 home,
-                ['add', 'example/repo-engineer', ...api],
+                ['save', 'example/repo-engineer', ...api],
                 root
             );
             expect(added.code).toBe(0);
@@ -396,7 +396,7 @@ describe('private organization workbenches', () => {
             const api = ['--api-url', registry.server.url.origin];
             const anonymous = await cli(
                 home,
-                ['add', 'example/repo-engineer', ...api],
+                ['save', 'example/repo-engineer', ...api],
                 root
             );
             expect(anonymous.code).toBe(1);
@@ -405,7 +405,7 @@ describe('private organization workbenches', () => {
             await hold(home, registry.server.url.origin, ['other']);
             const other = await cli(
                 home,
-                ['add', 'example/repo-engineer', ...api],
+                ['save', 'example/repo-engineer', ...api],
                 root
             );
             expect(other.code).toBe(1);

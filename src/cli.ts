@@ -11,7 +11,6 @@ import {
 import pc from 'picocolors';
 import packageMetadata from '../package.json' with { type: 'json' };
 
-import { addCommand } from './commands/add.js';
 import { answerCommand } from './commands/answer.js';
 import { attachCommand } from './commands/attach.js';
 import { buildCommand } from './commands/build.js';
@@ -33,6 +32,7 @@ import { pushCommand } from './commands/push.js';
 import { removeCommand } from './commands/remove.js';
 import { resumeCommand } from './commands/resume.js';
 import { runCommand } from './commands/run.js';
+import { saveCommand } from './commands/save.js';
 import { sendCommand } from './commands/send.js';
 import { smokeCommand } from './commands/smoke.js';
 import { statusCommand } from './commands/status.js';
@@ -85,7 +85,7 @@ export const workbenchCommand = defineCommand({
         build: buildCommand,
         clean: cleanCommand,
         connect: connectCommand,
-        add: addCommand,
+        save: saveCommand,
         remove: removeCommand,
         resume: resumeCommand,
         run: runCommand,

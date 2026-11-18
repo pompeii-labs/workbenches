@@ -267,7 +267,7 @@ describe('live previews on the local runtime', () => {
             expect(
                 (
                     await cli(
-                        ['add', packageDirectory, '--as', 'preview'],
+                        ['save', packageDirectory, '--as', 'preview'],
                         environment,
                         root
                     )

@@ -101,7 +101,7 @@ async function addLocalWorkbench(
 ): Promise<void> {
     const created = await execute(directory, ['init', 'core'], environment);
     expect(created.code).toBe(0);
-    const added = await execute(directory, ['add', './.workbenches/core'], environment);
+    const added = await execute(directory, ['save', './.workbenches/core'], environment);
     expect(added.code).toBe(0);
 }
 
