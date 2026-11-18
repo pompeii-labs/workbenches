@@ -42,7 +42,6 @@ class E2BArchiveUpload implements ArchiveUpload<DiskAssetSnapshot> {
 
 export class E2BRuntime extends RemoteRuntime<E2BSandbox, DiskAssetSnapshot> {
     readonly name = 'e2b';
-    readonly nativeAuthentication: 'persistent' | 'unavailable';
     readonly preparation: E2BRuntimeOptions['preparation'];
     protected declare readonly options: E2BRuntimeOptions;
     private recovery: E2BOutcomeRecovery | undefined;
@@ -50,9 +49,6 @@ export class E2BRuntime extends RemoteRuntime<E2BSandbox, DiskAssetSnapshot> {
 
     constructor(options: E2BRuntimeOptions) {
         super(options);
-        this.nativeAuthentication = options.request.credentials
-            ? 'persistent'
-            : 'unavailable';
         this.preparation = options.preparation;
     }
 

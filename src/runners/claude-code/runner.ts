@@ -25,6 +25,7 @@ import { CLAUDE_CODE_VERSION } from './capabilities.js';
 import type { ClaudeCodeConfigStaging, StagedClaudeCodeConfig } from './config.js';
 import { claudeCodeConnection } from './connection.js';
 import { ClaudeCodeCost, runtimeCostStore } from './cost.js';
+import { ClaudeCodeCredentialSettings, claudeCodeCredentials } from './credentials.js';
 import { ClaudeCodeEventAdapter } from './events.js';
 import { userMessage } from './input.js';
 import {
@@ -63,6 +64,7 @@ export class ClaudeCodeRunner extends Runner {
     /** A Claude Code session takes its input over piped standard input. */
     readonly standardInput = true;
     readonly connection = claudeCodeConnection;
+    readonly credentials = claudeCodeCredentials;
     /** Older releases refuse the options the session starts Claude Code with. */
     override readonly minimumVersion = CLAUDE_CODE_VERSION;
     /** A `claude setup-token` subscription token, taken from the person's own environment on any runtime. */
@@ -130,6 +132,7 @@ type ClaudeCodeTarget = Pick<
     | 'pathFor'
     | 'execute'
     | 'credentialRoot'
+    | 'credentials'
 >;
 
 /** The config directory inside a session's state that keeps the native session. */
@@ -152,6 +155,7 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
     /** The host environment, the only source of a subscription token. */
     readonly #host: Record<string, string | undefined>;
     readonly #platform: NodeJS.Platform | undefined;
+    readonly #credentials = new ClaudeCodeCredentialSettings();
     #repositoryRead = false;
     /** How the route of the last built invocation is paid, for its event normalizer. */
     #billing: ClaudeCodeRoute['billing'] = 'metered';
@@ -235,6 +239,9 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
             },
         };
     }
+
+    connectionEnvironment = (runtime: PreparedRuntime) =>
+        this.#credentials.load(runtime);
 
     publicInvocation(invocation: RunnerInvocation): Record<string, unknown> {
         return {
@@ -321,6 +328,7 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
         launch: (invocation: RunnerInvocation) => ReturnType<ClaudeCodeSpawn>
     ): Promise<PreparedClaudeCodeSession> {
         const staged = this.#staged;
+        await this.#credentials.load(target);
         const configDirectory = options.session
             ? join(options.session.directory, SESSION_CONFIG)
             : target.pathFor(staged.configDirectory);
@@ -388,7 +396,7 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
             environment: this.#router.environmentForRoute(
                 this.#workbench,
                 configuration,
-                target.environment
+                this.#credentials.environment(target)
             ),
             routeEnvironment: options.route.environment,
             model: configuration.nativeModel,
@@ -415,7 +423,7 @@ export class PreparedClaudeCodeRunner implements PreparedRunner {
             environment: this.#router.environmentForRoute(
                 this.#workbench,
                 configuration,
-                target.environment
+                this.#credentials.environment(target)
             ),
             keys: this.#router.catalog.providers[configuration.provider]?.env ?? [],
             oauthToken: this.#host.CLAUDE_CODE_OAUTH_TOKEN,

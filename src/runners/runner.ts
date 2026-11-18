@@ -47,6 +47,10 @@ export interface PreparedRunner {
         configuration: ResolvedRunnerConfiguration
     ): RunnerInvocation;
     native(runtime: PreparedRuntime, command: string[]): RunnerInvocation;
+    /** Provider variables read from the runner's Workbench-owned settings. */
+    connectionEnvironment?(
+        runtime: PreparedRuntime
+    ): Promise<Record<string, string | undefined>>;
     publicInvocation(invocation: RunnerInvocation): Record<string, unknown>;
     events(): RunnerEventNormalizer;
     startSession(
@@ -70,6 +74,8 @@ export interface RunnerCredentials {
     file: string;
     /** The entry type an API key is stored as. */
     apiKeyEntryType: string;
+    /** Providers stored as variables in an `env` object instead of an auth map. */
+    providerVariables?: Readonly<Record<string, string>>;
     /** The harness reads a stored entry before provider variables, so the entry decides alone. */
     storeFirst: boolean;
     /** The environment that points the harness at a mounted credential root. */

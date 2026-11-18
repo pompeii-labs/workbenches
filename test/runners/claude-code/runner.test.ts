@@ -12,6 +12,8 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { HostCredentialFiles } from '../../../src/connections/credentials.js';
+import { NativeCredentialFile } from '../../../src/connections/nativecredentials.js';
 import type {
     ModelCatalogSnapshot,
     ResolvedRunnerConfiguration,
@@ -163,6 +165,7 @@ interface FakeRuntimeOptions {
     workspaces?: WorkbenchWorkspaceBinding[];
     /** Maps host paths into the runtime. Identity on local. */
     mount?: (path: string) => string;
+    credentials?: PreparedRuntime['credentials'];
 }
 
 /** A runtime that records launches and keeps runtime files in memory. */
@@ -174,6 +177,7 @@ function fakeRuntime(name: string, options: FakeRuntimeOptions) {
     const mount = options.mount ?? ((path: string) => path);
     const runtime = {
         name,
+        ...(options.credentials ? { credentials: options.credentials } : {}),
         workbench: options.workbench,
         workspaceDirectory: mount(options.workspace),
         environment: {
@@ -216,6 +220,47 @@ function host(events: WorkbenchEventDraft[] = []): RunnerSessionHost {
         requestPermission: async () => 'reject',
         requestQuestion: async () => ({ outcome: 'rejected' }),
     };
+}
+
+for (const provider of ['anthropic', 'openrouter', 'vercel']) {
+    test(`Docker Claude Code reads the saved ${provider} key from documented settings env`, async () => {
+        const projectFiles = await project();
+        const ready = await prepare(projectFiles.workbench);
+        const directory = join(projectFiles.root, 'credentials');
+        await mkdir(directory);
+        const credentials = new HostCredentialFiles(directory);
+        const file = NativeCredentialFile.for('claude-code');
+        await file.save(credentials, provider, file.apiKey('fixture-saved-key'));
+        const target = fakeRuntime('docker', {
+            workbench: projectFiles.workbench,
+            workspace: projectFiles.workspace,
+            environment: { WORKBENCH_CREDENTIALS_DIR: directory },
+            credentials,
+        });
+        const environment = await ready.connectionEnvironment(target.runtime);
+        const variable =
+            provider === 'anthropic'
+                ? 'ANTHROPIC_API_KEY'
+                : provider === 'openrouter'
+                  ? 'OPENROUTER_API_KEY'
+                  : 'AI_GATEWAY_API_KEY';
+        expect(JSON.parse(await readFile(join(directory, file.path), 'utf8'))).toEqual({
+            env: { [variable]: 'fixture-saved-key' },
+        });
+        expect(environment[variable]).toBe('fixture-saved-key');
+        await start(ready, target.runtime, provider, undefined, [], 'api');
+        expect(
+            target.launched[0]?.env[
+                provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'ANTHROPIC_AUTH_TOKEN'
+            ]
+        ).toBe('fixture-saved-key');
+        expect(JSON.stringify(target.launched[0]?.command)).not.toContain(
+            'fixture-saved-key'
+        );
+        expect(
+            await stat(join(directory, 'claude')).catch(() => undefined)
+        ).toBeUndefined();
+    });
 }
 
 async function start(

@@ -89,8 +89,8 @@ export class ModelConnection {
             await this.#report(await this.#setup.verify(), this.#localAdvice());
             return;
         }
-        // Daytona, or a runner Workbench keeps no credentials for, reads keys from the environment.
-        if (target.runtime === 'daytona' || !this.#setup.storesCredentials) {
+        // Runners without a declared store use their inherited provider variables.
+        if (!this.#setup.storesCredentials) {
             await this.#report(
                 await this.#setup.verify(),
                 `Set ${this.#methodVariables() || 'the provider key'} where wb runs`
@@ -228,7 +228,11 @@ export class ModelConnection {
             ],
             title: `${readiness.saved ? 'Saved' : 'Ready'}: ${this.#provider} for ${this.#runner} in ${this.#runtime}`,
             details: readiness.saved
-                ? ['the first run confirms it']
+                ? [
+                      target.runtime === 'docker'
+                          ? 'confirmed by the runner'
+                          : 'the first run confirms it',
+                  ]
                 : readiness.fromEnvironment
                   ? [`from ${this.#variables()} in the environment`]
                   : [],
@@ -239,6 +243,12 @@ export class ModelConnection {
     #signInAdvice(): string {
         const { target, workbench } = this.#options;
         const runner = this.#runner;
+        if (
+            target.method.authenticationMethod === 'oauth' &&
+            this.#runners.find(target.harness)?.nativeCredentialVariables.length
+        ) {
+            return `Set ${this.#methodVariables()} where wb runs`;
+        }
         if (!harnessConnection(target.harness, this.#runners).hostSignIn) {
             return `${runner} has no command-line sign-in, so a ${runner} subscription cannot be connected here. Use an API key instead: ${this.#base()} --provider ${target.provider} --method api-key --stdin`;
         }

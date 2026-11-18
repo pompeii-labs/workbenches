@@ -11,7 +11,7 @@ import type { ResolvedWorkbench } from '../../src/types.js';
 const credentialVariables: Record<string, string | undefined> = {
     opencode: 'XDG_DATA_HOME',
     pi: 'WORKBENCH_CREDENTIALS_DIR',
-    'claude-code': undefined,
+    'claude-code': 'WORKBENCH_CREDENTIALS_DIR',
 };
 const variables = Object.values(credentialVariables).filter(
     (variable): variable is string => Boolean(variable)

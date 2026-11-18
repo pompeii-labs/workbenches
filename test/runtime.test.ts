@@ -315,48 +315,51 @@ describe('local runtime provider contract', () => {
         });
     });
 
-    test('smoke binds an e2b credential store only for runners with a credential file', async () => {
-        const home = await mkdtemp(join(tmpdir(), 'runtime-smoke-home-'));
-        try {
-            for (const [runner, kept] of [
-                ['opencode', true],
-                ['pi', true],
-                ['claude-code', false],
-            ] as const) {
-                let seen: RuntimePrepareRequest | undefined;
-                const capture: RuntimeProvider = {
-                    name: 'e2b',
-                    placement: 'sandbox',
-                    prepare: async (request) => {
-                        seen = request;
-                        throw new Error('captured');
-                    },
-                };
-                const target = workbench();
-                target.manifest.runner = runner;
-                target.manifest.runtime = 'e2b';
-                await expect(
-                    new RuntimeSmoke({
-                        workbench: target,
-                        workspaceDirectory: '/target',
-                        environment: {},
-                        registry: new RuntimeRegistry([capture]),
-                        home,
-                    }).check()
-                ).rejects.toThrow('captured');
-                expect(seen?.credentials?.runner).toBe(kept ? runner : undefined);
-                expect(
-                    Boolean(
-                        await stat(
-                            join(home, 'runtime-credentials', 'e2b', runner)
-                        ).catch(() => undefined)
-                    )
-                ).toBe(kept);
+    for (const runtime of ['e2b', 'daytona']) {
+        test(`smoke binds a ${runtime} credential store for every runner`, async () => {
+            const home = await mkdtemp(join(tmpdir(), 'runtime-smoke-home-'));
+            try {
+                for (const [runner, kept] of [
+                    ['opencode', true],
+                    ['pi', true],
+                    ['claude-code', true],
+                ] as const) {
+                    let seen: RuntimePrepareRequest | undefined;
+                    const capture: RuntimeProvider = {
+                        name: runtime,
+                        placement: 'sandbox',
+                        prepare: async (request) => {
+                            seen = request;
+                            throw new Error('captured');
+                        },
+                    };
+                    const target = workbench();
+                    target.manifest.runner = runner;
+                    target.manifest.runtime = runtime;
+                    target.manifest.runtimes = { [runtime]: { class: 'linux' } };
+                    await expect(
+                        new RuntimeSmoke({
+                            workbench: target,
+                            workspaceDirectory: '/target',
+                            environment: {},
+                            registry: new RuntimeRegistry([capture]),
+                            home,
+                        }).check()
+                    ).rejects.toThrow('captured');
+                    expect(seen?.credentials?.runner).toBe(kept ? runner : undefined);
+                    expect(
+                        Boolean(
+                            await stat(
+                                join(home, 'runtime-credentials', runtime, runner)
+                            ).catch(() => undefined)
+                        )
+                    ).toBe(kept);
+                }
+            } finally {
+                await rm(home, { recursive: true, force: true });
             }
-        } finally {
-            await rm(home, { recursive: true, force: true });
-        }
-    });
+        });
+    }
 
     test('rejects launch after cleanup', async () => {
         const runtime = await new LocalRuntimeProvider({

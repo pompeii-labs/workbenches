@@ -19,7 +19,7 @@ import {
 /** Whether a target can authenticate, and what is missing when it cannot. */
 export interface ConnectionReadiness {
     ready: boolean;
-    /** Only the host copy of a remote store was read back; the first run confirms it. */
+    /** A matching entry was read back from the runtime's credential store. */
     saved: boolean;
     /** An inherited provider variable serves the route. */
     fromEnvironment: boolean;
@@ -51,12 +51,10 @@ export interface ConnectionSetupOptions {
  * reports whether a run can authenticate with the chosen method. `local` uses
  * the runner's own host sign-in. `docker` writes the runner's credential
  * volume through the Workbench image and checks it with the runner inside the
- * container, so it needs a Workbench. `e2b` writes the host store synced into
- * each sandbox and is confirmed by the first run, because checking it would
- * create a billable sandbox. Workbench keeps no runner credential store for
- * `daytona`, which reads provider variables only. A runner without a credential file has no
- * store anywhere: Docker is checked by the runner itself, and E2B reads
- * provider variables only.
+ * container, so it needs a Workbench. `e2b` and `daytona` write a host store
+ * synced into each sandbox. The first run confirms it, because checking it
+ * would create a billable sandbox. A runner without a credential file is checked
+ * through its native inspection or inherited provider variables.
  */
 export class ConnectionSetup {
     /** The runner's native credential file, or undefined for a runner Workbench keeps no credentials for. */
@@ -77,11 +75,11 @@ export class ConnectionSetup {
     /** Whether the target runtime has a store Workbench writes for this runner. */
     get storesCredentials(): boolean {
         const { runtime } = this.#options.target;
-        return Boolean(this.file) && (runtime === 'docker' || runtime === 'e2b');
+        return Boolean(this.file) && runtime !== 'local';
     }
 
     /**
-     * Refuses runtimes whose store Workbench does not write: `local`, `daytona`,
+     * Refuses runtimes whose store Workbench does not write: `local`,
      * and any runtime for a runner without a credential file.
      */
     requireStore(): void {
@@ -90,9 +88,7 @@ export class ConnectionSetup {
         throw new Error(
             target.runtime === 'local'
                 ? `The local runtime uses your own ${this.#runner} sign-in; Workbench neither writes nor removes it`
-                : target.runtime === 'docker' || target.runtime === 'e2b'
-                  ? `${this.#runner} has no credential store Workbench writes; ${this.#provider} keys reach it only from the environment or --env-file`
-                  : `Workbench keeps no runner credential store on ${runtimeLabel(target.runtime)}; provider keys reach it only from the environment`
+                : `${this.#runner} declares no credential file for ${runtimeLabel(target.runtime)}; use the provider environment or --env-file`
         );
     }
 
@@ -140,15 +136,13 @@ export class ConnectionSetup {
         }
         // The runner itself reports its own sign-in; Workbench never reads its files.
         if (target.runtime === 'local' && workbench) return this.#inspect();
-        if (target.runtime !== 'e2b' || !file) {
+        if (target.runtime === 'local' || !file) {
             return this.#environmentServes()
                 ? ready({ fromEnvironment: true })
                 : this.#missing(
                       target.runtime === 'local'
                           ? `Without a Workbench, wb cannot ask ${this.#runner} which providers it is signed in to, and no ${this.#provider} key is in the environment`
-                          : target.runtime === 'e2b'
-                            ? `${this.#runner} has no credential store Workbench writes, so in E2B it reads ${this.#provider} keys only from the environment or --env-file`
-                            : `Workbench keeps no runner credential store on Daytona, so ${this.#runner} there reads ${this.#provider} keys only from the environment`
+                          : `No ${this.#provider} credential is available for ${this.#runner} in ${runtimeLabel(target.runtime)}; use the provider environment or --env-file`
                   );
         }
         // Reading must not create the store, so this skips the private-directory setup.
@@ -182,7 +176,7 @@ export class ConnectionSetup {
      */
     async remove(nativeProviders: string[]): Promise<boolean> {
         const { runtime } = this.#options.target;
-        if (!this.file && (runtime === 'docker' || runtime === 'e2b')) return false;
+        if (!this.file && runtime !== 'local') return false;
         const file = this.#file();
         const remove = async (files: RuntimeCredentialFiles) => {
             let removed = false;
@@ -240,6 +234,7 @@ export class ConnectionSetup {
             );
         }
         return ready({
+            saved: Boolean(entry),
             fromEnvironment:
                 !entry &&
                 route.authenticationMethod === 'api' &&

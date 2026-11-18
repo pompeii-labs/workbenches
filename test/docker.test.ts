@@ -626,7 +626,7 @@ describe('Docker runtime provider', () => {
         }
     });
 
-    test('connects a native-only provider through the runtime registry and reports Ready', async () => {
+    test('connects a native-only provider through the runtime registry and reports it saved', async () => {
         const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
         const volume = new Map<string, string>();
         const base = dockerMock([]);
@@ -713,7 +713,7 @@ describe('Docker runtime provider', () => {
 
         await expect(
             setup.save(NativeCredentialFile.for('opencode').apiKey('fixture-key'))
-        ).resolves.toEqual({ ready: true, saved: false, fromEnvironment: false });
+        ).resolves.toEqual({ ready: true, saved: true, fromEnvironment: false });
         expect(JSON.parse(volume.get(authFile) ?? '{}')).toEqual({
             openrouter: { type: 'api', key: 'fixture-key' },
         });
@@ -852,7 +852,7 @@ describe('Docker runtime provider', () => {
         for (const [runner, kept] of [
             ['opencode', true],
             ['pi', true],
-            ['claude-code', false],
+            ['claude-code', true],
         ] as const) {
             const fixture = await createFixture({ image: 'ghcr.io/example/lux:0.1.0' });
             fixture.workbench.manifest.runner = runner;

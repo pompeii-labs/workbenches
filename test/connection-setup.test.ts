@@ -134,7 +134,7 @@ describe('connection setup', () => {
 
         await expect(setup.save(file.apiKey('fixture-key'))).resolves.toEqual({
             ready: true,
-            saved: false,
+            saved: true,
             fromEnvironment: false,
         });
         expect(JSON.parse(volume.get('opencode/auth.json'))).toEqual({
@@ -246,7 +246,7 @@ describe('connection setup', () => {
         expect((await stat(directory)).mode & 0o777).toBe(0o700);
     });
 
-    test('treats Daytona as environment-only because runs mount no runner store', async () => {
+    test('verifies Daytona from the host store without preparing a sandbox', async () => {
         const home = await temporary('workbench-setup-daytona-');
         const setup = (environment: Record<string, string>) =>
             new ConnectionSetup({
@@ -257,24 +257,19 @@ describe('connection setup', () => {
                     throw new Error('a sandbox must not be prepared');
                 },
             });
-        expect(() => setup({}).requireStore()).toThrow(
-            'Workbench keeps no runner credential store on Daytona'
-        );
+        expect(() => setup({}).requireStore()).not.toThrow();
         await expect(setup({}).verify()).resolves.toMatchObject({
             ready: false,
-            missing:
-                'Workbench keeps no runner credential store on Daytona, so OpenCode there reads OpenRouter keys only from the environment',
+            missing: 'No OpenRouter credential is saved for OpenCode in Daytona',
         });
         await expect(
             setup({ OPENROUTER_API_KEY: 'fixture' }).verify()
         ).resolves.toEqual({ ready: true, saved: false, fromEnvironment: true });
         await expect(
             setup({}).save(NativeCredentialFile.for('opencode').apiKey('fixture'))
-        ).rejects.toThrow('Workbench keeps no runner credential store on Daytona');
-        await expect(setup({}).remove(['openrouter'])).rejects.toThrow(
-            'Workbench keeps no runner credential store on Daytona'
-        );
-        expect(await readdir(home)).toEqual([]);
+        ).resolves.toEqual({ ready: true, saved: true, fromEnvironment: false });
+        expect(await setup({}).remove(['openrouter'])).toBeTrue();
+        expect(await setup({}).verify()).toMatchObject({ ready: false });
     });
 });
 
@@ -318,9 +313,6 @@ describe('model connection', () => {
 
         await expect(connect(target('local'))).rejects.toThrow(
             'Workbench neither writes nor removes it'
-        );
-        await expect(connect(target('daytona'))).rejects.toThrow(
-            'Workbench keeps no runner credential store on Daytona'
         );
         await expect(connect(chatgpt('e2b'))).rejects.toThrow(
             '--stdin reads an API key, but ChatGPT subscription (headless) is a sign-in'
@@ -434,7 +426,7 @@ describe('model connection', () => {
         ).toEqual({ openrouter: { type: 'api', key: 'fixture-stdin-key' } });
     });
 
-    test('prints Ready only after the runtime check lists the provider', async () => {
+    test('reports Saved only after the runtime check lists the provider', async () => {
         const home = await temporary('workbench-connection-ready-');
         const lines: string[] = [];
         const volume = new MemoryFiles();
@@ -462,7 +454,7 @@ describe('model connection', () => {
             setup,
         }).connect({ stdin: true });
 
-        expect(lines).toEqual(['ready\tdocker\topencode\topenrouter\n']);
+        expect(lines).toEqual(['saved\tdocker\topencode\topenrouter\n']);
         expect(JSON.parse(volume.get('opencode/auth.json'))).toEqual({
             openrouter: { type: 'api', key: 'fixture-pasted' },
         });
@@ -542,10 +534,8 @@ describe('model connection', () => {
     });
 });
 
-describe('a runner without a credential file', () => {
-    const storeless = 'Claude Code has no credential store Workbench writes';
-
-    test('checks Docker through the runner itself, with no store to read or write', async () => {
+describe('Claude Code settings credentials', () => {
+    test('checks Docker through the runner and its settings store', async () => {
         const home = await temporary('workbench-storeless-docker-');
         const checks: string[] = [];
         const setup = new ConnectionSetup({
@@ -559,22 +549,22 @@ describe('a runner without a credential file', () => {
                 },
                 inspect: async (options = {}) => {
                     checks.push(options.before ? 'inspect with a store' : 'inspect');
+                    await options.before?.(runtime(new MemoryFiles()));
                     return anthropicStatus();
                 },
             }),
         });
 
-        expect(setup.file).toBeUndefined();
-        expect(setup.storesCredentials).toBeFalse();
+        expect(setup.file?.path).toBe('claude-code/settings.json');
+        expect(setup.storesCredentials).toBeTrue();
         await expect(setup.verify()).resolves.toEqual({
             ready: true,
             saved: false,
             fromEnvironment: false,
         });
-        expect(checks).toEqual(['inspect']);
-        expect(() => setup.requireStore()).toThrow(storeless);
-        expect(() => setup.apiKey('fixture')).toThrow(storeless);
-        expect(await setup.remove(['anthropic'])).toBeFalse();
+        expect(checks).toEqual(['inspect with a store']);
+        expect(() => setup.requireStore()).not.toThrow();
+        expect(setup.apiKey('fixture').type).toBe('api_key');
         expect(await readdir(home)).toEqual([]);
     });
 
@@ -599,7 +589,10 @@ describe('a runner without a credential file', () => {
                     throw new Error('no store is opened');
                 },
                 // Only an API key is listed, so the token method is not ready.
-                inspect: async () => anthropicStatus(),
+                inspect: async (options = {}) => {
+                    await options.before?.(runtime(new MemoryFiles()));
+                    return anthropicStatus();
+                },
             }),
         });
         const failure = await new ModelConnection({
@@ -619,7 +612,7 @@ describe('a runner without a credential file', () => {
         expect(await readdir(home)).toEqual([]);
     });
 
-    test('reads E2B keys only from the environment, without a sandbox or a store', async () => {
+    test('accepts inherited E2B keys without creating a sandbox or store', async () => {
         const home = await temporary('workbench-storeless-e2b-');
         const setup = (environment: Record<string, string>) =>
             new ConnectionSetup({
@@ -634,17 +627,15 @@ describe('a runner without a credential file', () => {
 
         await expect(setup({}).verify()).resolves.toMatchObject({
             ready: false,
-            missing:
-                'Claude Code has no credential store Workbench writes, so in E2B it reads Anthropic keys only from the environment or --env-file',
+            missing: 'No Anthropic credential is saved for Claude Code in E2B',
         });
         await expect(setup({ ANTHROPIC_API_KEY: 'fixture' }).verify()).resolves.toEqual(
             { ready: true, saved: false, fromEnvironment: true }
         );
-        expect(await setup({}).remove(['anthropic'])).toBeFalse();
         expect(await readdir(home)).toEqual([]);
     });
 
-    test('connects from the environment, rejects --stdin, and has nothing to remove', async () => {
+    test('connects from the environment or stdin, and removes only the stored API key', async () => {
         const home = await temporary('workbench-storeless-connection-');
         const store = new ConnectionStore(home);
         const context = { runner: 'claude-code', runtime: 'e2b' };
@@ -655,31 +646,34 @@ describe('a runner without a credential file', () => {
                 target: apiKey('e2b'),
                 output: presenter(lines),
                 environment,
-                interactive: true,
-                readKey: async () => {
-                    throw new Error('stdin must not be read');
-                },
+                interactive: false,
+                readKey: async () => 'fixture-anthropic-key',
             });
 
         const failure = await connection({})
             .connect({ stdin: false })
             .catch((error: unknown) => error);
         expect(failure).toBeInstanceOf(AuthenticationRequiredError);
-        expect((failure as Error).message).toBe(
-            'Claude Code has no credential store Workbench writes, so in E2B it reads Anthropic keys only from the environment or --env-file. Set ANTHROPIC_API_KEY where wb runs. For one run, --env-file also works.'
-        );
-        await expect(connection({}).connect({ stdin: true })).rejects.toThrow(
-            `${storeless}; Anthropic keys reach it only from the environment or --env-file`
+        expect((failure as Error).message).toContain(
+            'No Anthropic credential is saved for Claude Code in E2B'
         );
 
         await connection({ ANTHROPIC_API_KEY: 'fixture' }).connect({ stdin: false });
         expect(lines).toEqual(['ready\te2b\tclaude-code\tanthropic\n']);
         expect((await store.find(context))?.provider).toBe('anthropic');
+        await connection({}).connect({ stdin: true });
+        expect(lines.at(-1)).toBe('saved\te2b\tclaude-code\tanthropic\n');
 
         await connection({}).remove([apiKey('e2b').method]);
-        expect(lines.at(-1)).toBe('absent\te2b\tclaude-code\tanthropic\n');
+        expect(lines.at(-1)).toBe('removed\te2b\tclaude-code\tanthropic\n');
         expect(await store.find(context)).toBeUndefined();
-        expect(await readdir(home)).not.toContain('runtime-credentials');
+        expect(
+            await new ConnectionSetup({
+                home,
+                target: apiKey('e2b'),
+                environment: {},
+            }).verify()
+        ).toMatchObject({ ready: false });
     });
 });
 
@@ -955,7 +949,7 @@ function chatgpt(runtime: ConnectionTarget['runtime']): ConnectionTarget {
     };
 }
 
-/** An Anthropic key for Claude Code, which keeps no credential file. */
+/** An Anthropic key stored in Claude Code settings env. */
 function apiKey(runtime: ConnectionTarget['runtime']): ConnectionTarget {
     return {
         runtime,
