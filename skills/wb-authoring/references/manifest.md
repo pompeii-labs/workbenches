@@ -66,7 +66,7 @@ wb smoke .#<name>
 wb run <alias> --dry-run --task "..."
 ```
 
-From elsewhere, use `/path/to/repository#<name>` or the path `/path/to/repository/.workbenches/<name>`. After `wb add ./.workbenches/<name> --as <alias>`, the alias is live: new runs read the current files, so edits need no re-add.
+From elsewhere, use `/path/to/repository#<name>` or the path `/path/to/repository/.workbenches/<name>`. After `wb save ./.workbenches/<name> --as <alias>`, the alias is live: new runs read the current files, so edits need no further save.
 
 - `validate`: the package parses and its local files satisfy the schema.
 - `view`: the resolved contract and authorization bindings, without values.

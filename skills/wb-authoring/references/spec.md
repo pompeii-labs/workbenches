@@ -289,7 +289,7 @@ An engine normalizes an absent object to `gpu: false` with no other constraint.
 
 ### Selection
 
-The person or host starting a run can name one declared runtime. The reference CLI accepts `--runtime <name>` on `wb run`, `wb smoke`, `wb build`, and `wb create`. Without it, the first declared runtime is used. Naming a runtime the manifest does not declare is an error that lists the declared ones.
+The person or host starting a run can name one declared runtime. The reference CLI accepts `--runtime <name>` on `wb run`, `wb smoke`, and `wb build`. Without it, the first declared runtime is used. Naming a runtime the manifest does not declare is an error that lists the declared ones.
 
 ### Requirements against the selected runtime
 

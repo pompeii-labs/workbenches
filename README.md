@@ -66,33 +66,33 @@ The CLI reports anonymous save and run counts, but only for registry Workbenches
 
 ### Save and inspect your first Workbench
 
-Browse the [registry](https://workbenches.dev/workbenches) for published Workbenches. Start with the official creator, which helps you decide what expertise to package for your project:
+Browse the [registry](https://workbenches.dev/workbenches) for published Workbenches. Replace the example reference below with a package you want to use:
 
 ```sh
-wb add pompeii/creator --as creator
-wb view creator
+wb save publisher/core --as project-core
+wb view project-core
 ```
 
-The creator runs locally through OpenCode. Install [OpenCode](https://opencode.ai/docs/) before continuing. Inspecting the package shows its model, runtime, instructions, skills, and requirements; adding or inspecting it does not start an agent.
+Inspecting the package shows its model, runtime, instructions, skills, and requirements. Install its declared runner before continuing; saving or inspecting it does not start an agent.
 
 ### Connect and run
 
 ```sh
-wb connect creator
-wb smoke creator
+wb connect project-core
+wb smoke project-core
 ```
 
-Choose an authentication method for the creator's model provider. Workbench uses the package's harness, model, and runtime rather than asking you to configure a different environment. `smoke` checks that the runtime, harness, authentication, and declared tools are ready. It makes no model request, but on E2B and Daytona it creates a billable sandbox.
+Choose an authentication method for the package's model provider. Workbench uses the package's harness, model, and runtime rather than asking you to configure a different environment. `smoke` checks that the runtime, harness, authentication, and declared tools are ready. It makes no model request, but on E2B and Daytona it creates a billable sandbox.
 
 From the project directory you want the agent to inspect, run:
 
 ```sh
-wb run creator --task "Inspect this repository and recommend one focused Workbench to create. Do not change files." --final
+wb run project-core --task "Explain this repository's architecture. Do not change files." --final
 ```
 
-This starts a real model run and prints its final recommendation. It uses your provider credentials and billing. For multi-turn work, start with `--detach`, observe with `wb wait`, and continue with `wb send`. Bare `wb` displays command help.
+This starts a real model run and prints its final response. It uses your provider credentials and billing. For multi-turn work, start with `--detach`, observe with `wb wait`, and continue with `wb send`. Bare `wb` displays command help.
 
-When you are ready to author the package, use `wb create core --task "Create a focused expert for this repository"`; see [Create a Workbench](#create-a-workbench) below.
+To author a package, scaffold it with `wb init` and edit it with your own agent; see [Create a Workbench](#create-a-workbench) below.
 
 Runtime credentials are configured separately. For example, save an E2B API key once with:
 
@@ -107,9 +107,9 @@ An inherited `E2B_API_KEY` still overrides the saved value for a single process.
 Save a registry publication, a package from GitHub, or a local package before running its alias. The following are example references; replace them with your own:
 
 ```sh
-wb add publisher/core --as project-core
-wb add https://github.com/owner/repository --name core --as project-core-git
-wb add ./.workbenches/core --as project-core-local
+wb save publisher/core --as project-core
+wb save https://github.com/owner/repository --name core --as project-core-git
+wb save ./.workbenches/core --as project-core-local
 wb run project-core "Explain this repository's architecture"
 ```
 
@@ -120,26 +120,18 @@ wb run project-core --task "Review this migration" --final
 wb run project-core --task "Review this migration" --json
 ```
 
-Remote additions are frozen until `wb upgrade`. Local additions are live: each new run reads the registered absolute package directory. Every session captures its own package bytes, so resumed sessions keep their original package even after edits, upgrades, or removal. `run` accepts saved aliases only; `--dir` and `--repo` select the work target, never the package source. `wb login` connects one organization per approval, so run `wb login --org <slug>` for each you push from, then manage them with `wb org list`, `wb org use <slug>`, `wb whoami`, and `wb logout [--org <slug>]`.
+Remote saves are frozen until `wb upgrade`. Local saves are live: each new run reads the registered absolute package directory. Every session captures its own package bytes, so resumed sessions keep their original package even after edits, upgrades, or removal. `run` accepts saved aliases only; `--dir` and `--repo` select the work target, never the package source. `wb login` connects one organization per approval, so run `wb login --org <slug>` for each you push from, then manage them with `wb org list`, `wb org use <slug>`, `wb whoami`, and `wb logout [--org <slug>]`.
 
-Create a project before starting tracked work. Names resolve case-insensitively by display name or slug. Projects are local to this machine and work the same with or without `wb login`:
-
-```sh
-wb project create "Demo"
-wb run project-core --project demo --task "Review this migration" --detach
-wb project list
-```
-
-Coding agents can use the same projects and detached runs through `wb mcp`, and `wb studio` shows them on a local dashboard; see [Local Studio API](docs/STUDIO.md) and [Connect an agent](docs/STUDIO.md#connect-an-agent).
+Coding agents can use `mcp.workbenches.dev` for work on workbenches.dev, including work assigned to self-hosted workers.
 
 ### Share with your team, then publish
 
-Every organization workbench is internal until you publish it. `wb push` stores a new version under `organization/<manifest-name>`; only your organization's members and keys can see it. Teammates save it with `wb add`, using the held key for `org` automatically (`wb login --org <org>` first; without the key an internal workbench reports as missing):
+Every organization workbench is internal until you publish it. `wb push` stores a new version under `organization/<manifest-name>`; only your organization's members and keys can see it. Teammates save it with `wb save`, using the held key for `org` automatically (`wb login --org <org>` first; without the key an internal workbench reports as missing):
 
 ```sh
 wb push .#core                 # stores acme/core@<version>, internal
 wb image push core-local acme/core@1.2.0 # push the stored version's image once
-wb add acme/core               # teammates: save the internal workbench
+wb save acme/core               # teammates: save the internal workbench
 wb publish acme/core           # submit the newest stored release for public review
 wb unpublish acme/core         # make a public workbench internal again
 wb withdraw acme/core          # withdraw its open review submission
@@ -256,18 +248,17 @@ The other skills are `wb-cli`, `wb-authoring`, and `wb-publishing`; `npx skills 
 
 ## Create a Workbench
 
-Run the official creator from the repository you want the expert to understand:
-
-```sh
-wb create core --task "Create a focused expert for this repository"
-```
-
-The creator inspects the repository, writes `.workbenches/core/workbench.yml` and its supporting files, then validates and smoke-tests the package before finishing. Run the same target with a new brief to edit an existing local package.
-
-For deterministic scaffolding without a model run:
+Scaffold a package from your repository, then edit its manifest, instructions, and supporting files with your own agent. Authoring needs no workbenches.dev account:
 
 ```sh
 wb init core
+```
+
+Verify the edited package before running it:
+
+```sh
+wb validate .#core
+wb smoke .#core
 ```
 
 ## Keep the results
@@ -332,12 +323,8 @@ wb view project-core       # inspect configuration and readiness
 wb validate project-core   # validate a package
 wb smoke project-core      # preflight, no model request
 wb run project-core --task "Review this project"
-wb run project-core --project Demo --task "Review this project"
 wb ps                      # list active and resumable sessions
 wb status                  # live progress of active and recent runs
-wb studio --no-open        # dashboard on 9292, local API on 9293
-wb studio --port 9392 --api-port 9393
-wb mcp                     # serve Workbench tools to a coding agent over stdio
 wb worker start            # self-hosted worker for workbenches.dev
 wb send wb_... "Check the rollback too"
 wb resume wb_... --task "Run the checks"
@@ -353,7 +340,6 @@ Run `wb <command> --help` for command-specific options.
 - [CLI and execution reference](docs/REFERENCE.md)
 - [Workbench package specification](SPEC.md)
 - [Execution protocol](docs/EXECUTION.md)
-- [Local Studio API](docs/STUDIO.md)
 - [Outcome contract](docs/OUTCOMES.md)
 - [Source and workspace behavior](docs/SOURCES.md)
 - [Benchmarks](https://github.com/pompeii-labs/workbenchmarks): the same requests with and without a Workbench, graded by running the result, and how to reproduce them

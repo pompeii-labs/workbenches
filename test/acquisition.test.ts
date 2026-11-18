@@ -346,7 +346,7 @@ describe('saved-source contract', () => {
 });
 
 describe('private organization workbenches', () => {
-    test('add saves an internal workbench with the matching key and records visibility', async () => {
+    test('save registers an internal workbench with the matching key and records visibility', async () => {
         const { root, home, path } = await fixture('repo-engineer');
         const registry = await privateRegistry(path);
         try {
@@ -391,7 +391,7 @@ describe('private organization workbenches', () => {
         }
     });
 
-    test('add without the organization key fails with a sign-in hint', async () => {
+    test('save without the organization key fails with a sign-in hint', async () => {
         const { root, home, path } = await fixture('repo-engineer');
         const registry = await privateRegistry(path);
         try {

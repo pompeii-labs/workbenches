@@ -45,15 +45,15 @@ Missing runner on the host: `Runner CLI is unavailable: opencode. Install openco
 
 ```sh
 wb list owner/repository          # packages a repo publishes under .workbenches/
-wb add owner/name --as expert     # save a registry Workbench (org/name)
+wb save owner/name --as expert     # save a registry Workbench (org/name)
 wb view expert                    # runner, model routes, runtimes, auth readiness
 wb smoke expert                   # prepare runtime, check runner, tools, auth
 wb run expert --task "..." --final
 ```
 
-`run` accepts only a saved alias. Save registry packages as `org/name` (a bare name is not a registry reference), GitHub packages with `wb add https://github.com/o/r --name <pkg> [--ref <ref>]`, and local packages by path. Internal registry packages need `wb login --org <org>` first.
+`run` accepts only a saved alias. Save registry packages as `org/name` (a bare name is not a registry reference), GitHub packages with `wb save https://github.com/o/r --name <pkg> [--ref <ref>]`, and local packages by path. Internal registry packages need `wb login --org <org>` first.
 
-`smoke` makes no model request. On `local` and `docker` it is free. **On `e2b` and `daytona` it creates a real, billable sandbox.** `run`, `resume`, `send`, and `create` spend model tokens, and sandbox time on cloud runtimes. Say what a command will spend before running it on the person's behalf.
+`smoke` makes no model request. On `local` and `docker` it is free. **On `e2b` and `daytona` it creates a real, billable sandbox.** `run`, `resume`, and `send` spend model tokens, and sandbox time on cloud runtimes. Say what a command will spend before running it on the person's behalf.
 
 ## Model credentials
 
@@ -74,7 +74,7 @@ Never print, `cat`, or echo a key or an env file to check for it. Check by varia
 
 ## Runtimes
 
-A Workbench declares the runtimes it supports; the first is the default. Choose another with `--runtime` on `run`, `smoke`, `build`, and `create`. A resumed session keeps its runtime.
+A Workbench declares the runtimes it supports; the first is the default. Choose another with `--runtime` on `run`, `smoke`, and `build`. A resumed session keeps its runtime.
 
 | Runtime | Needs |
 | --- | --- |
@@ -85,7 +85,7 @@ A Workbench declares the runtimes it supports; the first is the default. Choose 
 
 The environment variable always wins over a saved runtime key. Runtime keys never enter the sandbox. `wb connect --runtime <name> --status` checks one.
 
-A Workbench that declares host Docker access needs `--allow-host-docker` on every `run`, `smoke`, `resume`, and `create`. That grants effective administrative access to the host's Docker daemon. Only the person can authorize it; never add the flag on your own initiative.
+A Workbench that declares host Docker access needs `--allow-host-docker` on every `run`, `smoke`, and `resume`. That grants effective administrative access to the host's Docker daemon. Only the person can authorize it; never add the flag on your own initiative.
 
 ## Workers (workbenches.dev, optional)
 
@@ -119,6 +119,6 @@ For scripts and agents:
 - `wait`, `send`, `answer`, `ps`, `view`, `build`, `outcome`, `smoke` take `--json`.
 - Piped output of other commands is tab separated and not a stable contract.
 
-Exit codes: `0` success; `1` failure; `2` `wait` stopped on a pending input; `3` no authenticated model route or runtime credential (any command can return it, including `run`, `resume`, `attach`, `send`, `smoke`, `build`, `create`, `connect`, and `outcome --recover`; `wait` reports such a run as failed, 1); `124` `wait` timed out (the run continues); `130` cancelled or interrupted.
+Exit codes: `0` success; `1` failure; `2` `wait` stopped on a pending input; `3` no authenticated model route or runtime credential (any command can return it, including `run`, `resume`, `attach`, `send`, `smoke`, `build`, `connect`, and `outcome --recover`; `wait` reports such a run as failed, 1); `124` `wait` timed out (the run continues); `130` cancelled or interrupted.
 
 The full command reference, state locations, and environment variables are in [references/commands.md](references/commands.md). Every common failure with its fix is in [references/troubleshooting.md](references/troubleshooting.md).

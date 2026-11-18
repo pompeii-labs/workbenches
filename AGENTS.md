@@ -57,19 +57,19 @@ Remote inspection uses the GitHub API. It does not clone the repository or creat
 Register a Workbench before running it. Remote packages are frozen; local directories remain live for each new session:
 
 ```sh
-wb add publisher/core --as project-core
-wb add https://github.com/owner/repository --name core --ref main --as project-git
-wb add ./.workbenches/core --as project-local
+wb save publisher/core --as project-core
+wb save https://github.com/owner/repository --name core --ref main --as project-git
+wb save ./.workbenches/core --as project-local
 wb list
 wb view project-core
 ```
 
-Bare `publisher/name` resolves only through the registry, never GitHub, to the latest release. `publisher/name@version` saves that exact version, such as a prerelease to try before it is released, and `wb upgrade` keeps it there. Git sources require a full HTTPS GitHub URL. `--name` selects a package and `--ref` selects a Git revision. Alias collisions require an explicit different `--as`; identical adds are idempotent. Local paths register their absolute package directory. A new run sees local edits, while every session owns frozen package bytes for resume. Existing frozen local registrations stay frozen until re-add.
+Bare `publisher/name` resolves only through the registry, never GitHub, to the latest release. `publisher/name@version` saves that exact version, such as a prerelease to try before it is released, and `wb upgrade` keeps it there. Git sources require a full HTTPS GitHub URL. `--name` selects a package and `--ref` selects a Git revision. Alias collisions require an explicit different `--as`; identical saves are idempotent. Local paths register their absolute package directory. A new run sees local edits, while every session owns frozen package bytes for resume. Existing frozen local registrations stay frozen until saved again.
 
 Remove an alias when it is no longer needed:
 
 ```sh
-wb remove project-core
+wb unsave project-core
 ```
 
 Refresh saved remote snapshots deliberately. `upgrade` never updates local registrations; edit their source directly:
@@ -148,27 +148,15 @@ wb answer wb_... request_id allow --json
 
 Use a receipt's `run_id` with `wait --run --after` to keep its cursor on that execution. Session IDs select the latest run; linked run IDs select the exact run. `--run` also pins the first run, whose ID is shared with the session.
 
-`wait` is read-only and prints one result with a turn's final response, usage, outcome ID, and pending input requests. It returns the first completed turn after the cursor, even when a queued follow-up starts immediately. `turn_completed` means that turn replied, not that execution or runtime cleanup finished. Repeat with `--after` set to the returned `sequence` to advance to the next boundary or terminal result. Without a cursor, observation starts at the beginning of that run. Headless authoring waits for execution and package verification instead of intermediate creator turns. Exit codes are 0 for idle/turn_completed/completed, 1 for failure, 130 for cancellation or interruption, 2 for input needed, and 124 for timeout. Interrupting or timing out a wait does not cancel execution. Terminal executions and currently pending requests remain observable. `usage` is a delta strictly after `--after` through the returned sequence; `usage_total` is the cumulative run total at that sequence. Always advance the cursor before summing another wait's delta. Repeating the same cursor repeats its interval.
+`wait` is read-only and prints one result with a turn's final response, usage, outcome ID, and pending input requests. It returns the first completed turn after the cursor, even when a queued follow-up starts immediately. `turn_completed` means that turn replied, not that execution or runtime cleanup finished. Repeat with `--after` set to the returned `sequence` to advance to the next boundary or terminal result. Without a cursor, observation starts at the beginning of that run. Exit codes are 0 for idle/turn_completed/completed, 1 for failure, 130 for cancellation or interruption, 2 for input needed, and 124 for timeout. Interrupting or timing out a wait does not cancel execution. Terminal executions and currently pending requests remain observable. `usage` is a delta strictly after `--after` through the returned sequence; `usage_total` is the cumulative run total at that sequence. Always advance the cursor before summing another wait's delta. Repeating the same cursor repeats its interval.
 
 Only answer reported requests. `allow` grants permission once and `deny` rejects it. `allow_always` must be explicitly offered by the runner. A question accepts an offered label or free text when permitted; multiple questions use JSON string arrays, such as `[["First option"],["Second option"]]`, supplied as text, `--response-file`, or `--stdin`. `answer --reject` dismisses a question. Authentication requests report the runner's URL and instructions; never send credentials through `answer`. `ps --json` includes `needs_input` and pending request metadata.
 
 `wb run <name>` requires a task through `--task`, `--task-file`, `--stdin`, or the positional task. `wb resume <id>` also requires new input; use `wb send` to continue an idle resumable session. Bare `wb` displays command help.
 
-## Projects, MCP, and Studio
+## Hosted MCP
 
-Group related sessions under a project so a person can follow them in `wb studio`:
-
-```sh
-wb project create "Demo"
-wb run project-core --project demo --task "Review the migration" --detach --json
-wb project list --json
-```
-
-`--project` accepts a name or slug case-insensitively and never creates a project; an unknown name fails before dispatch with a suggestion. Projects live in the local `wb.db`, can span any number of directories, and work the same with or without `wb login`. Ask before creating a project on someone's behalf.
-
-An MCP host can drive the same engine with `wb mcp`, a stdio server with the tools `search`, `view`, `run`, `wait`, `send`, `answer`, `cancel`, `runs`, `sessions`, `push`, `projects`, `create_project`, and `tasks`. The loop matches the CLI: `run`, then `wait`, then `send` or `answer`, then `wait` again with the returned `next`. `wb mcp` runs, supervises, and lists local work only; cloud work goes through `mcp.workbenches.dev`.
-
-`wb studio` runs a local dashboard in Docker over a loopback API, and `wb studio stop` removes it. It pulls the pinned Studio image when it is missing. Starting Studio is the person's decision; it is not part of delegating work. See `docs/STUDIO.md` for the API and the open link.
+Agents can use `mcp.workbenches.dev` for work on workbenches.dev. Self-hosted workers connect a machine to that service with `wb worker start`.
 
 ## Authorization and safety
 
@@ -264,17 +252,7 @@ wb delete example/core --yes # delete the Workbench, every version, and its imag
 
 `wb delete org/name` and `wb delete org/name@version` make no HTTP requests without `--yes` and only describe the irreversible deletion. With `--yes`, `org/name` deletes the Workbench, every version, and its registry images. `org/name@version` lists stored versions to find the exact id, then deletes only that version; its image is deleted unless a later version uses it. The registry refuses version deletion while a run of it is unfinished, when it is the current public version, or when it is the only version. Whole-Workbench deletion is refused while any run of it is unfinished. The CLI prints 409 messages unchanged. The organization comes from the reference; `--org`, when given, must match it, including for previews.
 
-For substantial authoring, editing, or improvement work, use the official creator through the same headless `create` command:
-
-```sh
-wb create core --dir /path/to/repository \
-  --task "Inspect this repository and create a focused review expert" --json
-wb create .#core --task-file improvements.txt --detach --json
-wb wait wb_... --timeout 120 --json
-wb create --from wb_... --feedback "Check failure cleanup" --detach --json
-```
-
-Supply one brief through `--task`, `--task-file`, or `--stdin`; `--from` can infer improvements from evidence without one. Detached JSON reports session/run/operation IDs. A later `wait` reports verified package paths and changed files in `authoring`, not merely the creator's final text. Engine-owned validation, package scope, version advancement, and runtime smoke must pass before authoring is completed. A native run may be completed while authoring verification is running or failed; `run_state` distinguishes that case. Answer reported permissions explicitly, then wait again. Saved snapshots are immutable: author or improve a local source package.
+Authoring needs no workbenches.dev account. Use `wb init`, edit the source package with your own agent, then run `wb validate` and `wb smoke`.
 
 ## Current reference-engine support
 

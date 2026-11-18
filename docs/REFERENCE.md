@@ -119,52 +119,25 @@ The installer verifies the release's published SHA-256 checksum, installs `workb
 
 ### Author a Workbench
 
-Run the official creator from a repository root with an authoring brief:
-
-```sh
-wb create migrations --task "Create a focused migration review expert"
-```
-
-The creator inspects the target repository and authors the complete package in `.workbenches/`. It receives the exact `wb` CLI build that started authoring instead of another globally installed version. If `migrations` already exists in the current repository, the same target edits it instead. The engine resolves and verifies the official creator through the Workbench registry and keeps its cache separate from the user's saved Workbenches.
-
-After the creator execution finishes, the engine validates the candidate, checks its version and package scope, and runs `wb smoke`. A failed check makes the authoring result fail with the concrete error.
-
-Candidates that declare environment values, named workspaces, or host Docker access can be verified with the same `--env-file`, repeatable `--env`, repeatable `--workspace`, and `--allow-host-docker` options accepted by `smoke` and `run`. Their values are used only for the final smoke and are never written to the authoring record or improvement evidence. `--runtime <name>` chooses which declared runtime of the candidate the final smoke checks, and `--allow-unchecked-gpu` accepts a local GPU requirement when GPU discovery finds no GPU.
-
 Scaffold a package with `wb init`. `--runtimes` takes a comma-separated list and writes the `runtimes` map in that order. It defaults to `local`. The `docker`, `e2b`, and `daytona` runtimes need `--image`; `daytona` is written with `class: linux` and that image:
 
 ```sh
 wb init migrations --runtimes local,docker --image ghcr.io/example/migrations:0.1.0
 ```
 
-Edit a local source package through the same authoring environment:
-
-```sh
-wb create .#migrations
-```
-
-`create` never mutates an immutable saved snapshot. Pass a local repository path or selector so the creator changes the source package directly.
-
-For deterministic scaffolding without a model run, use `init`:
+Select a runner and model when scaffolding:
 
 ```sh
 wb init core
 wb init migrations --runner opencode --model openai/gpt-5.6-terra
 ```
 
-Supply exactly one brief as text, a UTF-8 file, or explicit stdin:
+Edit the generated files with your own agent, then verify the package. Authoring needs no workbenches.dev account:
 
 ```sh
-wb create migrations --task "Create a focused migration review expert" --json
-wb create .#migrations --task-file improvements.txt --detach --json
-wb wait wb_... --timeout 120 --json
-printf '%s\n' "Check failure cleanup more carefully" | \
-  wb create --from wb_... --stdin --detach --json
+wb validate .#migrations
+wb smoke .#migrations
 ```
-
-Without `--detach`, headless authoring waits for execution and engine-owned verification, then prints one result. With `--detach`, it prints a correlated session/run/operation receipt while a separate supervisor verifies the package after the creator finishes. `wb wait` waits for that verification too. Its `authoring` result reports package selectors and paths, changed files, and the improvement evidence path when applicable. A completed creator turn alone is not authoring success: invalid packages, out-of-scope edits, missing version increments, and failed smoke checks produce a failed result and nonzero exit.
-
-`--from` can infer improvements from stored session evidence without a brief. Other authoring calls require one. If the creator needs permission, `wait` reports the pending request with exit 2; answer it explicitly through `wb answer`, then wait again. The creator remains a normal published Workbench, but running it directly does not provide the `create` command's scope and verification contract.
 
 ### Discover and save Workbenches
 
@@ -178,12 +151,12 @@ wb list owner/repository
 
 wb validate owner/repository
 wb smoke owner/repository
-wb add publisher/core
-wb add https://github.com/owner/repository --name core --ref main
-wb add ./.workbenches/core --as project-local
+wb save publisher/core
+wb save https://github.com/owner/repository --name core --ref main
+wb save ./.workbenches/core --as project-local
 ```
 
-Remote inspection uses the GitHub API and does not clone or create a temporary checkout. `add` saves remote package snapshots or registers a live absolute local package directory. Bare `publisher/name` means registry only, never GitHub, and saves the latest release. `publisher/name@version` saves that exact version, prereleases included, and `upgrade` keeps it at that version. Use `--name` for a source package selector, `--ref` for a Git revision, and `--as` for an explicit alias. The default alias is the manifest name. Identical additions are idempotent; collisions never overwrite and changed remotes require `upgrade`.
+Remote inspection uses the GitHub API and does not clone or create a temporary checkout. `save` saves remote package snapshots or registers a live absolute local package directory. Bare `publisher/name` means registry only, never GitHub, and saves the latest release. `publisher/name@version` saves that exact version, prereleases included, and `upgrade` keeps it at that version. Use `--name` for a source package selector, `--ref` for a Git revision, and `--as` for an explicit alias. The default alias is the manifest name. Identical saves are idempotent; collisions never overwrite and changed remotes require `upgrade`.
 
 Saved packages can be inspected and managed without returning to their source:
 
@@ -191,7 +164,7 @@ Saved packages can be inspected and managed without returning to their source:
 wb list
 wb view project-core
 wb view project-core --json
-wb remove project-core
+wb unsave project-core
 ```
 
 CLI releases and saved Workbench snapshots have separate lifecycles:
@@ -212,12 +185,7 @@ Run a saved alias only. Local registrations read current package bytes for each 
 ```sh
 wb run project-core "Explain the storage architecture"
 wb run project-core --task "Review this migration"
-wb project create "Demo"
-wb project list --json
-wb run project-core --project demo --task "Review this migration"
 ```
-
-Project names are trimmed, preserve display case, contain 1 to 64 characters, and cannot contain control characters. Each project has a lowercase hyphenated slug. Names and slugs are unique case-insensitively. `--project <name-or-slug>` must resolve an existing project and never creates one implicitly; an unknown name fails before anything is dispatched and suggests a close match. Resumes and continuations retain the session's project. Sessions started without this option remain untracked by Studio. `ps --json` reports the project's display name as `project`, a string or `null`, for every session. Projects are rows in the local `wb.db`, can span any number of directories, and work the same with or without `wb login`. `wb project list --json` returns each project's `name`, `slug`, `counts` of tasks that need you, are running, are done, and failed, and `created_at`.
 
 The default output is a colorized, terminal-safe Markdown stream normalized across runners. For integrations, `--json` emits the runner-neutral Workbench event protocol as NDJSON. `--final` emits only the final assistant response.
 
@@ -384,7 +352,7 @@ runtimes:
 
 The providers are `local`, `docker`, `e2b`, and `daytona`. `daytona` requires a `class` of `linux`, `windows`, `gpu`, or `macos`. `image` is optional in the schema, but the reference engine cannot prepare a daytona entry without a published `image`. Only the `linux` class runs today. The sandbox is created from the daytona entry's own image; there is no fallback to the docker entry's image.
 
-`run`, `smoke`, `build`, and `create` accept `--runtime <name>`. Without it the first declared runtime is used. Naming a runtime the Workbench does not declare fails and lists the declared ones. A resumed session keeps the runtime it started on.
+`run`, `smoke`, and `build` accept `--runtime <name>`. Without it the first declared runtime is used. Naming a runtime the Workbench does not declare fails and lists the declared ones. A resumed session keeps the runtime it started on.
 
 ```sh
 wb view project-core
@@ -394,7 +362,7 @@ wb run project-core --runtime e2b --task "Review this migration"
 
 `wb view` lists every declared runtime and the requirements. For a Workbench with `gpu: true` it also shows the GPUs found on this machine and whether the local runtime accepts them (`gpu` in `--json`). Requirements are checked against the selected runtime before anything is prepared or launched, and `smoke` lists the GPUs it checked:
 
-- Local compares OS, architecture, CPU count, and total memory with the host. A GPU requirement passes when the engine finds a GPU: `nvidia-smi --query-gpu=name,memory.total` on Linux, `system_profiler SPDisplaysDataType` on macOS. When neither lists one, the run is refused with the reason, such as `nvidia-smi is not installed`. Pass `--allow-unchecked-gpu` to `run`, `smoke`, or `create` to run anyway on a GPU that discovery cannot see.
+- Local compares OS, architecture, CPU count, and total memory with the host. A GPU requirement passes when the engine finds a GPU: `nvidia-smi --query-gpu=name,memory.total` on Linux, `system_profiler SPDisplaysDataType` on macOS. When neither lists one, the run is refused with the reason, such as `nvidia-smi is not installed`. Pass `--allow-unchecked-gpu` to `run` or `smoke` to run anyway on a GPU that discovery cannot see.
 - Docker and E2B need `linux` in `os` or no `os` constraint. Docker also needs the host architecture in `arch` and applies `cpu` and `memory_gb` as container limits. Docker runs a GPU requirement when `docker info` lists the NVIDIA container runtime, and passes `--gpus all` to its containers; it refuses one without that runtime, and always on macOS, where Docker containers cannot reach a GPU. E2B refuses a GPU requirement, does not enforce `arch`, `cpu`, `memory_gb`, or `disk_gb` in this engine, and `smoke` reports them as unchecked.
 - Daytona needs its class to match `os`: `linux` needs `linux`, `macos` needs `macos`, `windows` needs `windows`, and `gpu` needs `linux` with `gpu: true`. The engine runs only the `linux` class and refuses `gpu: true`. It applies `cpu`, `memory_gb`, and `disk_gb` as the sandbox's resources, and `smoke` reports `arch` as unchecked.
 
@@ -596,24 +564,9 @@ wb status --json       # run summaries for other tools
 
 Status folds each run's event log incrementally into a cache row in the local database, so frequent polling reads only new events.
 
-### Local Studio
-
-`wb studio` starts the local Studio API in a detached process and runs the dashboard container. The default image is `ghcr.io/pompeii-labs/workbenches/studio:0.3.0@sha256:e25dc97df8d2a84f0da0ef729de922707ba2567647eee275389e01e5250e4c3e`; `--image` selects another. Studio pulls the image when it is not present locally, runs it by its resolved image ID, and refuses an image built for another version of wb with "Studio image <image> does not match this version of wb. Drop --image to use the default image, or update wb." It fails with a plain message when Docker is not running or Docker Desktop is set to Windows containers. The dashboard is published at `127.0.0.1:9292` by default and the API binds to `127.0.0.1:9293`. Use `--port` and `--api-port` to override them. Startup fails before launching either process when a selected port is busy.
-
-```sh
-wb studio
-wb studio --no-open
-wb studio --port 9392 --api-port 9393
-wb studio status
-wb studio status --json
-wb studio stop
-```
-
-Starting Studio again opens the running dashboard with a fresh open link and never restarts it. `studio stop` is idempotent. JSON status contains `running`, `url`, `image`, and `image_id`, plus `open_url` when the browser was not opened; the API token is kept only in the owner-only state file `$WORKBENCH_HOME/studio/state.json` while the dashboard runs and is never printed. Studio shows local tracked sessions only, the same with or without `wb login`. See [Local Studio API](STUDIO.md) for the loopback API contract and the open link.
-
 ### Agents over MCP
 
-`wb mcp` serves `search`, `view`, `run`, `wait`, `send`, `answer`, `cancel`, `runs`, `sessions`, `push`, `projects`, `create_project`, and `tasks` to coding agents over stdio. The tools use the same catalog, inspection, supervision, control, history, and registry operations as their CLI counterparts. `run` accepts a saved alias and starts a detached local run with the Workbench's default runtime; its optional `runtime` argument selects a declared `local`, `docker`, `e2b`, or `daytona` runtime. `wb mcp` runs, supervises, and lists local work and local projects only; cloud work goes through `mcp.workbenches.dev`. `wait` returns a cursor and stops at a turn boundary, pending input, timeout, or terminal state, with each call capped at 60 seconds. Registry search runs only when the CLI already has a registry login, and `push` never starts a login flow. Local runs refuse to start while a worker of an earlier Workbench version is still active, as `wb run` does. Connect Claude Code with `claude mcp add wb -- wb mcp`; the [Studio API guide](STUDIO.md#connect-an-agent) lists the tools and supervision loop.
+Agents can use `mcp.workbenches.dev` for work on workbenches.dev, including work assigned to [self-hosted workers](#workers).
 
 Headless callers can supervise the same engine without keeping a client attached:
 
@@ -634,7 +587,7 @@ Waiting with a session ID selects its latest run. A linked run ID selects that e
 wb wait wb_... --run --after 42 --timeout 120 --json
 ```
 
-`wait` prints one snapshot with state, sequence, final response and usage, outcome ID, and pending permission/question/authentication requests. It returns the first completed turn after the cursor, even if queued work starts immediately. `turn_completed` means that turn replied, not that execution or runtime cleanup finished. Repeat with `--after` set to the returned `sequence` to observe the next boundary or final `completed` result. Without a cursor, observation starts at the beginning of that run. Headless authoring waits for execution and package verification instead of returning intermediate creator turns. See [Exit codes](#exit-codes). A timeout or interrupted wait never cancels the run. Waiting does not attach a controlling client, start authentication, or keep a runtime alive.
+`wait` prints one snapshot with state, sequence, final response and usage, outcome ID, and pending permission/question/authentication requests. It returns the first completed turn after the cursor, even if queued work starts immediately. `turn_completed` means that turn replied, not that execution or runtime cleanup finished. Repeat with `--after` set to the returned `sequence` to observe the next boundary or final `completed` result. Without a cursor, observation starts at the beginning of that run. See [Exit codes](#exit-codes). A timeout or interrupted wait never cancels the run. Waiting does not attach a controlling client, start authentication, or keep a runtime alive.
 
 `answer` resolves only a currently reported request ID. `allow` grants a permission once; `deny` rejects it. Multiple questions accept JSON string arrays, such as `[["First option"],["Second option"]]`. Use `--response-file`, `--stdin`, or `--reject` when appropriate. Authentication requests expose the runner's URL and instructions, never a credential-submission channel. `ps --json` includes `state`, `needs_input`, and pending requests. Native runner capabilities still apply: these commands do not invent permissions or questions for a harness that does not support them.
 
@@ -650,14 +603,7 @@ Questions use one runner-neutral contract for choices, free-form answers, and mu
 
 `send --steer` changes an active turn, while `send --queue` explicitly schedules a follow-up. The receipt and normalized input lifecycle show when the runner accepts and delivers it. `kill` cancels the active execution. Image generation and normalized image output are not implemented yet.
 
-Use `wb create --from` to improve a Workbench from bounded, normalized session evidence. Feedback is optional. The creator edits the source package, not the immutable package already loaded by the source session. Run evidence is treated as untrusted data, and the authoring record captures the creator version and digest, source session, package digests, and changed files:
-
-```sh
-wb create --from wb_... \
-  --feedback "The migration path missed our rollback convention"
-```
-
-Changes apply only to future runs. Every session resumes from the package bytes it captured at start, regardless of later source edits.
+Source edits apply only to future runs. Every session resumes from the package bytes it captured at start, regardless of later source edits.
 
 Session-capable runs use one background session worker in foreground and detached modes. Normalized events survive a caller disconnect, and `wb attach` observes the same live or retained event stream without taking control. An active turn and queued follow-ups continue after a foreground observer exits, then the unattended worker closes while its native context remains resumable. User prompts, permission decisions, and question answers are transient control messages, not durable run history.
 
@@ -743,7 +689,7 @@ Log lines carry names, ids, states, and a short task excerpt. A run is named by 
 
 `stop` waits for active runs to finish and takes no new ones meanwhile, printing how many runs it is waiting on; `--now` cancels them first. Once no run is active, the worker waits up to 5 seconds for workbenches.dev to store its last events, and sends anything not stored again after the next `start`. Either way the service is stopped and does not start again at boot until the next `start`. `remove` stops the worker the same way, removes the service, revokes the key with workbenches.dev, and deletes it locally. When the API cannot be reached the key is kept, so `remove` can be run again.
 
-Runs are ordinary detached engine sessions in the worker's own engine home, `$WORKBENCH_HOME/worker`, never the account's personal runs, projects, or Studio. A daemon restart or a dropped connection does not stop them. On reconnect the worker lists its runs and sends every event after the sequence the server reports stored, so delivery is at least once and the server dedupes by run and sequence. Events of a session that continues after `send` keep counting up from the previous run's last sequence. Commands from workbenches.dev go through the same session controls as `wb send` (send, steer, queue), `wb answer`, and `wb kill`. A run's time limit cancels it when it is reached. A repository workspace is cloned with the run's token like a hosted run; the agent pushes and opens pull requests itself when the task asks. When a run ends, its outcome is uploaded as a gzip tar of the `wb outcome --export` tree.
+Runs are ordinary detached engine sessions in the worker's own engine home, `$WORKBENCH_HOME/worker`, never the account's personal runs. A daemon restart or a dropped connection does not stop them. On reconnect the worker lists its runs and sends every event after the sequence the server reports stored, so delivery is at least once and the server dedupes by run and sequence. Events of a session that continues after `send` keep counting up from the previous run's last sequence. Commands from workbenches.dev go through the same session controls as `wb send` (send, steer, queue), `wb answer`, and `wb kill`. A run's time limit cancels it when it is reached. A repository workspace is cloned with the run's token like a hosted run; the agent pushes and opens pull requests itself when the task asks. When a run ends, its outcome is uploaded as a gzip tar of the `wb outcome --export` tree.
 
 A run's credentials and environment values are held in the worker's memory only and never written to disk or logged. Its repository token is the exception: like a hosted run's, it sits in the checkout's `origin` remote so the agent can push, and workbenches.dev revokes it when the run ends. A repository run without a run token gets no token: the worker never falls back to `gh auth token` or any other credential of the account. A `docker` run's Docker client gets a configuration directory of its own, `$WORKBENCH_HOME/worker/docker/<run id>/`, whose `config.json` holds only the run's private image pull credential, or nothing, with the file `0600` in a `0700` directory. The image pull and the pre-run check use it, never the daemon's environment or the account's `docker login`, and the directory is removed when the run ends, or at the next start after a crash. The account's `DOCKER_HOST`, `DOCKER_CONTEXT`, and `DOCKER_CONFIG` never reach a run; every run reaches the daemon through the endpoint of the account's current Docker context, resolved when the worker starts. A Workbench that declares a variable the engine owns is refused, and a value the server sends under such a name, for example `BUN_OPTIONS` or `NODE_OPTIONS`, is dropped. Because the run token lives in memory, an outcome is not uploaded when the worker process restarts during the run; the log says so. A follow-up after a restart runs with the starting member's environment again, without the original start's environment values.
 
@@ -835,7 +781,7 @@ These are the exact fields of the stable `--json` results. Additive fields may a
 **`wb wait --json`** prints one object:
 
 - `session_id`, `run_id`, `state`, `sequence`, `final`, `usage`, `usage_total`, and `pending_requests` are always present.
-- `outcome_id`, `error`, `interrupted`, `repository`, `delivery`, `run_state`, and `authoring` are present only when they apply.
+- `outcome_id`, `error`, `interrupted`, `repository`, and `delivery` are present only when they apply.
 - `state` is one of `starting`, `running`, `idle`, `turn_completed`, `completed`, `failed`, `cancelled`, `needs_input`, or `timeout`.
 - Each `pending_requests` entry is `{id, kind, sequence, details}`, where `kind` is `permission`, `question`, or `authentication`.
 - `usage` is the delta since `--after` (0 by default) and `usage_total` is the run total. Both carry a `kind` of `delta` or `total`, and the token counts and `cost_usd` the runner reported.
@@ -860,7 +806,7 @@ A source that cannot be resolved prints `error: <message>` on stderr with no JSO
 | 0 | Success. For `wait`: idle, `turn_completed`, or `completed` |
 | 1 | Failure |
 | 2 | `wait` only: the run needs input |
-| 3 | No authenticated model route or runtime credential. Any command can return it, including `run`, `resume`, `attach`, `send`, `smoke`, `build`, `create`, `connect`, and `outcome --recover`. `wait` reports such a run as failed (1). |
+| 3 | No authenticated model route or runtime credential. Any command can return it, including `run`, `resume`, `attach`, `send`, `smoke`, `build`, `connect`, and `outcome --recover`. `wait` reports such a run as failed (1). |
 | 124 | `wait` only: timeout. The run is unchanged |
 | 130 | Cancelled or interrupted |
 
