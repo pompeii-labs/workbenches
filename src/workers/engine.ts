@@ -33,6 +33,7 @@ import {
 } from './contracts.js';
 import { runSpec, type WorkerRunEnvironment } from './environment.js';
 import type { WorkerHome } from './home.js';
+import type { WorkerLog } from './log.js';
 import { WorkerOutcomeArchive } from './outcome.js';
 import type { RunStart, WorkerCommand } from './protocol.js';
 import { WorkerSessionRuns } from './runs.js';
@@ -54,6 +55,7 @@ export interface WorkerEngineOptions {
     worker: string;
     /** The URL of the API the worker belongs to, the one place besides GitHub a repository is fetched from. */
     api: string;
+    log?: Pick<WorkerLog, 'write'>;
     /** The machine the worker runs on. Defaults to this one. */
     host?: HostDescriber;
     /** Downloads the package archive behind a run's signed URL. */
@@ -142,7 +144,7 @@ export class WorkerEngine implements WorkerRunHost {
         // fetched through the run's credential. The engine's own repository
         // mode, which uses a GitHub token, is never used by a worker.
         if (start.workspace)
-            await new WorkerCheckout(this.#options.api).clone(
+            await new WorkerCheckout(this.#options.api, this.#options.log).clone(
                 start.workspace,
                 directory,
                 environment

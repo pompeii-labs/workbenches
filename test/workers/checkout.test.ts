@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { WorkerCheckout } from '../../src/workers/checkout.js';
 import { WorkerRejection } from '../../src/workers/contracts.js';
 import type { RunWorkspace } from '../../src/workers/protocol.js';
+import { CheckoutGit } from './checkoutgit.js';
 import { bareRepository } from './fixture.js';
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -66,6 +67,196 @@ function workspace(overrides: Partial<RunWorkspace>): RunWorkspace {
 }
 
 describe('worker checkout', () => {
+    const direct = {
+        url: 'https://github.com/acme/game.git',
+        credential: 'FAKE_CLONE_TOKEN',
+    };
+    const basic = Buffer.from(`x-access-token:${direct.credential}`).toString('base64');
+
+    test('fetches directly with a one-process header and keeps origin for later work', async () => {
+        const remote = await bareRepository();
+        cleanups.push(remote.cleanup);
+        const headers: Array<string | null> = [];
+        const server = Bun.serve({
+            port: 0,
+            hostname: '127.0.0.1',
+            fetch: (request) => {
+                headers.push(request.headers.get('authorization'));
+                const url = new URL(request.url);
+                return fetch(
+                    `${remote.url}${url.pathname.slice('/direct.git'.length)}${url.search}`,
+                    {
+                        method: request.method,
+                        headers: request.headers,
+                        body: request.body,
+                    }
+                );
+            },
+        });
+        cleanups.push(() => server.stop(true));
+        const { checkout, environment } = await isolation();
+        const recorder = new CheckoutGit(dirname(checkout));
+        await recorder.install(
+            direct.url,
+            `http://127.0.0.1:${server.port}/direct.git`
+        );
+        const lines: string[] = [];
+        const commit = await new WorkerCheckout(remote.api, {
+            write: (line) => {
+                lines.push(line);
+                return { at: '', text: line };
+            },
+        }).clone(
+            workspace({
+                url: remote.url,
+                ref: remote.commit,
+                branch: 'wb/run_1',
+                clone: direct,
+            }),
+            checkout,
+            recorder.environment(environment)
+        );
+        expect(commit).toBe(remote.commit);
+        const calls = await recorder.calls();
+        const fetches = calls.filter((call) => call.args.includes('fetch'));
+        expect(fetches).toHaveLength(1);
+        expect(fetches[0]?.args.slice(-6)).toEqual([
+            'fetch',
+            '--quiet',
+            '--depth',
+            '1',
+            direct.url,
+            remote.commit,
+        ]);
+        expect(fetches[0]?.config).toMatchObject({
+            GIT_CONFIG_COUNT: '1',
+            GIT_CONFIG_KEY_0: 'http.extraHeader',
+            GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}`,
+        });
+        expect(headers.length).toBeGreaterThan(0);
+        expect(headers.every((header) => header === `Basic ${basic}`)).toBe(true);
+        for (const call of calls) {
+            expect(call.args).toContain('http.followRedirects=false');
+            expect(call.args.join(' ')).not.toContain(direct.credential);
+            expect(call.args.join(' ')).not.toContain(basic);
+            if (!call.args.includes('fetch'))
+                expect(call.config).not.toHaveProperty('GIT_CONFIG_COUNT');
+        }
+        expect(environment).not.toHaveProperty('GIT_CONFIG_COUNT');
+        expect(await git(checkout, 'remote', 'get-url', 'origin')).toBe(remote.url);
+        expect(await git(checkout, 'branch', '--show-current')).toBe('wb/run_1');
+        const config = await readFile(join(checkout, '.git/config'), 'utf8');
+        expect(config.toLowerCase()).not.toContain('extraheader');
+        for (const text of [
+            config,
+            await readFile(join(checkout, '.git/FETCH_HEAD'), 'utf8'),
+            lines.join('\n'),
+        ]) {
+            expect(text).not.toContain(direct.credential);
+            expect(text).not.toContain(basic);
+        }
+        expect(lines).toEqual(['repository fetch: direct']);
+    });
+
+    test('falls back to origin after a failed direct fetch', async () => {
+        const remote = await bareRepository();
+        cleanups.push(remote.cleanup);
+        const { checkout, environment } = await isolation();
+        const recorder = new CheckoutGit(dirname(checkout));
+        await recorder.install(direct.url, `${remote.api}/missing.git`);
+        const lines: string[] = [];
+        expect(
+            await new WorkerCheckout(remote.api, {
+                write: (line) => {
+                    lines.push(line);
+                    return { at: '', text: line };
+                },
+            }).clone(
+                workspace({ url: remote.url, ref: remote.commit, clone: direct }),
+                checkout,
+                recorder.environment(environment)
+            )
+        ).toBe(remote.commit);
+        const fetches = (await recorder.calls()).filter((call) =>
+            call.args.includes('fetch')
+        );
+        expect(fetches.map((call) => call.args.slice(-2))).toEqual([
+            [direct.url, remote.commit],
+            ['origin', remote.commit],
+        ]);
+        expect(fetches[1]?.config).not.toHaveProperty('GIT_CONFIG_COUNT');
+        expect(lines).toEqual(['repository fetch: proxy fallback']);
+    });
+
+    test('scrubs both credentials and clone Basic authorization when both fetches fail', async () => {
+        const { checkout, environment } = await isolation();
+        const recorder = new CheckoutGit(dirname(checkout));
+        const credential = 'FAKE_PROXY_TOKEN';
+        await recorder.install(
+            direct.url,
+            direct.url,
+            `failed ${credential} ${direct.credential} ${basic}`
+        );
+        const error = await new WorkerCheckout('https://api.example.test')
+            .clone(
+                workspace({ credential, clone: direct }),
+                checkout,
+                recorder.environment(environment)
+            )
+            .catch((reason: unknown) => reason);
+        expect(error).toBeInstanceOf(WorkerRejection);
+        const message = error instanceof Error ? error.message : '';
+        for (const secret of [credential, direct.credential, basic])
+            expect(message).not.toContain(secret);
+        expect(
+            (await recorder.calls()).filter((call) => call.args.includes('fetch'))
+        ).toHaveLength(2);
+    });
+
+    test('keeps the exact git command sequence without clone metadata', async () => {
+        const remote = await bareRepository();
+        cleanups.push(remote.cleanup);
+        const { checkout, environment } = await isolation();
+        const recorder = new CheckoutGit(dirname(checkout));
+        await recorder.install(direct.url, remote.url);
+        await new WorkerCheckout(remote.api).clone(
+            workspace({ url: remote.url, ref: remote.commit, branch: 'wb/run_1' }),
+            checkout,
+            recorder.environment(environment)
+        );
+        const hardening = [
+            '-c',
+            'http.followRedirects=false',
+            '-c',
+            'core.hooksPath=/dev/null',
+            '-c',
+            'core.fsmonitor=false',
+            '-c',
+            'core.pager=cat',
+            '-c',
+            'gc.auto=0',
+            '-c',
+            'log.showSignature=false',
+            '-c',
+            'gpg.program=/bin/false',
+        ];
+        const calls = await recorder.calls();
+        expect(calls.map((call) => call.args)).toEqual(
+            [
+                ['init', '--quiet'],
+                ['remote', 'add', 'origin', remote.url],
+                ['fetch', '--quiet', '--depth', '1', 'origin', remote.commit],
+                ['checkout', '--quiet', '--force', 'FETCH_HEAD'],
+                ['checkout', '--quiet', '-B', 'wb/run_1'],
+                ['config', 'user.name', 'Workbenches'],
+                ['config', 'user.email', 'noreply@workbenches.dev'],
+                ['config', 'push.autoSetupRemote', 'true'],
+                ['rev-parse', 'HEAD'],
+            ].map((args) => [...hardening, ...args])
+        );
+        for (const call of calls)
+            expect(call.config).not.toHaveProperty('GIT_CONFIG_COUNT');
+    });
     test('builds the remote with the credential only when there is one', () => {
         expect(
             WorkerCheckout.remote(

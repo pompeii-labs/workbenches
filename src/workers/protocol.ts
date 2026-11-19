@@ -112,6 +112,8 @@ export interface RunWorkspace {
     /** The local branch to leave the checkout on; without one it is detached and cannot push. */
     branch: string | null;
     credential: string | null;
+    /** A short-lived read-only credential for the first fetch only. */
+    clone?: { url: string; credential: string } | null;
 }
 
 export interface RunStart {
@@ -321,7 +323,32 @@ function parseWorkspace(value: unknown): RunWorkspace | null {
         ref: required(workspace.ref, 'run.start.workspace.ref'),
         branch: optional(workspace.branch, 'run.start.workspace.branch'),
         credential: optional(workspace.credential, 'run.start.workspace.credential'),
+        ...(workspace.clone === undefined
+            ? {}
+            : { clone: parseClone(workspace.clone) }),
     };
+}
+
+function parseClone(value: unknown): NonNullable<RunWorkspace['clone']> | null {
+    if (
+        !isRecord(value) ||
+        typeof value.url !== 'string' ||
+        typeof value.credential !== 'string' ||
+        !value.credential
+    )
+        return null;
+    try {
+        const address = new URL(value.url);
+        if (
+            address.origin !== 'https://github.com' ||
+            address.username ||
+            address.password
+        )
+            return null;
+        return { url: value.url, credential: value.credential };
+    } catch {
+        return null;
+    }
 }
 
 function parseCommand(value: Record<string, unknown>): WorkerCommand {
