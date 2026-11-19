@@ -2,6 +2,7 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { WorkerRejection } from './contracts.js';
+import type { WorkerLog } from './log.js';
 import type { RunWorkspace } from './protocol.js';
 
 /** Who a commit made in the checkout is by, and the address that does not receive mail. */
@@ -64,7 +65,10 @@ export class WorkerCheckout {
     readonly #origins: readonly string[];
 
     /** `api` is the URL of the API the worker belongs to, whose proxy serves private repositories. */
-    constructor(api: string) {
+    constructor(
+        api: string,
+        private readonly log?: Pick<WorkerLog, 'write'>
+    ) {
         this.#origins = [GITHUB_ORIGIN, new URL(api).origin];
     }
 
@@ -101,7 +105,43 @@ export class WorkerCheckout {
                 'origin',
                 WorkerCheckout.remote(workspace.url, credential),
             ]);
-            await git(['fetch', '--quiet', '--depth', '1', 'origin', workspace.ref]);
+            let fetched = false;
+            if (workspace.clone) {
+                try {
+                    await this.#git(
+                        directory,
+                        {
+                            ...env,
+                            GIT_CONFIG_COUNT: '1',
+                            GIT_CONFIG_KEY_0: 'http.extraHeader',
+                            GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${workspace.clone.credential}`).toString('base64')}`,
+                        },
+                        [
+                            'fetch',
+                            '--quiet',
+                            '--depth',
+                            '1',
+                            workspace.clone.url,
+                            workspace.ref,
+                        ]
+                    );
+                    fetched = true;
+                } catch {
+                    // The run's proxy remains usable if the short-lived credential is not.
+                }
+                this.log?.write(
+                    `repository fetch: ${fetched ? 'direct' : 'proxy fallback'}`
+                );
+            }
+            if (!fetched)
+                await git([
+                    'fetch',
+                    '--quiet',
+                    '--depth',
+                    '1',
+                    'origin',
+                    workspace.ref,
+                ]);
             await git(['checkout', '--quiet', '--force', 'FETCH_HEAD']);
             if (workspace.branch) {
                 await git(['checkout', '--quiet', '-B', workspace.branch]);
@@ -113,17 +153,29 @@ export class WorkerCheckout {
         } catch (error) {
             const reason = error instanceof Error ? error.message : String(error);
             throw new WorkerRejection(
-                `The repository could not be fetched: ${WorkerCheckout.scrub(reason, credential)}`
+                `The repository could not be fetched: ${WorkerCheckout.scrub(reason, credential, workspace.clone?.credential)}`
             );
         }
     }
 
     /** The text with the credential, and the userinfo of any address in it, removed. */
-    static scrub(text: string, credential: string | null): string {
+    static scrub(
+        text: string,
+        credential: string | null,
+        cloneCredential?: string
+    ): string {
         let scrubbed = text;
-        if (credential)
-            for (const form of new Set([credential, encodeURIComponent(credential)]))
-                scrubbed = scrubbed.replaceAll(form, '[redacted]');
+        const forms = new Set<string>();
+        for (const secret of [credential, cloneCredential]) {
+            if (!secret) continue;
+            forms.add(secret);
+            forms.add(encodeURIComponent(secret));
+        }
+        if (cloneCredential)
+            forms.add(
+                Buffer.from(`x-access-token:${cloneCredential}`).toString('base64')
+            );
+        for (const form of forms) scrubbed = scrubbed.replaceAll(form, '[redacted]');
         return scrubbed.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, '$1');
     }
 

@@ -86,6 +86,7 @@ export class WorkerProcess {
                 ),
                 host: new WorkerEngine({
                     home,
+                    log,
                     services,
                     runners,
                     environment,

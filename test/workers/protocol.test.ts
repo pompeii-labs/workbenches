@@ -34,6 +34,40 @@ const start = {
 };
 
 describe('worker protocol', () => {
+    test('accepts direct clone metadata only for the exact GitHub origin', () => {
+        const clone = {
+            url: 'https://github.com/acme/game.git',
+            credential: 'FAKE_CLONE_TOKEN',
+        };
+        const parse = (value: unknown) =>
+            parseServerMessage(
+                JSON.stringify({
+                    ...start,
+                    workspace: { ...start.workspace, clone: value },
+                })
+            );
+        expect(parse(clone)).toMatchObject({ workspace: { clone } });
+        for (const url of [
+            'https://other.example/acme/game.git',
+            'http://github.com/acme/game.git',
+            'https://github.com:444/acme/game.git',
+            'https://github.com.other.example/acme/game.git',
+            'not a URL',
+            'https://user:FAKE_TOKEN@github.com/acme/game.git',
+        ]) {
+            expect(parse({ ...clone, url })).toMatchObject({
+                workspace: { clone: null },
+            });
+        }
+        for (const value of [
+            null,
+            {},
+            { url: clone.url },
+            { ...clone, credential: 3 },
+        ]) {
+            expect(parse(value)).toMatchObject({ workspace: { clone: null } });
+        }
+    });
     test('parses every server message', () => {
         expect(
             parseServerMessage(
