@@ -3,6 +3,7 @@ import { basename } from 'node:path';
 import { defineCommand } from 'citty';
 
 import { SavedWorkbenchCatalog } from '../catalog/index.js';
+import { CloudClient } from '../cloud/client.js';
 import { RunnerRegistry } from '../runners/index.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
 import { workbenchHome } from '../storage.js';
@@ -12,6 +13,17 @@ import { CliPresenter } from './presenter.js';
 export const listCommand = defineCommand({
     meta: { name: 'list', description: 'List saved or published Workbenches.' },
     args: {
+        cloud: {
+            type: 'boolean',
+            description:
+                'List the organization library on the optional workbenches.dev hosted service',
+            default: false,
+        },
+        json: {
+            type: 'boolean',
+            description: 'Print the cloud library as JSON',
+            default: false,
+        },
         source: {
             type: 'positional',
             description: 'Local path, GitHub URL, or GitHub owner/repo',
@@ -23,8 +35,35 @@ export const listCommand = defineCommand({
             default: false,
         },
     },
-    async run({ args }) {
+    async run({ args, data }) {
         const output = new CliPresenter();
+        if (args.cloud) {
+            if (args.source || args.saved)
+                throw new Error('A source and --saved cannot be used with --cloud');
+            const entries = await CloudClient.from(data).library.list();
+            if (args.json) console.log(JSON.stringify(entries));
+            else {
+                if (!entries.length) output.message('No organization Workbenches.');
+                for (const entry of entries)
+                    output.record({
+                        machine: [
+                            entry.kind,
+                            entry.reference,
+                            entry.version ?? '',
+                            entry.available ? 'available' : 'unavailable',
+                            entry.reason ?? '',
+                        ],
+                        title: entry.reference,
+                        details: [
+                            entry.kind,
+                            entry.version ?? undefined,
+                            entry.available ? 'available' : 'unavailable',
+                            entry.reason ?? undefined,
+                        ],
+                    });
+            }
+            return;
+        }
         const runners = RunnerRegistry.standard();
         if (!args.source || args.saved) {
             const entries = await new SavedWorkbenchCatalog(workbenchHome()).list();

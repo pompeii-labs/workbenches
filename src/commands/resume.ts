@@ -14,6 +14,12 @@ export const resumeCommand = defineCommand({
         description: 'Continue a resumable Workbench session.',
     },
     args: {
+        cloud: {
+            type: 'boolean',
+            description:
+                'Cloud continuation is not available on the optional workbenches.dev hosted service yet',
+            default: false,
+        },
         session: {
             type: 'positional',
             description: 'Workbench session ID',
@@ -82,6 +88,8 @@ export const resumeCommand = defineCommand({
         },
     },
     async run({ args, rawArgs }) {
+        if (args.cloud)
+            throw new Error('resume is not available for cloud sessions yet');
         if (args.json && args.final) {
             throw new Error('--json and --final cannot be used together');
         }

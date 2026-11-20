@@ -1,6 +1,8 @@
 import { basename } from 'node:path';
 
 import { defineCommand } from 'citty';
+import { CloudClient } from '../cloud/client.js';
+import { CloudStatusReader } from '../cloud/status.js';
 
 import { Connection } from '../database/connection.js';
 import { renderStatusLine } from '../rendering/status-line.js';
@@ -20,6 +22,11 @@ export const statusCommand = defineCommand({
         description: 'Show live progress for active and recently finished runs.',
     },
     args: {
+        cloud: {
+            type: 'boolean',
+            description: 'Show progress on the optional workbenches.dev hosted service',
+            default: false,
+        },
         line: {
             type: 'boolean',
             description:
@@ -32,8 +39,42 @@ export const statusCommand = defineCommand({
             default: false,
         },
     },
-    async run({ args }) {
+    async run({ args, data }) {
         const now = Date.now();
+        if (args.cloud) {
+            const runs = rank(
+                await new CloudStatusReader(CloudClient.from(data), () => now).list({
+                    recentMs: RECENT_MS,
+                })
+            );
+            if (args.json) {
+                process.stdout.write(`${JSON.stringify(runs)}\n`);
+                return;
+            }
+            const color =
+                !process.env.NO_COLOR && (args.line || process.stdout.isTTY === true);
+            const line = (run: RunStatus) =>
+                renderStatusLine(run, {
+                    now,
+                    color,
+                    typicalStep: median(run.steps.completed) ?? DEFAULT_STEP,
+                }).replace(
+                    `wb answer ${run.run_id}`,
+                    `wb answer --cloud ${run.run_id}`
+                );
+            if (args.line) {
+                const first = runs[0];
+                const more = runs.slice(1).filter(active).length;
+                process.stdout.write(
+                    `${first ? line(first) : idle({}, color)}${more ? ` ${dim(`+${more} more`, color)}` : ''}\n`
+                );
+            } else if (!runs.length)
+                process.stdout.write('No active or recent Workbench runs.\n');
+            else
+                for (const run of runs)
+                    process.stdout.write(`${line(run)}  ${dim(run.run_id, color)}\n`);
+            return;
+        }
         const home = workbenchHome();
         const connection = Connection.open(home);
         try {

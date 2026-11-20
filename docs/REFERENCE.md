@@ -167,6 +167,10 @@ wb view project-core --json
 wb unsave project-core
 ```
 
+workbenches.dev is an optional hosted service: `wb list --cloud` lists the connected organization's own Workbenches and its saves in one listing, marked `own` or `saved`. Each entry reports availability and the reason when unavailable. `--json` prints one array of `{id, reference, kind, available, reason, version, sandboxed}`. An unavailable save keeps its public reference without exposing a private version. `id` is the Workbench ID for an own entry and the save ID for a saved entry.
+
+`wb save --cloud publisher/name` resolves another publisher's public Workbench and saves its reference for the organization using the key from `wb login`. It follows the latest public version, makes no package copy, and accepts no alias, version pin, `--name`, `--ref`, or `--force`. Own Workbenches are already in the library. `wb unsave --cloud publisher/name` or `wb unsave --cloud <save id>` removes a save even when its original is unavailable, never the original or existing run history. Cloud operations leave local saves unchanged.
+
 CLI releases and saved Workbench snapshots have separate lifecycles:
 
 ```sh
@@ -181,6 +185,8 @@ wb upgrade
 ### Run a task
 
 workbenches.dev is an optional hosted service: `wb run --cloud org/name[@version] --task "Review this migration"` uses the organization key from `wb login`, with `--repo owner/name --ref main`, `--worker <slug>`, `--project <name or slug>`, and `--max-minutes <1..1440>` selecting cloud execution settings. Cloud runs refuse local paths, saved aliases, `--dir`, `--workspace`, and host environment/runtime overrides; `--detach` prints the run ID (with `--json`, the same receipt as a local detached run), while foreground output retains `--json`, `--final`, and the default human renderer.
+
+`wb project list` lists organization projects on the optional hosted service; `wb project create <name>` creates one. Both use `wb login`, accept `--json`, and are always cloud commands, with no `--cloud` flag. JSON output is an array for `list` and one project object for `create`. Create the project before passing its name or slug with `--project`; starting a run does not create it.
 
 Run a saved alias only. Local registrations read current package bytes for each new session; sessions retain their captured bytes for every resume. `--dir` and `--repo` select the workspace, not the package source. Pass a positional task or use `--task` for a one-shot run:
 
@@ -552,6 +558,8 @@ Every execution belongs to one stable Workbench session. The first run shares it
 
 Attaching observes or replays the latest run without taking control or starting model work. Resuming requires new input and either joins an active run's follow-up queue or starts a new internal run from saved native context. Use `wb send` for ordinary agent-driven continuation.
 
+`wb resume --cloud <id>` refuses with `resume is not available for cloud sessions yet`. The public API does not support continuing a cloud session; the CLI sends no request and reads no task input.
+
 Resuming with a task sends one non-interactive continuation through the same session. It joins an active run's follow-up queue or starts a linked internal run when the previous one is closed. `--detach` returns the stable session ID while that continuation runs in the background. Killing cooperatively terminates the active run without deleting the session or its resumable context.
 
 `wb status` shows live progress for every active run on the machine, plus runs that finished in the last 10 minutes: a plan bar from the agent's todo list (`plan.updated`) with the current todo, elapsed time, and cost. A run waiting on input shows that first, with its `wb answer` command. When the current todo passes a typical todo's tool calls, the line adds the count in orange, which also shows a todo list the agent stopped updating. "Typical" is the run's own median once three todos have finished, otherwise the median over the Workbench's finished runs.
@@ -569,6 +577,8 @@ wb status --json       # run summaries for other tools
 ```
 
 Status folds each run's event log incrementally into a cache row in the local database, so frequent polling reads only new events.
+
+`wb status --cloud` shows the connected organization's active runs and runs finished in the last 10 minutes on the optional hosted service. Human, `--line`, and `--json` output use the local progress summary shape. Cloud queued, provisioning, and starting runs map to `dispatched`; runs waiting on input map to `running` with `pending_input`. Public events supply activity, plans, tool counts, and pending input; run timestamps and reported cost supply elapsed time and cost. Cloud status reads events on each invocation without a local process probe or cache, and uses the run's completed todo counts, or the default of 15 tool calls, for its long-step warning.
 
 ### Agents over MCP
 

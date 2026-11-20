@@ -704,7 +704,8 @@ describe('CLI integration', () => {
         expect(result.stdout).toContain('run');
         expect(result.stdout).toContain('save');
         expect(result.stdout).toContain('unsave');
-        for (const name of ['mcp', 'studio', 'project', 'create', 'add', 'remove']) {
+        expect(result.stdout).toContain('project');
+        for (const name of ['mcp', 'studio', 'create', 'add', 'remove']) {
             expect(result.stdout).not.toMatch(new RegExp(`^  ${name}\\s`, 'm'));
         }
         expect(result.stdout).not.toContain('\n  edit ');
@@ -736,12 +737,17 @@ describe('CLI integration', () => {
 
     test('rejects retired commands and the project option without cloud execution', async () => {
         const home = await temporaryDirectory('cli-retired-');
-        for (const name of ['mcp', 'studio', 'project', 'create', 'add', 'remove']) {
+        for (const name of ['mcp', 'studio', 'create', 'add', 'remove']) {
             const result = await executeCli([name], { WORKBENCH_HOME: home });
             expect(result.code).toBe(1);
             expect(result.stderr).toContain('Unknown command');
             expect(result.stderr).toContain(name);
         }
+        const project = await executeCli(['project', '--help'], {
+            WORKBENCH_HOME: home,
+        });
+        expect(project.code).toBe(0);
+        expect(project.stdout).toContain('workbenches.dev');
         const result = await executeCli(
             ['run', 'core', '--project', 'Demo', '--task', 'Review'],
             { WORKBENCH_HOME: home }

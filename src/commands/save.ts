@@ -6,6 +6,7 @@ import {
     SavedWorkbenchCatalog,
     WorkbenchPackage,
 } from '../catalog/index.js';
+import { CloudClient } from '../cloud/client.js';
 import { Connection } from '../database/connection.js';
 import { RegistryClient, RegistryTelemetry } from '../registry/index.js';
 import { GitHubWorkbenchSource } from '../sources/index.js';
@@ -20,6 +21,12 @@ export const saveCommand = defineCommand({
         description: 'Save a remote package or register a live local Workbench.',
     },
     args: {
+        cloud: {
+            type: 'boolean',
+            description:
+                'Save for the organization on the optional workbenches.dev hosted service',
+            default: false,
+        },
         source: {
             type: 'positional',
             description:
@@ -42,8 +49,20 @@ export const saveCommand = defineCommand({
             description: 'Saved alias (defaults to the manifest name)',
         },
     },
-    async run({ args }) {
+    async run({ args, data }) {
         const output = new CliPresenter();
+        if (args.cloud) {
+            if (args.name || args.ref || args.as || args.force)
+                throw new Error(
+                    '--name, --ref, --as, and --force cannot be used with --cloud'
+                );
+            const saved = await CloudClient.from(data).library.save(args.source);
+            output.record({
+                machine: ['saved', saved.reference, saved.id],
+                title: `Saved ${saved.reference}`,
+            });
+            return;
+        }
         const home = workbenchHome();
         const catalog = new SavedWorkbenchCatalog(home);
         if (args.source.includes('#'))
