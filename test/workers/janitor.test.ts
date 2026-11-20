@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import {
+    mkdir,
+    mkdtemp,
+    readdir,
+    rm,
+    stat,
+    symlink,
+    writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { CatalogEntry } from '../../src/catalog/types.js';
-import type {
-    SessionRetentionPolicy,
-    SessionRetentionResult,
-} from '../../src/sessions/retention.js';
+import { Connection } from '../../src/database/connection.js';
+import { Services } from '../../src/workbench/services.js';
 import type { WorkerAssignment } from '../../src/workers/assignments.js';
 import { WorkerHome } from '../../src/workers/home.js';
 import { WORKER_LOG_LIMIT_BYTES, WorkerJanitor } from '../../src/workers/janitor.js';
@@ -22,9 +27,9 @@ afterEach(async () => {
 function finished(runId: string): WorkerAssignment {
     return {
         run_id: runId,
-        session_id: `wb_${runId}`,
+        session_id: null,
         workbench: 'threejs-game',
-        package: `session-${runId}`,
+        package: `session-${runId.replaceAll('_', '-')}`,
         runner: 'opencode',
         runtime: 'local',
         member_id: null,
@@ -48,32 +53,41 @@ describe('worker janitor', () => {
         await mkdir(home.workspaceDirectory('run_old'), { recursive: true });
         await mkdir(home.workspaceDirectory('run_new'), { recursive: true });
         await writeFile(home.logPath, Buffer.alloc(WORKER_LOG_LIMIT_BYTES + 1));
-        const policies: SessionRetentionPolicy[] = [];
-        const removed: string[] = [];
-        await new WorkerJanitor(
-            home,
-            {
-                apply: async (policy) => {
-                    policies.push(policy);
-                    return {} as SessionRetentionResult;
+        const outside = join(directory, 'outside.log');
+        await writeFile(outside, Buffer.alloc(WORKER_LOG_LIMIT_BYTES + 1));
+        await symlink(outside, join(home.root, 'daemon.out'));
+        const connection = Connection.open(home.root);
+        try {
+            const services = new Services(home.root, connection);
+            const digest = 'a'.repeat(64);
+            const snapshot = join(home.root, 'packages', digest);
+            await mkdir(snapshot, { recursive: true });
+            await writeFile(join(snapshot, 'instructions.md'), 'instructions');
+            await services.catalog.write([
+                {
+                    alias: 'session-run-old',
+                    name: 'fixture',
+                    version: '1.0.0',
+                    source: 'https://example.test/package',
+                    selector: 'fixture',
+                    digest: `sha256:${digest}`,
+                    packagePath: snapshot,
+                    addedAt: '2026-01-01T00:00:00.000Z',
                 },
-            },
-            {
-                remove: async (alias) => {
-                    removed.push(alias);
-                    return {} as CatalogEntry;
-                },
-            }
-        ).sweep([finished('run_old')], new Date('2026-02-01T00:00:00.000Z'));
+            ]);
+            const removed = await new WorkerJanitor(home, services).sweep(
+                [finished('run_old')],
+                new Date('2026-02-01T00:00:00.000Z')
+            );
+            expect(removed).toEqual(['run_old']);
+            expect(await services.catalog.find('session-run-old')).toBeUndefined();
+            expect(await stat(snapshot).catch(() => undefined)).toBeUndefined();
+        } finally {
+            connection.close();
+        }
         expect(await readdir(join(home.root, 'workspaces'))).toEqual(['run_new']);
-        expect(removed).toEqual(['session-run_old']);
-        expect(policies).toEqual([
-            {
-                before: new Date('2026-01-25T00:00:00.000Z'),
-                includeResumableSessions: true,
-            },
-        ]);
         expect((await stat(`${home.logPath}.1`)).size).toBe(WORKER_LOG_LIMIT_BYTES + 1);
         expect(await stat(home.logPath).catch(() => undefined)).toBeUndefined();
+        expect((await stat(outside)).size).toBe(WORKER_LOG_LIMIT_BYTES + 1);
     });
 });

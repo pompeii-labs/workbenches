@@ -7,6 +7,17 @@ import {
 } from '../../src/rendering/worker.js';
 import { clock } from '../../src/workers/log.js';
 
+const storage = {
+    wb_version: '1.8.1',
+    disk: {
+        home_bytes: null,
+        workspaces_bytes: null,
+        outcomes_bytes: null,
+        measured_at: null,
+        free_bytes: 1000,
+    },
+};
+
 describe('worker output', () => {
     test('stop says what it waits on', () => {
         expect(workerWaitingLine('mac', 1, 'drain')).toBe(
@@ -44,6 +55,7 @@ describe('worker output', () => {
         expect(
             workerStatusLines(
                 {
+                    ...storage,
                     registered: true,
                     name: 'mac',
                     organization: 'acme',
@@ -86,6 +98,7 @@ describe('worker output', () => {
         expect(
             workerStatusLines(
                 {
+                    ...storage,
                     registered: true,
                     name: 'mac',
                     organization: 'acme',
@@ -107,6 +120,7 @@ describe('worker output', () => {
         expect(
             workerStatusLines(
                 {
+                    ...storage,
                     registered: false,
                     online: false,
                     running: false,

@@ -44,6 +44,10 @@ export interface SessionRetentionResult extends SessionRetentionReview {
 export interface SessionRetentionDependencies {
     containers?: ManagedContainerStorage;
     sandboxes?: ManagedSandboxStorage;
+    sessionCleanup?: {
+        timestamp(session: StoredSession, runs: StoredRun[]): string;
+        remove(session: StoredSession): Promise<void>;
+    };
 }
 
 export interface ManagedContainerStorage {
@@ -68,7 +72,7 @@ export class SessionRetention {
         runs: RunStore,
         sessions: SessionStore,
         private readonly catalog: Pick<CatalogWriter, 'releaseSnapshot'>,
-        dependencies: SessionRetentionDependencies = {}
+        private readonly dependencies: SessionRetentionDependencies = {}
     ) {
         this.#runs = runs;
         this.#sessions = sessions;
@@ -118,6 +122,8 @@ export class SessionRetention {
             if (!this.oldEnough(this.runTimestamp(run), policy.before)) return false;
             if (!run.session_id) return true;
             const session = sessionsById.get(run.session_id);
+            // Worker cleanup retains every run of a session until the whole session expires.
+            if (session && this.dependencies.sessionCleanup) return false;
             // Repository continuations accumulate changes from their original base.
             if (session?.repository) return false;
             return !session || session.latest_run_id !== run.id;
@@ -218,6 +224,7 @@ export class SessionRetention {
                         skipped.push(candidate.id);
                         return;
                     }
+                    await this.dependencies.sessionCleanup?.remove(session);
                     await this.#sessions.remove(session.id);
                     await this.catalog.releaseSnapshot(session.workbench_digest);
                     removedSessions.push(session.id);
@@ -297,7 +304,8 @@ export class SessionRetention {
         if (!session) return this.removeIfEligible(initial, policy);
         return this.#sessions.exclusive(session.id, async () => {
             const currentSession = await this.#sessions.read(session.id);
-            if (currentSession.repository) return false;
+            if (currentSession.repository || this.dependencies.sessionCleanup)
+                return false;
             if (currentSession.latest_run_id === id) return false;
             return this.removeIfEligible(await this.#runs.read(id), policy);
         });
@@ -392,6 +400,8 @@ export class SessionRetention {
     }
 
     private sessionTimestamp(session: StoredSession, runs: StoredRun[]): string {
+        if (this.dependencies.sessionCleanup)
+            return this.dependencies.sessionCleanup.timestamp(session, runs);
         return (
             [session.updated_at, ...runs.map((run) => this.runTimestamp(run))]
                 .filter((value) => Number.isFinite(Date.parse(value)))

@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path';
 
 import { RegistryAccountStore } from '../../src/registry/account-store.js';
 import { RegistryClient } from '../../src/registry/client.js';
+import { WorkerDisk } from '../../src/workers/disk.js';
+import { WorkerHome } from '../../src/workers/home.js';
 import { seedModelCatalogFixture } from '../model-catalog-fixture.js';
 import { FakeWorkerServer, WORKER_KEY } from './fixture.js';
 
@@ -127,6 +129,39 @@ async function machine() {
 }
 
 describe('wb worker', () => {
+    test('status reports version and measured bytes without starting a worker', async () => {
+        const { home, cli } = await machine();
+        const worker = new WorkerHome(home);
+        await worker.saveRegistration({
+            version: 1,
+            id: 'wrk_1',
+            slug: 'mini',
+            name: 'mini',
+            organization: 'acme',
+            key: WORKER_KEY,
+            api_url: 'https://example.test',
+            registered_at: '2026-01-01T00:00:00.000Z',
+        });
+        await mkdir(worker.workspaceDirectory('run_1'), { recursive: true });
+        await writeFile(join(worker.workspaceDirectory('run_1'), 'source'), 'source');
+        await new WorkerDisk(worker).refresh(new Date('2026-01-08T00:00:00.000Z'));
+        const status = await cli(['worker', 'status', '--json']);
+        expect(status.code).toBe(0);
+        expect(JSON.parse(status.stdout)).toMatchObject({
+            wb_version: expect.any(String),
+            disk: {
+                home_bytes: expect.any(Number),
+                workspaces_bytes: 6,
+                outcomes_bytes: 0,
+                free_bytes: expect.any(Number),
+                measured_at: '2026-01-08T00:00:00.000Z',
+            },
+        });
+        const human = await cli(['worker', 'status']);
+        expect(human.stdout).toContain('Engine ');
+        expect(human.stdout).toContain('held (6 B workspaces, 0 B outcomes)');
+        expect(human.stdout).toContain(' free. Measured 2026-01-08T00:00:00.000Z.');
+    });
     test.if(process.platform === 'linux')(
         'registers, starts online, reports status and logs, stops, and removes',
         async () => {

@@ -2,6 +2,7 @@ import { open, stat } from 'node:fs/promises';
 
 import { defineCommand } from 'citty';
 
+import { formatOutcomeBytes } from '../outcomes/presentation.js';
 import { RegistryAccountStore } from '../registry/account-store.js';
 import {
     workerStartedLine,
@@ -85,6 +86,15 @@ const statusCommand = defineCommand({
             !status.registered ? 'muted' : status.online ? 'success' : 'warning'
         );
         for (const line of lines) output.text(line);
+        output.text(`Engine ${status.wb_version}.`);
+        const disk = status.disk;
+        const size = (bytes: number | null) =>
+            bytes === null ? 'unknown' : formatOutcomeBytes(bytes);
+        output.text(
+            disk.home_bytes === null
+                ? `Disk: not measured yet, ${size(disk.free_bytes)} free.`
+                : `Disk: ${size(disk.home_bytes)} held (${size(disk.workspaces_bytes)} workspaces, ${size(disk.outcomes_bytes)} outcomes), ${size(disk.free_bytes)} free. Measured ${disk.measured_at}.`
+        );
     },
 });
 

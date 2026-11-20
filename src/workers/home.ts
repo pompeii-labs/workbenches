@@ -38,6 +38,7 @@ export interface WorkerRunSummary {
 
 /** What the running daemon reports about itself for `wb worker status`. */
 export interface WorkerState {
+    wb_version?: string;
     pid: number;
     name: string;
     started_at: string;
@@ -210,6 +211,9 @@ export class WorkerHome {
                 : null;
         return {
             pid: value.pid,
+            ...(typeof value.wb_version === 'string'
+                ? { wb_version: value.wb_version }
+                : {}),
             name: typeof value.name === 'string' ? value.name : '',
             started_at: typeof value.started_at === 'string' ? value.started_at : '',
             online: value.online === true,

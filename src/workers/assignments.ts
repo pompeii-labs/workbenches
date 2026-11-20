@@ -75,21 +75,12 @@ export class WorkerAssignments {
         });
     }
 
-    /** Forgets and returns the runs that finished before `horizon`. */
-    expire(horizon: Date): WorkerAssignment[] {
-        const expired: WorkerAssignment[] = [];
-        for (const [id, run] of this.#runs) {
-            if (
-                WorkerAssignments.isTerminal(run.state) &&
-                run.finished_at &&
-                Date.parse(run.finished_at) < horizon.getTime()
-            ) {
-                expired.push(run);
-                this.#runs.delete(id);
-                this.#secrets.delete(id);
-            }
+    /** Forgets assignments only after their engine storage has been removed. */
+    remove(ids: string[]): void {
+        for (const id of ids) {
+            this.#runs.delete(id);
+            this.#secrets.delete(id);
         }
-        return expired;
     }
 
     get(runId: string): WorkerAssignment | undefined {

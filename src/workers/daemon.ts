@@ -13,7 +13,7 @@ import type {
     WorkerSettings,
     WorkerStopMode,
 } from './home.js';
-import { WorkerJanitor } from './janitor.js';
+import type { WorkerJanitor } from './janitor.js';
 import { duration, excerpt, type WorkerLog } from './log.js';
 import type { WorkerMachineProbe } from './machine.js';
 import {
@@ -99,6 +99,8 @@ export class WorkerDaemon {
     #idleSince: number | undefined;
     /** When the janitor last swept, in milliseconds. */
     #swept: number | undefined;
+    /** The sweep in progress, which runs beside the loop rather than inside it. */
+    #sweeping: Promise<void> | undefined;
     /** Sleeps that end on any wake, and sleeps that end only when the daemon exits. */
     readonly #wakeable = new Set<() => void>();
     readonly #sleepers = new Set<() => void>();
@@ -156,6 +158,7 @@ export class WorkerDaemon {
                     `cleanup after restart failed: ${excerpt(error instanceof Error ? error.message : String(error), 80)}`
                 );
             });
+        this.#sweep();
         const ticker = this.#tick();
         let attempt = 0;
         while (!this.#exit) {
@@ -348,7 +351,7 @@ export class WorkerDaemon {
                 this.#dirty = true;
                 await this.#assignments.save();
             }
-            await this.#sweep();
+            this.#sweep();
             if (this.#channel?.open && this.#welcomed) await this.#stream.flush();
             this.#flushLog();
             if (this.#dirty) {
@@ -370,20 +373,35 @@ export class WorkerDaemon {
         }
     }
 
-    /** At start and then hourly, removes what finished runs left past the retention. */
-    async #sweep(): Promise<void> {
+    /**
+     * At start and then hourly, removes what finished runs left past the
+     * retention. Measuring a large home can take minutes, so the sweep runs in
+     * the background and never holds up runs or their events.
+     */
+    #sweep(): void {
         const janitor = this.#options.janitor;
         const now = this.#now();
-        if (!janitor || (this.#swept && now.getTime() - this.#swept < 60 * 60 * 1000))
+        if (
+            !janitor ||
+            this.#sweeping ||
+            (this.#swept !== undefined && now.getTime() - this.#swept < 60 * 60 * 1000)
+        )
             return;
         this.#swept = now.getTime();
-        const expired = this.#assignments.expire(WorkerJanitor.horizon(now));
-        if (expired.length) await this.#assignments.save();
-        await janitor.sweep(expired, now).catch((error: unknown) => {
-            this.#options.log.write(
-                `cleanup failed: ${excerpt(error instanceof Error ? error.message : String(error), 80)}`
-            );
-        });
+        this.#sweeping = janitor
+            .sweep(this.#assignments.list(), now)
+            .then(async (removed) => {
+                this.#assignments.remove(removed);
+                if (removed.length) await this.#assignments.save();
+            })
+            .catch((error: unknown) => {
+                this.#options.log.write(
+                    `cleanup failed: ${excerpt(error instanceof Error ? error.message : String(error), 80)}`
+                );
+            })
+            .finally(() => {
+                this.#sweeping = undefined;
+            });
     }
 
     #drained(): boolean {
@@ -425,6 +443,7 @@ export class WorkerDaemon {
         const registration = this.#options.registration;
         await this.#options.home
             .writeState({
+                wb_version: this.#options.version,
                 pid: this.#options.pid ?? process.pid,
                 name: registration.name,
                 started_at: this.#startedAt.toISOString(),

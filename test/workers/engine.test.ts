@@ -29,6 +29,7 @@ import { WorkerSessionRuns } from '../../src/workers/runs.js';
 import { WorkerRunnerVersions } from '../../src/workers/versions.js';
 import { seedModelCatalogFixture } from '../model-catalog-fixture.js';
 import { bareRepository, runStart, TestRunEnvironment } from './fixture.js';
+import { commandSession, storedSession } from './storage.js';
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -95,7 +96,9 @@ async function engineHome() {
         connection.close();
         await rm(directory, { recursive: true, force: true });
     });
-    return { home, services: new Services(home.root, connection) };
+    const services = new Services(home.root, connection);
+    await storedSession(services, home, { id: commandSession });
+    return { home, services };
 }
 
 describe('worker engine', () => {
@@ -518,7 +521,7 @@ describe('worker engine', () => {
             download: async () => workbenchPackage(),
         });
         await engine.command(
-            'wb_session',
+            commandSession,
             {
                 type: 'command',
                 command_id: 'c',
@@ -578,7 +581,7 @@ describe('worker engine', () => {
             payload: Record<string, unknown>
         ) =>
             engine.command(
-                'wb_session',
+                commandSession,
                 {
                     type: 'command',
                     command_id: 'c',
@@ -603,12 +606,12 @@ describe('worker engine', () => {
         await command('answer', { request_id: 'q_1', response: [['Blue']] });
         await command('cancel', {});
         expect(calls).toEqual([
-            ['send', 'wb_session', 'Add sound', 'send'],
-            ['send', 'wb_session', 'Smaller', 'steer'],
-            ['send', 'wb_session', 'Then tests', 'queue'],
-            ['answer', 'wb_session', 'req_1', 'allow'],
-            ['answer', 'wb_session', 'q_1', '[["Blue"]]'],
-            ['cancel', 'wb_session'],
+            ['send', commandSession, 'Add sound', 'send'],
+            ['send', commandSession, 'Smaller', 'steer'],
+            ['send', commandSession, 'Then tests', 'queue'],
+            ['answer', commandSession, 'req_1', 'allow'],
+            ['answer', commandSession, 'q_1', '[["Blue"]]'],
+            ['cancel', commandSession],
         ]);
         expect(await command('send', {}).catch((error: Error) => error.message)).toBe(
             'send requires payload.text'
@@ -668,7 +671,7 @@ describe('worker engine', () => {
         });
         await engine.admit(repositoryStart);
         await engine.command(
-            'wb_session',
+            commandSession,
             {
                 type: 'command',
                 command_id: 'c',
@@ -899,7 +902,10 @@ describe('worker engine', () => {
                 },
                 // The fake launcher stores no session; a follow-up reads its package alias.
                 sessions: {
-                    read: async () => ({ reference: 'session-ses-1' }) as StoredSession,
+                    read: async () => ({
+                        ...(await services.sessions.read(commandSession)),
+                        reference: 'session-ses-1',
+                    }),
                 },
                 control: {
                     send: async (
@@ -1020,7 +1026,7 @@ describe('worker engine', () => {
         // A follow-up rebuilt after a restart uses the same connection.
         const followUp = (connection: string | null) =>
             engine.command(
-                'wb_launched',
+                commandSession,
                 {
                     type: 'command',
                     command_id: 'c',
@@ -1241,7 +1247,10 @@ describe('worker engine', () => {
                     },
                 },
                 sessions: {
-                    read: async () => ({ reference: 'session-ses-1' }) as StoredSession,
+                    read: async () => ({
+                        ...(await services.sessions.read(commandSession)),
+                        reference: 'session-ses-1',
+                    }),
                 },
                 control: {
                     send: async (
@@ -1293,7 +1302,7 @@ describe('worker engine', () => {
         };
         const followUp = () =>
             engine.command(
-                'wb_launched',
+                commandSession,
                 {
                     type: 'command',
                     command_id: 'c',

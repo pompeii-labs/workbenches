@@ -172,6 +172,8 @@ Only answer reported requests. `allow` grants permission once and `deny` rejects
 
 Agents can use `mcp.workbenches.dev` for work on workbenches.dev. Self-hosted workers connect a machine to that service with `wb worker start`.
 
+Worker sessions expire seven days after their last run ends and cannot be continued after that boundary. Workers automatically remove expired session data, native context, outcome blobs, and workspaces at startup and hourly, protecting active sessions and staying inside their own worker home. `wb worker status [--json]` reports the engine version, cached worker-home byte counts with their measurement time, and current free disk space without walking workspace trees.
+
 ## Authorization and safety
 
 Workbench manifests declare environment variable names, never their values. Provide required values through inherited environment, `--env-file`, or repeatable `--env NAME=value` flags. An unset required value fails preflight. An optional MCP whose environment is unavailable is disabled for that run. Prefer `--env-file` or inherited environment for secrets because command-line values may be retained in shell history.
