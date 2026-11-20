@@ -1,18 +1,32 @@
-import type { StoredRun } from '../runs/store.js';
-import type { SessionSnapshot, SessionSupervision } from '../sessions/supervision.js';
+import type { SessionSnapshot } from '../sessions/supervision.js';
 
-export class CliWait {
-    constructor(private readonly supervision: Pick<SessionSupervision, 'wait'>) {}
+interface WaitOptions {
+    afterSequence?: number;
+    timeoutMilliseconds?: number;
+    signal?: AbortSignal;
+}
+
+/** Prints one wait result and sets its exit code, for a local session or a cloud run. */
+export class CliWait<T> {
+    constructor(
+        private readonly supervision: {
+            wait(target: T, options: WaitOptions): Promise<SessionSnapshot>;
+        }
+    ) {}
 
     async execute(
-        run: StoredRun,
-        options: { json: boolean; afterSequence?: number; timeoutMilliseconds?: number }
+        target: T,
+        options: {
+            json: boolean;
+            afterSequence?: number;
+            timeoutMilliseconds?: number;
+        }
     ): Promise<void> {
         const abort = new AbortController();
         const stop = () => abort.abort();
         process.on('SIGINT', stop);
         try {
-            const result = await this.supervision.wait(run, {
+            const result = await this.supervision.wait(target, {
                 ...options,
                 signal: abort.signal,
             });

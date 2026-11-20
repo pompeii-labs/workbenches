@@ -1,4 +1,5 @@
 import { defineCommand } from 'citty';
+import { CloudClient } from '../cloud/client.js';
 
 import { Connection } from '../database/connection.js';
 import { workbenchHome } from '../storage.js';
@@ -11,6 +12,11 @@ export const psCommand = defineCommand({
         description: 'List Workbench sessions.',
     },
     args: {
+        cloud: {
+            type: 'boolean',
+            description: 'List runs on the optional workbenches.dev hosted service',
+            default: false,
+        },
         all: {
             type: 'boolean',
             alias: 'a',
@@ -23,8 +29,46 @@ export const psCommand = defineCommand({
             default: false,
         },
     },
-    async run({ args }) {
+    async run({ args, data }) {
         const output = new CliPresenter();
+        if (args.cloud) {
+            const client = CloudClient.from(data);
+            const rows: string[][] = [];
+            for await (const run of client.list(args.all)) {
+                if (args.json) {
+                    // Only a run waiting on input has requests worth replaying its events for.
+                    const pending =
+                        run.status === 'needs_input'
+                            ? (await client.snapshot(run.id)).pending_requests
+                            : [];
+                    console.log(
+                        JSON.stringify({
+                            ...run,
+                            state: run.status,
+                            needs_input: run.status === 'needs_input',
+                            pending_requests: pending,
+                        })
+                    );
+                } else
+                    rows.push([
+                        run.status,
+                        run.id,
+                        run.session_id,
+                        `${run.workbench.organization_slug}/${run.workbench.slug}@${run.version.version}`,
+                        run.created_at,
+                    ]);
+            }
+            if (!args.json)
+                process.stdout.write(
+                    rows.length
+                        ? renderTable(
+                              ['STATUS', 'RUN', 'SESSION', 'WORKBENCH', 'STARTED'],
+                              rows
+                          )
+                        : 'No Workbench runs.\n'
+                );
+            return;
+        }
         const home = workbenchHome();
         const connection = Connection.open(home);
         try {

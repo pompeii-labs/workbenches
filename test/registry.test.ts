@@ -29,6 +29,28 @@ describe('Workbench registry provider', () => {
         );
     });
 
+    test('bounds the wait for response headers but not a download body', async () => {
+        const signals: AbortSignal[] = [];
+        const client = new RegistryClient({
+            apiUrl: 'https://registry.example',
+            fetch: (input, init) => {
+                const signal = init?.signal ?? new AbortController().signal;
+                signals.push(signal);
+                if (String(input).endsWith('/v1/stalled'))
+                    return new Promise((_, reject) =>
+                        signal.addEventListener('abort', () => reject(signal.reason))
+                    );
+                return Promise.resolve(new Response('body'));
+            },
+        });
+        await client.response('/v1/download', { timeout: 20 });
+        await Bun.sleep(80);
+        expect(signals[0]?.aborted).toBeFalse();
+        await expect(client.response('/v1/stalled', { timeout: 20 })).rejects.toThrow(
+            'The operation timed out.'
+        );
+    });
+
     test('recognizes canonical registry identifiers without confusing source URLs', () => {
         expect(RegistryClient.parseReference('pompeii-labs/lux-core')).toEqual({
             publisher: 'pompeii-labs',
