@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import * as filesystem from 'node:fs/promises';
 import {
     chmod,
     mkdir,
@@ -85,6 +86,78 @@ function outcome(
 }
 
 describe('OutcomeStore', () => {
+    test('serializes concurrent admissions against the outcome content budget', async () => {
+        const home = await temporaryDirectory();
+        const store = new OutcomeStore(home, { maximumOutcomeBytes: 5 });
+        try {
+            const [first, second] = await Promise.all([
+                store.putBytes('aaaa', 'text/plain'),
+                store.putBytes('bbbb', 'text/plain'),
+            ]);
+            if (!first || !second) throw new Error('Missing fixture descriptors');
+            const candidate = outcome('wbo_parallel1234567890123', first);
+            candidate.artifacts.push({
+                id: 'artifact_second',
+                name: 'second.txt',
+                content: second,
+            });
+            const completed = await store.commit(candidate, 'present');
+            expect(completed.artifacts).toHaveLength(1);
+            expect(completed.warnings).toContainEqual({
+                code: 'outcome_file_skipped',
+                message: 'Skipped second.txt: exceeds the per-outcome safety limit',
+            });
+            expect((await store.collectGarbage()).retained_blobs).toBe(1);
+        } finally {
+            await store.close();
+        }
+    });
+    test('applies limits to retained descriptors when committing through another store', async () => {
+        const home = await temporaryDirectory();
+        const original = new OutcomeStore(home);
+        const descriptor = await original.putBytes('retained content', 'text/plain');
+        const limited = new OutcomeStore(home, { maximumContentBytes: 5 });
+        try {
+            const completed = await limited.commit(
+                outcome('wbo_reused123456789012345', descriptor),
+                'present'
+            );
+            expect(completed.artifacts).toEqual([]);
+            expect(completed.warnings[0]?.message).toContain('result.txt');
+            expect(completed.warnings[0]?.message).toContain('per-file safety limit');
+        } finally {
+            await limited.close();
+            await original.close();
+        }
+    });
+    test('skips a named file larger than free disk and commits its warning', async () => {
+        const home = await temporaryDirectory();
+        const source = join(home, 'disk.txt');
+        await writeFile(source, 'fake result larger than available disk');
+        const disk = await filesystem.statfs(home);
+        const free = spyOn(filesystem, 'statfs').mockResolvedValue({
+            ...disk,
+            bavail: 1,
+            bsize: 1,
+        });
+        const store = new OutcomeStore(home);
+        try {
+            const descriptor = await store.putFile(source);
+            const completed = await store.commit(
+                outcome('wbo_disk12345678901234567', descriptor),
+                'present'
+            );
+            expect(completed.artifacts).toEqual([]);
+            expect(completed.warnings).toContainEqual({
+                code: 'outcome_file_skipped',
+                message: 'Skipped result.txt: insufficient free disk space',
+            });
+            expect((await store.read(completed.id)).completeness).toBe('complete');
+        } finally {
+            free.mockRestore();
+            await store.close();
+        }
+    });
     test('refuses symlinked content storage without writing outside its home', async () => {
         const home = await temporaryDirectory();
         const outside = await temporaryDirectory();
@@ -179,9 +252,19 @@ describe('OutcomeStore', () => {
             maximumContentBytes: 5,
             maximumOutcomeBytes: 5,
         });
-        await expect(store.putBytes('too large', 'text/plain')).rejects.toThrow(
-            'per-file safety limit'
+        const skipped = await store.putBytes('too large', 'text/plain');
+        const partial = await store.commit(
+            outcome('wbo_oversized123456789012', skipped),
+            'present'
         );
+        expect(partial.artifacts).toEqual([]);
+        expect(partial.changesets[0]?.entries).toEqual([]);
+        expect(partial.warnings).toContainEqual({
+            code: 'outcome_file_skipped',
+            message: expect.stringContaining(
+                'Skipped result.txt: exceeds the 5 B per-file safety limit'
+            ),
+        });
 
         const descriptor = await store.putBytes('hello', 'text/plain');
         const id = 'wbo_1234567890abcdefghij';
@@ -350,14 +433,21 @@ describe('OutcomeStore', () => {
         ).toBe(0o600);
     });
 
-    test('rejects aggregate capture overflow before copying another blob', async () => {
+    test('skips aggregate capture overflow before copying another blob', async () => {
         const home = await temporaryDirectory();
         const store = new OutcomeStore(home, { maximumOutcomeBytes: 5 });
         const first = await store.putBytes('hello', 'text/plain');
         expect(await store.putBytes('hello', 'text/plain')).toEqual(first);
         const source = join(home, 'overflow.txt');
         await writeFile(source, 'other');
-        await expect(store.putFile(source)).rejects.toThrow('aggregate safety limit');
+        const skipped = await store.putFile(source);
+        const completed = await store.commit(
+            outcome('wbo_aggregate123456789012', skipped),
+            'present'
+        );
+        expect(completed.artifacts).toEqual([]);
+        expect(completed.warnings[0]?.message).toContain('result.txt');
+        expect(completed.warnings[0]?.message).toContain('per-outcome safety limit');
         expect((await store.collectGarbage()).retained_blobs).toBe(1);
         await store.close();
         expect((await store.collectGarbage()).removed_blobs).toBe(0);
@@ -373,25 +463,34 @@ describe('OutcomeStore', () => {
             stores.map((store) => store.putBytes('same', 'text/plain'))
         );
         expect(descriptors[0]).toEqual(descriptors[1]);
-        const results = await Promise.allSettled(
+        const results = await Promise.all(
             stores.map((store, index) =>
                 store.putBytes(index === 0 ? 'aaaa' : 'bbbb', 'text/plain')
             )
         );
-        expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(
+        const completed = await Promise.all(
+            stores.map(async (store, index) => {
+                const descriptor = results[index];
+                if (!descriptor) throw new Error('Missing fixture descriptor');
+                return store.commit(
+                    outcome(`wbo_${String(index).repeat(20)}`, descriptor),
+                    'present'
+                );
+            })
+        );
+        expect(completed.filter((value) => value.artifacts.length === 0)).toHaveLength(
             1
         );
-        const rejected = results.find((result) => result.status === 'rejected');
-        expect(rejected).toMatchObject({
-            reason: expect.objectContaining({
-                message: expect.stringContaining('quota exceeded'),
-            }),
-        });
+        expect(
+            completed
+                .flatMap((value) => value.warnings)
+                .some((warning) => warning.message.includes('quota exceeded'))
+        ).toBe(true);
         expect((await stores[0]?.collectGarbage())?.retained_blobs).toBe(2);
         await Promise.all(stores.map((store) => store.close()));
     });
 
-    test('quota failures retain committed results and include metadata in the budget', async () => {
+    test('quota skips retain committed results and reserve room for warning metadata', async () => {
         const home = await temporaryDirectory();
         const store = new OutcomeStore(home, { maximumStoreBytes: 4_096 });
         const descriptor = await store.putBytes('retained', 'text/plain');
@@ -399,9 +498,14 @@ describe('OutcomeStore', () => {
         await store.commit(outcome(id, descriptor), 'pending');
         await store.close();
         const limited = new OutcomeStore(home, { maximumStoreBytes: 8 });
-        await expect(limited.putBytes('new', 'text/plain')).rejects.toThrow(
-            'quota exceeded'
+        const skipped = await limited.putBytes('new', 'text/plain');
+        const completed = await limited.commit(
+            outcome('wbo_new123456789012345678', skipped),
+            'present'
         );
+        expect(completed.artifacts).toEqual([]);
+        expect(completed.warnings[0]?.message).toContain('quota exceeded');
+        expect(completed.warnings[0]?.message).not.toContain('wb clean');
         expect(await limited.read(id)).toEqual(outcome(id, descriptor));
         expect(await readFile(await limited.blob(descriptor), 'utf8')).toBe('retained');
         await limited.close();
@@ -409,10 +513,8 @@ describe('OutcomeStore', () => {
         const other = await temporaryDirectory();
         const metadataLimited = new OutcomeStore(other, { maximumStoreBytes: 8 });
         const content = await metadataLimited.putBytes('12345678', 'text/plain');
-        await expect(
-            metadataLimited.commit(outcome(id, content), 'pending')
-        ).rejects.toThrow('quota exceeded');
-        await expect(metadataLimited.read(id)).rejects.toThrow('does not exist');
+        await metadataLimited.commit(outcome(id, content), 'pending');
+        expect((await metadataLimited.read(id)).artifacts).toHaveLength(1);
         await metadataLimited.close();
     });
 
@@ -420,9 +522,8 @@ describe('OutcomeStore', () => {
         const home = await temporaryDirectory();
         const store = new OutcomeStore(home, { maximumStoreBytes: 4 });
         await store.putBytes('aaaa', 'text/plain');
-        await expect(store.putBytes('bbbb', 'text/plain')).rejects.toThrow(
-            'quota exceeded'
-        );
+        const skipped = await store.putBytes('bbbb', 'text/plain');
+        await expect(store.blob(skipped)).rejects.toThrow();
         await store.close();
         const next = await store.putBytes('cccc', 'text/plain');
         expect(await readFile(await store.blob(next), 'utf8')).toBe('cccc');

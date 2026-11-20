@@ -1,9 +1,18 @@
 import { randomBytes } from 'node:crypto';
-import { lstat, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import {
+    lstat,
+    readdir,
+    readFile,
+    rename,
+    rm,
+    statfs,
+    writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { outcomeStorageDirectory } from './directories.js';
 import { OutcomeStorageLease } from './lease.js';
+import { OutcomeLimitError } from './limit.js';
 
 /** Budgets engine-owned result bytes under the same lease as capture and GC. */
 export class OutcomeStorageQuota {
@@ -17,7 +26,8 @@ export class OutcomeStorageQuota {
     async write<T>(
         requestedBytes: number | (() => Promise<number>),
         operation: () => Promise<T>,
-        replacedBytes = 0
+        replacedBytes = 0,
+        enforceLimit = true
     ): Promise<T> {
         await outcomeStorageDirectory(this.home, ['blobs'], true);
         return new OutcomeStorageLease(join(this.home, 'blobs')).exclusive(async () => {
@@ -27,11 +37,14 @@ export class OutcomeStorageQuota {
                 typeof requestedBytes === 'number'
                     ? requestedBytes
                     : await requestedBytes();
-            if (additionalBytes > this.maximumBytes - used) {
-                throw new Error(
-                    `Outcome storage quota exceeded (${this.maximumBytes} bytes). Review wb clean before removing retained results.`
+            if (enforceLimit && additionalBytes > this.maximumBytes - used) {
+                throw new OutcomeLimitError(
+                    `Outcome storage quota exceeded (${this.maximumBytes} bytes)`
                 );
             }
+            const disk = await statfs(this.home);
+            if (enforceLimit && additionalBytes > disk.bavail * disk.bsize)
+                throw new OutcomeLimitError('insufficient free disk space');
             // Persist the reservation first. Interrupted writes remain accounted for
             // until the next scan repairs the ledger from actual on-disk files.
             await this.record(used + additionalBytes);

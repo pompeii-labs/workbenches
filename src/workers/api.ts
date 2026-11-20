@@ -106,20 +106,7 @@ export class WorkerApi {
         return `/v1/workers/${encodeURIComponent(worker)}/connections${id ? `/${encodeURIComponent(id)}` : ''}`;
     }
 
-    async uploadOutcome(
-        runId: string,
-        runToken: string,
-        archive: Uint8Array
-    ): Promise<void> {
-        await this.request(`/v1/runs/${encodeURIComponent(runId)}/outcome`, {
-            method: 'PUT',
-            token: runToken,
-            raw: archive,
-            contentType: 'application/gzip',
-        });
-    }
-
-    private async request(
+    async request(
         path: string,
         options: {
             method?: string;
@@ -148,7 +135,7 @@ export class WorkerApi {
                 ...(options.body !== undefined
                     ? { body: JSON.stringify(options.body) }
                     : options.raw
-                      ? { body: new Uint8Array(options.raw) }
+                      ? { body: options.raw }
                       : {}),
                 signal: AbortSignal.timeout(60_000),
             });
@@ -156,14 +143,19 @@ export class WorkerApi {
             const detail = error instanceof Error ? error.message : String(error);
             throw new WorkerApiError(`Could not reach workbenches.dev: ${detail}`, 0);
         }
-        const value: unknown = await response.json().catch(() => null);
+        const value: unknown = await response.json().catch((error: unknown) => {
+            if (error instanceof SyntaxError || !response.ok) return null;
+            throw new WorkerApiError('Worker response was interrupted', 0);
+        });
         if (!response.ok) {
             const message =
-                isRecord(value) &&
-                isRecord(value.error) &&
-                typeof value.error.message === 'string'
-                    ? value.error.message
-                    : `Worker request failed (HTTP ${response.status})`;
+                isRecord(value) && typeof value.message === 'string'
+                    ? value.message
+                    : isRecord(value) &&
+                        isRecord(value.error) &&
+                        typeof value.error.message === 'string'
+                      ? value.error.message
+                      : `Worker request failed (HTTP ${response.status})`;
             throw new WorkerApiError(message, response.status);
         }
         return value;

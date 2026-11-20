@@ -23,7 +23,7 @@ import { WorkerRejection } from '../../src/workers/contracts.js';
 import { packageAlias, WorkerEngine } from '../../src/workers/engine.js';
 import { dockerAuthConfig } from '../../src/workers/environment.js';
 import { WorkerHome } from '../../src/workers/home.js';
-import { WorkerOutcomeArchive } from '../../src/workers/outcome.js';
+import { WorkerOutcomeLayout } from '../../src/workers/outcome.js';
 import { parseServerMessage, type RunStart } from '../../src/workers/protocol.js';
 import { WorkerSessionRuns } from '../../src/workers/runs.js';
 import { WorkerRunnerVersions } from '../../src/workers/versions.js';
@@ -1424,7 +1424,7 @@ describe('worker engine', () => {
                 kind: 'pull_request',
             },
         ];
-        expect(WorkerOutcomeArchive.pullRequest({ links } as RunOutcome)).toBe(12);
+        expect(WorkerOutcomeLayout.pullRequest({ links } as RunOutcome)).toBe(12);
     });
 });
 

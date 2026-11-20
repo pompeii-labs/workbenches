@@ -2,9 +2,16 @@ import type { WorkbenchEvent } from '../runs/events.js';
 import { type WorkerAssignment, WorkerAssignments } from './assignments.js';
 import type { WorkerRunHost } from './contracts.js';
 import { duration, excerpt, type WorkerLog } from './log.js';
+import type { WorkerOutcomeData } from './outcome.js';
 
 export interface WorkerUploader {
-    uploadOutcome(runId: string, runToken: string, archive: Uint8Array): Promise<void>;
+    uploadOutcome(
+        runId: string,
+        runToken: string,
+        outcome: WorkerOutcomeData,
+        credentials: string[],
+        report: (message: string) => void
+    ): Promise<void>;
 }
 
 /** How many passes a finished run continued with send is followed before it must show new events. */
@@ -202,7 +209,18 @@ export class WorkerRunTracker {
                 await this.uploader.uploadOutcome(
                     assignment.run_id,
                     start.run_token,
-                    await outcome.archive()
+                    await outcome.files(),
+                    [
+                        ...Object.values(start.env),
+                        start.run_token,
+                        start.workspace?.credential ?? '',
+                        start.workspace?.clone?.credential ?? '',
+                        start.image_pull?.password ?? '',
+                    ],
+                    (message) =>
+                        this.log.write(
+                            `${assignment.workbench} outcome: ${excerpt(message, 80)}`
+                        )
                 );
             } catch (error) {
                 this.log.write(

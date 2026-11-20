@@ -40,10 +40,7 @@ async function worker(
     const directory =
         reuse?.directory ?? (await mkdtemp(join(tmpdir(), 'workbench-worker-daemon-')));
     const server = reuse?.server ?? new FakeWorkerServer();
-    server.routes.set(
-        'PUT /v1/runs/run_1/outcome',
-        () => new Response(null, { status: 204 })
-    );
+    server.routes.set('POST /v1/runs/run_1/outcome/complete', () => Response.json({}));
     const home = new WorkerHome(directory);
     const host = reuse?.host ?? new FakeRunHost();
     const registration = {
@@ -125,10 +122,11 @@ describe('worker daemon', () => {
         host.finish(session, 12);
         const upload = await server.request(
             (request) =>
-                request.method === 'PUT' && request.path === '/v1/runs/run_1/outcome'
+                request.method === 'POST' &&
+                request.path === '/v1/runs/run_1/outcome/complete'
         );
         expect(upload.authorization).toBe('Bearer MUST_NOT_RENDER_RUN_TOKEN');
-        expect(upload.body).toBe('outcome-archive');
+        expect(JSON.parse(upload.body)).toMatchObject({ warnings: [], artifacts: [] });
         await server.next(
             (message) =>
                 message.type === 'log' &&

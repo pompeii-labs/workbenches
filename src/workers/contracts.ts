@@ -1,5 +1,6 @@
 import type { WorkbenchEvent } from '../runs/events.js';
 import type { WorkerRunSpec } from './environment.js';
+import type { WorkerOutcomeData } from './outcome.js';
 import type { RunStart, WorkerCommand } from './protocol.js';
 
 /** A run the worker will not take, with the reason the server shows. */
@@ -23,7 +24,7 @@ export interface WorkerOutcome {
     run: string;
     /** The pull request number its links name, for the log. */
     pullRequest?: number;
-    archive(): Promise<Uint8Array>;
+    files(): Promise<WorkerOutcomeData>;
 }
 
 /**

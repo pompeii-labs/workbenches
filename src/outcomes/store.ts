@@ -12,7 +12,7 @@ import {
     writeFile,
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-
+import { OutcomeAdmission } from './admission.js';
 import {
     digestFile,
     installExclusive,
@@ -37,7 +37,6 @@ import {
     requireMetadataFile,
     writeJson,
 } from './metadata.js';
-import { formatOutcomeBytes as formatBytes } from './presentation.js';
 import { OutcomeStorageQuota } from './quota.js';
 import { collectAbandonedOutcomeTemporaries } from './temporaries.js';
 import {
@@ -46,9 +45,9 @@ import {
     parseRunOutcome,
 } from './validation.js';
 
-const defaultMaximumOutcomeBytes = 512 * 1_024 * 1_024;
-const defaultMaximumContentBytes = 256 * 1_024 * 1_024;
-const defaultMaximumStoreBytes = 5 * 1_024 * 1_024 * 1_024;
+const defaultMaximumOutcomeBytes = 20 * 1_024 ** 3;
+const defaultMaximumContentBytes = 5 * 1_024 ** 3;
+const defaultMaximumStoreBytes = 20 * 1_024 ** 3;
 const defaultMaximumMetadataBytes = 16 * 1_024 * 1_024;
 
 export interface OutcomeStoreOptions {
@@ -73,8 +72,7 @@ export class OutcomeStore {
     readonly #quota: OutcomeStorageQuota;
     private capture: Promise<void> | undefined;
     private readonly captureId = crypto.randomUUID();
-    private readonly capturedContent = new Map<OutcomeDigest, number>();
-    private capturedBytes = 0;
+    private readonly admission: OutcomeAdmission;
 
     constructor(
         private readonly home: string,
@@ -89,6 +87,10 @@ export class OutcomeStore {
             options.maximumMetadataBytes ?? defaultMaximumMetadataBytes;
         const maximumStoreBytes = options.maximumStoreBytes ?? defaultMaximumStoreBytes;
         this.#quota = new OutcomeStorageQuota(home, maximumStoreBytes);
+        this.admission = new OutcomeAdmission(
+            this.#maximumContentBytes,
+            this.#maximumOutcomeBytes
+        );
         requirePositiveLimit(this.#maximumOutcomeBytes, 'maximumOutcomeBytes');
         requirePositiveLimit(this.#maximumContentBytes, 'maximumContentBytes');
         requirePositiveLimit(maximumStoreBytes, 'maximumStoreBytes');
@@ -107,38 +109,38 @@ export class OutcomeStore {
         if (details.isSymbolicLink() || !details.isFile()) {
             throw new Error(`Outcome content must be a regular file: ${path}`);
         }
-        this.assertContentSize(details.size);
         const digest = await digestFile(path);
         const descriptor: OutcomeContentDescriptor = {
             digest,
             media_type: mediaType,
             size_bytes: details.size,
         };
-        this.admitContent(descriptor);
-        const target = this.blobPath(digest);
-        await this.prepareBlob(digest);
-        if (!(await validExistingBlob(target, descriptor))) {
-            await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-            const temporary = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-            let existing = false;
-            await this.#quota.write(
-                async () => {
-                    existing = await validExistingBlob(target, descriptor);
-                    return existing ? 0 : descriptor.size_bytes;
-                },
-                async () => {
-                    if (existing) return;
-                    try {
-                        await copyFile(path, temporary);
-                        await chmod(temporary, 0o600);
-                        await verifyBlob(temporary, descriptor);
-                        await installExclusive(temporary, target);
-                    } finally {
-                        await rm(temporary, { force: true });
+        await this.admission.capture(descriptor, async () => {
+            const target = this.blobPath(digest);
+            await this.prepareBlob(digest);
+            if (!(await validExistingBlob(target, descriptor))) {
+                await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+                const temporary = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+                let existing = false;
+                await this.#quota.write(
+                    async () => {
+                        existing = await validExistingBlob(target, descriptor);
+                        return existing ? 0 : descriptor.size_bytes;
+                    },
+                    async () => {
+                        if (existing) return;
+                        try {
+                            await copyFile(path, temporary);
+                            await chmod(temporary, 0o600);
+                            await verifyBlob(temporary, descriptor);
+                            await installExclusive(temporary, target);
+                        } finally {
+                            await rm(temporary, { force: true });
+                        }
                     }
-                }
-            );
-        }
+                );
+            }
+        });
         return descriptor;
     }
 
@@ -148,7 +150,6 @@ export class OutcomeStore {
     ): Promise<OutcomeContentDescriptor> {
         await this.beginCapture();
         const source = typeof bytes === 'string' ? Buffer.from(bytes) : bytes;
-        this.assertContentSize(source.byteLength);
         const digest =
             `sha256:${createHash('sha256').update(source).digest('hex')}` as const;
         const descriptor: OutcomeContentDescriptor = {
@@ -156,29 +157,33 @@ export class OutcomeStore {
             media_type: mediaType,
             size_bytes: source.byteLength,
         };
-        this.admitContent(descriptor);
-        const target = this.blobPath(digest);
-        await this.prepareBlob(digest);
-        if (!(await validExistingBlob(target, descriptor))) {
-            await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-            const temporary = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-            let existing = false;
-            await this.#quota.write(
-                async () => {
-                    existing = await validExistingBlob(target, descriptor);
-                    return existing ? 0 : descriptor.size_bytes;
-                },
-                async () => {
-                    if (existing) return;
-                    try {
-                        await writeFile(temporary, source, { mode: 0o600, flag: 'wx' });
-                        await installExclusive(temporary, target);
-                    } finally {
-                        await rm(temporary, { force: true });
+        await this.admission.capture(descriptor, async () => {
+            const target = this.blobPath(digest);
+            await this.prepareBlob(digest);
+            if (!(await validExistingBlob(target, descriptor))) {
+                await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+                const temporary = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+                let existing = false;
+                await this.#quota.write(
+                    async () => {
+                        existing = await validExistingBlob(target, descriptor);
+                        return existing ? 0 : descriptor.size_bytes;
+                    },
+                    async () => {
+                        if (existing) return;
+                        try {
+                            await writeFile(temporary, source, {
+                                mode: 0o600,
+                                flag: 'wx',
+                            });
+                            await installExclusive(temporary, target);
+                        } finally {
+                            await rm(temporary, { force: true });
+                        }
                     }
-                }
-            );
-        }
+                );
+            }
+        });
         return descriptor;
     }
 
@@ -187,7 +192,7 @@ export class OutcomeStore {
         applicationState: OutcomeApplicationState
     ): Promise<RunOutcome> {
         await this.beginCapture();
-        const outcome = parseRunOutcome(candidate);
+        const outcome = this.admission.filter(parseRunOutcome(candidate));
         if (outcome.turn_index !== undefined && applicationState !== 'present') {
             throw new Error('Turn snapshots must have a present receipt');
         }
@@ -203,15 +208,6 @@ export class OutcomeStore {
                 throw new Error(
                     'Outcome references disagree about shared content size'
                 );
-        }
-        const total = [...unique.values()].reduce(
-            (sum, descriptor) => sum + descriptor.size_bytes,
-            0
-        );
-        if (total > this.#maximumOutcomeBytes) {
-            throw new Error(
-                `Outcome content exceeds the ${formatBytes(this.#maximumOutcomeBytes)} safety limit`
-            );
         }
         for (const descriptor of unique.values()) {
             await this.blob(descriptor);
@@ -249,7 +245,9 @@ export class OutcomeStore {
                     await rm(temporary, { recursive: true, force: true });
                     throw error;
                 }
-            }
+            },
+            0,
+            false
         );
         return outcome;
     }
@@ -449,8 +447,7 @@ export class OutcomeStore {
         await new OutcomeStorageLease(this.blobsRoot()).exclusive(async () => {
             await rm(this.capturePath(), { force: true });
             this.capture = undefined;
-            this.capturedContent.clear();
-            this.capturedBytes = 0;
+            this.admission.clear();
             await this.collectGarbageExclusive();
         });
     }
@@ -569,29 +566,6 @@ export class OutcomeStore {
             removed_bytes: removedBytes,
             retained_blobs: retainedBlobs,
         };
-    }
-
-    private assertContentSize(bytes: number): void {
-        if (bytes > this.#maximumContentBytes) {
-            throw new Error(
-                `Outcome content exceeds the ${formatBytes(this.#maximumContentBytes)} per-file safety limit`
-            );
-        }
-    }
-
-    private admitContent(descriptor: OutcomeContentDescriptor): void {
-        const existing = this.capturedContent.get(descriptor.digest);
-        if (existing !== undefined) {
-            if (existing !== descriptor.size_bytes)
-                throw new Error(
-                    'Outcome references disagree about shared content size'
-                );
-            return;
-        }
-        if (descriptor.size_bytes > this.#maximumOutcomeBytes - this.capturedBytes)
-            throw new Error('Outcome content exceeds its aggregate safety limit');
-        this.capturedContent.set(descriptor.digest, descriptor.size_bytes);
-        this.capturedBytes += descriptor.size_bytes;
     }
 
     private outcomesRoot(): string {

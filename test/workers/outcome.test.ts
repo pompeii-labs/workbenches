@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { OutcomeStore, WorkspaceSnapshot } from '../../src/outcomes/index.js';
-import { TarArchive } from '../../src/runtimes/staging/tar.js';
 import { WorkerCheckout } from '../../src/workers/checkout.js';
-import { WorkerOutcomeArchive } from '../../src/workers/outcome.js';
+import {
+    type WorkerOutcomeData,
+    WorkerOutcomeLayout,
+} from '../../src/workers/outcome.js';
 import { bareRepository } from './fixture.js';
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -15,15 +17,12 @@ afterEach(async () => {
     for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-const decoder = new TextDecoder();
-
-async function unpack(bytes: Uint8Array): Promise<Map<string, string>> {
-    const archive = await TarArchive.gunzip(bytes);
-    return new Map(
-        archive
-            .entries()
-            .map((entry) => [entry.name, decoder.decode(entry.content)] as const)
-    );
+async function unpack(outcome: WorkerOutcomeData): Promise<Map<string, string>> {
+    const files = new Map<string, string>();
+    for (const file of outcome.files)
+        files.set(file.path, await readFile(await file.source(), 'utf8'));
+    files.set('.workbench/outcome.json', JSON.stringify(outcome.manifest));
+    return files;
 }
 
 async function outcomeHome() {
@@ -90,7 +89,7 @@ describe('worker outcome archive', () => {
             },
             'present'
         );
-        const files = await unpack(await new WorkerOutcomeArchive(home).pack(outcome));
+        const files = await unpack(await new WorkerOutcomeLayout(home).files(outcome));
         expect([...files.keys()].toSorted()).toEqual([
             '.workbench/changes/change_primary/added.txt',
             '.workbench/changes/change_primary/notes.txt',
@@ -169,7 +168,7 @@ describe('worker outcome archive', () => {
             },
             'present'
         );
-        const files = await unpack(await new WorkerOutcomeArchive(home).pack(outcome));
+        const files = await unpack(await new WorkerOutcomeLayout(home).files(outcome));
         expect([...files.keys()].toSorted()).toEqual([
             '.workbench/outcome.json',
             'report.txt',
