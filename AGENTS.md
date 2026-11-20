@@ -99,6 +99,8 @@ wb run project-core \
 
 `run` accepts a saved alias only. The current directory is the target workspace unless `--dir` or `--repo` is provided. Neither option changes the package source.
 
+workbenches.dev is an optional hosted service: `wb run --cloud org/name[@version] --task "Review the migration"` uses the organization key from `wb login`, with optional `--repo owner/name --ref main`, `--worker <slug>`, `--project <name or slug>`, and `--max-minutes <1..1440>`. Cloud runs refuse local paths, saved aliases, `--dir`, `--workspace`, and host environment/runtime overrides, while retaining human, `--json`, and `--final` output.
+
 If `wb view` reports named workspace requirements, bind them explicitly with a repeatable `--workspace NAME=PATH` argument. Never guess sibling repository paths. The engine exposes each resolved location to the runner as `WORKBENCH_WORKSPACE_<NAME>` and rejects missing required bindings before model execution.
 
 Choose the output contract based on the caller:
@@ -131,6 +133,8 @@ wb kill wb_...
 
 `wb attach` observes or replays the session's latest run without starting new model work. `wb resume` starts a new run from saved native context when that session is resumable. Without an ID, `wb attach` selects the latest session. `wb kill` requires a session ID. `wb ps` shows active and resumable sessions; `wb ps --all` also includes terminal one-shot history. Runs persist their normalized events for replay.
 
+For the optional workbenches.dev hosted service, `run --cloud --detach` immediately prints the cloud run ID; `attach --cloud wb_...` follows that run with the same output modes. `ps --cloud` lists active organization runs (`--all` includes finished runs), and `kill --cloud wb_...` submits cancellation.
+
 ## Supervise multi-turn work
 
 The calling agent owns multi-turn supervision through the session control commands:
@@ -150,7 +154,11 @@ Use a receipt's `run_id` with `wait --run --after` to keep its cursor on that ex
 
 `wait` is read-only and prints one result with a turn's final response, usage, outcome ID, and pending input requests. It returns the first completed turn after the cursor, even when a queued follow-up starts immediately. `turn_completed` means that turn replied, not that execution or runtime cleanup finished. Repeat with `--after` set to the returned `sequence` to advance to the next boundary or terminal result. Without a cursor, observation starts at the beginning of that run. Exit codes are 0 for idle/turn_completed/completed, 1 for failure, 130 for cancellation or interruption, 2 for input needed, and 124 for timeout. Interrupting or timing out a wait does not cancel execution. Terminal executions and currently pending requests remain observable. `usage` is a delta strictly after `--after` through the returned sequence; `usage_total` is the cumulative run total at that sequence. Always advance the cursor before summing another wait's delta. Repeating the same cursor repeats its interval.
 
+`wait --cloud wb_...` uses the optional workbenches.dev hosted service with the same result fields, cursor semantics, timeout, and exit codes. `send --cloud wb_...` supports text, files, stdin, steering, and queuing; its receipt retains `input_id` and `after_sequence` and adds `command_status` to distinguish API acceptance from runner delivery.
+
 Only answer reported requests. `allow` grants permission once and `deny` rejects it. `allow_always` must be explicitly offered by the runner. A question accepts an offered label or free text when permitted; multiple questions use JSON string arrays, such as `[["First option"],["Second option"]]`, supplied as text, `--response-file`, or `--stdin`. `answer --reject` dismisses a question. Authentication requests report the runner's URL and instructions; never send credentials through `answer`. `ps --json` includes `needs_input` and pending request metadata.
+
+`answer --cloud wb_... request_id allow` answers a permission or question through the optional hosted service, including file, stdin, and JSON string-array responses; `--reject` is not available for cloud runs yet. `outcome --cloud wb_...` lists returned files, `--export ./results` downloads them into a new directory, and `--diff` prints the run's repository patch.
 
 `wb run <name>` requires a task through `--task`, `--task-file`, `--stdin`, or the positional task. `wb resume <id>` also requires new input; use `wb send` to continue an idle resumable session. Bare `wb` displays command help.
 

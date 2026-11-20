@@ -180,6 +180,8 @@ wb upgrade
 
 ### Run a task
 
+workbenches.dev is an optional hosted service: `wb run --cloud org/name[@version] --task "Review this migration"` uses the organization key from `wb login`, with `--repo owner/name --ref main`, `--worker <slug>`, `--project <name or slug>`, and `--max-minutes <1..1440>` selecting cloud execution settings. Cloud runs refuse local paths, saved aliases, `--dir`, `--workspace`, and host environment/runtime overrides; `--detach` prints the run ID (with `--json`, the same receipt as a local detached run), while foreground output retains `--json`, `--final`, and the default human renderer.
+
 Run a saved alias only. Local registrations read current package bytes for each new session; sessions retain their captured bytes for every resume. `--dir` and `--repo` select the workspace, not the package source. Pass a positional task or use `--task` for a one-shot run:
 
 ```sh
@@ -508,6 +510,8 @@ The reference CLI does not use Daytona's stop, start, pause, archive, or recover
 
 ### Returned results
 
+On the optional workbenches.dev hosted service, `wb outcome --cloud wb_...` lists returned files, `--export ./results` downloads their original bytes into a new directory, and `--diff` prints the repository patch. Cloud outcomes do not support local application or sandbox recovery.
+
 Each durable execution collects changesets, artifacts, and links into an immutable outcome before disposable runtime cleanup. Local and Docker changes are already present in mounted host directories. E2B and Daytona changes remain pending until you accept them explicitly:
 
 ```sh
@@ -524,6 +528,8 @@ A Workbench can write reports, screenshots, images, or other files beneath `WORK
 The result store enforces per-file, per-outcome, and aggregate storage limits before copying bytes. Quota failures do not silently remove retained outcomes. See [OUTCOMES.md](OUTCOMES.md) for the versioned contract, outbox JSON, receipt states, recovery limits, and explicit cleanup behavior.
 
 ### Sessions and background work
+
+Use `wb attach --cloud wb_...` to follow or replay a run on the optional workbenches.dev hosted service, with the same human, `--json`, and `--final` rendering. `wb ps --cloud` lists active organization runs (`--all` includes finished runs), and `wb kill --cloud wb_...` submits cancellation for a cloud run.
 
 ```sh
 wb run project-core --task "Perform the migration" --detach
@@ -569,6 +575,10 @@ Status folds each run's event log incrementally into a cache row in the local da
 Agents can use `mcp.workbenches.dev` for work on workbenches.dev, including work assigned to [self-hosted workers](#workers).
 
 Headless callers can supervise the same engine without keeping a client attached:
+
+For the optional workbenches.dev hosted service, `wb wait --cloud wb_...` observes the first turn boundary after `--after`, pending input, or termination with the local JSON result fields and exit codes; `--timeout` leaves the cloud execution running. `wb send --cloud wb_...` accepts text, `--task-file`, or `--stdin`, with `--steer` and `--queue` mapping to cloud commands; receipts include the cloud command ID as `input_id`, `after_sequence`, and an additive `command_status`, which reports API acceptance rather than runner delivery.
+
+`wb answer --cloud wb_... request_id allow` uses the same optional hosted service to answer permissions or questions, including JSON string arrays, `--response-file`, and `--stdin`. `--reject` is not available for cloud runs yet.
 
 ```sh
 wb run project-core --task "Review the migration" --detach --json

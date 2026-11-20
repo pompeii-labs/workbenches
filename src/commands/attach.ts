@@ -1,10 +1,11 @@
 import { defineCommand } from 'citty';
-
+import { CloudClient } from '../cloud/client.js';
 import { AuthenticationRequiredError } from '../connections/error.js';
 import { Connection } from '../database/connection.js';
 import { createEventRenderer } from '../rendering/index.js';
 import { workbenchHome } from '../storage.js';
 import { Services } from '../workbench/services.js';
+import { CloudAttachment } from './cloudattachment.js';
 
 export const attachCommand = defineCommand({
     meta: {
@@ -12,6 +13,11 @@ export const attachCommand = defineCommand({
         description: 'Observe or replay a Workbench session.',
     },
     args: {
+        cloud: {
+            type: 'boolean',
+            description: 'Observe a run on the optional workbenches.dev hosted service',
+            default: false,
+        },
         session: {
             type: 'positional',
             description: 'Session ID (defaults to the latest session)',
@@ -33,9 +39,17 @@ export const attachCommand = defineCommand({
             negativeDescription: 'Disable color in human-readable output',
         },
     },
-    async run({ args }) {
+    async run({ args, data }) {
         if (args.json && args.final) {
             throw new Error('--json and --final cannot be used together');
+        }
+        if (args.cloud) {
+            if (!args.session)
+                throw new Error('Cloud attach requires a cloud run ID (wb_...)');
+            const client = CloudClient.from(data);
+            await client.read(args.session);
+            await new CloudAttachment(client).execute(args.session, args);
+            return;
         }
         const home = workbenchHome();
         const connection = Connection.open(home);

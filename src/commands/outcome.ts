@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { defineCommand } from 'citty';
+import { CloudClient } from '../cloud/client.js';
 
 import { AuthenticationRequiredError } from '../connections/error.js';
 import type { RepositoryCheckoutStore } from '../database/checkouts.js';
@@ -28,6 +29,17 @@ export const outcomeCommand = defineCommand({
         description: 'Inspect, apply, or export a durable Workbench run outcome.',
     },
     args: {
+        cloud: {
+            type: 'boolean',
+            description:
+                'Read results from the optional workbenches.dev hosted service',
+            default: false,
+        },
+        diff: {
+            type: 'boolean',
+            description: 'Print the cloud run repository diff',
+            default: false,
+        },
         target: {
             type: 'positional',
             description: 'Workbench run ID or outcome ID',
@@ -65,7 +77,53 @@ export const outcomeCommand = defineCommand({
             default: false,
         },
     },
-    async run({ args }) {
+    async run({ args, data }) {
+        if (args.cloud) {
+            if (
+                args.apply ||
+                args.recover ||
+                args['discard-recovery'] ||
+                args.workspace
+            )
+                throw new Error('Cloud outcomes support listing, --export, and --diff');
+            if (args.diff && (args.export || args.json))
+                throw new Error('--diff cannot be combined with --export or --json');
+            const client = CloudClient.from(data);
+            if (args.diff) {
+                process.stdout.write(await client.diff(args.target));
+                return;
+            }
+            const files = await client.files(args.target);
+            const destination = args.export
+                ? await client.download(args.target, args.export, files)
+                : undefined;
+            if (args.json)
+                console.log(
+                    JSON.stringify({
+                        ...files,
+                        ...(destination
+                            ? { action: { type: 'export', path: destination } }
+                            : {}),
+                    })
+                );
+            else {
+                const output = new CliPresenter();
+                for (const file of files.files)
+                    output.record({
+                        machine: [file.path, String(file.size), file.media_type],
+                        title: file.name,
+                        details: [file.path, formatBytes(file.size)],
+                        tone: 'info',
+                    });
+                if (destination)
+                    output.message(
+                        `Exported outcome files to ${destination}`,
+                        'success'
+                    );
+            }
+            return;
+        }
+        if (args.diff) throw new Error('--diff requires --cloud');
         if (args['discard-recovery'] && (args.apply || args.export || args.recover))
             throw new Error(
                 '--discard-recovery cannot be combined with other outcome actions'

@@ -1,4 +1,5 @@
 import { defineCommand } from 'citty';
+import { CloudClient } from '../cloud/client.js';
 import { Connection } from '../database/connection.js';
 import { workbenchHome } from '../storage.js';
 import { Services } from '../workbench/services.js';
@@ -11,6 +12,11 @@ export const answerCommand = defineCommand({
         description: 'Answer a pending permission or question.',
     },
     args: {
+        cloud: {
+            type: 'boolean',
+            description: 'Answer on the optional workbenches.dev hosted service',
+            default: false,
+        },
         session: {
             type: 'positional',
             required: true,
@@ -47,8 +53,10 @@ export const answerCommand = defineCommand({
             default: false,
         },
     },
-    async run({ args }) {
+    async run({ args, data }) {
         await new CliReceipt().execute(args.json, async () => {
+            if (args.cloud && args.reject)
+                throw new Error('--reject is not available for cloud runs yet');
             if (
                 args.reject &&
                 (args.response !== undefined || args['response-file'] || args.stdin)
@@ -61,6 +69,26 @@ export const answerCommand = defineCommand({
                       file: args['response-file'],
                       stdin: args.stdin,
                   });
+            if (args.cloud) {
+                let answer: unknown = response;
+                if (response.trimStart().startsWith('[')) {
+                    answer = JSON.parse(response);
+                    if (
+                        !Array.isArray(answer) ||
+                        !answer.every(
+                            (row) =>
+                                Array.isArray(row) &&
+                                row.every((value) => typeof value === 'string')
+                        )
+                    )
+                        throw new Error('Question response must be JSON string arrays');
+                }
+                return CloudClient.from(data).answer(
+                    args.session,
+                    args.request,
+                    answer
+                );
+            }
             const home = workbenchHome();
             const connection = Connection.open(home);
             try {

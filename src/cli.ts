@@ -11,6 +11,7 @@ import {
 import pc from 'picocolors';
 import packageMetadata from '../package.json' with { type: 'json' };
 
+import { CloudClient } from './cloud/client.js';
 import { answerCommand } from './commands/answer.js';
 import { attachCommand } from './commands/attach.js';
 import { buildCommand } from './commands/build.js';
@@ -49,6 +50,7 @@ import { AuthenticationRequiredError } from './connections/error.js';
 import { Connection } from './database/connection.js';
 import { ModelCatalog } from './models/catalog.js';
 import { RegistryClient } from './registry/index.js';
+import { RegistryKeyring } from './registry/keyring.js';
 import { workbenchHome } from './storage.js';
 import { Services } from './workbench/services.js';
 import { WorkerProcess } from './workers/process.js';
@@ -73,14 +75,14 @@ export const workbenchCommand = defineCommand({
         login: loginCommand,
         logout: logoutCommand,
         org: orgCommand,
-        outcome: outcomeCommand,
+        outcome: cloudCommand(outcomeCommand),
         whoami: whoamiCommand,
         push: pushCommand,
         publish: publishCommand,
         unpublish: unpublishCommand,
         withdraw: withdrawCommand,
         delete: deleteCommand,
-        ps: psCommand,
+        ps: cloudCommand(psCommand),
         status: statusCommand,
         build: buildCommand,
         clean: cleanCommand,
@@ -88,12 +90,12 @@ export const workbenchCommand = defineCommand({
         save: saveCommand,
         unsave: unsaveCommand,
         resume: resumeCommand,
-        run: runCommand,
-        attach: attachCommand,
-        kill: killCommand,
-        send: sendCommand,
-        wait: waitCommand,
-        answer: answerCommand,
+        run: cloudCommand(runCommand),
+        attach: cloudCommand(attachCommand),
+        kill: cloudCommand(killCommand),
+        send: cloudCommand(sendCommand),
+        wait: cloudCommand(waitCommand),
+        answer: cloudCommand(answerCommand),
         worker: workerCommand,
     },
 });
@@ -225,9 +227,28 @@ function commandUsage(usage: string): string {
 }
 
 function usesModelCatalog(args: string[]): boolean {
+    if (args.includes('--cloud') || args.includes('--cloud=true')) return false;
     return new Set(['build', 'init', 'resume', 'run', 'send', 'smoke', 'view']).has(
         args[0] ?? ''
     );
+}
+
+function cloud(): CloudClient {
+    const registry = new RegistryClient();
+    return new CloudClient(
+        registry,
+        new RegistryKeyring(workbenchHome(), registry.apiUrl),
+        60_000
+    );
+}
+
+function cloudCommand<T extends ArgsDef>(command: CommandDef<T>): CommandDef<T> {
+    return {
+        ...command,
+        setup(context) {
+            if (context.args.cloud === true) context.data = cloud();
+        },
+    };
 }
 
 export function extractApiUrl(args: string[]): {

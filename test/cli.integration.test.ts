@@ -597,7 +597,10 @@ describe('CLI integration', () => {
             decision: 'allow_once',
         });
         if (!request) throw new Error('Missing permission response');
-        await events.emit('input.accepted', { id: 'permission', kind: 'permission' });
+        await events.emit('input.accepted', {
+            id: 'permission',
+            kind: 'permission',
+        });
         await control.resolve(request, {
             outcome: 'accepted',
             disposition: 'delivered',
@@ -723,14 +726,15 @@ describe('CLI integration', () => {
         expect(run.stdout).toContain('--env=<NAME=value>');
         expect(run.stdout).toContain('--workspace=<NAME=path>');
         expect(run.stdout).toContain('--allow-host-docker');
-        expect(run.stdout).not.toContain('--project');
+        expect(run.stdout).toContain('--cloud');
+        expect(run.stdout).toContain('--project=<project>');
 
         const resume = await executeCli(['resume', '--help']);
         expect(resume.code).toBe(0);
         expect(resume.stdout).toContain('--connection=<connection>');
     });
 
-    test('rejects retired commands and the removed project option', async () => {
+    test('rejects retired commands and the project option without cloud execution', async () => {
         const home = await temporaryDirectory('cli-retired-');
         for (const name of ['mcp', 'studio', 'project', 'create', 'add', 'remove']) {
             const result = await executeCli([name], { WORKBENCH_HOME: home });
@@ -745,6 +749,55 @@ describe('CLI integration', () => {
         expect(result.code).toBe(1);
         expect(result.stderr).toContain('--project');
         expect(await open(home).runs.list()).toEqual([]);
+    });
+
+    test('a run without cloud execution keeps the saved-package and native-runner path', async () => {
+        const fixture = await createFixture();
+        const home = await temporaryDirectory('cli-local-home-');
+        const bin = await fakeBin();
+        const record = join(fixture.root, 'local-runner');
+        const paths: string[] = [];
+        const server = Bun.serve({
+            port: 0,
+            hostname: '127.0.0.1',
+            fetch(request) {
+                paths.push(new URL(request.url).pathname);
+                return new Response('Unexpected cloud request', { status: 500 });
+            },
+        });
+        servers.push(server);
+        const environment = {
+            WORKBENCH_HOME: home,
+            PATH: `${bin}:${process.env.PATH}`,
+            WB_TEST_RECORD: record,
+        };
+        expect(
+            (
+                await executeCli(
+                    ['save', fixture.packageDirectory, '--as', 'local-expert'],
+                    environment,
+                    fixture.root
+                )
+            ).code
+        ).toBe(0);
+        const result = await executeCli(
+            [
+                'run',
+                'local-expert',
+                '--task',
+                'Local task',
+                '--final',
+                '--api-url',
+                server.url.toString(),
+            ],
+            environment,
+            fixture.root
+        );
+        expect(result.code).toBe(0);
+        expect(result.stdout).toBe('fixture response\n');
+        expect(await readFile(`${record}.args`, 'utf8')).toBe('Local task\n');
+        expect(paths.filter((path) => path.startsWith('/v1/runs'))).toEqual([]);
+        expect(await open(home).runs.list()).toHaveLength(1);
     });
 
     test('requests a runtime directly instead of requiring a saved Workbench', async () => {
@@ -2033,7 +2086,10 @@ describe('CLI integration', () => {
     });
 
     test('builds and reuses a Workbench-local Docker image', async () => {
-        const fixture = await createFixture({ runtime: 'docker', localImage: true });
+        const fixture = await createFixture({
+            runtime: 'docker',
+            localImage: true,
+        });
         const docker = await fakeDocker();
         const environment = {
             PATH: `${docker.bin}:${process.env.PATH}`,

@@ -5,6 +5,7 @@ import {
 import { workbenchHome } from '../storage.js';
 import { WORKBENCH_USER_AGENT } from '../user-agent.js';
 import { WorkbenchManifestParser } from '../workbench/manifest.js';
+import { RegistryRequestError } from './error.js';
 import { RegistryKeyring } from './keyring.js';
 import { RegistryStoredVersions, semverPattern } from './versions.js';
 
@@ -67,6 +68,7 @@ export interface RegistryRequestOptions {
     token?: string;
     body?: unknown;
     timeout?: number;
+    signal?: AbortSignal;
 }
 
 export class RegistryClient {
@@ -153,10 +155,32 @@ export class RegistryClient {
             : api.origin;
     }
 
-    async request<T>(path: string, options: RegistryRequestOptions = {}): Promise<T> {
+    request<T>(path: string, options?: RegistryRequestOptions): Promise<T>;
+    async request(
+        path: string,
+        options: RegistryRequestOptions = {}
+    ): Promise<unknown> {
+        const response = await this.response(path, options);
+        return response.json().catch(() => null);
+    }
+
+    async response(
+        path: string,
+        options: RegistryRequestOptions = {}
+    ): Promise<Response> {
         if (!path.startsWith('/v1/')) {
             throw new Error('Workbench registry requests must use a /v1 route');
         }
+        // The deadline covers the response headers only. A download's body can
+        // take far longer, bounded by the caller's own signal.
+        const deadline = new AbortController();
+        const timer = setTimeout(
+            () =>
+                deadline.abort(
+                    new DOMException('The operation timed out.', 'TimeoutError')
+                ),
+            options.timeout ?? 20_000
+        );
         let response: Response;
         try {
             response = await this.fetcher(`${this.apiUrl}${path}`, {
@@ -174,23 +198,33 @@ export class RegistryClient {
                 ...(options.body === undefined
                     ? {}
                     : { body: JSON.stringify(options.body) }),
-                signal: AbortSignal.timeout(options.timeout ?? 20_000),
+                signal: options.signal
+                    ? AbortSignal.any([options.signal, deadline.signal])
+                    : deadline.signal,
             });
         } catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
             throw new Error(`Could not reach the Workbench registry: ${detail}`);
+        } finally {
+            clearTimeout(timer);
         }
-        const value: unknown = await response.json().catch(() => null);
         if (!response.ok) {
+            const value: unknown = await response.json().catch(() => null);
             const message =
                 RegistryClient.isRecord(value) &&
                 RegistryClient.isRecord(value.error) &&
                 typeof value.error.message === 'string'
                     ? value.error.message
                     : `Workbench registry request failed (HTTP ${response.status})`;
-            throw new Error(message);
+            const code =
+                RegistryClient.isRecord(value) &&
+                RegistryClient.isRecord(value.error) &&
+                typeof value.error.code === 'string'
+                    ? value.error.code
+                    : 'request_failed';
+            throw new RegistryRequestError(code, message, response.status);
         }
-        return value as T;
+        return response;
     }
 
     async versions(
@@ -619,7 +653,7 @@ export class RegistryClient {
         return value === undefined || value === 'public' || value === 'private';
     }
 
-    private static isRecord(value: unknown): value is Record<string, unknown> {
+    static isRecord(value: unknown): value is Record<string, unknown> {
         return typeof value === 'object' && value !== null && !Array.isArray(value);
     }
 }

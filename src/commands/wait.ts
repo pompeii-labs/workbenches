@@ -1,4 +1,5 @@
 import { defineCommand } from 'citty';
+import { CloudClient } from '../cloud/client.js';
 import { Connection } from '../database/connection.js';
 import { workbenchHome } from '../storage.js';
 import { Services } from '../workbench/services.js';
@@ -11,6 +12,11 @@ export const waitCommand = defineCommand({
             'Wait read-only for a turn boundary, terminal execution, or input request.',
     },
     args: {
+        cloud: {
+            type: 'boolean',
+            description: 'Wait on the optional workbenches.dev hosted service',
+            default: false,
+        },
         session: {
             type: 'positional',
             required: true,
@@ -36,7 +42,19 @@ export const waitCommand = defineCommand({
             description: 'Wait past an event sequence returned by send or wait',
         },
     },
-    async run({ args }) {
+    async run({ args, data }) {
+        if (args.cloud) {
+            await new CliWait(CloudClient.from(data)).execute(args.session, {
+                json: args.json,
+                ...(args.after !== undefined
+                    ? { afterSequence: Number(args.after) }
+                    : {}),
+                ...(args.timeout !== undefined
+                    ? { timeoutMilliseconds: Number(args.timeout) * 1000 }
+                    : {}),
+            });
+            return;
+        }
         const home = workbenchHome();
         const connection = Connection.open(home);
         try {

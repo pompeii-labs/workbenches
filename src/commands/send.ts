@@ -1,4 +1,5 @@
 import { defineCommand } from 'citty';
+import { CloudClient } from '../cloud/client.js';
 import { Connection } from '../database/connection.js';
 import { workbenchHome } from '../storage.js';
 import { Services } from '../workbench/services.js';
@@ -12,13 +13,21 @@ export const sendCommand = defineCommand({
             'Send work to an idle session, steer an active turn, or queue a follow-up.',
     },
     args: {
+        cloud: {
+            type: 'boolean',
+            description: 'Send to the optional workbenches.dev hosted service',
+            default: false,
+        },
         session: {
             type: 'positional',
             required: true,
             description: 'Session or run ID',
         },
         text: { type: 'positional', required: false, description: 'Input text' },
-        'task-file': { type: 'string', description: 'Read input from a UTF-8 file' },
+        'task-file': {
+            type: 'string',
+            description: 'Read input from a UTF-8 file',
+        },
         stdin: {
             type: 'boolean',
             description: 'Read input from stdin',
@@ -40,7 +49,7 @@ export const sendCommand = defineCommand({
             default: false,
         },
     },
-    async run({ args }) {
+    async run({ args, data }) {
         await new CliReceipt().execute(args.json, async () => {
             if (args.steer && args.queue)
                 throw new Error('--steer and --queue cannot be used together');
@@ -49,6 +58,13 @@ export const sendCommand = defineCommand({
                 file: args['task-file'],
                 stdin: args.stdin,
             });
+            if (args.cloud) {
+                return CloudClient.from(data).command(
+                    args.session,
+                    args.steer ? 'steer' : args.queue ? 'queue' : 'send',
+                    { text: input }
+                );
+            }
             const home = workbenchHome();
             const connection = Connection.open(home);
             try {

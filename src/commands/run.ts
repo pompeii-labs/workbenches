@@ -1,4 +1,6 @@
 import { defineCommand } from 'citty';
+import { CloudClient } from '../cloud/client.js';
+import { cloudRunRequest } from '../cloud/request.js';
 
 import { AuthenticationRequiredError } from '../connections/error.js';
 import { Connection } from '../database/connection.js';
@@ -15,6 +17,7 @@ import {
     withRuntime,
 } from '../workbench/index.js';
 import { Services } from '../workbench/services.js';
+import { CloudAttachment } from './cloudattachment.js';
 import { CliInput } from './input.js';
 import { CliPresenter } from './presenter.js';
 import { CliRunClient } from './run-client.js';
@@ -25,6 +28,20 @@ export const runCommand = defineCommand({
         description: 'Run a Workbench.',
     },
     args: {
+        cloud: {
+            type: 'boolean',
+            description: 'Run on the optional workbenches.dev hosted service',
+            default: false,
+        },
+        worker: { type: 'string', description: 'Cloud worker slug' },
+        project: {
+            type: 'string',
+            description: 'Existing cloud project name or slug',
+        },
+        'max-minutes': {
+            type: 'string',
+            description: 'Cloud run time limit, from 1 to 1440 minutes',
+        },
         workbench: {
             type: 'positional',
             description: 'Saved Workbench alias',
@@ -127,8 +144,36 @@ export const runCommand = defineCommand({
             default: false,
         },
     },
-    async run({ args, rawArgs }) {
+    async run({ args, rawArgs, data }) {
         rejectUnknownRunOptions(rawArgs);
+        if (args.cloud) {
+            const request = cloudRunRequest(args, rawArgs);
+            const task = await new CliInput().read({
+                text: args.task ?? args.prompt,
+                file: args['task-file'],
+                stdin: args.stdin,
+            });
+            const client = CloudClient.from(data);
+            const run = await client.start({ ...request, task });
+            if (args.detach) {
+                // Cloud commands take the run id, so the human line prints it.
+                console.log(
+                    args.json
+                        ? JSON.stringify({
+                              session_id: run.session_id,
+                              run_id: run.id,
+                              input_id: `input_${run.id}`,
+                              after_sequence: 0,
+                          })
+                        : run.id
+                );
+                return;
+            }
+            await new CloudAttachment(client).execute(run.id, args);
+            return;
+        }
+        if (args.worker || args.project || args['max-minutes'])
+            throw new Error('--worker, --project, and --max-minutes require --cloud');
         if (args.ref && !args.repo) throw new Error('--ref requires --repo');
         if (args.repo && args.dir)
             throw new Error('--repo and --dir cannot be combined');
@@ -324,6 +369,10 @@ export const runCommand = defineCommand({
 });
 
 const runOptions = new Set([
+    '--cloud',
+    '--worker',
+    '--project',
+    '--max-minutes',
     '--repo',
     '--ref',
     '--task',
