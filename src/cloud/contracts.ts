@@ -10,6 +10,9 @@ export interface CloudRun {
     final_response: string | null;
     terminal_reason: string | null;
     created_at: string;
+    started_at?: string | null;
+    completed_at?: string | null;
+    usage?: { cost_usd: number | null } | null;
 }
 
 export interface CloudEvent extends Omit<WorkbenchEvent, 'type'> {
@@ -72,7 +75,18 @@ export function parseRun(value: unknown): CloudRun {
         typeof value.version.version !== 'string' ||
         (value.final_response !== null && typeof value.final_response !== 'string') ||
         (value.terminal_reason !== null && typeof value.terminal_reason !== 'string') ||
-        typeof value.created_at !== 'string'
+        typeof value.created_at !== 'string' ||
+        (value.started_at !== undefined &&
+            value.started_at !== null &&
+            typeof value.started_at !== 'string') ||
+        (value.completed_at !== undefined &&
+            value.completed_at !== null &&
+            typeof value.completed_at !== 'string') ||
+        (value.usage !== undefined &&
+            value.usage !== null &&
+            (!RegistryClient.isRecord(value.usage) ||
+                (value.usage.cost_usd !== null &&
+                    typeof value.usage.cost_usd !== 'number')))
     )
         throw new Error('The cloud API returned a malformed run');
     return {
@@ -87,6 +101,23 @@ export function parseRun(value: unknown): CloudRun {
         final_response: value.final_response,
         terminal_reason: value.terminal_reason,
         created_at: value.created_at,
+        ...(value.started_at === undefined ? {} : { started_at: value.started_at }),
+        ...(value.completed_at === undefined
+            ? {}
+            : { completed_at: value.completed_at }),
+        ...(value.usage === undefined
+            ? {}
+            : {
+                  usage:
+                      value.usage === null
+                          ? null
+                          : {
+                                cost_usd:
+                                    typeof value.usage.cost_usd === 'number'
+                                        ? value.usage.cost_usd
+                                        : null,
+                            },
+              }),
     };
 }
 

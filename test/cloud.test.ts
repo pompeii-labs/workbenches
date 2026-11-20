@@ -22,6 +22,32 @@ let reconnect = false;
 let silent = false;
 let unsafeFile = false;
 let finishAfterReplay = false;
+let unavailable = false;
+let completedAt: string | undefined;
+let empty = false;
+let malformed = false;
+
+function saved() {
+    return {
+        id: '11111111-1111-4111-8111-111111111111',
+        workbench_id: unavailable ? null : 'fake-workbench',
+        reference: 'publisher/expert',
+        available: !unavailable,
+        reason: unavailable ? 'The original is no longer public.' : null,
+        version: unavailable ? null : '2.0.0',
+        sandboxed: true,
+        saved_by: null,
+        created_at: '2026-11-19T00:00:00.000Z',
+    };
+}
+
+function project() {
+    return {
+        name: 'API',
+        slug: 'api',
+        counts: { needs_you: 0, running: 1, done: 2, failed: 0 },
+    };
+}
 
 function event(type: string, data: unknown = {}) {
     return {
@@ -46,6 +72,10 @@ function run() {
         // The API reports a successful run's terminal reason as "completed".
         terminal_reason: status === 'completed' ? 'completed' : null,
         created_at: '2026-11-19T00:00:00.000Z',
+        started_at: new Date().toISOString(),
+        completed_at:
+            status === 'completed' ? (completedAt ?? new Date().toISOString()) : null,
+        usage: { input_tokens: 10, output_tokens: 20, cost_usd: 0.25 },
     };
 }
 
@@ -59,6 +89,10 @@ beforeEach(async () => {
     silent = false;
     unsafeFile = false;
     finishAfterReplay = false;
+    unavailable = false;
+    completedAt = undefined;
+    empty = false;
+    malformed = false;
     requests.length = 0;
     events = [];
     events.push(event('run.started', { workbench: 'expert' }));
@@ -87,11 +121,48 @@ beforeEach(async () => {
                     },
                     { status: 409 }
                 );
+            if (malformed) return Response.json({});
             if (url.pathname === '/v1/resolutions')
                 return Response.json({
                     workbench_id: 'fake-workbench',
                     latest_version: { id: 'fake-latest-version', version: '2.0.0' },
                 });
+            if (url.pathname === '/v1/workbenches')
+                return Response.json({
+                    workbenches: empty
+                        ? []
+                        : [
+                              {
+                                  workbench_id: 'own-workbench',
+                                  slug: 'expert',
+                                  publisher: { slug: 'example' },
+                                  latest_version: { version: '1.0.0' },
+                                  sandboxed: true,
+                              },
+                              {
+                                  workbench_id: 'other-workbench',
+                                  slug: 'other',
+                                  publisher: { slug: 'publisher' },
+                                  latest_version: { version: '1.0.0' },
+                                  sandboxed: true,
+                              },
+                          ],
+                });
+            if (url.pathname === '/v1/saves')
+                return Response.json(
+                    request.method === 'POST'
+                        ? saved()
+                        : { saves: empty ? [] : [saved()] }
+                );
+            if (url.pathname.startsWith('/v1/saves/'))
+                return Response.json({ deleted: true });
+            if (url.pathname === '/v1/projects')
+                return Response.json(
+                    request.method === 'POST'
+                        ? project()
+                        : { projects: empty ? [] : [project()] },
+                    { status: request.method === 'POST' ? 201 : 200 }
+                );
             if (url.pathname === '/v1/workbenches/fake-workbench/versions')
                 return Response.json({
                     versions: [
@@ -152,15 +223,18 @@ beforeEach(async () => {
             if (url.pathname === '/v1/runs' && request.method === 'GET') {
                 // The API filters by view, as documented: active excludes needs_input.
                 const view = url.searchParams.get('view');
+                const finished = ['completed', 'failed', 'cancelled'].includes(status);
                 const listed =
                     view === 'all' ||
-                    (view === 'needs_input'
-                        ? status === 'needs_input'
-                        : view === 'active' &&
-                          !['needs_input', 'completed', 'failed', 'cancelled'].includes(
-                              status
-                          ));
-                return Response.json({ runs: listed ? [run()] : [], next: null });
+                    (view === 'finished'
+                        ? finished
+                        : view === 'needs_input'
+                          ? status === 'needs_input'
+                          : view === 'active' && !finished && status !== 'needs_input');
+                return Response.json({
+                    runs: listed && !empty ? [run()] : [],
+                    next: null,
+                });
             }
             return Response.json(run(), {
                 status: request.method === 'POST' ? 201 : 200,
@@ -250,6 +324,251 @@ async function cli(args: string[], input = '') {
 }
 
 describe('cloud commands', () => {
+    for (const args of [
+        ['list'],
+        ['save'],
+        ['unsave'],
+        ['status'],
+        ['resume'],
+        ['project'],
+        ['project', 'list'],
+        ['project', 'create'],
+    ])
+        test(`${args.join(' ')} help describes its cloud interface without HTTP`, async () => {
+            const result = await cli([...args, '--help']);
+            expect(result.code).toBe(0);
+            expect(result.stdout).toContain(
+                args[0] === 'project' ? 'workbenches.dev' : '--cloud'
+            );
+            if (args[0] === 'project') expect(result.stdout).not.toContain('--cloud');
+            expect(requests).toHaveLength(0);
+        });
+
+    test('list includes an available save with its public version', async () => {
+        const result = await cli(['list', '--cloud', '--json']);
+        expect(result.code).toBe(0);
+        expect(JSON.parse(result.stdout)[1]).toMatchObject({
+            kind: 'saved',
+            available: true,
+            reason: null,
+            version: '2.0.0',
+        });
+    });
+
+    test('status excludes old completions without reading their events', async () => {
+        completedAt = '2020-01-01T00:00:00Z';
+        const result = await cli(['status', '--cloud', '--json']);
+        expect(result.code).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual([]);
+        expect(requests.map((request) => request.path)).toEqual([
+            '/v1/runs?limit=100&view=needs_input',
+            '/v1/runs?limit=100&view=active',
+            '/v1/runs?limit=100&view=finished',
+        ]);
+    });
+
+    test('empty cloud listings retain machine and human output', async () => {
+        empty = true;
+        for (const args of [
+            ['list', '--cloud'],
+            ['status', '--cloud'],
+            ['project', 'list'],
+        ]) {
+            expect(JSON.parse((await cli([...args, '--json'])).stdout)).toEqual([]);
+            expect((await cli(args)).stdout).toContain('No ');
+        }
+        expect((await cli(['status', '--cloud', '--line'])).stdout).toBe(
+            'no active runs\n'
+        );
+    });
+
+    for (const args of [
+        ['list', '--cloud', '.'],
+        ['list', '--cloud', '--saved'],
+        ['save', '--cloud', 'publisher/expert', '--as', 'alias'],
+        ['save', '--cloud', 'publisher/expert@1.0.0'],
+        ['save', '--cloud', './expert'],
+        ['unsave', '--cloud', '../expert'],
+    ])
+        test(`${args.join(' ')} refuses unsupported cloud inputs before HTTP`, async () => {
+            expect((await cli(args)).code).toBe(1);
+            expect(requests).toHaveLength(0);
+        });
+
+    for (const args of [
+        ['list', '--cloud'],
+        ['save', '--cloud', 'publisher/expert'],
+        ['unsave', '--cloud', 'publisher/expert'],
+        ['status', '--cloud'],
+        ['project', 'list'],
+        ['project', 'create', 'API'],
+    ]) {
+        test(`${args.join(' ')} passes public API errors through unchanged`, async () => {
+            failure = true;
+            const result = await cli(args);
+            expect(result.code).toBe(1);
+            expect(result.stderr).toBe('error: The worker is not connected.\n');
+        });
+        test(`${args.join(' ')} refuses malformed public API responses`, async () => {
+            malformed = true;
+            const result = await cli(args);
+            expect(result.code).toBe(1);
+            expect(result.stderr).toContain('malformed');
+        });
+    }
+    for (const json of [false, true])
+        test(`list combines own and saved Workbenches in ${json ? 'JSON' : 'human'} mode`, async () => {
+            unavailable = true;
+            const result = await cli(['list', '--cloud', ...(json ? ['--json'] : [])]);
+            expect(result.code).toBe(0);
+            if (json)
+                expect(JSON.parse(result.stdout)).toEqual([
+                    expect.objectContaining({
+                        reference: 'example/expert',
+                        kind: 'own',
+                        available: true,
+                        reason: null,
+                    }),
+                    expect.objectContaining({
+                        reference: 'publisher/expert',
+                        kind: 'saved',
+                        available: false,
+                        reason: 'The original is no longer public.',
+                        version: null,
+                    }),
+                ]);
+            else {
+                for (const text of [
+                    'own',
+                    'saved',
+                    'available',
+                    'unavailable',
+                    'The original is no longer public.',
+                ])
+                    expect(result.stdout).toContain(text);
+            }
+            expect(result.stdout).not.toContain('publisher/other');
+            expect(requests.map((request) => request.path).sort()).toEqual([
+                '/v1/saves',
+                '/v1/workbenches',
+            ]);
+        });
+
+    test('save resolves the public identity and saves it for the default organization', async () => {
+        const result = await cli(['save', '--cloud', 'publisher/expert']);
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain('publisher/expert');
+        expect(requests).toEqual([
+            {
+                method: 'POST',
+                path: '/v1/resolutions',
+                body: { publisher: 'publisher', workbench: 'expert' },
+            },
+            {
+                method: 'POST',
+                path: '/v1/saves',
+                body: { workbench_id: 'fake-workbench' },
+            },
+        ]);
+    });
+
+    for (const reference of [
+        'publisher/expert',
+        '11111111-1111-4111-8111-111111111111',
+    ])
+        test(`unsave deletes ${reference} by save ID`, async () => {
+            unavailable = true;
+            const result = await cli(['unsave', '--cloud', reference]);
+            expect(result.code).toBe(0);
+            expect(requests.at(-1)).toMatchObject({
+                method: 'DELETE',
+                path: '/v1/saves/11111111-1111-4111-8111-111111111111',
+            });
+            expect(requests).toHaveLength(reference.includes('/') ? 2 : 1);
+        });
+
+    for (const state of ['running', 'needs_input', 'completed'])
+        test(`status folds live progress for a ${state} run`, async () => {
+            status = state;
+            events = [];
+            events.push(
+                event('plan.updated', {
+                    items: [{ text: 'Review', status: 'in_progress' }],
+                    completed: 0,
+                    total: 1,
+                })
+            );
+            events.push(event('tool.started', { id: 'tool', title: 'Read source' }));
+            if (state === 'needs_input')
+                events.push(
+                    event('input.requested', { id: 'permission', kind: 'permission' })
+                );
+            const result = await cli(['status', '--cloud', '--json']);
+            expect(result.code).toBe(0);
+            expect(JSON.parse(result.stdout)).toEqual([
+                expect.objectContaining({
+                    run_id: id,
+                    workbench: 'example/expert',
+                    workbench_version: '1.0.0',
+                    status: state === 'needs_input' ? 'running' : state,
+                    cost_usd: 0.25,
+                    activity: expect.objectContaining({
+                        kind: 'tool',
+                        title: 'Read source',
+                    }),
+                    plan: expect.objectContaining({ total: 1 }),
+                    steps: { item: 'Review', current: 1, completed: [] },
+                    pending_input:
+                        state === 'needs_input'
+                            ? { id: 'permission', kind: 'permission' }
+                            : null,
+                }),
+            ]);
+            expect((await cli(['status', '--cloud', '--line'])).stdout).toContain(
+                'expert'
+            );
+            if (state === 'needs_input')
+                expect((await cli(['status', '--cloud', '--line'])).stdout).toContain(
+                    `wb answer --cloud ${id}`
+                );
+            expect((await cli(['status', '--cloud'])).stdout).toContain(id);
+        });
+
+    test('resume refuses cloud continuation before reading input or making HTTP requests', async () => {
+        const result = await cli([
+            'resume',
+            '--cloud',
+            session,
+            '--task-file',
+            join(home, 'missing'),
+        ]);
+        expect(result.code).toBe(1);
+        expect(result.stderr).toBe(
+            'error: resume is not available for cloud sessions yet\n'
+        );
+        expect(requests).toHaveLength(0);
+    });
+
+    for (const json of [false, true])
+        test(`project lists and creates through the public API in ${json ? 'JSON' : 'human'} mode`, async () => {
+            const flags = json ? ['--json'] : [];
+            const listed = await cli(['project', 'list', ...flags]);
+            const created = await cli(['project', 'create', 'API', ...flags]);
+            expect(listed.code).toBe(0);
+            expect(created.code).toBe(0);
+            if (json) {
+                expect(JSON.parse(listed.stdout)).toEqual([project()]);
+                expect(JSON.parse(created.stdout)).toEqual(project());
+            } else {
+                expect(listed.stdout).toContain('API');
+                expect(created.stdout).toContain('API');
+            }
+            expect(requests).toEqual([
+                { method: 'GET', path: '/v1/projects', body: undefined },
+                { method: 'POST', path: '/v1/projects', body: { name: 'API' } },
+            ]);
+        });
+
     test('starts a detached run with documented API fields and a local-shaped receipt', async () => {
         const result = await cli([
             'run',

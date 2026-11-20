@@ -66,6 +66,8 @@ wb view project-core
 
 Bare `publisher/name` resolves only through the registry, never GitHub, to the latest release. `publisher/name@version` saves that exact version, such as a prerelease to try before it is released, and `wb upgrade` keeps it there. Git sources require a full HTTPS GitHub URL. `--name` selects a package and `--ref` selects a Git revision. Alias collisions require an explicit different `--as`; identical saves are idempotent. Local paths register their absolute package directory. A new run sees local edits, while every session owns frozen package bytes for resume. Existing frozen local registrations stay frozen until saved again.
 
+workbenches.dev is an optional hosted service: `wb list --cloud` lists the connected organization's own Workbenches and its saves together, marked `own` or `saved`, with availability and the reason when unavailable. `--json` prints one array. `wb save --cloud publisher/name` saves another publisher's public Workbench under its original reference, following its latest public version, without downloading a package. Cloud saves accept no alias, version pin, or source options. `wb unsave --cloud publisher/name` or `wb unsave --cloud <save id>` removes the save, never the original or run history. These commands use the organization key from `wb login` and do not change local saves.
+
 Remove an alias when it is no longer needed:
 
 ```sh
@@ -134,6 +136,10 @@ wb kill wb_...
 `wb attach` observes or replays the session's latest run without starting new model work. `wb resume` starts a new run from saved native context when that session is resumable. Without an ID, `wb attach` selects the latest session. `wb kill` requires a session ID. `wb ps` shows active and resumable sessions; `wb ps --all` also includes terminal one-shot history. Runs persist their normalized events for replay.
 
 For the optional workbenches.dev hosted service, `run --cloud --detach` immediately prints the cloud run ID; `attach --cloud wb_...` follows that run with the same output modes. `ps --cloud` lists active organization runs (`--all` includes finished runs), and `kill --cloud wb_...` submits cancellation.
+
+`status --cloud` shows live progress for active organization runs and runs finished in the last 10 minutes, with human, `--line`, and `--json` output. It folds public events into the local summary shape without probing local processes. `resume --cloud` refuses continuation because the public API does not support continuing a cloud session yet.
+
+`wb project list` and `wb project create <name>` manage organization projects on the optional hosted service using `wb login`; both accept `--json` and need no `--cloud` flag. Create a project before selecting it with `wb run --cloud --project <name or slug>`.
 
 ## Supervise multi-turn work
 

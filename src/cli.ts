@@ -27,6 +27,11 @@ import { logoutCommand } from './commands/logout.js';
 import { orgCommand } from './commands/org.js';
 import { outcomeCommand } from './commands/outcome.js';
 import { exitOnBrokenPipe } from './commands/pipe.js';
+import {
+    projectCommand,
+    projectCreateCommand,
+    projectListCommand,
+} from './commands/project.js';
 import { psCommand } from './commands/ps.js';
 import { publishCommand } from './commands/publish.js';
 import { pushCommand } from './commands/push.js';
@@ -66,7 +71,7 @@ export const workbenchCommand = defineCommand({
     subCommands: {
         init: initCommand,
         image: imageCommand,
-        list: listCommand,
+        list: cloudCommand(listCommand),
         view: viewCommand,
         validate: validateCommand,
         smoke: smokeCommand,
@@ -83,13 +88,20 @@ export const workbenchCommand = defineCommand({
         withdraw: withdrawCommand,
         delete: deleteCommand,
         ps: cloudCommand(psCommand),
-        status: statusCommand,
+        status: cloudCommand(statusCommand),
+        project: {
+            ...projectCommand,
+            subCommands: {
+                list: cloudCommand(projectListCommand, true),
+                create: cloudCommand(projectCreateCommand, true),
+            },
+        },
         build: buildCommand,
         clean: cleanCommand,
         connect: connectCommand,
-        save: saveCommand,
-        unsave: unsaveCommand,
-        resume: resumeCommand,
+        save: cloudCommand(saveCommand),
+        unsave: cloudCommand(unsaveCommand),
+        resume: cloudCommand(resumeCommand),
         run: cloudCommand(runCommand),
         attach: cloudCommand(attachCommand),
         kill: cloudCommand(killCommand),
@@ -242,11 +254,14 @@ function cloud(): CloudClient {
     );
 }
 
-function cloudCommand<T extends ArgsDef>(command: CommandDef<T>): CommandDef<T> {
+function cloudCommand<T extends ArgsDef>(
+    command: CommandDef<T>,
+    always = false
+): CommandDef<T> {
     return {
         ...command,
         setup(context) {
-            if (context.args.cloud === true) context.data = cloud();
+            if (always || context.args.cloud === true) context.data = cloud();
         },
     };
 }

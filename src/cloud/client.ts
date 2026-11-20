@@ -1,5 +1,7 @@
 import { mkdir, open } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { RegistryAccountStore } from '../registry/account-store.js';
+import type { RegistryRequestOptions } from '../registry/client.js';
 import { RegistryClient } from '../registry/client.js';
 import type { RegistryKeyring } from '../registry/keyring.js';
 import type { RunSnapshot } from '../runs/supervision.js';
@@ -12,10 +14,14 @@ import {
     parseRun,
     terminal,
 } from './contracts.js';
+import { CloudLibrary } from './library.js';
 import { CloudObservation } from './observation.js';
+import { CloudProjects } from './projects.js';
 
 /** Drives runs on workbenches.dev through its public API with the `wb login` key. */
 export class CloudClient {
+    readonly library: CloudLibrary;
+    readonly projects: CloudProjects;
     /**
      * `silence` is how long a live event socket may stay quiet before it is
      * replaced: an idle connection can die without a close frame, and a fresh
@@ -25,7 +31,20 @@ export class CloudClient {
         private readonly registry: RegistryClient,
         private readonly keyring: RegistryKeyring,
         private readonly silence: number
-    ) {}
+    ) {
+        this.library = new CloudLibrary(
+            this,
+            new RegistryAccountStore({ client: registry })
+        );
+        this.projects = new CloudProjects(this);
+    }
+
+    async request(
+        path: string,
+        options: Omit<RegistryRequestOptions, 'token'> = {}
+    ): Promise<unknown> {
+        return this.registry.request(path, { ...options, token: await this.token() });
+    }
 
     /** The client a command's setup composed for `--cloud`. */
     static from(data: unknown): CloudClient {
@@ -90,9 +109,11 @@ export class CloudClient {
         );
     }
 
-    /** Unfinished runs, those waiting on input first, or every run with `all`. The API filters by status. */
-    async *list(all: boolean): AsyncGenerator<CloudRun> {
-        for (const view of all ? ['all'] : ['needs_input', 'active']) {
+    /** Runs in each of the API's status views in turn, newest first within a view. */
+    async *list(
+        views: readonly ('all' | 'active' | 'needs_input' | 'finished')[]
+    ): AsyncGenerator<CloudRun> {
+        for (const view of views) {
             let cursor: string | null = null;
             do {
                 const query = new URLSearchParams({ limit: '100', view });

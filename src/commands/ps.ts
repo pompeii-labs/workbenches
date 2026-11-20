@@ -34,7 +34,10 @@ export const psCommand = defineCommand({
         if (args.cloud) {
             const client = CloudClient.from(data);
             const rows: string[][] = [];
-            for await (const run of client.list(args.all)) {
+            // Unfinished runs, those waiting on input first, or every run with --all.
+            for await (const run of client.list(
+                args.all ? ['all'] : ['needs_input', 'active']
+            )) {
                 if (args.json) {
                     // Only a run waiting on input has requests worth replaying its events for.
                     const pending =
