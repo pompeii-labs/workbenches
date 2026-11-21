@@ -34,7 +34,7 @@ import {
 import { runSpec, type WorkerRunEnvironment } from './environment.js';
 import type { WorkerHome } from './home.js';
 import type { WorkerLog } from './log.js';
-import { WorkerOutcomeArchive } from './outcome.js';
+import { WorkerOutcomeLayout } from './outcome.js';
 import type { RunStart, WorkerCommand } from './protocol.js';
 import { WorkerSessionRuns } from './runs.js';
 import { WorkerRunnerVersions } from './versions.js';
@@ -71,13 +71,13 @@ export interface WorkerEngineOptions {
  */
 export class WorkerEngine implements WorkerRunHost {
     readonly #options: WorkerEngineOptions;
-    readonly #outcomes: WorkerOutcomeArchive;
+    readonly #outcomes: WorkerOutcomeLayout;
     readonly #sessions: WorkerSessionRuns;
     readonly #versions: Pick<WorkerRunnerVersions, 'check'>;
 
     constructor(options: WorkerEngineOptions) {
         this.#options = options;
-        this.#outcomes = new WorkerOutcomeArchive(options.home.root);
+        this.#outcomes = new WorkerOutcomeLayout(options.home.root);
         this.#sessions = new WorkerSessionRuns(options.services);
         this.#versions = options.versions ?? new WorkerRunnerVersions();
     }
@@ -272,11 +272,11 @@ export class WorkerEngine implements WorkerRunHost {
             const run = await this.#options.services.runs.read(id);
             if (!RunStore.isTerminal(run.status) || !run.outcome_id) continue;
             const outcome = await this.#outcomes.read(run.outcome_id);
-            const pullRequest = WorkerOutcomeArchive.pullRequest(outcome);
+            const pullRequest = WorkerOutcomeLayout.pullRequest(outcome);
             outcomes.push({
                 run: run.id,
                 ...(pullRequest !== undefined ? { pullRequest } : {}),
-                archive: () => this.#outcomes.pack(outcome),
+                files: () => this.#outcomes.files(outcome),
             });
         }
         return outcomes;

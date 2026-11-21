@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import {
     type OutcomeContentDescriptor,
@@ -6,26 +6,35 @@ import {
     type RunOutcome,
 } from '../outcomes/index.js';
 import { outcomeArtifactPath } from '../outcomes/paths.js';
-import { TarArchive, type TarEntry } from '../runtimes/staging/tar.js';
 
-const encoder = new TextEncoder();
+export interface WorkerOutcomeFile {
+    path: string;
+    source(): Promise<string>;
+    media_type: string;
+}
 
-/** The directory of the archive's own files, which a run's output never takes a place in. */
+export interface WorkerOutcomeData {
+    directory: string;
+    files: WorkerOutcomeFile[];
+    manifest: ReturnType<WorkerOutcomeLayout['manifest']>;
+}
+
+/** Reserved engine metadata directory, never occupied by returned files. */
 const ARCHIVE_DIRECTORY = '.workbench';
 
 /**
- * Packs a run's outcome as the gzip tar the server stores, in the layout a
- * cloud run's outcome is stored in. Returned files sit at their own paths.
+ * Describes files in the hosted outcome layout, preserving older tar paths.
+ * Returned files sit at their own paths.
  * Everything else the outcome holds goes under `.workbench/`: `outcome.json`,
  * the files each changeset left behind, and its review diff. A repository
  * run's change against the commit it was cloned at is the changeset
  * `change_primary`, with its diff at
  * `.workbench/changes/change_primary/review.diff`.
  */
-export class WorkerOutcomeArchive {
+export class WorkerOutcomeLayout {
     readonly #store: OutcomeStore;
 
-    constructor(home: string) {
+    constructor(private readonly home: string) {
         this.#store = new OutcomeStore(home);
     }
 
@@ -33,48 +42,47 @@ export class WorkerOutcomeArchive {
         return this.#store.read(id);
     }
 
-    async pack(outcome: RunOutcome): Promise<Uint8Array> {
-        const entries: TarEntry[] = [];
+    async files(outcome: RunOutcome): Promise<WorkerOutcomeData> {
+        const files: WorkerOutcomeFile[] = [];
         const seen = new Set<string>();
-        const add = async (
-            name: string,
-            content: () => Promise<Uint8Array>,
-            mode = 0o644
-        ) => {
+        const add = (name: string, descriptor: OutcomeContentDescriptor) => {
             const path = normalize(name);
             if (!path || seen.has(path)) return;
             seen.add(path);
-            entries.push({ name: path, type: 'file', mode, content: await content() });
+            files.push({
+                path,
+                source: () => this.#store.blob(descriptor),
+                media_type: descriptor.media_type,
+            });
         };
-        const blob = (descriptor: OutcomeContentDescriptor) => async () =>
-            new Uint8Array(await readFile(await this.#store.blob(descriptor)));
         for (const artifact of outcome.artifacts) {
             const path = outcomeArtifactPath(artifact);
             if (normalize(path).split('/')[0] === ARCHIVE_DIRECTORY) continue;
-            await add(path, blob(artifact.content));
+            add(path, artifact.content);
         }
         for (const changeset of outcome.changesets) {
             for (const entry of changeset.entries) {
                 if (entry.after?.kind === 'file')
-                    await add(
+                    add(
                         `${ARCHIVE_DIRECTORY}/changes/${changeset.id}/${entry.path}`,
-                        blob(entry.after.content),
-                        entry.after.mode & 0o777
+                        entry.after.content
                     );
             }
             if (changeset.review)
-                await add(
+                add(
                     `${ARCHIVE_DIRECTORY}/changes/${changeset.id}/review.diff`,
-                    blob(changeset.review)
+                    changeset.review
                 );
         }
-        const manifest = encoder.encode(JSON.stringify(this.#manifest(outcome)));
-        await add(`${ARCHIVE_DIRECTORY}/outcome.json`, async () => manifest);
-        return await TarArchive.pack(entries).gzip();
+        return {
+            directory: join(this.home, 'outcomes', outcome.id, 'uploads'),
+            files,
+            manifest: this.manifest(outcome),
+        };
     }
 
-    /** What the outcome says about itself, as the server's archive records it. */
-    #manifest(outcome: RunOutcome) {
+    /** The metadata sent after every file has been considered. */
+    manifest(outcome: RunOutcome) {
         return {
             summary: outcome.summary ?? null,
             changesets: outcome.changesets.map((changeset) => ({
@@ -88,8 +96,6 @@ export class WorkerOutcomeArchive {
             })),
             artifacts: outcome.artifacts.map((artifact) => ({
                 name: artifact.name,
-                // The path the tar stores the artifact under, so a reader
-                // finds its entry by name.
                 path: normalize(outcomeArtifactPath(artifact)),
                 description: artifact.description ?? null,
                 media_type: artifact.content.media_type,
@@ -110,7 +116,7 @@ export class WorkerOutcomeArchive {
     }
 }
 
-/** A path with its empty, `.`, and `..` segments dropped, as the tar stores it. */
+/** Preserves the path normalization used by older tar uploads. */
 function normalize(path: string): string {
     return path
         .split('/')

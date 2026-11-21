@@ -369,7 +369,17 @@ export class FakeRunHost implements WorkerRunHost {
             {
                 run: outcome.run,
                 ...(outcome.pullRequest ? { pullRequest: outcome.pullRequest } : {}),
-                archive: async () => new TextEncoder().encode('outcome-archive'),
+                files: async () => ({
+                    directory: join(tmpdir(), 'workbench-empty-outcome'),
+                    files: [],
+                    manifest: {
+                        summary: null,
+                        changesets: [],
+                        artifacts: [],
+                        links: [],
+                        warnings: [],
+                    },
+                }),
             },
         ];
     }

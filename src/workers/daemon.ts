@@ -26,7 +26,8 @@ import {
 } from './protocol.js';
 import type { WorkerSignIns } from './signin.js';
 import { WorkerEventStream } from './stream.js';
-import { WorkerRunTracker, type WorkerUploader } from './tracker.js';
+import { WorkerRunTracker } from './tracker.js';
+import { type WorkerOutcomeRequest, WorkerOutcomeUpload } from './upload.js';
 
 export interface WorkerDaemonOptions {
     home: WorkerHome;
@@ -34,7 +35,7 @@ export interface WorkerDaemonOptions {
     /** What the worker offers: the runtimes this machine can run of those it may. */
     settings: WorkerSettings;
     host: WorkerRunHost;
-    api: WorkerUploader & { readonly connectUrl: string };
+    api: { request: WorkerOutcomeRequest; readonly connectUrl: string };
     machine: Pick<WorkerMachineProbe, 'describe'>;
     log: WorkerLog;
     version: string;
@@ -116,7 +117,10 @@ export class WorkerDaemon {
         this.#tracker = new WorkerRunTracker(
             this.#assignments,
             options.host,
-            options.api,
+            new WorkerOutcomeUpload(
+                options.api.request.bind(options.api),
+                (milliseconds) => Bun.sleep(milliseconds)
+            ),
             options.log,
             this.#now
         );
