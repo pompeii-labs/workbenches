@@ -32,6 +32,7 @@ import {
     type WorkerRunHost,
 } from './contracts.js';
 import { runSpec, type WorkerRunEnvironment } from './environment.js';
+import { WorkerSessionExpiry } from './expiry.js';
 import type { WorkerHome } from './home.js';
 import type { WorkerLog } from './log.js';
 import { WorkerOutcomeLayout } from './outcome.js';
@@ -62,6 +63,7 @@ export interface WorkerEngineOptions {
     download: (url: string, versionId: string) => Promise<RemoteWorkbenchPackage>;
     /** Checks a local run's runner CLI is new enough. Defaults to asking this machine's. */
     versions?: Pick<WorkerRunnerVersions, 'check'>;
+    now?: () => Date;
 }
 
 /**
@@ -251,6 +253,27 @@ export class WorkerEngine implements WorkerRunHost {
         const text = command.payload.text;
         if (typeof text !== 'string' || !text.trim())
             throw new Error(`${command.kind} requires payload.text`);
+        const latest = await this.#sessions.latest(session).catch(() => undefined);
+        if (!latest)
+            throw new WorkerRejection(
+                'This worker session is no longer available and cannot be continued'
+            );
+        if (RunStore.isTerminal(latest.status)) {
+            const runs = await Promise.all(
+                (await this.#sessions.ids(session)).map((id) =>
+                    this.#options.services.runs.read(id)
+                )
+            );
+            if (
+                WorkerSessionExpiry.expired(
+                    runs,
+                    (this.#options.now ?? (() => new Date()))()
+                )
+            )
+                throw new WorkerRejection(
+                    'This worker session expired seven days after its last run ended and cannot be continued'
+                );
+        }
         const environment = await this.#continuation(context);
         const providers = async () => {
             const stored = await this.#options.services.sessions.read(session);

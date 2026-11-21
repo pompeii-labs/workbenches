@@ -96,6 +96,12 @@ async function worker() {
 }
 
 describe('worker controller', () => {
+    test('reports the running daemon version rather than the inspecting CLI version', async () => {
+        const { server, controller, home } = await worker();
+        await server.next((message) => message.type === 'hello');
+        while (!(await home.readState())) await Bun.sleep(10);
+        expect((await controller.status()).wb_version).toBe('1.4.0');
+    });
     test('remove stops a busy worker with --now, then revokes its key', async () => {
         const { server, home, controller, calls, running } = await worker();
         await server.next((message) => message.type === 'hello');

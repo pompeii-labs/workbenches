@@ -1,7 +1,9 @@
 import { basename } from 'node:path';
 
+import packageMetadata from '../../package.json' with { type: 'json' };
 import { RegistryClient } from '../registry/client.js';
 import { WorkerApi } from './api.js';
+import { WorkerDisk, type WorkerDiskUsage } from './disk.js';
 import {
     WorkerHome,
     type WorkerSettings,
@@ -14,6 +16,8 @@ import { WorkerRegistration } from './registration.js';
 import { type WorkerService, workerService } from './service.js';
 
 export interface WorkerStatus {
+    wb_version: string;
+    disk: WorkerDiskUsage;
     registered: boolean;
     name?: string;
     organization?: string;
@@ -127,6 +131,8 @@ export class WorkerController {
         const state = await this.home.readState();
         const running = state !== undefined && this.#alive(state.pid) && !state.stopped;
         return {
+            wb_version: state?.wb_version ?? packageMetadata.version,
+            disk: await new WorkerDisk(this.home).read(),
             registered: Boolean(registration),
             ...(registration
                 ? { name: registration.name, organization: registration.organization }

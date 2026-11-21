@@ -5,7 +5,6 @@ import { Connection } from '../database/connection.js';
 import { ModelCatalog } from '../models/catalog.js';
 import { RegistryClient } from '../registry/client.js';
 import { RunnerRegistry } from '../runners/registry.js';
-import { SessionRetention } from '../sessions/retention.js';
 import { Services } from '../workbench/services.js';
 import { WorkerApi } from './api.js';
 import { WorkerDaemon } from './daemon.js';
@@ -74,16 +73,7 @@ export class WorkerProcess {
                 ...(git ? {} : { repositoryRefusal: GIT_REFUSAL }),
                 signIns: (send) =>
                     new WorkerSignIns({ home, runners, environment, log, send }),
-                janitor: new WorkerJanitor(
-                    home,
-                    new SessionRetention(
-                        home.root,
-                        services.runs,
-                        services.sessions,
-                        services.writer
-                    ),
-                    services.writer
-                ),
+                janitor: new WorkerJanitor(home, services),
                 host: new WorkerEngine({
                     home,
                     log,

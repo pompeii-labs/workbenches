@@ -196,8 +196,8 @@ export class SessionStore {
 
     async remove(id: string): Promise<void> {
         RunStore.validateId(id);
-        this.#records.remove(id);
         await this.#files.removeSession(id);
+        this.#records.remove(id);
     }
 
     async size(id: string): Promise<number> {

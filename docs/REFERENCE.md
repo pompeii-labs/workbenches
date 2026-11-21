@@ -688,11 +688,13 @@ Everything a worker does differently from `wb run` on the same machine is here.
 
 `start` fails when this machine can run none of the allowed runtimes. A worker rejects a run whose runtime it does not offer, whose Workbench does not declare that runtime, whose `requirements` (os, cpu, memory_gb, gpu) this machine cannot meet, or that arrives with every slot busy, and the server shows the reason. A worker reports the GPUs it finds, with each name and, for NVIDIA, its memory, every time it connects. A local run that needs a GPU passes on that discovery alone, since a worker run has no `--allow-unchecked-gpu`.
 
-`status` shows whether the worker is online or offline and since when, its organization, how many slots are busy, and one line per active run with its workbench, run id, runtime, and age. `--json` prints the same fields:
+`status` shows whether the worker is online or offline and since when, its organization, how many slots are busy, and one line per active run with its workbench, run id, runtime, and age. It also reports the daemon's engine version and disk use. `--json` adds `wb_version` and `disk`: `home_bytes` counts regular file bytes under the worker home, `workspaces_bytes` counts workspaces, `outcomes_bytes` counts outcome metadata and blobs, `free_bytes` is current available filesystem space, and `measured_at` dates the byte counts. The daemon measures at startup and each hourly sweep; status reads the cached measurement without traversing workspaces. Counts and `measured_at` are null until the first measurement, and remain dated while the daemon is stopped. Symlinks are not followed.
 
 ```text
 Worker mini is online for acme since 14:02:11 (15m 37s). 1 of 1 slot busy, runtimes docker.
   threejs-game  wb_d8m99qyw2e4qqhitfff63f1n  docker  12m 8s
+Engine 1.8.1.
+Disk: 1073741824 bytes held (805306368 workspaces, 268435456 outcomes); 4294967296 bytes free. Measured 2026-10-22T14:02:11.000Z.
 ```
 
 `logs` prints the lifecycle log, and `-f` keeps following it:
@@ -715,7 +717,7 @@ A run's credentials and environment values are held in the worker's memory only 
 
 Package downloads are accepted only from the API origin the worker registered with, without following redirects, and up to 64 MiB.
 
-The worker cleans up after itself at start and then hourly. Seven days after a run finishes, its workspace, its saved package, and its engine sessions, runs, events, and outcomes are removed. The lifecycle log is rotated at 5 MiB, keeping one previous file as `worker.log.1`, and the service output `daemon.out` is emptied at 5 MiB.
+Worker sessions expire exactly seven days after their last run ends. A continuation before that boundary starts a new window when its run ends; session renames do not extend it. An expired session cannot be continued, even before cleanup runs. The worker sweeps at startup before connecting and then hourly, removing expired session records, native runner context, linked runs and events, unreferenced outcome blobs, workspaces, and saved packages. Sessions with any active run are protected, including their earlier runs and workspace. Cleanup stays inside the worker's own home, never the account's personal sessions or external workspaces, and refuses linked storage roots. No `wb clean` invocation is needed. The lifecycle log is rotated at 5 MiB, keeping one previous file as `worker.log.1`, and the service output `daemon.out` is emptied at 5 MiB.
 
 #### Member sign-ins
 

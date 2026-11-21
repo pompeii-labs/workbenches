@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { WorkerApi } from '../../src/workers/api.js';
-import { WorkerDaemon } from '../../src/workers/daemon.js';
+import { WorkerDaemon, type WorkerDaemonOptions } from '../../src/workers/daemon.js';
 import { GIT_REFUSAL } from '../../src/workers/git.js';
 import { WorkerHome, type WorkerSettings } from '../../src/workers/home.js';
 import { WorkerLog } from '../../src/workers/log.js';
@@ -31,10 +31,10 @@ afterEach(async () => {
 
 async function worker(
     settings: Partial<WorkerSettings> = {},
-    options: {
-        acknowledgeMilliseconds?: number;
-        repositoryRefusal?: string;
-    } = {},
+    options: Pick<
+        WorkerDaemonOptions,
+        'acknowledgeMilliseconds' | 'repositoryRefusal' | 'now' | 'janitor'
+    > = {},
     reuse?: { directory: string; host: FakeRunHost; server: FakeWorkerServer }
 ) {
     const directory =
@@ -86,6 +86,54 @@ async function worker(
 }
 
 describe('worker daemon', () => {
+    test('sweeps before connecting and then hourly, including a zero clock', async () => {
+        let now = 0;
+        const sweeps: number[] = [];
+        const next = Promise.withResolvers<void>();
+        const { server } = await worker(
+            {},
+            {
+                now: () => new Date(now),
+                janitor: {
+                    sweep: async (_assignments, at) => {
+                        sweeps.push(at.getTime());
+                        if (sweeps.length === 2) next.resolve();
+                        return [];
+                    },
+                },
+            }
+        );
+        await server.next((message) => message.type === 'hello');
+        expect(sweeps).toEqual([0]);
+        now = 60 * 60 * 1000 - 1;
+        await Bun.sleep(30);
+        expect(sweeps).toEqual([0]);
+        now++;
+        await next.promise;
+        expect(sweeps).toEqual([0, 60 * 60 * 1000]);
+    });
+    test('a sweep still running holds up neither the connection nor a second sweep', async () => {
+        let now = 0;
+        let sweeps = 0;
+        const unfinished = Promise.withResolvers<string[]>();
+        const { server } = await worker(
+            {},
+            {
+                now: () => new Date(now),
+                janitor: {
+                    sweep: () => {
+                        sweeps++;
+                        return unfinished.promise;
+                    },
+                },
+            }
+        );
+        await server.next((message) => message.type === 'hello');
+        now = 2 * 60 * 60 * 1000;
+        await Bun.sleep(30);
+        expect(sweeps).toBe(1);
+        unfinished.resolve([]);
+    });
     test('says hello, comes online, and logs it', async () => {
         const { server } = await worker();
         const hello = await server.next((message) => message.type === 'hello');

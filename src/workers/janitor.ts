@@ -1,13 +1,14 @@
-import { rename, rm, stat, truncate } from 'node:fs/promises';
+import { lstat, rename, truncate } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { CatalogWriter } from '../catalog/writer.js';
-import type { SessionRetention } from '../sessions/retention.js';
-import type { WorkerAssignment } from './assignments.js';
+import { RunStore } from '../runs/store.js';
+import { SessionRetention } from '../sessions/retention.js';
+import type { Services } from '../workbench/services.js';
+import { type WorkerAssignment, WorkerAssignments } from './assignments.js';
+import { WorkerDisk } from './disk.js';
+import { WorkerSessionExpiry } from './expiry.js';
 import type { WorkerHome } from './home.js';
 
-/** How long a finished run's workspace, package, and records are kept. */
-const WORKER_RETENTION_DAYS = 7;
 /** The size at which the lifecycle log is rotated, keeping one previous file. */
 export const WORKER_LOG_LIMIT_BYTES = 5 * 1024 * 1024;
 
@@ -19,42 +20,71 @@ export const WORKER_LOG_LIMIT_BYTES = 5 * 1024 * 1024;
  */
 export class WorkerJanitor {
     constructor(
-        private readonly home: Pick<
-            WorkerHome,
-            'root' | 'logPath' | 'workspaceDirectory'
-        >,
-        private readonly retention: Pick<SessionRetention, 'apply'>,
-        private readonly catalog: Pick<CatalogWriter, 'remove'>
+        private readonly home: WorkerHome,
+        private readonly services: Pick<Services, 'runs' | 'sessions' | 'writer'>
     ) {}
 
-    /** The moment before which finished work is removed. */
-    static horizon(now: Date): Date {
-        return new Date(now.getTime() - WORKER_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-    }
-
-    /** Removes what `expired` runs left behind, then everything older than the retention. */
-    async sweep(expired: WorkerAssignment[], now: Date): Promise<void> {
+    /** Removes expired engine sessions before forgetting their assignments. */
+    async sweep(assignments: WorkerAssignment[], now: Date): Promise<string[]> {
+        const expiry = new WorkerSessionExpiry(this.home, this.services.sessions);
+        await expiry.verify();
         await this.#rotate();
-        for (const run of expired) {
-            await rm(this.home.workspaceDirectory(run.run_id), {
-                recursive: true,
-                force: true,
-            });
-            if (run.package) await this.catalog.remove(run.package).catch(() => {});
-        }
-        await this.retention.apply({
-            before: WorkerJanitor.horizon(now),
+        const result = await new SessionRetention(
+            this.home.root,
+            this.services.runs,
+            this.services.sessions,
+            this.services.writer,
+            { sessionCleanup: expiry }
+        ).apply({
+            before: WorkerSessionExpiry.horizon(now),
             includeResumableSessions: true,
         });
+        const sessions = await this.services.sessions.list();
+        const runs = await this.services.runs.list();
+        const removed: string[] = [];
+        for (const run of assignments) {
+            if (
+                run.session_id &&
+                sessions.some((session) => session.id === run.session_id)
+            )
+                continue;
+            if (
+                runs.some(
+                    (stored) =>
+                        stored.session_id === run.session_id &&
+                        !RunStore.isTerminal(stored.status)
+                )
+            )
+                continue;
+            if (
+                !result.removedSessions.includes(run.session_id ?? '') &&
+                (!WorkerAssignments.isTerminal(run.state) ||
+                    !run.finished_at ||
+                    !(
+                        Date.parse(run.finished_at) <=
+                        WorkerSessionExpiry.horizon(now).getTime()
+                    ))
+            )
+                continue;
+            const workspace = this.home.workspaceDirectory(run.run_id);
+            if (sessions.some((session) => session.workspace === workspace)) continue;
+            await expiry.removeWorkspace(workspace);
+            if (run.package)
+                await this.services.writer.remove(run.package).catch(() => {});
+            removed.push(run.run_id);
+        }
+        await new WorkerDisk(this.home).refresh(now);
+        return removed;
     }
 
     async #rotate(): Promise<void> {
-        const log = await stat(this.home.logPath).catch(() => undefined);
-        if (log && log.size > WORKER_LOG_LIMIT_BYTES)
+        const log = await lstat(this.home.logPath).catch(() => undefined);
+        if (log?.isFile() && log.size > WORKER_LOG_LIMIT_BYTES)
             await rename(this.home.logPath, `${this.home.logPath}.1`);
         // The service manager holds the output file open, so it is emptied in place.
         const output = join(this.home.root, 'daemon.out');
-        const written = await stat(output).catch(() => undefined);
-        if (written && written.size > WORKER_LOG_LIMIT_BYTES) await truncate(output, 0);
+        const written = await lstat(output).catch(() => undefined);
+        if (written?.isFile() && written.size > WORKER_LOG_LIMIT_BYTES)
+            await truncate(output, 0);
     }
 }
