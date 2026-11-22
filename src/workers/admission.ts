@@ -29,12 +29,49 @@ export interface WorkerRunAdmissionOptions {
 export class WorkerRunAdmission {
     /** Runs between run.start and their assignment, so slots count them. */
     readonly #admitting = new Set<string>();
+    readonly #launching = new Map<
+        string,
+        {
+            controller: AbortController;
+            step: string;
+            done: Promise<void>;
+            cancelled: boolean;
+        }
+    >();
 
     constructor(private readonly options: WorkerRunAdmissionOptions) {}
 
     /** How many starts are still being admitted. */
     get pending(): number {
         return this.#admitting.size;
+    }
+
+    async cancel(runId: string, reason?: string): Promise<void> {
+        const launch = this.#launching.get(runId);
+        if (!launch) {
+            const assignment = this.options.assignments.get(runId);
+            if (assignment?.state !== 'launching' || assignment.session_id) return;
+            await this.#finish(
+                assignment,
+                reason === undefined ? 'cancelled' : 'failed',
+                reason ?? 'The run was cancelled'
+            );
+            await this.options.assignments.save();
+            this.options.changed();
+            return;
+        }
+        if (launch.controller.signal.aborted) return launch.done;
+        launch.cancelled = reason === undefined;
+        launch.controller.abort(new Error(reason ?? 'The run was cancelled'));
+        await launch.done;
+    }
+
+    async expire(assignment: WorkerAssignment): Promise<void> {
+        const launch = this.#launching.get(assignment.run_id);
+        await this.cancel(
+            assignment.run_id,
+            `The run did not start within ${assignment.max_minutes} minutes. It was ${launch?.step ?? 'starting the session'}.`
+        );
     }
 
     async start(start: RunStart): Promise<void> {
@@ -83,26 +120,67 @@ export class WorkerRunAdmission {
         }
         assignments.add(assignment, start);
         this.#admitting.delete(start.run_id);
-        await assignments.save();
-        this.options.send({ type: 'run.accepted', run_id: start.run_id });
+        const completion = Promise.withResolvers<void>();
+        const launch = {
+            controller: new AbortController(),
+            step: 'preparing the launch',
+            done: completion.promise,
+            cancelled: false,
+        };
+        this.#launching.set(start.run_id, launch);
         try {
-            assignment.session_id = await host.launch(start);
+            await assignments.save();
+            this.options.send({ type: 'run.accepted', run_id: start.run_id });
+            const signal = launch.controller.signal;
+            signal.throwIfAborted();
+            const aborted = new Promise<never>((_resolve, reject) => {
+                signal.addEventListener('abort', () => reject(signal.reason), {
+                    once: true,
+                });
+            });
+            assignment.session_id = await Promise.race([
+                host.launch(start, {
+                    signal,
+                    step: (step) => {
+                        launch.step = step;
+                    },
+                }),
+                aborted,
+            ]);
+            signal.throwIfAborted();
             assignment.state = 'running';
             log.write(
                 `${assignment.workbench} started  ${assignment.run_id}${assignment.started_by ? `  by ${assignment.started_by}` : ''}  "${assignment.task}"`
             );
         } catch (error) {
-            assignment.state = 'failed';
-            assignment.failure =
-                error instanceof Error ? error.message : 'The run could not start';
-            assignment.finished_at = this.options.now().toISOString();
-            await host.release(start.run_id).catch(() => {});
-            log.write(
-                `${assignment.workbench} failed to start  ${excerpt(assignment.failure, 80)}`
+            launch.controller.abort(error);
+            await this.#finish(
+                assignment,
+                launch.cancelled ? 'cancelled' : 'failed',
+                error instanceof Error ? error.message : 'The run could not start'
             );
         }
-        await assignments.save();
-        this.options.changed();
+        try {
+            await assignments.save();
+        } finally {
+            this.#launching.delete(start.run_id);
+            completion.resolve();
+            this.options.changed();
+        }
+    }
+
+    async #finish(
+        assignment: WorkerAssignment,
+        state: 'failed' | 'cancelled',
+        reason: string
+    ): Promise<void> {
+        assignment.state = state;
+        assignment.failure = reason;
+        assignment.finished_at = this.options.now().toISOString();
+        await this.options.host.release(assignment.run_id).catch(() => {});
+        this.options.log.write(
+            `${assignment.workbench} ${state === 'failed' ? 'failed to start' : 'cancelled during launch'}  ${excerpt(reason, 80)}`
+        );
     }
 
     #refusal(start: RunStart): string | undefined {

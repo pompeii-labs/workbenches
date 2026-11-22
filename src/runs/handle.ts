@@ -133,14 +133,17 @@ export class StoredRunHandle implements RunHandle {
         return this.submit({ kind: 'close' });
     }
 
-    cancel(reason?: string): Promise<RunControlReceipt> {
-        return this.submit({ kind: 'cancel', ...(reason ? { reason } : {}) });
+    cancel(reason?: string, signal?: AbortSignal): Promise<RunControlReceipt> {
+        return this.submit({ kind: 'cancel', ...(reason ? { reason } : {}) }, signal);
     }
 
-    private async submit(submission: RunControlSubmission): Promise<RunControlReceipt> {
+    private async submit(
+        submission: RunControlSubmission,
+        signal?: AbortSignal
+    ): Promise<RunControlReceipt> {
         const result = this.submissions.then(
-            () => this.submitNow(submission),
-            () => this.submitNow(submission)
+            () => this.submitNow(submission, signal),
+            () => this.submitNow(submission, signal)
         );
         this.submissions = result.then(
             () => undefined,
@@ -150,7 +153,8 @@ export class StoredRunHandle implements RunHandle {
     }
 
     private async submitNow(
-        submission: RunControlSubmission
+        submission: RunControlSubmission,
+        signal?: AbortSignal
     ): Promise<RunControlReceipt> {
         const run = await this.store.read(this.runId);
         if (RunStore.isTerminal(run.status)) {
@@ -158,7 +162,7 @@ export class StoredRunHandle implements RunHandle {
                 `Workbench run is already ${run.status}: ${this.runId}`
             );
         }
-        const receipt = await this.control.submit(submission);
+        const receipt = await this.control.submit(submission, signal);
         if (receipt.outcome === 'rejected') {
             throw new RunControlRejected(receipt);
         }

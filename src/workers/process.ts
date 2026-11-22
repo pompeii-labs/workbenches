@@ -5,6 +5,7 @@ import { Connection } from '../database/connection.js';
 import { ModelCatalog } from '../models/catalog.js';
 import { RegistryClient } from '../registry/client.js';
 import { RunnerRegistry } from '../runners/registry.js';
+import { DockerRunContainers } from '../runtimes/docker/liveness.js';
 import { Services } from '../workbench/services.js';
 import { WorkerApi } from './api.js';
 import { WorkerDaemon } from './daemon.js';
@@ -56,11 +57,12 @@ export class WorkerProcess {
                 fetch: new WorkerDownloads(registration.api_url).fetch,
             });
             const api = new WorkerApi(registration.api_url);
+            const dockerHost = await machine.dockerHost();
             const environment = new WorkerRunEnvironment(
                 home,
                 runners,
                 process.env,
-                await machine.dockerHost()
+                dockerHost
             );
             const daemon = new WorkerDaemon({
                 home,
@@ -75,6 +77,15 @@ export class WorkerProcess {
                     new WorkerSignIns({ home, runners, environment, log, send }),
                 janitor: new WorkerJanitor(home, services),
                 host: new WorkerEngine({
+                    containers: new DockerRunContainers(
+                        {},
+                        {
+                            ...process.env,
+                            ...(dockerHost
+                                ? { DOCKER_HOST: dockerHost, DOCKER_CONTEXT: undefined }
+                                : {}),
+                        }
+                    ),
                     home,
                     log,
                     services,

@@ -16,6 +16,8 @@ export interface DockerCommandResult {
 }
 
 export interface DockerProcessOptions {
+    signal?: AbortSignal;
+    timeout?: number;
     cwd?: string;
     env?: Record<string, string | undefined>;
     /** Written to standard input, so the content never appears in argv. */

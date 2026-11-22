@@ -26,6 +26,7 @@ import {
 import { Workbench } from '../workbench/workbench.js';
 import { type RunHandle, StoredRunHandle } from './handle.js';
 import { RunStore, type StoredRun } from './store.js';
+import { RunTermination } from './termination.js';
 
 export interface PrepareRunOptions {
     resolved: ResolvedWorkbenchReference;
@@ -43,6 +44,7 @@ export interface PrepareRunOptions {
 }
 
 export interface DispatchRunOptions {
+    signal?: AbortSignal;
     id: string;
     cwd: string;
     /** The whole environment of the detached process. Defaults to this process's. */
@@ -264,6 +266,7 @@ export class RunDispatcher {
     async dispatch(options: DispatchRunOptions): Promise<number> {
         let pid: number;
         try {
+            options.signal?.throwIfAborted();
             const child = Bun.spawn(this.workerCommand(options.id), {
                 cwd: options.cwd,
                 // A given environment replaces this process's own; it is never merged over it.
@@ -292,10 +295,15 @@ export class RunDispatcher {
         try {
             await this.waitUntilStarted(
                 options.id,
-                options.waitForInitialTurn ?? false
+                options.waitForInitialTurn ?? false,
+                options.signal
             );
             return pid;
         } catch (error) {
+            if (options.signal?.aborted) {
+                await new RunTermination(this.store).stop(options.id, 'cancelled');
+                throw error;
+            }
             await this.store
                 .read(options.id)
                 .then((run) => this.store.reconcile(run))
@@ -306,11 +314,13 @@ export class RunDispatcher {
 
     private async waitUntilStarted(
         id: string,
-        waitForInitialTurn: boolean
+        waitForInitialTurn: boolean,
+        signal?: AbortSignal
     ): Promise<void> {
         const started = Date.now();
         let startupTimeout = 15_000;
         while (Date.now() - started < startupTimeout) {
+            signal?.throwIfAborted();
             const run = await this.store.read(id);
             startupTimeout =
                 run.repository ||

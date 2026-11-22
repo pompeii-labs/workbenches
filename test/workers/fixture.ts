@@ -6,6 +6,7 @@ import type { ServerWebSocket } from 'bun';
 import type { WorkbenchEvent, WorkbenchEventType } from '../../src/runs/events.js';
 import type {
     WorkerAdmission,
+    WorkerLaunch,
     WorkerOutcome,
     WorkerRunContext,
     WorkerRunHost,
@@ -288,7 +289,7 @@ export class FakeRunHost implements WorkerRunHost {
         return { workbench: 'threejs-game', runner: 'opencode' };
     }
 
-    async launch(start: RunStart): Promise<string> {
+    async launch(start: RunStart, _launch: WorkerLaunch): Promise<string> {
         if (this.failLaunch) throw new Error(this.failLaunch);
         this.launched.push(start);
         const id = `wb_${start.run_id.replace(/[^a-z0-9]/g, '')}session`;
@@ -334,6 +335,14 @@ export class FakeRunHost implements WorkerRunHost {
 
     async active(session: string): Promise<boolean> {
         return this.require(session).active;
+    }
+
+    async containerExists(_session: string): Promise<boolean | undefined> {
+        return true;
+    }
+
+    async fail(session: string, reason: string): Promise<void> {
+        this.emit(session, 'run.failed', { message: reason });
     }
 
     async command(

@@ -109,7 +109,11 @@ export class RunControl {
         this.store = new RunControlStore(connection);
     }
 
-    async submit(submission: RunControlSubmission): Promise<RunControlReceipt> {
+    async submit(
+        submission: RunControlSubmission,
+        signal?: AbortSignal
+    ): Promise<RunControlReceipt> {
+        signal?.throwIfAborted();
         const request = this.createRequest(submission);
         try {
             this.store.enqueue(
@@ -126,7 +130,7 @@ export class RunControl {
                 throw new Error(`Workbench run does not exist: ${this.runId}`);
             throw error;
         }
-        return this.waitForReceipt(request);
+        return this.waitForReceipt(request, signal);
     }
 
     async receive(signal?: AbortSignal): Promise<RunControlRequest | undefined> {
@@ -203,18 +207,20 @@ export class RunControl {
     }
 
     private async waitForReceipt(
-        request: RunControlRequest
+        request: RunControlRequest,
+        signal?: AbortSignal
     ): Promise<RunControlReceipt> {
         const started = Date.now();
         let seen = '';
         while (Date.now() - started < this.timeoutMilliseconds) {
+            signal?.throwIfAborted();
             const token = this.connection.changeToken();
             if (token !== seen) {
                 seen = token;
                 const payload = this.store.receipt(request.id);
                 if (payload !== undefined) return this.parseReceipt(payload, request);
             }
-            await this.connection.delay(this.pollMilliseconds);
+            await this.connection.delay(this.pollMilliseconds, signal);
         }
         throw new Error(this.timeoutMessage(request.kind));
     }

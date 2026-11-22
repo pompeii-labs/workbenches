@@ -1,4 +1,5 @@
 import type { WorkbenchEvent } from '../runs/events.js';
+import type { WorkerRunAdmission } from './admission.js';
 import { type WorkerAssignment, WorkerAssignments } from './assignments.js';
 import type { WorkerRunHost } from './contracts.js';
 import { duration, excerpt, type WorkerLog } from './log.js';
@@ -16,6 +17,10 @@ export interface WorkerUploader {
 
 /** How many passes a finished run continued with send is followed before it must show new events. */
 const WAKE_PASSES = 3;
+/** How often a running Docker run's container is looked for. */
+const CONTAINER_CHECK_MS = 15_000;
+/** How long a running Docker run's container may be absent before the run fails. */
+const CONTAINER_GONE_MS = 60_000;
 
 /**
  * Follows each accepted run's session: its state for slots and status, its
@@ -27,13 +32,18 @@ const WAKE_PASSES = 3;
 export class WorkerRunTracker {
     /** Finished runs a command may have continued, with the passes left to show it. */
     readonly #awake = new Map<string, number>();
+    /** When each Docker run's container was last looked for. */
+    readonly #checked = new Map<string, number>();
+    /** Since when each Docker run's container has been absent. */
+    readonly #missing = new Map<string, number>();
 
     constructor(
         private readonly assignments: WorkerAssignments,
         private readonly host: WorkerRunHost,
         private readonly uploader: WorkerUploader,
         private readonly log: WorkerLog,
-        private readonly now: () => Date
+        private readonly now: () => Date,
+        private readonly launches: Pick<WorkerRunAdmission, 'expire' | 'cancel'>
     ) {}
 
     /** Follows a finished run again, because a command was relayed into its session. */
@@ -45,7 +55,18 @@ export class WorkerRunTracker {
     async observe(): Promise<boolean> {
         let changed = false;
         for (const assignment of this.assignments.list()) {
-            if (!assignment.session_id) continue;
+            if (!assignment.session_id) {
+                if (
+                    assignment.state === 'launching' &&
+                    assignment.max_minutes &&
+                    this.now().getTime() - Date.parse(assignment.accepted_at) >=
+                        assignment.max_minutes * 60_000
+                ) {
+                    await this.launches.expire(assignment);
+                    changed = true;
+                }
+                continue;
+            }
             const finished = WorkerAssignments.isTerminal(assignment.state);
             const passes = this.#awake.get(assignment.run_id);
             if (finished && passes === undefined) continue;
@@ -59,10 +80,47 @@ export class WorkerRunTracker {
                 else this.#awake.set(assignment.run_id, passes - 1);
             }
             if (!WorkerAssignments.isTerminal(assignment.state)) {
-                changed = (await this.enforceLimit(assignment)) || changed;
+                if (await this.enforceLimit(assignment)) {
+                    changed = true;
+                    continue;
+                }
+                const active = await this.host
+                    .active(assignment.session_id)
+                    .catch(() => true);
+                const now = this.now().getTime();
                 if (
-                    !(await this.host.active(assignment.session_id).catch(() => true))
+                    active &&
+                    assignment.runtime === 'docker' &&
+                    now - (this.#checked.get(assignment.run_id) ?? -Infinity) >=
+                        CONTAINER_CHECK_MS
                 ) {
+                    this.#checked.set(assignment.run_id, now);
+                    const exists = await this.host
+                        .containerExists(assignment.session_id)
+                        .catch(() => undefined);
+                    if (exists === true) this.#missing.delete(assignment.run_id);
+                    if (exists === false) {
+                        const since = this.#missing.get(assignment.run_id) ?? now;
+                        this.#missing.set(assignment.run_id, since);
+                        if (now - since >= CONTAINER_GONE_MS) {
+                            const reason = "The run's container is gone";
+                            await this.host.fail(assignment.session_id, reason);
+                            assignment.failure = reason;
+                            await this.consume(
+                                assignment,
+                                await this.host.events(
+                                    assignment.session_id,
+                                    assignment.observed
+                                )
+                            );
+                            if (!WorkerAssignments.isTerminal(assignment.state))
+                                await this.finish(assignment, 'failed', reason);
+                            changed = true;
+                            continue;
+                        }
+                    }
+                }
+                if (!active) {
                     // The session ended without a terminal event, for example after a crash.
                     const late = await this.host
                         .events(assignment.session_id, assignment.observed)
@@ -93,7 +151,10 @@ export class WorkerRunTracker {
         assignment: WorkerAssignment,
         commandId: string
     ): Promise<void> {
-        if (!assignment.session_id) return;
+        if (!assignment.session_id) {
+            await this.launches.cancel(assignment.run_id);
+            return;
+        }
         await this.host
             .command(
                 assignment.session_id,
@@ -166,6 +227,8 @@ export class WorkerRunTracker {
         state: 'completed' | 'failed' | 'cancelled',
         reason?: string
     ): Promise<void> {
+        this.#checked.delete(assignment.run_id);
+        this.#missing.delete(assignment.run_id);
         // The outcome goes up first: the run counts as finished, and its end is
         // sent, only after the server has had the chance to take it.
         const pullRequest = await this.upload(assignment);

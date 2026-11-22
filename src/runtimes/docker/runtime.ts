@@ -438,6 +438,9 @@ export class DockerRuntime implements PreparedRuntime {
                 '--rm',
                 '--network',
                 options.network,
+                ...(this.options.request.run
+                    ? DockerManagedContainers.labels(this.options.request.run)
+                    : []),
                 ...(options.readOnly ? ['--read-only'] : []),
                 ...this.containerArguments(),
                 ...container.arguments,

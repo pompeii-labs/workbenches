@@ -48,7 +48,11 @@ export interface WorkerRunHost {
     /** Downloads and checks the package. Throws `WorkerRejection` with the reason. */
     admit(start: RunStart): Promise<WorkerAdmission>;
     /** Starts the run as a detached engine session and returns its session id. */
-    launch(start: RunStart): Promise<string>;
+    launch(start: RunStart, launch: WorkerLaunch): Promise<string>;
+    /** Undefined means Docker could not answer. */
+    containerExists(session: string): Promise<boolean | undefined>;
+    /** Stops a session's process tree and records its failure. */
+    fail(session: string, reason: string): Promise<void>;
     /** The session's events after `after`, numbered across all of its runs. */
     events(session: string, after: number): Promise<WorkbenchEvent[]>;
     /** Whether the session's latest run is still executing. */
@@ -67,4 +71,9 @@ export interface WorkerRunHost {
     recover(
         active: Array<{ run_id: string; runtime: string; session_id: string | null }>
     ): Promise<void>;
+}
+
+export interface WorkerLaunch {
+    signal: AbortSignal;
+    step(description: string): void;
 }

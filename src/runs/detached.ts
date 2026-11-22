@@ -15,6 +15,10 @@ import type { RunDispatcher } from './dispatcher.js';
 import type { StoredRun } from './store.js';
 
 export interface StartDetachedRunOptions {
+    signal?: AbortSignal;
+    step?: (description: string) => void;
+    smokeRun?: { id: string; scope: string };
+    prepared?: (run: StoredRun) => void;
     workbench: string;
     task: string;
     cwd?: string;
@@ -38,7 +42,10 @@ export class DetachedRunLauncher {
     ) {}
 
     async start(options: StartDetachedRunOptions): Promise<StoredRun> {
+        options.signal?.throwIfAborted();
+        options.step?.('refreshing the model catalog');
         await new ModelCatalog({ home: this.home }).refresh();
+        options.signal?.throwIfAborted();
         const resolved = await new WorkbenchResolver().resolve(options.workbench, {
             home: this.home,
             savedOnly: true,
@@ -74,7 +81,12 @@ export class DetachedRunLauncher {
                 runtimes.resolve(selectedRuntime(resolved.workbench).name).placement !==
                     'sandbox'
             ) {
+                options.step?.(
+                    `checking the ${selectedRuntime(resolved.workbench).name} runtime and image`
+                );
                 const smoke = await new RuntimeSmoke({
+                    ...(options.signal ? { signal: options.signal } : {}),
+                    ...(options.smokeRun ? { run: options.smokeRun } : {}),
                     workbench: resolved.workbench,
                     allowUncheckedGpu: options.allowUncheckedGpu,
                     registry: runtimes,
@@ -92,6 +104,8 @@ export class DetachedRunLauncher {
                     );
                 }
             }
+            options.signal?.throwIfAborted();
+            options.step?.('starting the session');
             const run = await this.dispatcher.prepare({
                 resolved,
                 task: options.task,
@@ -103,11 +117,13 @@ export class DetachedRunLauncher {
                 ...(options.connection ? { connection: options.connection } : {}),
                 ...(options.environment ? { environment: options.environment } : {}),
             });
+            options.prepared?.(run);
             await this.dispatcher.dispatch({
                 id: run.id,
                 cwd: resolved.workspaceDirectory,
                 environment,
                 waitForInitialTurn: true,
+                ...(options.signal ? { signal: options.signal } : {}),
             });
             return run;
         } finally {

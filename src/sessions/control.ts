@@ -8,6 +8,7 @@ import type { RunControlReceipt } from '../runs/control.js';
 import { StoredRunHandle } from '../runs/handle.js';
 import { RunStore } from '../runs/store.js';
 import type { RunSupervision } from '../runs/supervision.js';
+import { RunTermination } from '../runs/termination.js';
 import type { SessionLifecycle } from './lifecycle.js';
 import type { SessionResolver } from './resolver.js';
 
@@ -139,18 +140,41 @@ export class SessionControl {
     }
 
     /** Stops the session's active run and waits until its worker acknowledges. */
-    async cancel(id: string): Promise<{ session_id: string; run_id: string }> {
+    async cancel(
+        id: string,
+        termination: Pick<RunTermination, 'stop'> = new RunTermination(this.runs)
+    ): Promise<{ session_id: string; run_id: string }> {
         const activity = await this.lifecycle.resolve(id);
         if (RunStore.isTerminal(activity.run.status)) {
             throw new Error(
                 `Workbench session is already ${activity.run.status}: ${activity.id}`
             );
         }
-        await new StoredRunHandle(this.runs, this.connection, activity.run.id).cancel(
-            'requested'
-        );
-        for await (const _event of this.runs.follow(activity.run.id)) {
-            // The worker owns the event stream; cancellation waits for acknowledgement.
+        const waiting = new AbortController();
+        try {
+            const acknowledgement = async () => {
+                await new StoredRunHandle(
+                    this.runs,
+                    this.connection,
+                    activity.run.id
+                ).cancel('requested', waiting.signal);
+                for await (const _event of this.runs.follow(activity.run.id, {
+                    signal: waiting.signal,
+                })) {
+                    // Give the worker its normal opportunity to finalize the run.
+                }
+                return true;
+            };
+            const acknowledged = await Promise.race([
+                acknowledgement().catch(() => false),
+                this.connection.delay(30_000, waiting.signal).then(() => false),
+            ]);
+            if (!acknowledged) {
+                waiting.abort();
+                await termination.stop(activity.run.id, 'cancelled');
+            }
+        } finally {
+            waiting.abort();
         }
         const finished = await this.runs.read(activity.run.id);
         if (finished.status !== 'cancelled') {

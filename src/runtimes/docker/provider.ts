@@ -69,7 +69,8 @@ export class DockerRuntimeProvider implements RuntimeProvider {
             executable,
             this.dependencies,
             DockerMountPlan.environmentNames(request.workbench),
-            request.environment
+            request.environment,
+            request.signal
         );
         await client.require(
             [executable, 'version', '--format', '{{.Server.Version}}'],

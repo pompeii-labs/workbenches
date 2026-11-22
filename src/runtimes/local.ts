@@ -1,6 +1,7 @@
 import type { OutcomeSink, RuntimeOutcomeCollection } from '../outcomes/collection.js';
 import { HostOutcomeCapture } from '../outcomes/runtime.js';
 import { ProcessProbe } from '../processes/probe.js';
+import { ProcessTree } from '../processes/tree.js';
 import type { RunnerInvocation, SpawnedRunner } from '../types.js';
 import { workspaceEnvironment } from '../workbench/bindings.js';
 import type { HostDescriber } from '../workbench/host.js';
@@ -128,6 +129,7 @@ export class LocalRuntime implements PreparedRuntime {
     readonly credentialRoot: string | undefined;
     /** The `PATH` the run is launched with, where its commands are looked for. */
     private readonly path: string | undefined;
+    private readonly signal: AbortSignal | undefined;
 
     constructor(
         request: RuntimePrepareRequest,
@@ -135,6 +137,7 @@ export class LocalRuntime implements PreparedRuntime {
         private readonly requirementsPreflight: RequirementsPreflight,
         private readonly outcome?: HostOutcomeCapture
     ) {
+        this.signal = request.signal;
         this.allowUncheckedGpu = request.allowUncheckedGpu ?? false;
         this.executable = runnerExecutable(request);
         this.requiresGitHubCli = request.repository?.delivery === 'pr';
@@ -207,6 +210,7 @@ export class LocalRuntime implements PreparedRuntime {
      */
     async execute(invocation: RunnerInvocation): Promise<RuntimeCommandResult> {
         this.assertAvailable('launch');
+        this.signal?.throwIfAborted();
         const child = this.dependencies.spawn(invocation.command, {
             cwd: invocation.cwd,
             env: withoutHostVariables(invocation.env),
@@ -214,6 +218,11 @@ export class LocalRuntime implements PreparedRuntime {
             stdout: 'pipe',
             stderr: 'pipe',
         });
+        const stop = () => {
+            if (child.pid) new ProcessTree().stop(child.pid);
+            else child.kill?.();
+        };
+        this.signal?.addEventListener('abort', stop, { once: true });
         let expired = false;
         const limit = setTimeout(() => {
             expired = true;
@@ -230,7 +239,11 @@ export class LocalRuntime implements PreparedRuntime {
             child.exited,
             LocalRuntime.read(child.stdout),
             LocalRuntime.read(child.stderr),
-        ]).finally(() => clearTimeout(limit));
+        ]).finally(() => {
+            clearTimeout(limit);
+            this.signal?.removeEventListener('abort', stop);
+        });
+        this.signal?.throwIfAborted();
         if (expired) {
             return {
                 code: 124,
