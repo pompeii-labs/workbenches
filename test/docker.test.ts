@@ -27,8 +27,10 @@ import {
     DockerManagedContainers,
     DockerRuntimeProvider,
 } from '../src/runtimes/docker/index.js';
+import { DockerRunContainers } from '../src/runtimes/docker/liveness.js';
 import { DockerMountPlan } from '../src/runtimes/docker/mounts.js';
 import { RuntimeRegistry } from '../src/runtimes/index.js';
+import { RuntimeSmoke } from '../src/runtimes/smoke.js';
 import type { ResolvedWorkbench, SpawnedRunner } from '../src/types.js';
 import { NodeHost } from '../src/workbench/host.js';
 import { runtimeProviderContract } from './runtime-provider-contract.js';
@@ -44,6 +46,75 @@ afterEach(async () => {
 });
 
 describe('Docker runtime provider', () => {
+    test('aborting smoke stops its clients and removes its run-labeled containers', async () => {
+        const fixture = await createFixture({ image: 'ghcr.io/example/core:0.1.0' });
+        const controller = new AbortController();
+        const entered = Promise.withResolvers<void>();
+        const commands: string[][] = [];
+        const respond = dockerMock(commands);
+        const run = { id: RunStore.createId(), scope: RunStore.scope(fixture.root) };
+        let processes = 0;
+        const containers = new Set<string>();
+        const provider = new DockerRuntimeProvider({
+            host: new NodeHost(),
+            findExecutable: () => '/usr/bin/docker',
+            command: async (command, options) => {
+                expect(options?.signal).toBe(controller.signal);
+                if (!command.includes('command -v "$1" 2>/dev/null'))
+                    return respond(command);
+                expect(command).toContain(`dev.workbenches.run=${run.id}`);
+                containers.add('abcdef123456');
+                processes++;
+                entered.resolve();
+                return new Promise((_resolve, reject) => {
+                    options?.signal?.addEventListener(
+                        'abort',
+                        () => {
+                            processes--;
+                            reject(controller.signal.reason);
+                        },
+                        { once: true }
+                    );
+                });
+            },
+        });
+        const checking = new RuntimeSmoke({
+            workbench: fixture.workbench,
+            workspaceDirectory: fixture.root,
+            registry: new RuntimeRegistry([provider]),
+            signal: controller.signal,
+            run,
+            home: fixture.root,
+            environment: {},
+        })
+            .check()
+            .catch((error: unknown) => {
+                entered.reject(error);
+                return error;
+            });
+        await entered.promise;
+        controller.abort(new Error('Launch expired'));
+        expect(await checking).toBeInstanceOf(Error);
+        await new DockerRunContainers(
+            {
+                findExecutable: () => '/usr/bin/docker',
+                command: async (command, options) => {
+                    expect(options?.timeout).toBe(10_000);
+                    if (command.includes('ls')) {
+                        expect(command).toContain(
+                            `label=dev.workbenches.run=${run.id}`
+                        );
+                        return result(0, [...containers].join('\n'));
+                    }
+                    for (const id of command.slice(4)) containers.delete(id);
+                    return result(0);
+                },
+            },
+            {}
+        ).remove(run.id);
+        expect(processes).toBe(0);
+        expect(containers.size).toBe(0);
+    });
     test('maps only the per-run outbox, not sibling run metadata, into the container', async () => {
         const fixture = await createFixture({ image: 'ghcr.io/example/core:0.1.0' });
         const home = await mkdtemp(join(tmpdir(), 'outbox-docker-test-'));

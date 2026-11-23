@@ -1,4 +1,5 @@
 import { realpath, stat } from 'node:fs/promises';
+import { ProcessTree } from '../../processes/tree.js';
 
 import type { SpawnedRunner } from '../../types.js';
 import type {
@@ -32,7 +33,8 @@ export class DockerClient {
          * The environment the Docker CLI runs with: the run's own, so a pull
          * uses the run's registry credential and never this process's.
          */
-        readonly baseEnvironment: Record<string, string | undefined> = process.env
+        readonly baseEnvironment: Record<string, string | undefined> = process.env,
+        private readonly signal?: AbortSignal
     ) {
         this.commandProcess = dependencies.command ?? DockerClient.commandProcess;
         this.spawnProcess = dependencies.spawn ?? DockerClient.spawnProcess;
@@ -48,6 +50,7 @@ export class DockerClient {
     ): Promise<DockerCommandResult> {
         return this.commandProcess(command, {
             ...options,
+            ...(this.signal && !options.signal ? { signal: this.signal } : {}),
             env: this.processEnvironment(options),
         });
     }
@@ -191,6 +194,14 @@ export class DockerClient {
         command: string[],
         options: DockerProcessOptions = {}
     ): Promise<DockerCommandResult> {
+        const timeout = options.timeout
+            ? AbortSignal.timeout(options.timeout)
+            : undefined;
+        const signal =
+            options.signal && timeout
+                ? AbortSignal.any([options.signal, timeout])
+                : (options.signal ?? timeout);
+        signal?.throwIfAborted();
         const child = Bun.spawn(command, {
             ...(options.cwd ? { cwd: options.cwd } : {}),
             env: options.env ?? process.env,
@@ -198,12 +209,19 @@ export class DockerClient {
             stdout: 'pipe',
             stderr: 'pipe',
         });
-        const [code, stdout, stderr] = await Promise.all([
-            child.exited,
-            new Response(child.stdout).text(),
-            new Response(child.stderr).text(),
-        ]);
-        return { code, stdout, stderr };
+        const stop = () => new ProcessTree().stop(child.pid);
+        signal?.addEventListener('abort', stop, { once: true });
+        try {
+            const [code, stdout, stderr] = await Promise.all([
+                child.exited,
+                new Response(child.stdout).text(),
+                new Response(child.stderr).text(),
+            ]);
+            signal?.throwIfAborted();
+            return { code, stdout, stderr };
+        } finally {
+            signal?.removeEventListener('abort', stop);
+        }
     }
 
     private static spawnProcess(

@@ -137,7 +137,7 @@ function failure(assignment: WorkerAssignment): WorkbenchEvent {
         run_id: assignment.run_id,
         sequence: 1,
         timestamp: assignment.finished_at ?? assignment.accepted_at,
-        type: 'run.failed',
+        type: assignment.state === 'cancelled' ? 'run.cancelled' : 'run.failed',
         runner: assignment.runner,
         data: { message: assignment.failure ?? 'The run could not start' },
     };

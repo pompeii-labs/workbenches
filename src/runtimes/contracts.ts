@@ -83,6 +83,7 @@ export interface RuntimeExecutionRequest extends RuntimePrepareFields {
 }
 
 interface RuntimePrepareFields {
+    signal?: AbortSignal;
     workbench: ResolvedWorkbench;
     workspaceDirectory: string;
     environment: Record<string, string | undefined>;

@@ -86,6 +86,66 @@ async function worker(
 }
 
 describe('worker daemon', () => {
+    test('cancel during launch ends cancelled and answers command.done', async () => {
+        const { server, host, home } = await worker();
+        const entered = Promise.withResolvers<void>();
+        let aborted = false;
+        host.launch = async (_start, launch) => {
+            launch.step('checking the docker runtime');
+            launch.signal.addEventListener(
+                'abort',
+                () => {
+                    aborted = true;
+                },
+                { once: true }
+            );
+            entered.resolve();
+            return new Promise(() => {});
+        };
+        await server.next((message) => message.type === 'hello');
+        server.send(runStart());
+        await entered.promise;
+        server.send({
+            type: 'command',
+            command_id: 'steer_launch',
+            run_id: 'run_1',
+            kind: 'steer',
+            payload: { text: 'continue' },
+        });
+        expect(
+            await server.next(
+                (message) =>
+                    message.type === 'command.done' &&
+                    message.command_id === 'steer_launch'
+            )
+        ).toMatchObject({
+            status: 'rejected',
+            reason: expect.stringContaining('launching'),
+        });
+        server.send({
+            type: 'command',
+            command_id: 'cancel_launch',
+            run_id: 'run_1',
+            kind: 'cancel',
+            payload: {},
+        });
+        expect(
+            await server.next(
+                (message) =>
+                    message.type === 'command.done' &&
+                    message.command_id === 'cancel_launch'
+            )
+        ).toMatchObject({ status: 'delivered' });
+        expect(aborted).toBe(true);
+        expect(host.released).toContain('run_1');
+        expect(JSON.parse(await readFile(home.assignmentsPath, 'utf8'))).toMatchObject({
+            runs: [{ state: 'cancelled' }],
+        });
+        await server.next((message) => message.type === 'events');
+        expect(
+            server.events('run_1').some((event) => event.type === 'run.cancelled')
+        ).toBe(true);
+    });
     test('sweeps before connecting and then hourly, including a zero clock', async () => {
         let now = 0;
         const sweeps: number[] = [];

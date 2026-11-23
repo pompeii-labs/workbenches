@@ -10,6 +10,7 @@ import type { RunnerRegistry } from '../runners/registry.js';
 import type { DetachedRunLauncher } from '../runs/detached.js';
 import type { WorkbenchEvent } from '../runs/events.js';
 import { RunStore } from '../runs/store.js';
+import type { DockerRunContainers } from '../runtimes/docker/liveness.js';
 import { RuntimeRegistry } from '../runtimes/registry.js';
 import type { SessionControl } from '../sessions/control.js';
 import type { SessionStore } from '../sessions/store.js';
@@ -26,6 +27,7 @@ import { requirementsOf } from '../workbench/runtimes.js';
 import { WorkerCheckout } from './checkout.js';
 import {
     type WorkerAdmission,
+    type WorkerLaunch,
     type WorkerOutcome,
     WorkerRejection,
     type WorkerRunContext,
@@ -37,13 +39,22 @@ import type { WorkerHome } from './home.js';
 import type { WorkerLog } from './log.js';
 import { WorkerOutcomeLayout } from './outcome.js';
 import type { RunStart, WorkerCommand } from './protocol.js';
+import { WorkerRunResources } from './resources.js';
 import { WorkerSessionRuns } from './runs.js';
 import { WorkerRunnerVersions } from './versions.js';
 
 export interface WorkerEngineOptions {
     home: WorkerHome;
     services: {
-        runs: Pick<RunStore, 'read' | 'readEventsAfter' | 'lastEvent' | 'reconcile'>;
+        runs: Pick<
+            RunStore,
+            | 'read'
+            | 'readEventsAfter'
+            | 'lastEvent'
+            | 'reconcile'
+            | 'update'
+            | 'appendEvent'
+        >;
         sessions: Pick<SessionStore, 'read'>;
         catalog: Pick<SavedWorkbenchCatalog, 'find'>;
         writer: Pick<CatalogWriter, 'addRemote' | 'remove'>;
@@ -64,6 +75,7 @@ export interface WorkerEngineOptions {
     /** Checks a local run's runner CLI is new enough. Defaults to asking this machine's. */
     versions?: Pick<WorkerRunnerVersions, 'check'>;
     now?: () => Date;
+    containers?: Pick<DockerRunContainers, 'exists' | 'remove'>;
 }
 
 /**
@@ -76,12 +88,17 @@ export class WorkerEngine implements WorkerRunHost {
     readonly #outcomes: WorkerOutcomeLayout;
     readonly #sessions: WorkerSessionRuns;
     readonly #versions: Pick<WorkerRunnerVersions, 'check'>;
+    readonly #resources: WorkerRunResources;
 
     constructor(options: WorkerEngineOptions) {
         this.#options = options;
         this.#outcomes = new WorkerOutcomeLayout(options.home.root);
         this.#sessions = new WorkerSessionRuns(options.services);
         this.#versions = options.versions ?? new WorkerRunnerVersions();
+        this.#resources = new WorkerRunResources(
+            options.services.runs,
+            options.containers
+        );
     }
 
     async admit(start: RunStart): Promise<WorkerAdmission> {
@@ -131,26 +148,39 @@ export class WorkerEngine implements WorkerRunHost {
         }
     }
 
-    async launch(start: RunStart): Promise<string> {
+    async launch(start: RunStart, launch: WorkerLaunch): Promise<string> {
+        launch.signal.throwIfAborted();
+        const smoke = this.#resources.begin(
+            start.run_id,
+            this.#options.home.root,
+            start.runtime
+        );
+        launch.step('preparing the workspace');
         const directory = await this.#options.home.ensure(
             this.#options.home.workspaceDirectory(start.run_id)
         );
         const { runner, providers } = await this.#package(
             packageAlias(start.session_id)
         );
-        const environment = await this.#options.environment.build(
-            runSpec(start),
-            runner
-        );
+        const environment = await this.#options.environment
+            .build(runSpec(start), runner, launch.signal)
+            .catch(async (error: unknown) => {
+                await this.#options.environment.release(start.run_id);
+                throw error;
+            });
         // A repository run is a plain directory run on its own checkout,
         // fetched through the run's credential. The engine's own repository
         // mode, which uses a GitHub token, is never used by a worker.
-        if (start.workspace)
+        if (start.workspace) {
+            launch.step('checking out the repository');
             await new WorkerCheckout(this.#options.api, this.#options.log).clone(
                 start.workspace,
                 directory,
-                environment
+                environment,
+                launch.signal
             );
+        }
+        launch.signal.throwIfAborted();
         // The worker's own process reads these values too, so a reserved
         // name, such as one that preloads code, never comes from the server.
         const keys = Object.fromEntries(
@@ -169,12 +199,15 @@ export class WorkerEngine implements WorkerRunHost {
             environment,
             keys
         );
+        launch.signal.throwIfAborted();
         const run = await this.#start(
             start,
             directory,
             environment,
             keys,
-            connection
+            connection,
+            launch,
+            smoke
         ).catch(async (error: unknown) => {
             // A run uses only its member's sign-ins or the keys it was sent.
             // The engine's own advice names this worker's private package
@@ -217,6 +250,16 @@ export class WorkerEngine implements WorkerRunHost {
         return !RunStore.isTerminal(run.status);
     }
 
+    async containerExists(session: string): Promise<boolean | undefined> {
+        const latest = await this.#sessions.latest(session);
+        return latest ? this.#resources.containers.exists(latest.id) : undefined;
+    }
+
+    async fail(session: string, reason: string): Promise<void> {
+        const latest = await this.#sessions.latest(session);
+        if (latest) await this.#resources.stop(latest.id, 'failed', reason);
+    }
+
     async command(
         session: string,
         command: WorkerCommand,
@@ -224,7 +267,7 @@ export class WorkerEngine implements WorkerRunHost {
     ): Promise<void> {
         const control = this.#options.services.control;
         if (command.kind === 'cancel') {
-            await control.cancel(session);
+            await control.cancel(session, this.#resources);
             return;
         }
         if (command.kind === 'answer') {
@@ -306,7 +349,11 @@ export class WorkerEngine implements WorkerRunHost {
     }
 
     async release(runId: string): Promise<void> {
-        await this.#options.environment.release(runId);
+        try {
+            await this.#resources.release(runId);
+        } finally {
+            await this.#options.environment.release(runId);
+        }
     }
 
     async recover(
@@ -357,9 +404,15 @@ export class WorkerEngine implements WorkerRunHost {
         directory: string,
         environment: Record<string, string | undefined>,
         keys: Record<string, string>,
-        connection: string | undefined
+        connection: string | undefined,
+        launch: WorkerLaunch,
+        smokeRun: { id: string; scope: string }
     ) {
         return this.#options.services.launcher.start({
+            signal: launch.signal,
+            step: launch.step,
+            smokeRun,
+            prepared: (run) => this.#resources.prepared(start.run_id, run.id),
             workbench: packageAlias(start.session_id),
             task: start.task,
             directory,

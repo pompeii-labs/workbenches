@@ -90,8 +90,10 @@ export class WorkerRunEnvironment {
 
     async build(
         run: WorkerRunSpec,
-        runner: string
+        runner: string,
+        signal?: AbortSignal
     ): Promise<Record<string, string | undefined>> {
+        signal?.throwIfAborted();
         const environment = this.#inherited();
         Object.assign(
             environment,
@@ -116,11 +118,13 @@ export class WorkerRunEnvironment {
             WorkerRunEnvironment.credentialRoot(member)
         );
         if (run.runtime === 'local') {
-            await this.keychain.unlock(member);
+            await this.keychain.unlock(member, signal);
+            signal?.throwIfAborted();
             Object.assign(environment, this.memberEnvironment(member, runner));
             return environment;
         }
         environment.DOCKER_CONFIG = await this.dockerConfig(run);
+        signal?.throwIfAborted();
         return environment;
     }
 

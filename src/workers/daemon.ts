@@ -1,5 +1,6 @@
 import { WorkerRunAdmission } from './admission.js';
 import { WorkerAssignments } from './assignments.js';
+import { WorkerCommands } from './commands.js';
 import {
     WorkerChannel as Channel,
     type WorkerChannel,
@@ -21,7 +22,6 @@ import {
     type ServerMessage,
     WORKER_CLOSE_CODES,
     WORKER_PROTOCOL,
-    type WorkerCommand,
     type WorkerMessage,
 } from './protocol.js';
 import type { WorkerSignIns } from './signin.js';
@@ -80,6 +80,7 @@ export class WorkerDaemon {
     readonly #startedAt: Date;
     readonly #stream: WorkerEventStream;
     readonly #admission: WorkerRunAdmission;
+    readonly #commands: WorkerCommands;
     readonly #signIns:
         | Pick<
               WorkerSignIns,
@@ -116,16 +117,6 @@ export class WorkerDaemon {
             options.host,
             (message) => this.#send(message)
         );
-        this.#tracker = new WorkerRunTracker(
-            this.#assignments,
-            options.host,
-            new WorkerOutcomeUpload(
-                options.api.request.bind(options.api),
-                (milliseconds) => Bun.sleep(milliseconds)
-            ),
-            options.log,
-            this.#now
-        );
         this.#admission = new WorkerRunAdmission({
             assignments: this.#assignments,
             host: options.host,
@@ -143,6 +134,24 @@ export class WorkerDaemon {
                 this.#wake();
             },
         });
+        this.#tracker = new WorkerRunTracker(
+            this.#assignments,
+            options.host,
+            new WorkerOutcomeUpload(
+                options.api.request.bind(options.api),
+                (milliseconds) => Bun.sleep(milliseconds)
+            ),
+            options.log,
+            this.#now,
+            this.#admission
+        );
+        this.#commands = new WorkerCommands(
+            this.#assignments,
+            options.host,
+            this.#admission,
+            this.#tracker,
+            (message) => this.#send(message)
+        );
         this.#signIns = options.signIns?.((message) => this.#send(message));
     }
 
@@ -260,7 +269,8 @@ export class WorkerDaemon {
             return this.#signIns?.secret(message.connect_id, message.text);
         if (message.type === 'connect.cancel')
             return this.#signIns?.cancel(message.connect_id);
-        return this.#command(message);
+        await this.#commands.deliver(message);
+        this.#wake();
     }
 
     async #welcome(stored: Array<{ run_id: string; sequence: number }>): Promise<void> {
@@ -287,43 +297,6 @@ export class WorkerDaemon {
         this.#onlineSince = now;
         this.#offlineSince = undefined;
         this.#dirty = true;
-        this.#wake();
-    }
-
-    async #command(command: WorkerCommand): Promise<void> {
-        const assignment = this.#assignments.get(command.run_id);
-        const done = (status: 'delivered' | 'rejected', reason?: string) =>
-            this.#send({
-                type: 'command.done',
-                command_id: command.command_id,
-                status,
-                ...(reason ? { reason } : {}),
-            });
-        if (!assignment?.session_id) {
-            done('rejected', 'This worker has no session for the run');
-            return;
-        }
-        const start = this.#assignments.start(command.run_id);
-        try {
-            await this.#options.host.command(assignment.session_id, command, {
-                run: {
-                    run_id: assignment.run_id,
-                    runtime: assignment.runtime,
-                    member_id: assignment.member_id,
-                    runner: assignment.runner,
-                    connection: assignment.connection,
-                },
-                ...(start ? { start } : {}),
-            });
-            // A finished session continued with send is followed again.
-            if (command.kind !== 'cancel') this.#tracker.wake(assignment.run_id);
-            done('delivered');
-        } catch (error) {
-            done(
-                'rejected',
-                error instanceof Error ? error.message : 'The command was not delivered'
-            );
-        }
         this.#wake();
     }
 

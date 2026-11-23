@@ -13,6 +13,7 @@ import {
 } from '../../src/runs/detached.js';
 import type { WorkbenchEvent } from '../../src/runs/events.js';
 import type { StoredRun } from '../../src/runs/store.js';
+import type { RunTermination } from '../../src/runs/termination.js';
 import { readContainerForwardNames } from '../../src/runtimes/hostvariables.js';
 import type { StoredSession } from '../../src/sessions/store.js';
 import type { RemoteWorkbenchPackage } from '../../src/sources/index.js';
@@ -279,6 +280,7 @@ describe('worker engine', () => {
         const runners = RunnerRegistry.standard();
         const launched: StartDetachedRunOptions[] = [];
         const engine = new WorkerEngine({
+            containers: { exists: async () => true, remove: async () => {} },
             worker: 'mini',
             api: remote.api,
             home,
@@ -333,7 +335,8 @@ describe('worker engine', () => {
                     BUN_OPTIONS: '--preload ./MUST_NOT_RUN.ts',
                     NODE_OPTIONS: '--require ./MUST_NOT_RUN.js',
                 },
-            })
+            }),
+            { signal: new AbortController().signal, step: () => {} }
         );
         expect(session).toBe('wb_launched');
         const options = launched[0];
@@ -425,7 +428,10 @@ describe('worker engine', () => {
             const worker = engine(os);
             await worker.admit(start({ runtime: 'docker' }));
             return worker
-                .launch(start({ runtime: 'docker' }))
+                .launch(start({ runtime: 'docker' }), {
+                    signal: new AbortController().signal,
+                    step: () => {},
+                })
                 .catch((error: unknown) =>
                     error instanceof Error ? error.message : ''
                 );
@@ -474,7 +480,8 @@ describe('worker engine', () => {
                         branch: 'wb/run_1',
                         credential: 'MUST_NOT_RENDER_CREDENTIAL',
                     },
-                })
+                }),
+                { signal: new AbortController().signal, step: () => {} }
             )
             .catch((reason: unknown) => reason);
         expect(error).toBeInstanceOf(WorkerRejection);
@@ -560,8 +567,9 @@ describe('worker engine', () => {
                 calls.push(['answer', ...args]);
                 return { session_id: '', run_id: '', input_id: '', after_sequence: 0 };
             },
-            cancel: async (...args: unknown[]) => {
-                calls.push(['cancel', ...args]);
+            cancel: async (id: string, termination?: Pick<RunTermination, 'stop'>) => {
+                calls.push(['cancel', id]);
+                expect(typeof termination?.stop).toBe('function');
                 return { session_id: '', run_id: '' };
             },
         };
@@ -766,7 +774,12 @@ describe('worker engine', () => {
             });
             return engine
                 .admit(local)
-                .then(() => engine.launch(local))
+                .then(() =>
+                    engine.launch(local, {
+                        signal: new AbortController().signal,
+                        step: () => {},
+                    })
+                )
                 .catch((error: unknown) => error);
         };
         const message = (value: unknown) =>
@@ -957,7 +970,10 @@ describe('worker engine', () => {
                 ...overrides,
             });
             await engine.admit(run);
-            await engine.launch(run);
+            await engine.launch(run, {
+                signal: new AbortController().signal,
+                step: () => {},
+            });
             const options = launched.at(-1);
             return {
                 connection: options?.connection,
@@ -1101,7 +1117,10 @@ describe('worker engine', () => {
                 ...overrides,
             });
             await engine.admit(run);
-            await engine.launch(run);
+            await engine.launch(run, {
+                signal: new AbortController().signal,
+                step: () => {},
+            });
             return launched.at(-1);
         };
         const local = await launch({ runtime: 'local' });
@@ -1176,7 +1195,10 @@ describe('worker engine', () => {
                 started_by: { member_id: 'mem_1' },
             });
             await engine.admit(run);
-            await engine.launch(run);
+            await engine.launch(run, {
+                signal: new AbortController().signal,
+                step: () => {},
+            });
             expect(launched.at(-1)?.connection).toBe('claude-agent');
         }
     });
@@ -1219,7 +1241,9 @@ describe('worker engine', () => {
         const run = start({ runtime: 'docker', started_by: { member_id: 'mem_1' } });
         await engine.admit(run);
 
-        const error = await engine.launch(run).catch((reason: unknown) => reason);
+        const error = await engine
+            .launch(run, { signal: new AbortController().signal, step: () => {} })
+            .catch((reason: unknown) => reason);
 
         expect(error instanceof Error ? error.message : '').toBe(
             "Claude Code in the docker runtime has no subscription login for Claude subscription. On a Mac worker a docker run cannot read Claude Code's login, which the member's own keychain holds. Run this Workbench on a Linux worker."
@@ -1297,7 +1321,10 @@ describe('worker engine', () => {
                 started_by: { member_id: 'mem_1' },
             });
             await engine.admit(run);
-            await engine.launch(run);
+            await engine.launch(run, {
+                signal: new AbortController().signal,
+                step: () => {},
+            });
             return launched.at(-1);
         };
         const followUp = () =>

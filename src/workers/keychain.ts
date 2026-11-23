@@ -1,11 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { ProcessTree } from '../processes/tree.js';
 
 /** Runs `security -i` with `HOME` set, its commands on standard input. */
 export type KeychainCommand = (
     home: string,
-    input: string
+    input: string,
+    signal?: AbortSignal
 ) => Promise<{ code: number; stderr: string }>;
 
 /**
@@ -26,7 +28,8 @@ export class MemberKeychain {
     ) {}
 
     /** Creates the member directory's keychain if it has none, and unlocks it. */
-    async unlock(directory: string): Promise<void> {
+    async unlock(directory: string, signal?: AbortSignal): Promise<void> {
+        signal?.throwIfAborted();
         if (this.platform !== 'darwin') return;
         const keychains = join(directory, 'Library', 'Keychains');
         const keychain = join(keychains, 'login.keychain-db');
@@ -42,7 +45,8 @@ export class MemberKeychain {
                     // No timeout and no lock on sleep.
                     `set-keychain-settings "${keychain}"`,
                 ],
-                'created'
+                'created',
+                signal
             );
             await chmod(keychain, 0o600);
         }
@@ -55,12 +59,19 @@ export class MemberKeychain {
         await this.#run(
             directory,
             [`unlock-keychain -p ${password.trim()} "${keychain}"`],
-            'unlocked'
+            'unlocked',
+            signal
         );
     }
 
-    async #run(home: string, commands: string[], done: string): Promise<void> {
-        const result = await this.command(home, `${commands.join('\n')}\n`);
+    async #run(
+        home: string,
+        commands: string[],
+        done: string,
+        signal?: AbortSignal
+    ): Promise<void> {
+        signal?.throwIfAborted();
+        const result = await this.command(home, `${commands.join('\n')}\n`, signal);
         if (result.code !== 0) {
             const detail = result.stderr.trim().split('\n')[0];
             throw new Error(
@@ -71,18 +82,26 @@ export class MemberKeychain {
 }
 
 /** The password goes on standard input, never in a process listing. */
-const security: KeychainCommand = async (home, input) => {
+const security: KeychainCommand = async (home, input, signal) => {
+    signal?.throwIfAborted();
     const child = Bun.spawn(['security', '-i'], {
         env: { ...process.env, HOME: home },
         stdin: new Blob([input]),
         stdout: 'ignore',
         stderr: 'pipe',
     });
-    const [code, stderr] = await Promise.all([
-        child.exited,
-        new Response(child.stderr).text(),
-    ]);
-    return { code, stderr };
+    const stop = () => new ProcessTree().stop(child.pid);
+    signal?.addEventListener('abort', stop, { once: true });
+    try {
+        const [code, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stderr).text(),
+        ]);
+        signal?.throwIfAborted();
+        return { code, stderr };
+    } finally {
+        signal?.removeEventListener('abort', stop);
+    }
 };
 
 async function exists(path: string): Promise<boolean> {

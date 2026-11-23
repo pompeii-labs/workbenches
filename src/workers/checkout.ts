@@ -1,5 +1,6 @@
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { ProcessTree } from '../processes/tree.js';
 
 import { WorkerRejection } from './contracts.js';
 import type { WorkerLog } from './log.js';
@@ -86,7 +87,8 @@ export class WorkerCheckout {
     async clone(
         workspace: RunWorkspace,
         directory: string,
-        environment: Record<string, string | undefined>
+        environment: Record<string, string | undefined>,
+        signal?: AbortSignal
     ): Promise<string> {
         const { credential } = workspace;
         try {
@@ -96,7 +98,7 @@ export class WorkerCheckout {
             if (!this.#origins.includes(origin))
                 throw new Error(`${origin} is neither GitHub nor this worker's API`);
             const env = this.#environment(environment);
-            const git = (args: string[]) => this.#git(directory, env, args);
+            const git = (args: string[]) => this.#git(directory, env, args, signal);
             await rm(join(directory, '.git'), { recursive: true, force: true });
             await git(['init', '--quiet']);
             await git([
@@ -123,7 +125,8 @@ export class WorkerCheckout {
                             '1',
                             workspace.clone.url,
                             workspace.ref,
-                        ]
+                        ],
+                        signal
                     );
                     fetched = true;
                 } catch {
@@ -193,8 +196,10 @@ export class WorkerCheckout {
     async #git(
         directory: string,
         env: Record<string, string>,
-        args: string[]
+        args: string[],
+        signal?: AbortSignal
     ): Promise<string> {
+        signal?.throwIfAborted();
         const child = Bun.spawn(['git', ...HARDENING, ...args], {
             cwd: directory,
             env,
@@ -202,7 +207,9 @@ export class WorkerCheckout {
             stdout: 'pipe',
             stderr: 'pipe',
         });
-        const timer = setTimeout(() => child.kill(), CLONE_TIMEOUT_MS);
+        const stop = () => new ProcessTree().stop(child.pid);
+        signal?.addEventListener('abort', stop, { once: true });
+        const timer = setTimeout(stop, CLONE_TIMEOUT_MS);
         try {
             const [code, stdout, stderr] = await Promise.all([
                 child.exited,
@@ -216,6 +223,7 @@ export class WorkerCheckout {
             return stdout;
         } finally {
             clearTimeout(timer);
+            signal?.removeEventListener('abort', stop);
         }
     }
 }

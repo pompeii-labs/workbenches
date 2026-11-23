@@ -22,6 +22,8 @@ export interface WorkbenchSmokeResult extends PreflightResult {
 }
 
 export interface RuntimeSmokeOptions {
+    signal?: AbortSignal;
+    run?: { id: string; scope: string };
     workbench: ResolvedWorkbench;
     workspaceDirectory?: string;
     environment?: Record<string, string | undefined>;
@@ -43,6 +45,7 @@ export class RuntimeSmoke {
     constructor(private readonly options: RuntimeSmokeOptions) {}
 
     async check(): Promise<WorkbenchSmokeResult> {
+        this.options.signal?.throwIfAborted();
         const environment = this.options.environment ?? process.env;
         const workbench = withRuntime(this.options.workbench, this.options.runtime);
         const selected = selectedRuntime(workbench);
@@ -68,6 +71,7 @@ export class RuntimeSmoke {
         let operationError: unknown;
         try {
             runtime = await registry.resolve(selected.name).prepare({
+                ...(this.options.signal ? { signal: this.options.signal } : {}),
                 workbench,
                 workspaceDirectory,
                 environment,
@@ -100,13 +104,14 @@ export class RuntimeSmoke {
                     : {}),
                 ...(this.options.home
                     ? {
-                          run: {
+                          run: this.options.run ?? {
                               id: RunStore.createId(),
                               scope: RunStore.scope(this.options.home),
                           },
                       }
                     : {}),
             });
+            this.options.signal?.throwIfAborted();
             const preflight = await runtime.preflight();
             const authentication = await new ConnectionInspector({
                 workbench,
