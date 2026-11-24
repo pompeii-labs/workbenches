@@ -28,15 +28,14 @@ export function parseDeclarationSource(source: string): DeclaredOutcome {
 
 /** Where the files of one outbox are stored, by their path inside the outbox. */
 export interface OutboxContent {
-    /** Stores one file's content and returns its descriptor. */
-    put(path: string, mediaType: string): Promise<OutcomeContentDescriptor>;
+    /** Stores one file, or returns undefined when the host skips it. */
+    put(path: string, mediaType: string): Promise<OutcomeContentDescriptor | undefined>;
 }
 
 /**
  * Turns an outbox listing and its optional declaration into artifacts and
  * links, storing each file through `content`. Reading the outbox is the
- * caller's job, so the same assembly serves a directory on disk and an archive
- * held in memory.
+ * caller's job, so the same assembly serves local files and remote streams.
  */
 export class DeclaredOutput {
     constructor(private readonly content: OutboxContent) {}
@@ -61,14 +60,16 @@ export class DeclaredOutput {
         const artifacts: OutcomeArtifact[] = [];
         for (const [index, path] of paths.entries()) {
             const declared = metadata.get(path);
+            const content = await this.content.put(
+                path,
+                declared?.media_type ?? inferMediaType(path)
+            );
+            if (!content) continue;
             artifacts.push({
                 id: uniqueId('artifact', declared?.name ?? path, index),
                 name: declared?.name ?? path,
                 path,
-                content: await this.content.put(
-                    path,
-                    declared?.media_type ?? inferMediaType(path)
-                ),
+                content,
                 ...(declared?.description ? { description: declared.description } : {}),
             });
         }

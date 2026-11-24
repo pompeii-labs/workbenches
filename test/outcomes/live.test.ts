@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,6 +33,28 @@ async function fixture(onAvailable?: (outcome: RunOutcome) => Promise<void> | vo
 }
 
 describe('live immutable outbox snapshots', () => {
+    test('publishes collection warnings even when every returned file was skipped', async () => {
+        const f = await fixture();
+        const warnings = [
+            { code: 'outcome_tools_missing', message: 'No hashing tools' },
+        ];
+        const collect = spyOn(f.lifecycle.output, 'collect').mockResolvedValue({
+            artifacts: [],
+            links: [],
+            warnings,
+        });
+        try {
+            const snapshot = await f.lifecycle.checkpoint(undefined, 1);
+            expect(snapshot?.warnings).toEqual(warnings);
+            expect(snapshot && (await f.store.read(snapshot.id)).warnings).toEqual(
+                warnings
+            );
+            expect(await f.lifecycle.checkpoint(undefined, 2)).toEqual(snapshot);
+        } finally {
+            collect.mockRestore();
+        }
+    });
+
     test('publishes exact durable revisions, suppresses unchanged output, and still collects a separate final outcome', async () => {
         const published: RunOutcome[] = [];
         const f = await fixture(async (outcome) => {

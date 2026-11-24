@@ -1,36 +1,27 @@
-import { afterEach, expect, spyOn, test } from 'bun:test';
+import { afterEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import * as streams from 'node:fs';
-import * as filesystem from 'node:fs/promises';
-import { mkdtemp, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
-import { OutcomeStore } from '../../src/outcomes/index.js';
 import { WorkerApi } from '../../src/workers/api.js';
-import {
-    type WorkerOutcomeData,
-    WorkerOutcomeLayout,
-} from '../../src/workers/outcome.js';
-import { isRecord } from '../../src/workers/protocol.js';
+import type { WorkerOutcomeData } from '../../src/workers/outcome.js';
 import { WorkerOutcomeRedaction } from '../../src/workers/redaction.js';
-import { WorkerOutcomeUpload } from '../../src/workers/upload.js';
+import {
+    type WorkerOutcomeRequest,
+    WorkerOutcomeUpload,
+} from '../../src/workers/upload.js';
 
-const cleanups: Array<() => Promise<void> | void> = [];
+const directories: string[] = [];
 afterEach(async () => {
-    for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+    for (const directory of directories.splice(0))
+        await rm(directory, { recursive: true, force: true });
 });
 
-async function fixture(names = ['large.bin']) {
+async function fixture(contents: Record<string, string>) {
     const directory = await mkdtemp(join(tmpdir(), 'workbench-upload-test-'));
-    cleanups.push(() => rm(directory, { recursive: true, force: true }));
+    directories.push(directory);
     const outcome: WorkerOutcomeData = {
-        directory: join(directory, 'uploads'),
-        files: names.map((path) => ({
-            path,
-            media_type: 'application/octet-stream',
-            source: async () => join(directory, path),
-        })),
+        files: [],
         manifest: {
             summary: null,
             changesets: [],
@@ -39,360 +30,325 @@ async function fixture(names = ['large.bin']) {
             warnings: [],
         },
     };
+    for (const [path, bytes] of Object.entries(contents)) {
+        const source = join(directory, String(outcome.files.length));
+        await writeFile(source, bytes);
+        outcome.files.push({
+            path,
+            source: async () => source,
+            content: {
+                digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+                size_bytes: Buffer.byteLength(bytes),
+                media_type: 'text/plain',
+            },
+        });
+    }
     return { directory, outcome };
 }
 
-test('redacts stream-boundary and JSON-escaped credentials without resizing, never short values', async () => {
-    const { directory } = await fixture([]);
-    const source = join(directory, 'source');
-    const target = join(directory, 'redacted');
-    const credential = 'FAKE_LONG_CREDENTIAL';
-    const quoted = 'FAKE"QUOTED"KEY';
-    const escaped = JSON.stringify(quoted).slice(1, -1);
-    const prefix = 'x'.repeat(64 * 1024 - 5);
-    const bytes = Buffer.from(`${prefix}${credential} ${escaped} true 1234 é`);
-    await writeFile(source, bytes);
-    const redaction = new WorkerOutcomeRedaction([
-        credential,
-        quoted,
-        'true',
-        '1234',
-        'é',
+test('redacts every manifest string and key, including JSON-escaped credentials, but not short values', () => {
+    const credential = 'FAKE"QUOTED"KEY';
+    const redaction = new WorkerOutcomeRedaction([credential, 'true', '1234', 'é', '']);
+    expect(
+        redaction.value({
+            [credential]: [
+                credential,
+                JSON.stringify(credential).slice(1, -1),
+                'true',
+                '1234',
+                'é',
+            ],
+        })
+    ).toEqual({
+        '[redacted]*****': [
+            '[redacted]*****',
+            '[redacted]*******',
+            'true',
+            '1234',
+            'é',
+        ],
+    });
+    expect(JSON.stringify(redaction.value({ summary: credential }))).not.toContain(
+        'FAKE'
+    );
+});
+
+test('sends unchanged file slices to signed URLs without credentials and completes with exact ordered ETags', async () => {
+    const secret = 'FAKE_SECRET_VALUE';
+    const bytes = `start${secret}end`;
+    const { directory, outcome } = await fixture({
+        [`${secret}.txt`]: bytes,
+        'empty.txt': '',
+    });
+    outcome.manifest.summary = secret;
+    outcome.manifest.links = [
+        { id: 'link_fake', label: secret, uri: `https://example.com/${secret}` },
+    ];
+    outcome.manifest.warnings = [{ code: secret, message: secret }];
+    outcome.manifest.artifacts = [
+        {
+            name: secret,
+            path: secret,
+            description: secret,
+            media_type: secret,
+            size_bytes: bytes.length,
+        },
+    ];
+    outcome.manifest.changesets = [
+        {
+            id: secret,
+            workspace: { kind: 'named', name: secret },
+            stats: { additions: 0, modifications: 1, deletions: 0, binary_files: 0 },
+            entries: [{ path: secret, operation: 'modify' }],
+        },
+    ];
+    const partBytes = 7;
+    const counts = [Math.ceil(Buffer.byteLength(bytes) / partBytes), 1];
+    const sent: Uint8Array[] = [];
+    const completions: unknown[] = [];
+    let fileIndex = -1;
+    const request: WorkerOutcomeRequest = async (path, options) => {
+        expect(options.token).toBe('FAKE_RUN_TOKEN');
+        if (path.endsWith('/files')) {
+            fileIndex += 1;
+            const file = outcome.files[fileIndex];
+            expect(options.body).toEqual({
+                path: new WorkerOutcomeRedaction([secret]).text(file?.path ?? ''),
+                size: file?.content.size_bytes,
+                sha256: file?.content.digest.slice(7),
+                ordinal: fileIndex,
+                media_type: 'text/plain',
+            });
+            return {
+                upload: `upload/${fileIndex}`,
+                part_bytes: partBytes,
+                parts: Array.from(
+                    { length: counts[fileIndex] ?? 0 },
+                    (_, index) => `https://storage.example/${fileIndex}/${index + 1}`
+                ),
+            };
+        }
+        if (path.includes('/files/')) {
+            expect(path).toContain(`upload%2F${fileIndex}/complete`);
+            completions.push(options.body);
+            return {
+                path: new WorkerOutcomeRedaction([secret]).text(
+                    outcome.files[fileIndex]?.path ?? ''
+                ),
+                size: outcome.files[fileIndex]?.content.size_bytes,
+            };
+        }
+        const manifest = JSON.stringify(options.body);
+        expect(manifest).not.toContain(secret);
+        expect(manifest).toContain('[redacted]');
+        return {};
+    };
+    const uploader = new WorkerOutcomeUpload(
+        request,
+        async () => {},
+        async (url, options) => {
+            expect(options.method).toBe('PUT');
+            const headers = new Headers(options.headers);
+            expect(headers.has('authorization')).toBe(false);
+            const part = new Uint8Array(await new Response(options.body).arrayBuffer());
+            expect(headers.get('content-length')).toBe(String(part.length));
+            sent.push(part);
+            return new Response(null, {
+                headers: { ETag: `"${url.split('/').at(-1)}-opaque"` },
+            });
+        }
+    );
+    await uploader.uploadOutcome(
+        'run_fake',
+        'FAKE_RUN_TOKEN',
+        outcome,
+        [secret],
+        () => {}
+    );
+    expect(sent.map((part) => Buffer.from(part).toString())).toEqual([
+        ...Array.from({ length: counts[0] ?? 0 }, (_, index) =>
+            bytes.slice(index * partBytes, (index + 1) * partBytes)
+        ),
         '',
     ]);
-    const descriptor = await redaction.write(source, target);
-    const result = await filesystem.readFile(target);
-    expect(result.length).toBe(bytes.length);
-    expect(result.toString()).toBe(
-        `${prefix}[redacted]${'*'.repeat(credential.length - 10)} [redacted]${'*'.repeat(escaped.length - 10)} true 1234 é`
+    expect(Buffer.concat(sent).toString()).toBe(bytes);
+    expect(completions).toEqual(
+        counts.map((count) => ({
+            parts: Array.from({ length: count }, (_, index) => ({
+                number: index + 1,
+                etag: `"${index + 1}-opaque"`,
+            })),
+        }))
     );
-    expect(descriptor).toEqual({
-        size: bytes.length,
-        sha256: createHash('sha256').update(result).digest('hex'),
-    });
-    expect(redaction.value({ summary: 'true', nested: [credential] })).toEqual({
-        summary: 'true',
-        nested: [`[redacted]${'*'.repeat(credential.length - 10)}`],
-    });
+    expect((await readdir(directory)).toSorted()).toEqual(['0', '1']);
+    expect(await readFile(join(directory, '0'), 'utf8')).toBe(bytes);
 });
 
-function server(handler: (request: Request) => Promise<Response> | Response) {
-    const http = Bun.serve({
-        port: 0,
-        fetch: handler,
-        maxRequestBodySize: 100 * 1024 ** 2,
+test('stored and skipped files require no source reads or part transfers', async () => {
+    const { outcome } = await fixture({
+        'stored.txt': 'stored',
+        'skipped.txt': 'skip',
     });
-    cleanups.push(() => {
-        http.stop(true);
-    });
-    const api = new WorkerApi(http.url.toString());
-    return new WorkerOutcomeUpload(api.request.bind(api), async () => {});
-}
-
-test('never sends the manifest as a file and uploads review diffs through all file steps', async () => {
-    const { directory } = await fixture([]);
-    const store = new OutcomeStore(directory);
-    cleanups.push(() => store.close());
-    const content = await store.putBytes('fake bytes', 'text/plain');
-    const outcome = await store.commit(
-        {
-            version: 1,
-            id: 'wbo_manifest1234567890123',
-            run_id: 'wb_manifest12345678901234',
-            created_at: '2026-01-01T00:00:00.000Z',
-            completeness: 'complete',
-            artifacts: [{ id: 'artifact_report', name: 'report.txt', content }],
-            changesets: [
-                {
-                    id: 'change_primary',
-                    workspace: { kind: 'primary' },
-                    base: { snapshot_digest: `sha256:${'0'.repeat(64)}` },
-                    entries: [],
-                    review: content,
-                    stats: {
-                        additions: 0,
-                        modifications: 0,
-                        deletions: 0,
-                        binary_files: 0,
-                    },
-                },
-            ],
-            links: [],
-            warnings: [],
-        },
-        'present'
-    );
-    const layout = await new WorkerOutcomeLayout(directory).files(outcome);
-    const begun: string[] = [];
-    const steps: string[] = [];
-    let path = '';
-    let manifestsAsFiles = 0;
-    let manifests = 0;
-    const api = server(async (request) => {
-        const endpoint = new URL(request.url).pathname;
-        if (endpoint.endsWith('/files')) {
-            const body = await request.json();
-            if (!isRecord(body) || typeof body.path !== 'string')
-                throw new Error('Invalid file');
-            path = body.path;
-            if (path === '.workbench/outcome.json') {
-                manifestsAsFiles += 1;
-                return Response.json(
-                    {
-                        code: 'reserved_path',
-                        message: 'Manifest uses outcome completion',
-                    },
-                    { status: 400 }
-                );
-            }
-            begun.push(path);
-            steps.push(`begin ${path}`);
-            return Response.json(
-                { upload: 'fake-upload', part_bytes: 64 * 1024 ** 2 },
-                { status: 201 }
-            );
-        }
-        if (endpoint.includes('/parts/')) {
-            expect(await request.text()).toBe('fake bytes');
-            steps.push(`part ${path}`);
-            return Response.json({ etag: 'fake-etag' });
-        }
-        if (endpoint.includes('/files/')) {
-            steps.push(`complete ${path}`);
-            return Response.json({ path, size: 10 });
-        }
-        manifests += 1;
-        steps.push('manifest');
-        expect(await request.json()).toEqual(layout.manifest);
-        return Response.json({});
-    });
-    await api.uploadOutcome('run_fake', 'FAKE_TOKEN', layout, [], () => {});
-    const review = '.workbench/changes/change_primary/review.diff';
-    expect(begun).toEqual(['report.txt', review]);
-    expect(manifestsAsFiles).toBe(0);
-    expect(manifests).toBe(1);
-    expect(steps).toEqual([
-        'begin report.txt',
-        'part report.txt',
-        'complete report.txt',
-        `begin ${review}`,
-        `part ${review}`,
-        `complete ${review}`,
-        'manifest',
-    ]);
-});
-
-test('streams redacted bytes across exact-size parts and deletes only after confirmation', async () => {
-    const { directory, outcome } = await fixture();
-    const partBytes = 64 * 1024 ** 2;
-    const source = join(directory, 'large.bin');
-    const credential = 'FAKE_CREDENTIAL_CROSSING_PART';
-    const input = await open(source, 'w');
-    await input.truncate(partBytes + 13);
-    await input.write(Buffer.from(credential), 0, credential.length, partBytes - 20);
-    await input.close();
-    const expected = createHash('sha256');
-    const zeros = Buffer.alloc(64 * 1024);
-    let remaining = partBytes - 20;
-    while (remaining > 0) {
-        const length = Math.min(remaining, zeros.length);
-        expected.update(zeros.subarray(0, length));
-        remaining -= length;
-    }
-    const marker = '[redacted]'.padEnd(credential.length, '*');
-    expected.update(marker);
-    expected.update(Buffer.alloc(33 - credential.length));
-    const digest = expected.digest('hex');
-    const received = createHash('sha256');
-    const calls: string[] = [];
-    const parts: number[] = [];
-    let staged = '';
-    const api = server(async (request) => {
-        expect(request.headers.get('authorization')).toBe('Bearer FAKE_RUN_TOKEN');
-        const path = new URL(request.url).pathname;
-        calls.push(path);
-        if (path.endsWith('/files')) {
-            expect(await request.json()).toEqual({
-                path: 'large.bin',
-                size: partBytes + 13,
-                sha256: digest,
-                ordinal: 0,
-                media_type: 'application/octet-stream',
-            });
-            const copies = await readdir(outcome.directory);
-            staged = join(outcome.directory, copies[0] ?? 'missing', 'content');
-            expect((await stat(staged)).size).toBe(partBytes + 13);
-            return Response.json(
-                { upload: 'opaque/value', part_bytes: partBytes },
-                { status: 201 }
-            );
-        }
-        if (path.includes('/parts/')) {
-            const number = Number(path.split('/').at(-1));
-            const bytes = Buffer.from(await request.arrayBuffer());
-            received.update(bytes);
-            parts.push(bytes.length);
-            if (number === 1)
-                expect(bytes.subarray(-20).toString()).toBe(marker.slice(0, 20));
-            else
-                expect(bytes.subarray(0, credential.length - 20).toString()).toBe(
-                    marker.slice(20)
-                );
-            expect((await stat(staged)).size).toBe(partBytes + 13);
-            return Response.json({ etag: `part-${number}` });
-        }
-        if (path.includes('/files/')) {
-            expect(received.digest('hex')).toBe(digest);
-            expect(await request.json()).toEqual({
-                parts: [
-                    { number: 1, etag: 'part-1' },
-                    { number: 2, etag: 'part-2' },
+    for (const file of outcome.files)
+        file.source = async () => {
+            throw new Error('Must not read');
+        };
+    let begun = 0;
+    const messages: string[] = [];
+    const uploader = new WorkerOutcomeUpload(
+        async (path, options) => {
+            if (path.endsWith('/files'))
+                return ++begun === 1
+                    ? { stored: true }
+                    : { skipped: { code: 'budget', message: 'Not kept' } };
+            expect(options.body).toMatchObject({
+                warnings: [
+                    { code: 'budget', message: 'Skipped skipped.txt: Not kept' },
                 ],
             });
-            expect((await stat(staged)).size).toBe(partBytes + 13);
-            return Response.json({ path: 'large.bin', size: partBytes + 13 });
+            return {};
+        },
+        async () => {},
+        async () => {
+            throw new Error('Must not transfer');
         }
-        expect(await stat(staged).catch(() => undefined)).toBeUndefined();
-        expect(await request.json()).toEqual(outcome.manifest);
-        return Response.json({});
-    });
-    const reads = spyOn(filesystem, 'readFile').mockImplementation(async () => {
-        throw new Error('Whole-file reads are forbidden');
-    });
-    const streamsOpened = spyOn(streams, 'createReadStream');
-    try {
-        await api.uploadOutcome(
-            'run_fake',
-            'FAKE_RUN_TOKEN',
-            outcome,
-            [credential, 'FAKE_RUN_TOKEN'],
-            () => {}
-        );
-        expect(parts).toEqual([partBytes, 13]);
-        expect(calls.at(-1)).toBe('/v1/runs/run_fake/outcome/complete');
-        expect(calls[1]).toContain('opaque%2Fvalue/parts/1');
-        expect(reads).not.toHaveBeenCalled();
-        expect(streamsOpened).toHaveBeenCalledWith(source, {
-            highWaterMark: 64 * 1024,
-        });
-    } finally {
-        reads.mockRestore();
-        streamsOpened.mockRestore();
-    }
+    );
+    await uploader.uploadOutcome('run_fake', 'FAKE_TOKEN', outcome, [], (message) =>
+        messages.push(message)
+    );
+    expect(begun).toBe(2);
+    expect(messages).toEqual(['Not kept']);
 });
 
-test('skipped and stored files move on, failed parts warn, and the manifest goes last', async () => {
-    const { directory, outcome } = await fixture([
-        'skip.txt',
-        'stored.txt',
-        'retry.txt',
-        'bad.txt',
-        'budget.txt',
-        'empty.txt',
-    ]);
-    for (const file of outcome.files)
-        await writeFile(
-            join(directory, file.path),
-            file.path === 'empty.txt' ? '' : 'FAKE_SECRET'
-        );
-    outcome.manifest.summary = 'FAKE_SECRET';
+test('retries only the failed part and retries begin and completion with the same input', async () => {
+    const { outcome } = await fixture({ 'retry.txt': 'abcdef' });
     const calls: string[] = [];
-    const attempts = new Map<string, number>();
-    const messages: string[] = [];
-    const begun: string[] = [];
-    let current = '';
-    const api = server(async (request) => {
-        expect(request.headers.get('authorization')).toBe('Bearer FAKE_TOKEN');
-        const path = new URL(request.url).pathname;
-        calls.push(path);
-        if (path.endsWith('/files')) {
-            const body = await request.json();
-            if (!isRecord(body) || typeof body.path !== 'string')
-                throw new Error('Invalid begin request');
-            current = body.path;
-            expect(body.ordinal).toBe(begun.length);
-            begun.push(current);
-            if (current === 'skip.txt')
-                return Response.json({
-                    skipped: {
-                        code: 'outcome_file_too_large',
-                        message: 'Fake storage limit',
-                    },
-                });
-            if (current === 'stored.txt') return Response.json({ stored: true });
-            return Response.json({ upload: current, part_bytes: 4 }, { status: 201 });
-        }
-        if (path.includes('/parts/')) {
-            const count = (attempts.get(path) ?? 0) + 1;
-            attempts.set(path, count);
-            await request.arrayBuffer();
-            if (current === 'bad.txt')
-                return Response.json(
-                    { code: 'invalid_part', message: 'Fake invalid part' },
-                    { status: 400 }
-                );
-            if (current === 'retry.txt' && count === 1)
-                return Response.json(
-                    { code: 'busy', message: 'Fake retry' },
-                    { status: 503 }
-                );
-            return Response.json({ etag: 'fake-etag' });
-        }
+    const waits: number[] = [];
+    const steps = new Map<string, number>();
+    const request: WorkerOutcomeRequest = async (path, options) => {
+        const count = (steps.get(path) ?? 0) + 1;
+        steps.set(path, count);
+        if (count === 1) throw Object.assign(new Error('Unavailable'), { status: 503 });
+        if (path.endsWith('/files'))
+            return {
+                upload: 'retry',
+                part_bytes: 3,
+                parts: ['https://storage.example/1', 'https://storage.example/2'],
+            };
         if (path.includes('/files/')) {
-            if (current === 'budget.txt')
-                return Response.json({
-                    skipped: {
-                        code: 'outcome_file_too_large',
-                        message: 'Fake budget filled',
-                    },
-                });
-            if (current === 'empty.txt')
-                expect(await request.json()).toEqual({ parts: [] });
-            return Response.json({
-                path: current,
-                size: current === 'empty.txt' ? 0 : 11,
+            expect(options.body).toEqual({
+                parts: [
+                    { number: 1, etag: 'one' },
+                    { number: 2, etag: 'two' },
+                ],
+            });
+            return { path: 'retry.txt', size: 6 };
+        }
+        return {};
+    };
+    const uploader = new WorkerOutcomeUpload(
+        request,
+        async (milliseconds) => {
+            waits.push(milliseconds);
+        },
+        async (url, options) => {
+            calls.push(url);
+            expect(await new Response(options.body).text()).toBe(
+                url.endsWith('/1') ? 'abc' : 'def'
+            );
+            if (url.endsWith('/2') && calls.length === 2)
+                return new Response(null, { status: 503 });
+            return new Response(null, {
+                headers: { ETag: url.endsWith('/1') ? 'one' : 'two' },
             });
         }
-        const manifest = await request.json();
-        if (!isRecord(manifest)) throw new Error('Invalid manifest');
-        expect(manifest.summary).toBe('[redacted]*');
-        expect(manifest.warnings).toEqual([
-            {
-                code: 'outcome_file_too_large',
-                message: 'Skipped skip.txt: Fake storage limit',
-            },
-            {
-                code: 'outcome_upload_failed',
-                message: 'Could not upload bad.txt: Fake invalid part',
-            },
-            {
-                code: 'outcome_file_too_large',
-                message: 'Skipped budget.txt: Fake budget filled',
-            },
-        ]);
-        return Response.json({});
-    });
-    await api.uploadOutcome(
+    );
+    await uploader.uploadOutcome('run_fake', 'FAKE_TOKEN', outcome, [], () => {});
+    expect(calls).toEqual([
+        'https://storage.example/1',
+        'https://storage.example/2',
+        'https://storage.example/2',
+    ]);
+    expect(waits).toEqual([100, 100, 100, 100]);
+});
+
+test('exhausted part retries warn and move to the next file, redacting errors and paths', async () => {
+    const secret = 'FAKE_SECRET';
+    const { outcome } = await fixture({ [`${secret}.txt`]: 'bad', 'next.txt': 'next' });
+    let attempts = 0;
+    let begun = 0;
+    let waits = 0;
+    const messages: string[] = [];
+    const uploader = new WorkerOutcomeUpload(
+        async (path, options) => {
+            if (path.endsWith('/files'))
+                return ++begun === 1
+                    ? {
+                          upload: 'bad',
+                          part_bytes: 3,
+                          parts: ['https://storage.example/bad'],
+                      }
+                    : { stored: true };
+            expect(path).toBe('/v1/runs/run_fake/outcome/complete');
+            expect(JSON.stringify(options.body)).not.toContain(secret);
+            expect(options.body).toMatchObject({
+                warnings: [
+                    {
+                        code: 'outcome_upload_failed',
+                        message: 'Could not upload [redacted]*.txt: [redacted]*',
+                    },
+                ],
+            });
+            return {};
+        },
+        async () => {
+            waits += 1;
+        },
+        async () => {
+            attempts += 1;
+            throw new Error(secret);
+        }
+    );
+    await uploader.uploadOutcome(
         'run_fake',
         'FAKE_TOKEN',
         outcome,
-        ['FAKE_SECRET'],
+        [secret],
         (message) => messages.push(message)
     );
-    expect(attempts.get('/v1/runs/run_fake/outcome/files/retry.txt/parts/1')).toBe(2);
-    expect(attempts.get('/v1/runs/run_fake/outcome/files/bad.txt/parts/1')).toBe(1);
-    expect(calls.at(-1)).toBe('/v1/runs/run_fake/outcome/complete');
-    expect(begun).toEqual(outcome.files.map((file) => file.path));
-    expect(messages).toEqual([
-        'Fake storage limit',
-        'Fake invalid part',
-        'Fake budget filled',
-    ]);
-    expect(await readdir(outcome.directory)).toEqual([]);
+    expect(attempts).toBe(3);
+    expect(waits).toBe(2);
+    expect(begun).toBe(2);
+    expect(messages).toEqual(['[redacted]*']);
+});
+
+test('completion can skip a file and missing ETags fail the file', async () => {
+    const { outcome } = await fixture({ 'skip.txt': 'x', 'bad.txt': 'x' });
+    let begun = 0;
+    const uploader = new WorkerOutcomeUpload(
+        async (path, options) => {
+            if (path.endsWith('/files'))
+                return {
+                    upload: String(++begun),
+                    part_bytes: 1,
+                    parts: [`https://storage.example/${begun}`],
+                };
+            if (path.includes('/files/'))
+                return { skipped: { code: 'budget', message: 'Full' } };
+            expect(options.body).toMatchObject({
+                warnings: [{ code: 'budget' }, { code: 'outcome_upload_failed' }],
+            });
+            return {};
+        },
+        async () => {},
+        async () =>
+            new Response(null, { headers: begun === 1 ? { ETag: 'opaque' } : {} })
+    );
+    await uploader.uploadOutcome('run_fake', 'FAKE_TOKEN', outcome, [], () => {});
 });
 
 test('retries interrupted response bodies and network failures without changing the manifest', async () => {
-    const { outcome } = await fixture([]);
+    const { outcome } = await fixture({});
     let attempts = 0;
     const api = new WorkerApi('http://localhost', async () => {
         attempts += 1;
@@ -419,9 +375,9 @@ test('retries interrupted response bodies and network failures without changing 
 
 for (const status of [401, 404, 409]) {
     test(`does not retry HTTP ${status} and prints its unchanged error`, async () => {
-        const { outcome } = await fixture([]);
+        const { outcome } = await fixture({});
         let attempts = 0;
-        const api = server(() => {
+        const api = new WorkerApi('http://localhost', async () => {
             attempts += 1;
             return Response.json(
                 { code: 'fake_error', message: 'Fake server explanation' },
@@ -429,7 +385,10 @@ for (const status of [401, 404, 409]) {
             );
         });
         await expect(
-            api.uploadOutcome('run_fake', 'FAKE_TOKEN', outcome, [], () => {})
+            new WorkerOutcomeUpload(
+                api.request.bind(api),
+                async () => {}
+            ).uploadOutcome('run_fake', 'FAKE_TOKEN', outcome, [], () => {})
         ).rejects.toThrow('Fake server explanation');
         expect(attempts).toBe(1);
     });

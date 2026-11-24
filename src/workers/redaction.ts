@@ -1,22 +1,15 @@
-import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { pipeline } from 'node:stream/promises';
-
 /**
  * Values shorter than this are never redacted. A short value such as `true`
- * or `1234` appears in ordinary output, and replacing it would corrupt files
- * without protecting anything. workbenches.dev applies the same rule.
+ * or `1234` appears in ordinary text. workbenches.dev applies the same rule.
  */
 const minimumLength = 8;
 
 /**
- * Replaces credential bytes before part boundaries are chosen: each value
- * exactly, and the form it takes inside a JSON string, because tools often
- * print serialized JSON.
+ * Redacts credentials in paths, manifest fields, and messages, including the
+ * form each value takes inside a JSON string. File bytes remain unchanged.
  */
 export class WorkerOutcomeRedaction {
     private readonly values: Buffer[];
-    private readonly retained: number;
 
     constructor(credentials: string[]) {
         this.values = [
@@ -28,40 +21,10 @@ export class WorkerOutcomeRedaction {
         ]
             .map((value) => Buffer.from(value))
             .sort((left, right) => right.length - left.length);
-        this.retained = Math.max(1, ...this.values.map((value) => value.length)) - 1;
-    }
-
-    async write(
-        source: string,
-        target: string
-    ): Promise<{ size: number; sha256: string }> {
-        const hash = createHash('sha256');
-        let size = 0;
-        const transform = this;
-        await pipeline(
-            createReadStream(source, { highWaterMark: 64 * 1024 }),
-            async function* (chunks) {
-                let pending = Buffer.alloc(0);
-                for await (const chunk of chunks) {
-                    const bytes = Buffer.concat([pending, Buffer.from(chunk)]);
-                    const result = transform.replace(bytes, false);
-                    pending = bytes.subarray(result.consumed);
-                    hash.update(result.bytes);
-                    size += result.bytes.length;
-                    yield result.bytes;
-                }
-                const result = transform.replace(pending, true);
-                hash.update(result.bytes);
-                size += result.bytes.length;
-                yield result.bytes;
-            },
-            createWriteStream(target, { mode: 0o600, flags: 'wx' })
-        );
-        return { size, sha256: hash.digest('hex') };
     }
 
     text(source: string): string {
-        return this.replace(Buffer.from(source), true).bytes.toString();
+        return this.replace(Buffer.from(source)).toString();
     }
 
     value(source: unknown): unknown {
@@ -78,12 +41,9 @@ export class WorkerOutcomeRedaction {
         return source;
     }
 
-    private replace(
-        source: Buffer,
-        final: boolean
-    ): { bytes: Buffer; consumed: number } {
+    private replace(source: Buffer): Buffer {
         const output = Buffer.alloc(source.length);
-        const end = final ? source.length : Math.max(0, source.length - this.retained);
+        const end = source.length;
         let offset = 0;
         while (offset < end) {
             let position = end;
@@ -102,6 +62,6 @@ export class WorkerOutcomeRedaction {
             marker.copy(output, offset, 0, match.length);
             offset += match.length;
         }
-        return { bytes: output.subarray(0, offset), consumed: offset };
+        return output;
     }
 }

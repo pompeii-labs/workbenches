@@ -183,7 +183,7 @@ describe('wb worker', () => {
             expect(await record()).toContain('--user enable workbench-worker.service');
             const hello = await server.next((message) => message.type === 'hello');
             expect(hello).toMatchObject({
-                protocol: 1,
+                protocol: 2,
                 runtimes: ['docker'],
                 slots: 1,
             });

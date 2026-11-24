@@ -45,6 +45,7 @@ class ScriptedSandbox implements TransferSandbox {
     readonly commands: string[] = [];
     readonly downloads: string[] = [];
     exitCode = 0;
+    outputListing = '';
     private readonly files = new Map<string, Uint8Array>();
     private readonly reported = new Map<string, number>();
 
@@ -61,7 +62,11 @@ class ScriptedSandbox implements TransferSandbox {
 
     async run(command: string): Promise<RuntimeCommandResult> {
         this.commands.push(command);
-        return { code: this.exitCode, stdout: '', stderr: this.exitCode ? 'boom' : '' };
+        return {
+            code: this.exitCode,
+            stdout: this.outputListing,
+            stderr: this.exitCode ? 'boom' : '',
+        };
     }
 
     async fileSize(path: string): Promise<number> {
@@ -85,10 +90,6 @@ class ScriptedSandbox implements TransferSandbox {
     private lookup(path: string): Uint8Array {
         const exact = this.files.get(path);
         if (exact) return exact;
-        // The outbox archive is named with a random token.
-        for (const [key, content] of this.files) {
-            if (key.endsWith('*') && path.startsWith(key.slice(0, -1))) return content;
-        }
         throw new Error(`The sandbox has no file at ${path}`);
     }
 }
@@ -237,16 +238,22 @@ describe('MemoryOutcomeCollector', () => {
 
 describe('MemoryOutcomeCollector output', () => {
     test('returns the files and summary the runner left in its outbox', async () => {
-        const sandbox = new ScriptedSandbox().serve(
-            '/tmp/workbench-artifacts-*',
-            await pack([
-                file('report.txt', 'done'),
-                file(
-                    'outcome.json',
-                    JSON.stringify({ version: 1, summary: 'All done' })
-                ),
-            ])
-        );
+        const declaration = JSON.stringify({ version: 1, summary: 'All done' });
+        const sandbox = new ScriptedSandbox()
+            .serve('/outbox/report.txt', text('done'))
+            .serve('/outbox/outcome.json', text(declaration));
+        sandbox.outputListing = [
+            'sha256sum',
+            'f',
+            'report.txt',
+            '4',
+            'a'.repeat(64),
+            'f',
+            'outcome.json',
+            String(declaration.length),
+            'b'.repeat(64),
+            '',
+        ].join('\0');
         const { collector: subject } = await collector({
             sandbox,
             bindings: [outcomeBinding],
@@ -259,21 +266,16 @@ describe('MemoryOutcomeCollector output', () => {
         ]);
         const [artifact] = output.artifacts;
         expect(artifact && sink.get(artifact.content)).toEqual(text('done'));
-        expect(sandbox.commands.at(-1)).toContain('rm -f');
+        expect(sandbox.commands).toHaveLength(1);
+        expect(sandbox.downloads).toEqual([
+            '/outbox/outcome.json',
+            '/outbox/report.txt',
+        ]);
     });
 
-    test('refuses a symlink in the outbox and an outbox over the limit', async () => {
-        const link: TarEntry = {
-            name: 'out',
-            type: 'symlink',
-            mode: 0o777,
-            content: new Uint8Array(),
-            link: 'report.txt',
-        };
-        const linked = new ScriptedSandbox().serve(
-            '/tmp/workbench-artifacts-*',
-            await pack([file('report.txt', 'done'), link])
-        );
+    test('refuses a symlink in the outbox before downloading', async () => {
+        const linked = new ScriptedSandbox();
+        linked.outputListing = 'sha256sum\0l\0out\0\0\0';
         const { collector: withLink } = await collector({
             sandbox: linked,
             bindings: [outcomeBinding],
@@ -281,17 +283,158 @@ describe('MemoryOutcomeCollector output', () => {
         await expect(withLink.collectOutput(new MemoryOutcomeSink())).rejects.toThrow(
             'Outcome artifacts cannot be symlinks: out'
         );
-        const large = new ScriptedSandbox().serve(
-            '/tmp/workbench-artifacts-*',
-            await pack([file('report.txt', 'x'.repeat(200))])
-        );
-        const { collector: oversized } = await collector({
-            sandbox: large,
+        expect(linked.downloads).toEqual([]);
+    });
+
+    test('hands fresh whole-file streams to the sink in directory-walk order and merges skips', async () => {
+        const sandbox = new ScriptedSandbox();
+        const paths = ['z.txt', 'dir/space name.txt', '-leading\nline.txt'];
+        sandbox.outputListing = [
+            'shasum',
+            ...paths.flatMap((path) => ['f', path, '4', 'a'.repeat(64)]),
+            '',
+        ].join('\0');
+        for (const path of paths) sandbox.serve(`/outbox/${path}`, text('done'));
+        const { collector: subject } = await collector({
+            sandbox,
             bindings: [outcomeBinding],
-            maximum: 64,
+            maximum: 1,
         });
-        await expect(oversized.collectOutput(new MemoryOutcomeSink())).rejects.toThrow(
-            'Daytona output exceeds the 64 B transfer safety limit'
+        const sink = new MemoryOutcomeSink();
+        const received: string[] = [];
+        const warning = { code: 'budget', message: 'Not kept' };
+        const result = await subject.collect({
+            putBytes: async () => {
+                throw new Error('Unexpected byte upload');
+            },
+            putRemoteFile: async (file, open) => {
+                received.push(file.path);
+                expect(file).toMatchObject({
+                    size: 4,
+                    sha256: 'a'.repeat(64),
+                    mediaType: 'text/plain',
+                });
+                if (file.path === 'z.txt') return { kind: 'skipped', warning };
+                expect(await new Response(await open()).text()).toBe('done');
+                return {
+                    kind: 'stored',
+                    descriptor: await sink.putBytes(
+                        await new Response(await open()).bytes(),
+                        file.mediaType
+                    ),
+                };
+            },
+        });
+        expect(received).toEqual(['-leading\nline.txt', 'dir/space name.txt', 'z.txt']);
+        expect(result.artifacts.map((artifact) => artifact.path)).toEqual(
+            received.slice(0, 2)
         );
+        expect(result.warnings).toEqual([warning]);
+        expect(
+            sandbox.downloads.filter((path) => path.endsWith('space name.txt'))
+        ).toHaveLength(2);
+    });
+
+    test('keeps no files and warns when neither hash tool exists', async () => {
+        const sandbox = new ScriptedSandbox();
+        sandbox.outputListing = 'none\0';
+        const { collector: subject } = await collector({
+            sandbox,
+            bindings: [outcomeBinding],
+        });
+        const result = await subject.collectOutput(new MemoryOutcomeSink());
+        expect(result.artifacts).toEqual([]);
+        expect(result.warnings).toEqual([
+            {
+                code: 'outcome_tools_missing',
+                message:
+                    'The sandbox has neither sha256sum nor shasum, so its returned files were not kept.',
+            },
+        ]);
+        expect(sandbox.downloads).toEqual([]);
+    });
+
+    test('a skipped declared artifact becomes a warning without hiding links', async () => {
+        const declaration = JSON.stringify({
+            version: 1,
+            artifacts: [{ path: 'skip.txt', media_type: 'text/custom' }],
+            links: [{ label: 'Result', uri: 'https://example.com/result' }],
+        });
+        const sandbox = new ScriptedSandbox().serve(
+            '/outbox/outcome.json',
+            text(declaration)
+        );
+        sandbox.outputListing = [
+            'sha256sum',
+            'f',
+            'outcome.json',
+            String(declaration.length),
+            'a'.repeat(64),
+            'f',
+            'skip.txt',
+            '9',
+            'b'.repeat(64),
+            '',
+        ].join('\0');
+        const { collector: subject } = await collector({
+            sandbox,
+            bindings: [outcomeBinding],
+        });
+        const warning = { code: 'budget', message: 'Not kept' };
+        const output = await subject.collectOutput({
+            putBytes: async () => {
+                throw new Error('Unexpected byte upload');
+            },
+            putRemoteFile: async (file) => {
+                expect(file.mediaType).toBe('text/custom');
+                return { kind: 'skipped', warning };
+            },
+        });
+        expect(output.artifacts).toEqual([]);
+        expect(output.links[0]?.label).toBe('Result');
+        expect(output.warnings).toEqual([warning]);
+        expect(sandbox.downloads).toEqual(['/outbox/outcome.json']);
+    });
+
+    test('enforces the declaration limit while reading even if its reported size is wrong', async () => {
+        const sandbox = new ScriptedSandbox().serve(
+            '/outbox/outcome.json',
+            new Uint8Array(1048577)
+        );
+        sandbox.outputListing = [
+            'sha256sum',
+            'f',
+            'outcome.json',
+            '1',
+            'a'.repeat(64),
+            '',
+        ].join('\0');
+        const { collector: subject } = await collector({
+            sandbox,
+            bindings: [outcomeBinding],
+        });
+        await expect(subject.collectOutput(new MemoryOutcomeSink())).rejects.toThrow(
+            'Outcome declaration exceeds the 1 MiB safety limit'
+        );
+    });
+
+    test('keeps the declaration size limit independently of artifact admission', async () => {
+        const sandbox = new ScriptedSandbox();
+        sandbox.outputListing = [
+            'sha256sum',
+            'f',
+            'outcome.json',
+            '1048577',
+            'a'.repeat(64),
+            '',
+        ].join('\0');
+        const { collector: subject } = await collector({
+            sandbox,
+            bindings: [outcomeBinding],
+        });
+        await expect(subject.collectOutput(new MemoryOutcomeSink())).rejects.toThrow(
+            'Outcome declaration exceeds the 1 MiB safety limit'
+        );
+        expect(sandbox.downloads).toEqual([]);
     });
 });

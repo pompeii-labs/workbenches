@@ -59,6 +59,8 @@ export {
     type OutcomeLink,
     type OutcomePathFingerprint,
     type OutcomePathState,
+    type OutcomeRemoteFile,
+    type OutcomeRemoteResult,
     type OutcomeSink,
     OutcomeStore,
     type OutcomeWarning,

@@ -1,5 +1,3 @@
-import { join } from 'node:path';
-
 import {
     type OutcomeContentDescriptor,
     OutcomeStore,
@@ -10,23 +8,21 @@ import { outcomeArtifactPath } from '../outcomes/paths.js';
 export interface WorkerOutcomeFile {
     path: string;
     source(): Promise<string>;
-    media_type: string;
+    content: OutcomeContentDescriptor;
 }
 
 export interface WorkerOutcomeData {
-    directory: string;
     files: WorkerOutcomeFile[];
     manifest: ReturnType<WorkerOutcomeLayout['manifest']>;
 }
 
 /** Reserved engine metadata directory, never occupied by returned files. */
-const ARCHIVE_DIRECTORY = '.workbench';
+const METADATA_DIRECTORY = '.workbench';
 
 /**
- * Describes files in the hosted outcome layout, preserving older tar paths.
- * Returned files sit at their own paths.
- * Everything else the outcome holds goes under `.workbench/`: `outcome.json`,
- * the files each changeset left behind, and its review diff. A repository
+ * Returned files sit at their own paths. Each changeset's review diff sits
+ * under `.workbench/changes/`; after-file copies are not uploaded. The manifest
+ * is sent separately after the files. A repository
  * run's change against the commit it was cloned at is the changeset
  * `change_primary`, with its diff at
  * `.workbench/changes/change_primary/review.diff`.
@@ -34,7 +30,7 @@ const ARCHIVE_DIRECTORY = '.workbench';
 export class WorkerOutcomeLayout {
     readonly #store: OutcomeStore;
 
-    constructor(private readonly home: string) {
+    constructor(home: string) {
         this.#store = new OutcomeStore(home);
     }
 
@@ -52,30 +48,22 @@ export class WorkerOutcomeLayout {
             files.push({
                 path,
                 source: () => this.#store.blob(descriptor),
-                media_type: descriptor.media_type,
+                content: descriptor,
             });
         };
         for (const artifact of outcome.artifacts) {
             const path = outcomeArtifactPath(artifact);
-            if (normalize(path).split('/')[0] === ARCHIVE_DIRECTORY) continue;
+            if (normalize(path).split('/')[0] === METADATA_DIRECTORY) continue;
             add(path, artifact.content);
         }
         for (const changeset of outcome.changesets) {
-            for (const entry of changeset.entries) {
-                if (entry.after?.kind === 'file')
-                    add(
-                        `${ARCHIVE_DIRECTORY}/changes/${changeset.id}/${entry.path}`,
-                        entry.after.content
-                    );
-            }
             if (changeset.review)
                 add(
-                    `${ARCHIVE_DIRECTORY}/changes/${changeset.id}/review.diff`,
+                    `${METADATA_DIRECTORY}/changes/${changeset.id}/review.diff`,
                     changeset.review
                 );
         }
         return {
-            directory: join(this.home, 'outcomes', outcome.id, 'uploads'),
             files,
             manifest: this.manifest(outcome),
         };
@@ -116,7 +104,6 @@ export class WorkerOutcomeLayout {
     }
 }
 
-/** Preserves the path normalization used by older tar uploads. */
 function normalize(path: string): string {
     return path
         .split('/')
