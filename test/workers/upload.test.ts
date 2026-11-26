@@ -158,13 +158,15 @@ test('sends unchanged file slices to signed URLs without credentials and complet
             });
         }
     );
-    await uploader.uploadOutcome(
-        'run_fake',
-        'FAKE_RUN_TOKEN',
-        outcome,
-        [secret],
-        () => {}
-    );
+    expect(
+        await uploader.uploadOutcome(
+            'run_fake',
+            'FAKE_RUN_TOKEN',
+            outcome,
+            [secret],
+            () => {}
+        )
+    ).toBe(true);
     expect(sent.map((part) => Buffer.from(part).toString())).toEqual([
         ...Array.from({ length: counts[0] ?? 0 }, (_, index) =>
             bytes.slice(index * partBytes, (index + 1) * partBytes)
@@ -213,9 +215,11 @@ test('stored and skipped files require no source reads or part transfers', async
             throw new Error('Must not transfer');
         }
     );
-    await uploader.uploadOutcome('run_fake', 'FAKE_TOKEN', outcome, [], (message) =>
-        messages.push(message)
-    );
+    expect(
+        await uploader.uploadOutcome('run_fake', 'FAKE_TOKEN', outcome, [], (message) =>
+            messages.push(message)
+        )
+    ).toBe(false);
     expect(begun).toBe(2);
     expect(messages).toEqual(['Not kept']);
 });
@@ -263,7 +267,9 @@ test('retries only the failed part and retries begin and completion with the sam
             });
         }
     );
-    await uploader.uploadOutcome('run_fake', 'FAKE_TOKEN', outcome, [], () => {});
+    expect(
+        await uploader.uploadOutcome('run_fake', 'FAKE_TOKEN', outcome, [], () => {})
+    ).toBe(true);
     expect(calls).toEqual([
         'https://storage.example/1',
         'https://storage.example/2',
@@ -309,13 +315,15 @@ test('exhausted part retries warn and move to the next file, redacting errors an
             throw new Error(secret);
         }
     );
-    await uploader.uploadOutcome(
-        'run_fake',
-        'FAKE_TOKEN',
-        outcome,
-        [secret],
-        (message) => messages.push(message)
-    );
+    expect(
+        await uploader.uploadOutcome(
+            'run_fake',
+            'FAKE_TOKEN',
+            outcome,
+            [secret],
+            (message) => messages.push(message)
+        )
+    ).toBe(false);
     expect(attempts).toBe(3);
     expect(waits).toBe(2);
     expect(begun).toBe(2);
@@ -344,7 +352,9 @@ test('completion can skip a file and missing ETags fail the file', async () => {
         async () =>
             new Response(null, { headers: begun === 1 ? { ETag: 'opaque' } : {} })
     );
-    await uploader.uploadOutcome('run_fake', 'FAKE_TOKEN', outcome, [], () => {});
+    expect(
+        await uploader.uploadOutcome('run_fake', 'FAKE_TOKEN', outcome, [], () => {})
+    ).toBe(false);
 });
 
 test('retries interrupted response bodies and network failures without changing the manifest', async () => {

@@ -26,28 +26,34 @@ export class WorkerOutcomeUpload {
         ) => Promise<Response> = fetch
     ) {}
 
+    /** True when the server confirmed every file stored. */
     async uploadOutcome(
         run: string,
         token: string,
         outcome: WorkerOutcomeData,
         credentials: string[],
         report: (message: string) => void
-    ): Promise<void> {
+    ): Promise<boolean> {
         const base = `/v1/runs/${encodeURIComponent(run)}/outcome`;
         const redaction = new WorkerOutcomeRedaction(credentials);
         const emit = (message: string) => report(redaction.text(message));
         const warnings = [...outcome.manifest.warnings];
+        let stored = true;
         for (const [ordinal, file] of outcome.files.entries()) {
             try {
-                await this.file(
-                    base,
-                    token,
-                    { ...file, path: redaction.text(file.path) },
-                    ordinal,
-                    warnings,
-                    emit
-                );
+                if (
+                    !(await this.file(
+                        base,
+                        token,
+                        { ...file, path: redaction.text(file.path) },
+                        ordinal,
+                        warnings,
+                        emit
+                    ))
+                )
+                    stored = false;
             } catch (error) {
+                stored = false;
                 const message = redaction.text(
                     error instanceof Error ? error.message : String(error)
                 );
@@ -72,8 +78,10 @@ export class WorkerOutcomeUpload {
                 redaction.text(error instanceof Error ? error.message : String(error))
             );
         }
+        return stored;
     }
 
+    /** True when the file is stored, false when the server skipped it. */
     private async file(
         base: string,
         token: string,
@@ -81,7 +89,7 @@ export class WorkerOutcomeUpload {
         ordinal: number,
         warnings: OutcomeWarning[],
         report: (message: string) => void
-    ): Promise<void> {
+    ): Promise<boolean> {
         const size = file.content.size_bytes;
         const begin = await this.retry(`${base}/files`, {
             method: 'POST',
@@ -94,8 +102,8 @@ export class WorkerOutcomeUpload {
                 media_type: file.content.media_type,
             },
         });
-        if (this.skipped(begin, file.path, warnings, report)) return;
-        if (isRecord(begin) && begin.stored === true) return;
+        if (this.skipped(begin, file.path, warnings, report)) return false;
+        if (isRecord(begin) && begin.stored === true) return true;
         if (
             !isRecord(begin) ||
             typeof begin.upload !== 'string' ||
@@ -159,13 +167,14 @@ export class WorkerOutcomeUpload {
             token,
             body: { parts },
         });
-        if (this.skipped(complete, file.path, warnings, report)) return;
+        if (this.skipped(complete, file.path, warnings, report)) return false;
         if (
             !isRecord(complete) ||
             complete.path !== file.path ||
             complete.size !== size
         )
             throw new Error('Malformed outcome file completion response');
+        return true;
     }
 
     private skipped(

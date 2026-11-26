@@ -65,6 +65,8 @@ export interface WorkerRunHost {
     ): Promise<void>;
     /** Finished engine runs of the session with an outcome, except `uploaded`. */
     outcomes(session: string, uploaded: string[]): Promise<WorkerOutcome[]>;
+    /** Removes the session's uploaded outcomes once they are too large for a continuation to restore. True when it did. */
+    discardOutcomes(session: string): Promise<boolean>;
     /** Releases what a run held on this machine once it has ended. */
     release(runId: string): Promise<void>;
     /** After a restart, releases what runs no longer active hold, and resumes what the active ones need. */

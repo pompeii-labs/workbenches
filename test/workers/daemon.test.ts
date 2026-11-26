@@ -263,8 +263,38 @@ describe('worker daemon', () => {
                 /^threejs-game completed in \d+s {2}PR #12$/.test(line)
             )
         ).toBe(true);
+        expect(host.discarded).toEqual([session]);
         // Run credentials and environment stay in memory.
         expect(await everyFile(directory)).not.toMatch(/MUST_NOT_RENDER/);
+    });
+
+    test('keeps a session outcome the server did not take', async () => {
+        const { server, host, home } = await worker();
+        server.routes.set('POST /v1/runs/run_1/outcome/complete', () =>
+            Response.json({ error: 'Refused' }, { status: 409 })
+        );
+        await server.next((message) => message.type === 'hello');
+        server.send(runStart());
+        await server.next(
+            (message) => message.type === 'run.accepted' && message.run_id === 'run_1'
+        );
+        host.finish('wb_run1session', 12);
+        await server.next(
+            (message) =>
+                message.type === 'log' &&
+                (message.lines as Array<{ text: string }>).some((line) =>
+                    line.text.includes('completed')
+                )
+        );
+        expect(server.logLines()).toContainEqual(
+            expect.stringContaining('outcome upload failed')
+        );
+        expect(host.discarded).toEqual([]);
+        await waitFor(
+            async () =>
+                JSON.parse(await readFile(home.assignmentsPath, 'utf8')).runs[0]
+                    ?.incomplete === true
+        );
     });
 
     test('logs the cloud run id and names a member only when it knows them', async () => {

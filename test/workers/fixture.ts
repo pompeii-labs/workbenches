@@ -275,6 +275,7 @@ export class FakeRunHost implements WorkerRunHost {
     readonly launched: RunStart[] = [];
     readonly released: string[] = [];
     readonly recovered: string[][] = [];
+    readonly discarded: string[] = [];
     /** Admissions held until released, to drive a start that is still being admitted. */
     admitting: Promise<void> | undefined;
     admissions = 0;
@@ -391,6 +392,11 @@ export class FakeRunHost implements WorkerRunHost {
                 }),
             },
         ];
+    }
+
+    async discardOutcomes(session: string): Promise<boolean> {
+        this.discarded.push(session);
+        return false;
     }
 
     private require(session: string): FakeSession {
