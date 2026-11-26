@@ -2,7 +2,7 @@ import type { WorkbenchEvent } from '../runs/events.js';
 import type { HostGpu } from '../workbench/gpus.js';
 
 /** The worker protocol version this engine speaks in `hello`. */
-export const WORKER_PROTOCOL = 1;
+export const WORKER_PROTOCOL = 2;
 
 /** Close codes the server ends a worker connection with. Others reconnect. */
 export const WORKER_CLOSE_CODES = {

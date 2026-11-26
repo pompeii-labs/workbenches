@@ -5,6 +5,8 @@
  */
 export type {
     CollectedOutput,
+    OutcomeRemoteFile,
+    OutcomeRemoteResult,
     OutcomeSink,
     RuntimeOutcomeCollection,
 } from '../collection.js';

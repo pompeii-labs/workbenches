@@ -26,7 +26,25 @@ export interface OutcomeSink {
      * `putBytes` when it is absent.
      */
     putFile?(path: string, mediaType?: string): Promise<OutcomeContentDescriptor>;
+    /** Owns admission, transfer, and retries. Each open returns the whole file anew. */
+    putRemoteFile?(
+        file: OutcomeRemoteFile,
+        open: () => Promise<ReadableStream<Uint8Array>>
+    ): Promise<OutcomeRemoteResult>;
 }
+
+export interface OutcomeRemoteFile {
+    /** Relative to the outcome directory, with / separators. */
+    path: string;
+    size: number;
+    /** Lowercase hexadecimal SHA-256. */
+    sha256: string;
+    mediaType: string;
+}
+
+export type OutcomeRemoteResult =
+    | { kind: 'stored'; descriptor: OutcomeContentDescriptor }
+    | { kind: 'skipped'; warning: OutcomeWarning };
 
 export interface RuntimeOutcomeCollection {
     application_state: OutcomeApplicationState;
@@ -41,4 +59,5 @@ export interface CollectedOutput {
     summary?: string;
     artifacts: OutcomeArtifact[];
     links: OutcomeLink[];
+    warnings?: OutcomeWarning[];
 }

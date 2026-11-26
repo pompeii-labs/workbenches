@@ -31,7 +31,7 @@ async function outcomeHome() {
     return home;
 }
 
-describe('worker outcome archive', () => {
+describe('worker outcome layout', () => {
     test('stores a repository run in the layout of a cloud outcome', async () => {
         const remote = await bareRepository();
         cleanups.push(remote.cleanup);
@@ -91,16 +91,12 @@ describe('worker outcome archive', () => {
         );
         const files = await unpack(await new WorkerOutcomeLayout(home).files(outcome));
         expect([...files.keys()].toSorted()).toEqual([
-            '.workbench/changes/change_primary/added.txt',
-            '.workbench/changes/change_primary/notes.txt',
             '.workbench/changes/change_primary/review.diff',
             '.workbench/outcome.json',
             'dist/logo.svg',
         ]);
         expect(files.get('dist/logo.svg')).toBe('<svg/>');
-        expect(files.get('.workbench/changes/change_primary/notes.txt')).toBe(
-            'first\nsecond\n'
-        );
+        expect(files.has('.workbench/changes/change_primary/notes.txt')).toBe(false);
         const review = files.get('.workbench/changes/change_primary/review.diff');
         expect(review).toContain('+second');
         expect(review).toContain('--- a/README.md');
@@ -137,7 +133,7 @@ describe('worker outcome archive', () => {
         });
     });
 
-    test('keeps a run output out of the archive directory', async () => {
+    test('keeps a run output out of the metadata directory', async () => {
         const home = await outcomeHome();
         const store = new OutcomeStore(home);
         const content = await store.putBytes('x', 'text/plain');
@@ -173,7 +169,7 @@ describe('worker outcome archive', () => {
             '.workbench/outcome.json',
             'report.txt',
         ]);
-        // The manifest is the archive's own, not the forged artifact's content.
+        // Reserved metadata comes from the outcome, never a returned artifact.
         expect(files.get('.workbench/outcome.json')).not.toBe('x');
     });
 });

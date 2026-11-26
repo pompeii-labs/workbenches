@@ -175,7 +175,8 @@ export class OutcomeLifecycle {
                 if (
                     !output.summary &&
                     output.artifacts.length === 0 &&
-                    output.links.length === 0
+                    output.links.length === 0 &&
+                    !output.warnings?.length
                 )
                     return undefined;
                 const outcome = await store.commit(
@@ -188,7 +189,7 @@ export class OutcomeLifecycle {
                         turn_index: turnIndex,
                         ...output,
                         changesets: [],
-                        warnings: [],
+                        warnings: output.warnings ?? [],
                     },
                     'present'
                 );

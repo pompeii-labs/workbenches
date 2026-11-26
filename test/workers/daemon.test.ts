@@ -198,7 +198,7 @@ describe('worker daemon', () => {
         const { server } = await worker();
         const hello = await server.next((message) => message.type === 'hello');
         expect(hello).toMatchObject({
-            protocol: 1,
+            protocol: 2,
             wb_version: '1.4.0',
             machine,
             runtimes: ['docker'],

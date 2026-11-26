@@ -49,6 +49,27 @@ export class CollectionCommands {
         ].join(' && ');
     }
 
+    /** NUL-delimited records preserve every filename, including embedded newlines. */
+    remoteFiles(root: string): string {
+        const inspect = [
+            'tool=$1; shift',
+            'for path do',
+            `if [ -L "$path" ]; then printf "l\\0%s\\0\\0\\0" "\${path#./}";`,
+            'elif [ "$tool" != none ]; then',
+            'size=$(wc -c < "$path") || exit 1',
+            'if [ "$tool" = sha256sum ]; then digest=$(sha256sum < "$path"); else digest=$(shasum -a 256 < "$path"); fi || exit 1',
+            `printf "f\\0%s\\0%s\\0%s\\0" "\${path#./}" "$size" "\${digest%% *}"`,
+            'fi',
+            'done',
+        ].join('\n');
+        return [
+            `cd ${quote(root)}`,
+            'if command -v sha256sum >/dev/null 2>&1; then tool=sha256sum; elif command -v shasum >/dev/null 2>&1; then tool=shasum; else tool=none; fi',
+            'printf "%s\\0" "$tool"',
+            `find . \\( -type f -o -type l \\) -exec sh -c ${quote(inspect)} sh "$tool" {} +`,
+        ].join(' && ');
+    }
+
     warnings(paths: string[]): OutcomeWarning[] {
         if (paths.length === 0) return [];
         const visible = paths

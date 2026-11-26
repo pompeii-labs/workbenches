@@ -1,9 +1,10 @@
 import type {
     CollectedOutput,
+    OutcomeRemoteFile,
     OutcomeSink,
     RuntimeOutcomeCollection,
 } from '../../../outcomes/collection.js';
-import type { OutcomeChangeset } from '../../../outcomes/contracts.js';
+import type { OutcomeChangeset, OutcomeWarning } from '../../../outcomes/contracts.js';
 import {
     DeclaredOutput,
     maximumDeclarationBytes,
@@ -16,14 +17,12 @@ import type { TransferRules } from '../rules.js';
 import { quote } from '../shell.js';
 import { workspaceTracking } from '../tracking.js';
 import type { OutcomeCollector, TransferSandbox } from '../transfer.js';
-import { MemoryArchive } from './archive.js';
 import { readBoundedBytes } from './bounded.js';
 import type { MemoryAssetSnapshot } from './snapshot.js';
 
 /** Collects a run's changes and returned files into byte arrays and a sink. */
 export class MemoryOutcomeCollector implements OutcomeCollector {
     private readonly commands: CollectionCommands;
-    private readonly archive: MemoryArchive;
 
     constructor(
         private readonly sandbox: TransferSandbox,
@@ -36,7 +35,6 @@ export class MemoryOutcomeCollector implements OutcomeCollector {
         }
     ) {
         this.commands = new CollectionCommands(rules);
-        this.archive = new MemoryArchive(rules);
     }
 
     async collect(store: OutcomeSink): Promise<RuntimeOutcomeCollection> {
@@ -124,7 +122,7 @@ export class MemoryOutcomeCollector implements OutcomeCollector {
                 .catch(() => {});
         }
         if (this.options.snapshots.some((entry) => entry.binding.kind === 'outcome')) {
-            output = await this.collectOutput(store, transferred, materialized);
+            output = await this.collectOutput(store);
         }
         return {
             application_state: 'pending',
@@ -132,74 +130,103 @@ export class MemoryOutcomeCollector implements OutcomeCollector {
             changesets,
             artifacts: output.artifacts,
             links: output.links,
-            warnings: this.commands.warnings([...excluded]),
+            warnings: [
+                ...this.commands.warnings([...excluded]),
+                ...(output.warnings ?? []),
+            ],
         };
     }
 
-    async collectOutput(
-        store: OutcomeSink,
-        transferred = 0,
-        materialized = 0
-    ): Promise<CollectedOutput> {
+    async collectOutput(store: OutcomeSink): Promise<CollectedOutput> {
         const snapshot = this.options.snapshots.find(
             (candidate) => candidate.binding.kind === 'outcome'
         );
         if (!snapshot) return { artifacts: [], links: [] };
-        const sandbox = this.sandbox;
-        const provider = this.rules.provider;
-        const maximum = this.options.maximumTransferBytes;
-        const token = crypto.randomUUID();
-        const remoteArchive = `/tmp/workbench-artifacts-${token}.tar.gz`;
-        const remoteFiles = `/tmp/workbench-artifacts-files-${token}`;
-        try {
-            this.commands.requireSuccess(
-                await sandbox.run(
-                    this.commands.output({
-                        root: snapshot.binding.runtimePath,
-                        files: remoteFiles,
-                        archive: remoteArchive,
-                    })
-                ),
-                `Failed to collect ${provider} outcome artifacts`
-            );
-            if (transferred + (await sandbox.fileSize(remoteArchive)) > maximum) {
-                throw new Error(
-                    `${provider} output exceeds the ${formatOutcomeBytes(maximum)} transfer safety limit`
-                );
-            }
-            const archive = await this.download(remoteArchive, maximum - transferred);
-            const { changed } = await this.archive.unpack(
-                archive,
-                maximum - materialized,
-                maximum
-            );
-            const files = new Map<string, Uint8Array>();
-            for (const [path, entry] of changed) {
-                if (entry.type === 'symlink') {
-                    throw new Error(`Outcome artifacts cannot be symlinks: ${path}`);
-                }
-                files.set(path, entry.content);
-            }
-            const declared = files.get(outcomeDeclarationName);
-            if (declared && declared.byteLength > maximumDeclarationBytes) {
-                throw new Error('Outcome declaration exceeds the 1 MiB safety limit');
-            }
-            return await new DeclaredOutput({
-                put: (path, mediaType) =>
-                    store.putBytes(files.get(path) ?? new Uint8Array(), mediaType),
-            }).assemble({
-                declaration: declared
-                    ? parseDeclarationSource(new TextDecoder().decode(declared))
-                    : undefined,
-                paths: [...files.keys()]
-                    .filter((path) => path !== outcomeDeclarationName)
-                    .toSorted(compareOutboxPaths),
-            });
-        } finally {
-            await sandbox
-                .run(`rm -f ${quote(remoteArchive)} ${quote(remoteFiles)}`)
-                .catch(() => {});
+        const root = snapshot.binding.runtimePath;
+        const result = await this.sandbox.run(this.commands.remoteFiles(root));
+        this.commands.requireSuccess(
+            result,
+            `Failed to collect ${this.rules.provider} outcome artifacts`
+        );
+        const [tool, ...fields] = result.stdout.split('\0');
+        const files = new Map<string, Omit<OutcomeRemoteFile, 'mediaType'>>();
+        if (
+            fields.pop() !== '' ||
+            !['sha256sum', 'shasum', 'none'].includes(tool ?? '') ||
+            fields.length % 4 !== 0
+        )
+            throw new Error('Malformed outcome file listing');
+        for (let index = 0; index < fields.length; index += 4) {
+            const type = fields[index];
+            const path = fields[index + 1] ?? '';
+            this.rules.validateRelativePath(path);
+            if (type === 'l')
+                throw new Error(`Outcome artifacts cannot be symlinks: ${path}`);
+            const size = Number(fields[index + 2]);
+            const sha256 = fields[index + 3] ?? '';
+            if (
+                type !== 'f' ||
+                !Number.isSafeInteger(size) ||
+                size < 0 ||
+                !/^[a-f0-9]{64}$/.test(sha256) ||
+                files.has(path)
+            )
+                throw new Error('Malformed outcome file listing');
+            files.set(path, { path, size, sha256 });
         }
+        if (tool === 'none')
+            return {
+                artifacts: [],
+                links: [],
+                warnings: [
+                    {
+                        code: 'outcome_tools_missing',
+                        message:
+                            'The sandbox has neither sha256sum nor shasum, so its returned files were not kept.',
+                    },
+                ],
+            };
+        const open = (path: string) => this.sandbox.download(`${root}/${path}`);
+        const declared = files.get(outcomeDeclarationName);
+        if (declared && declared.size > maximumDeclarationBytes)
+            throw new Error('Outcome declaration exceeds the 1 MiB safety limit');
+        const declaration = declared
+            ? parseDeclarationSource(
+                  new TextDecoder().decode(
+                      await readBoundedBytes(
+                          await open(outcomeDeclarationName),
+                          maximumDeclarationBytes,
+                          'Outcome declaration exceeds the 1 MiB safety limit'
+                      )
+                  )
+              )
+            : undefined;
+        const warnings: OutcomeWarning[] = [];
+        const output = await new DeclaredOutput({
+            put: async (path, mediaType) => {
+                const file = files.get(path);
+                if (!file) throw new Error(`Outcome file is unavailable: ${path}`);
+                if (!store.putRemoteFile)
+                    return store.putBytes(
+                        new Uint8Array(
+                            await new Response(await open(path)).arrayBuffer()
+                        ),
+                        mediaType
+                    );
+                const result = await store.putRemoteFile({ ...file, mediaType }, () =>
+                    open(path)
+                );
+                if (result.kind === 'stored') return result.descriptor;
+                warnings.push(result.warning);
+                return undefined;
+            },
+        }).assemble({
+            declaration,
+            paths: [...files.keys()]
+                .filter((path) => path !== outcomeDeclarationName)
+                .toSorted(compareOutboxPaths),
+        });
+        return { ...output, warnings };
     }
 
     private async download(remote: string, maximumBytes: number): Promise<Uint8Array> {

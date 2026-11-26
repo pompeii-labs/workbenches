@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, open, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { open } from 'node:fs/promises';
 
 import type { OutcomeWarning } from '../outcomes/contracts.js';
 import type { WorkerOutcomeData, WorkerOutcomeFile } from './outcome.js';
@@ -12,17 +11,19 @@ export type WorkerOutcomeRequest = (
         method: string;
         token: string;
         body?: unknown;
-        raw?: Uint8Array;
-        contentType?: string;
     }
 ) => Promise<unknown>;
 
-/** Uploads private redacted copies sequentially, removing each copy after its attempt. */
+/** Sends unchanged blob slices directly to storage, redacting only metadata. */
 export class WorkerOutcomeUpload {
     constructor(
         private readonly request: WorkerOutcomeRequest,
         /** Waits between retries of a failed part or step. */
-        private readonly wait: (milliseconds: number) => Promise<void>
+        private readonly wait: (milliseconds: number) => Promise<void>,
+        private readonly transfer: (
+            url: string,
+            options: RequestInit
+        ) => Promise<Response> = fetch
     ) {}
 
     async uploadOutcome(
@@ -43,10 +44,8 @@ export class WorkerOutcomeUpload {
                     token,
                     { ...file, path: redaction.text(file.path) },
                     ordinal,
-                    redaction,
                     warnings,
-                    emit,
-                    outcome.directory
+                    emit
                 );
             } catch (error) {
                 const message = redaction.text(
@@ -80,49 +79,19 @@ export class WorkerOutcomeUpload {
         token: string,
         file: WorkerOutcomeFile,
         ordinal: number,
-        redaction: WorkerOutcomeRedaction,
         warnings: OutcomeWarning[],
-        report: (message: string) => void,
-        staging: string
+        report: (message: string) => void
     ): Promise<void> {
-        await mkdir(staging, { recursive: true, mode: 0o700 });
-        const directory = await mkdtemp(join(staging, 'upload-'));
-        try {
-            await this.send(
-                base,
-                token,
-                file,
-                ordinal,
-                redaction,
-                warnings,
-                report,
-                join(directory, 'content')
-            );
-        } finally {
-            await rm(directory, { recursive: true, force: true });
-        }
-    }
-
-    private async send(
-        base: string,
-        token: string,
-        file: WorkerOutcomeFile,
-        ordinal: number,
-        redaction: WorkerOutcomeRedaction,
-        warnings: OutcomeWarning[],
-        report: (message: string) => void,
-        path: string
-    ): Promise<void> {
-        // Shared outcome blobs remain immutable for local inspection and other outcomes.
-        const descriptor = await redaction.write(await file.source(), path);
+        const size = file.content.size_bytes;
         const begin = await this.retry(`${base}/files`, {
             method: 'POST',
             token,
             body: {
                 path: file.path,
-                ...descriptor,
+                size,
+                sha256: file.content.digest.slice('sha256:'.length),
                 ordinal,
-                media_type: file.media_type,
+                media_type: file.content.media_type,
             },
         });
         if (this.skipped(begin, file.path, warnings, report)) return;
@@ -133,18 +102,22 @@ export class WorkerOutcomeUpload {
             typeof begin.part_bytes !== 'number' ||
             !Number.isSafeInteger(begin.part_bytes) ||
             begin.part_bytes <= 0 ||
-            begin.part_bytes > 64 * 1024 ** 2
+            !Array.isArray(begin.parts) ||
+            !begin.parts.every(
+                (part: unknown) => typeof part === 'string' && /^https?:\/\//.test(part)
+            ) ||
+            begin.parts.length !== Math.max(1, Math.ceil(size / begin.part_bytes))
         )
             throw new Error('Malformed outcome file upload response');
         const upload = `${base}/files/${encodeURIComponent(begin.upload)}`;
         const parts: Array<{ number: number; etag: string }> = [];
-        const input = await open(path, 'r');
+        const input = await open(await file.source(), 'r');
         try {
             let offset = 0;
-            while (offset < descriptor.size) {
-                const bytes = Buffer.alloc(
-                    Math.min(begin.part_bytes, descriptor.size - offset)
-                );
+            for (const url of begin.parts) {
+                if (typeof url !== 'string')
+                    throw new Error('Malformed outcome part URL');
+                const bytes = Buffer.alloc(Math.min(begin.part_bytes, size - offset));
                 let read = 0;
                 while (read < bytes.length) {
                     const result = await input.read(
@@ -153,20 +126,29 @@ export class WorkerOutcomeUpload {
                         bytes.length - read,
                         offset + read
                     );
-                    if (!result.bytesRead)
-                        throw new Error('Outcome upload copy ended early');
+                    if (!result.bytesRead) throw new Error('Outcome blob ended early');
                     read += result.bytesRead;
                 }
                 const number = parts.length + 1;
-                const part = await this.retry(`${upload}/parts/${number}`, {
-                    method: 'PUT',
-                    token,
-                    raw: bytes,
-                    contentType: 'application/octet-stream',
+                const etag = await this.retryStep(async () => {
+                    const response = await this.transfer(url, {
+                        method: 'PUT',
+                        headers: { 'Content-Length': String(bytes.length) },
+                        body: bytes,
+                        // Generous enough for a full part on a slow home uplink.
+                        signal: AbortSignal.timeout(15 * 60_000),
+                    });
+                    await response.body?.cancel();
+                    if (!response.ok)
+                        throw new Error(
+                            `Outcome part upload failed (HTTP ${response.status})`
+                        );
+                    const etag = response.headers.get('ETag');
+                    if (etag === null)
+                        throw new Error('Outcome part response has no ETag');
+                    return etag;
                 });
-                if (!isRecord(part) || typeof part.etag !== 'string')
-                    throw new Error('Malformed outcome part response');
-                parts.push({ number, etag: part.etag });
+                parts.push({ number, etag });
                 offset += bytes.length;
             }
         } finally {
@@ -181,7 +163,7 @@ export class WorkerOutcomeUpload {
         if (
             !isRecord(complete) ||
             complete.path !== file.path ||
-            complete.size !== descriptor.size
+            complete.size !== size
         )
             throw new Error('Malformed outcome file completion response');
     }
@@ -210,19 +192,28 @@ export class WorkerOutcomeUpload {
         path: string,
         options: Parameters<WorkerOutcomeRequest>[1]
     ): Promise<unknown> {
-        for (let attempt = 0; ; attempt += 1) {
-            try {
-                return await this.request(path, options);
-            } catch (error) {
+        return this.retryStep(
+            () => this.request(path, options),
+            // An API refusal answers the same way every time; only network and server failures get retried.
+            (error) => {
                 const status =
                     error instanceof Error && 'status' in error
                         ? error.status
                         : undefined;
-                if (
-                    attempt >= 2 ||
-                    (status !== 0 && !(typeof status === 'number' && status >= 500))
-                )
-                    throw error;
+                return status === 0 || (typeof status === 'number' && status >= 500);
+            }
+        );
+    }
+
+    private async retryStep<T>(
+        operation: () => Promise<T>,
+        retryable: (error: unknown) => boolean = () => true
+    ): Promise<T> {
+        for (let attempt = 0; ; attempt += 1) {
+            try {
+                return await operation();
+            } catch (error) {
+                if (attempt >= 2 || !retryable(error)) throw error;
                 await this.wait(100 * 2 ** attempt);
             }
         }

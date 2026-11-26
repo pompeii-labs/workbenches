@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import {
+    mkdir,
+    mkdtemp,
+    readFile,
+    rename,
+    rm,
+    symlink,
+    writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -40,6 +49,43 @@ async function shell(command: string, cwd: string): Promise<string> {
 const names = (value: string) => value.split('\0').filter(Boolean).toSorted();
 
 describe('collection commands', () => {
+    test('lists exact sizes and hashes without interpreting file names', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'workbench-output-commands-'));
+        directories.push(root);
+        await mkdir(join(root, 'nested'));
+        const files = new Map([
+            ['space name.txt', 'space'],
+            ['line\nbreak.txt', 'newline'],
+            ["-leading'quote.txt", 'dash'],
+            ['nested/outcome.json', '{}'],
+            ['empty', ''],
+        ]);
+        for (const [path, content] of files) await writeFile(join(root, path), content);
+        await symlink('nested', join(root, 'link'));
+        const [tool, ...fields] = (await shell(commands.remoteFiles(root), root)).split(
+            '\0'
+        );
+        expect(['sha256sum', 'shasum']).toContain(tool ?? '');
+        expect(fields.pop()).toBe('');
+        const records = new Map<string, string[]>();
+        for (let index = 0; index < fields.length; index += 4)
+            records.set(fields[index + 1] ?? '', [
+                fields[index] ?? '',
+                fields[index + 2] ?? '',
+                fields[index + 3] ?? '',
+            ]);
+        expect(records.size).toBe(files.size + 1);
+        expect(records.get('link')).toEqual(['l', '', '']);
+        for (const [path, content] of files) {
+            const record = records.get(path);
+            expect(record?.[0]).toBe('f');
+            expect(Number(record?.[1])).toBe(Buffer.byteLength(content));
+            expect(record?.[2]).toBe(
+                createHash('sha256').update(content).digest('hex')
+            );
+        }
+    });
+
     test('a renamed file is listed as its old path deleted and its new path changed', async () => {
         const parent = await mkdtemp(join(tmpdir(), 'workbench-commands-'));
         directories.push(parent);

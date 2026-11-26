@@ -112,8 +112,6 @@ export class WorkerApi {
             method?: string;
             token?: string;
             body?: unknown;
-            raw?: Uint8Array;
-            contentType?: string;
         } = {}
     ): Promise<unknown> {
         let response: Response;
@@ -128,15 +126,11 @@ export class WorkerApi {
                         : {}),
                     ...(options.body !== undefined
                         ? { 'Content-Type': 'application/json' }
-                        : options.contentType
-                          ? { 'Content-Type': options.contentType }
-                          : {}),
+                        : {}),
                 },
                 ...(options.body !== undefined
                     ? { body: JSON.stringify(options.body) }
-                    : options.raw
-                      ? { body: options.raw }
-                      : {}),
+                    : {}),
                 signal: AbortSignal.timeout(60_000),
             });
         } catch (error) {
