@@ -35,6 +35,8 @@ export interface WorkerAssignment {
     observed: number;
     /** Engine runs of the session whose outcome was uploaded or given up on. */
     uploaded: string[];
+    /** An outcome of the session the server does not fully hold, so its local outcomes are kept. */
+    incomplete?: boolean;
     /** Why the run failed before its session could start. */
     failure?: string;
     finished_at?: string;
@@ -153,6 +155,7 @@ function parseAssignment(value: unknown): WorkerAssignment | undefined {
                   (entry): entry is string => typeof entry === 'string'
               )
             : [],
+        ...(value.incomplete === true ? { incomplete: true } : {}),
         ...(failure ? { failure } : {}),
         ...(typeof value.finished_at === 'string'
             ? { finished_at: value.finished_at }

@@ -4,6 +4,8 @@ import {
     type RunOutcome,
 } from '../outcomes/index.js';
 import { outcomeArtifactPath } from '../outcomes/paths.js';
+import { restorable, sessionLibrary } from '../outcomes/resume.js';
+import type { StoredRun } from '../runs/store.js';
 
 export interface WorkerOutcomeFile {
     path: string;
@@ -92,6 +94,23 @@ export class WorkerOutcomeLayout {
             links: outcome.links,
             warnings: outcome.warnings,
         };
+    }
+
+    /**
+     * Removes the outcomes of a session's finished runs, given in dispatch
+     * order, when their files are more than a continuation restores, so files
+     * already uploaded stop holding the disk. A library that fits is kept for
+     * continuations. True when anything was removed.
+     */
+    async discard(runs: Array<Pick<StoredRun, 'id'>>): Promise<boolean> {
+        const ids = new Set(runs.map((run) => run.id));
+        const outcomes = (await this.#store.list()).filter((outcome) =>
+            ids.has(outcome.run_id)
+        );
+        if (restorable(sessionLibrary(runs, outcomes))) return false;
+        for (const outcome of outcomes) await this.#store.remove(outcome.id);
+        await this.#store.collectGarbage();
+        return true;
     }
 
     /** The number of the first pull request the outcome links to. */

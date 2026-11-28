@@ -39,7 +39,7 @@ async function fixture() {
     const tracker = new WorkerRunTracker(
         assignments,
         host,
-        { uploadOutcome: async () => {} },
+        { uploadOutcome: async () => true },
         log,
         () => new Date(now),
         admission

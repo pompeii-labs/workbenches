@@ -348,6 +348,15 @@ export class WorkerEngine implements WorkerRunHost {
         return outcomes;
     }
 
+    async discardOutcomes(session: string): Promise<boolean> {
+        const runs = [];
+        for (const id of await this.#sessions.ids(session)) {
+            const run = await this.#options.services.runs.read(id);
+            if (RunStore.isTerminal(run.status)) runs.push(run);
+        }
+        return this.#outcomes.discard(runs);
+    }
+
     async release(runId: string): Promise<void> {
         try {
             await this.#resources.release(runId);

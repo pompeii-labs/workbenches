@@ -1,9 +1,9 @@
 import { chmod, copyFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { RunStore } from '../runs/store.js';
+import { RunStore, type StoredRun } from '../runs/store.js';
 import { verifyBlob } from './content.js';
-import type { OutcomeArtifact } from './contracts.js';
+import type { OutcomeArtifact, RunOutcome } from './contracts.js';
 import type { OutcomeOutput } from './output.js';
 import { assertArtifactPaths, outcomeArtifactPath } from './paths.js';
 import { OutcomeStore } from './store.js';
@@ -29,30 +29,9 @@ export async function restoreSessionArtifacts(
         )
         .toSorted((a, b) => a.dispatched_at.localeCompare(b.dispatched_at));
     const store = new OutcomeStore(home);
-    const artifacts = new Map<string, OutcomeArtifact>();
-    // Each retained file belongs to the session library. Absence from a later
-    // snapshot is not a tombstone; the latest published revision of a path wins.
-    const outcomes = await store.list();
-    for (const run of runs) {
-        for (const outcome of outcomes
-            .filter((outcome) => outcome.run_id === run.id)
-            .toReversed()) {
-            for (const artifact of outcome.artifacts) {
-                const path = outcomeArtifactPath(artifact);
-                artifacts.set(path.normalize('NFC').toLowerCase(), {
-                    ...artifact,
-                    path,
-                });
-            }
-        }
-    }
-    const files = [...artifacts.values()];
+    const files = sessionLibrary(runs, await store.list());
     assertArtifactPaths(files);
-    const bytes = files.reduce(
-        (total, artifact) => total + artifact.content.size_bytes,
-        0
-    );
-    if (bytes > maximumRestoredBytes)
+    if (!restorable(files))
         throw new Error('Session deliverables exceed the 512 MiB restore safety limit');
     // Verify all source content before creating any working copies.
     const sources = await Promise.all(
@@ -68,4 +47,37 @@ export async function restoreSessionArtifacts(
     // Do not replay old declarations, links or summaries as newly produced work.
     // Files are collected automatically; the harness can supply fresh metadata.
     return files.length;
+}
+
+/**
+ * The latest revision of each file the runs kept, given in dispatch order.
+ * Absence from a later snapshot is not a tombstone.
+ */
+export function sessionLibrary(
+    runs: Array<Pick<StoredRun, 'id'>>,
+    outcomes: RunOutcome[]
+): OutcomeArtifact[] {
+    const artifacts = new Map<string, OutcomeArtifact>();
+    for (const run of runs) {
+        for (const outcome of outcomes
+            .filter((outcome) => outcome.run_id === run.id)
+            .toReversed()) {
+            for (const artifact of outcome.artifacts) {
+                const path = outcomeArtifactPath(artifact);
+                artifacts.set(path.normalize('NFC').toLowerCase(), {
+                    ...artifact,
+                    path,
+                });
+            }
+        }
+    }
+    return [...artifacts.values()];
+}
+
+/** Whether a session library fits what a continuation restores. */
+export function restorable(files: OutcomeArtifact[]): boolean {
+    return (
+        files.reduce((total, artifact) => total + artifact.content.size_bytes, 0) <=
+        maximumRestoredBytes
+    );
 }

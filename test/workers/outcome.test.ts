@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { OutcomeStore, WorkspaceSnapshot } from '../../src/outcomes/index.js';
+import {
+    type OutcomeContentDescriptor as OutcomeContent,
+    OutcomeStore,
+    WorkspaceSnapshot,
+} from '../../src/outcomes/index.js';
 import { WorkerCheckout } from '../../src/workers/checkout.js';
 import {
     type WorkerOutcomeData,
@@ -171,5 +175,48 @@ describe('worker outcome layout', () => {
         ]);
         // Reserved metadata comes from the outcome, never a returned artifact.
         expect(files.get('.workbench/outcome.json')).not.toBe('x');
+    });
+
+    test('discards a session only once its files are more than a continuation restores', async () => {
+        const home = await outcomeHome();
+        const store = new OutcomeStore(home);
+        const keep = async (run: string, path: string, content: OutcomeContent) =>
+            store.commit(
+                {
+                    version: 1,
+                    id: `wbo_${run}`,
+                    run_id: `wb_${run}`,
+                    created_at: '2026-01-01T00:00:00.000Z',
+                    completeness: 'complete',
+                    changesets: [],
+                    artifacts: [{ id: `artifact_${run}`, name: path, path, content }],
+                    links: [],
+                    warnings: [],
+                },
+                'present'
+            );
+        const small = await store.putBytes('notes', 'text/plain');
+        await keep('aaaaaaaaaaaaaaaaaaaaaaaa', 'notes.txt', small);
+        await keep('cccccccccccccccccccccccc', 'other.txt', small);
+        const sparse = join(home, 'large.bin');
+        await writeFile(sparse, '');
+        await truncate(sparse, 512 * 1_024 * 1_024 + 1);
+        const large = await store.putFile(sparse);
+        await rm(sparse);
+        await keep('bbbbbbbbbbbbbbbbbbbbbbbb', 'large.bin', large);
+        await store.close();
+        const layout = new WorkerOutcomeLayout(home);
+        const first = { id: 'wb_aaaaaaaaaaaaaaaaaaaaaaaa' };
+        expect(await layout.discard([first])).toBe(false);
+        expect(await store.list()).toHaveLength(3);
+        expect(
+            await layout.discard([first, { id: 'wb_bbbbbbbbbbbbbbbbbbbbbbbb' }])
+        ).toBe(true);
+        // Another session's outcome, and content it shares, stay.
+        expect((await store.list()).map((outcome) => outcome.run_id)).toEqual([
+            'wb_cccccccccccccccccccccccc',
+        ]);
+        expect(await readFile(await store.blob(small), 'utf8')).toBe('notes');
+        await expect(store.blob(large)).rejects.toThrow();
     });
 });

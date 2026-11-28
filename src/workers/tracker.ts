@@ -12,7 +12,7 @@ export interface WorkerUploader {
         outcome: WorkerOutcomeData,
         credentials: string[],
         report: (message: string) => void
-    ): Promise<void>;
+    ): Promise<boolean>;
 }
 
 /** How many passes a finished run continued with send is followed before it must show new events. */
@@ -263,13 +263,14 @@ export class WorkerRunTracker {
             pullRequest = outcome.pullRequest ?? pullRequest;
             assignment.uploaded.push(outcome.run);
             if (!start) {
+                assignment.incomplete = true;
                 this.log.write(
                     `${assignment.workbench} outcome not uploaded: the worker restarted during the run`
                 );
                 continue;
             }
             try {
-                await this.uploader.uploadOutcome(
+                const complete = await this.uploader.uploadOutcome(
                     assignment.run_id,
                     start.run_token,
                     await outcome.files(),
@@ -285,7 +286,9 @@ export class WorkerRunTracker {
                             `${assignment.workbench} outcome: ${excerpt(message, 80)}`
                         )
                 );
+                if (!complete) assignment.incomplete = true;
             } catch (error) {
+                assignment.incomplete = true;
                 this.log.write(
                     `${assignment.workbench} outcome upload failed: ${excerpt(
                         error instanceof Error ? error.message : String(error),
@@ -293,6 +296,24 @@ export class WorkerRunTracker {
                     )}`
                 );
             }
+        }
+        // Only outcomes the server holds are removed; one it lacks keeps the session's for the retention period.
+        if (outcomes.length > 0 && !assignment.incomplete) {
+            const discarded = await this.host
+                .discardOutcomes(assignment.session_id)
+                .catch((error: unknown) => {
+                    this.log.write(
+                        `${assignment.workbench} outcome cleanup failed: ${excerpt(
+                            error instanceof Error ? error.message : String(error),
+                            80
+                        )}`
+                    );
+                    return false;
+                });
+            if (discarded)
+                this.log.write(
+                    `${assignment.workbench} outcome files removed from this machine: too large to restore into a continuation`
+                );
         }
         return pullRequest;
     }
